@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -178,7 +179,7 @@ class NavigatorViewTest {
         Map<String, Integer> totals = new HashMap<>();
         totals.put(TOPIC, 4);
         partitionShare.publish(AssignmentSnapshot.resolved(
-                new java.util.HashSet<>(Arrays.asList(TP0, TP1, new TopicPartition(TOPIC, 2))), totals),
+                new HashSet<>(Arrays.asList(TP0, TP1, new TopicPartition(TOPIC, 2))), totals),
                 clock.instant());
         clock.add(ONE_SECOND); // the publication is effective from the next quantum (R4)
 

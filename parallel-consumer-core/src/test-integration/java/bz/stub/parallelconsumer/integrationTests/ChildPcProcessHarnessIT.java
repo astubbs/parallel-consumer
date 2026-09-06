@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.integrationTests.utils.ChildPcMain;
 import bz.stub.parallelconsumer.integrationTests.utils.ChildPcOptions;
 import bz.stub.parallelconsumer.integrationTests.utils.ChildPcProcess;
 import bz.stub.parallelconsumer.integrationTests.utils.FiringLedger;
+import bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.FleetIdentity;
 import bz.stub.parallelconsumer.navigator.ResourceContract;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -28,11 +29,13 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
+import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.fleetIdentity;
+import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.randomSuffix;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -137,6 +140,26 @@ class ChildPcProcessHarnessIT extends BrokerIntegrationTest<String, String> {
         assertThat(reported).as("reported well inside the start budget, not at its end").isLessThan(START_BUDGET);
         assertThat(child.stderrText()).contains(ChildPcMain.DELIBERATE_FAILURE_MESSAGE);
         assertThat(describeGroup().members()).as("the doomed child never joined").isEmpty();
+    }
+
+    // ------------------------------------------------------------------
+    // Scenario 2b: a parent that dies (stdin EOF, no stop line) does not leave an orphan running forever
+    // ------------------------------------------------------------------
+
+    @Test
+    void childStopsGracefullyAndEmitsItsLedgerWhenStdinClosesWithoutAStopLine() {
+        String topic = setupTopic("child-pc-in");
+        ChildPcProcess child = launch(tagged("orphan", topic));
+        child.awaitStarted(START_BUDGET);
+        awaitGroupStable(1, GROUP_BUDGET);
+
+        child.closeStdin();
+        OptionalInt exit = child.awaitExit(ofSeconds(60));
+        assertThat(exit.isPresent()).as("the child noticed stdin EOF and exited on its own" + child.diagnostics())
+                .isTrue();
+        assertThat(exit.getAsInt()).as("EOF is the graceful route: exit 0").isZero();
+        FiringLedger.FleetLedger fleet = ledger.awaitLedgerRecords(UniSets.of("orphan"), ofSeconds(60));
+        assertThat(fleet.forResource(RESOURCE)).as("the ledger record was emitted on the EOF path").hasSize(1);
     }
 
     // ------------------------------------------------------------------
@@ -331,13 +354,13 @@ class ChildPcProcessHarnessIT extends BrokerIntegrationTest<String, String> {
             assertThat(record.getQuantaObserved()).as("%s sampled its share", record.getInstanceId()).isPositive();
             assertThat(record.getFired()).as("%s fired", record.getInstanceId()).isPositive();
         }
-        long minted = fleet.mintedTotal(RESOURCE);
-        double shares = fleet.sharesSummedTotal(RESOURCE);
+        FleetIdentity identity = fleetIdentity(fleet);
         log.info("FLEET IDENTITY: minted {} + overdraft {} against summed shares {} across {} children",
-                minted, fleet.overdraftTotal(RESOURCE), shares, records.size());
-        assertThat(minted).as("the fleet's minted credits never exceed its summed shares (one credit of "
-                        + "rounding slack per child for the partial quantum at each end)")
-                .isLessThanOrEqualTo((long) Math.ceil(shares) + records.size());
+                identity.getMinted(), identity.getOverdraft(), identity.getSharesSummed(),
+                identity.getTaggedChildren());
+        assertThat(identity.getMinted()).as("the fleet's minted credits never exceed its summed shares plus the "
+                        + "envelope's conservation slack")
+                .isLessThanOrEqualTo(identity.getCeiling());
     }
 
     // ------------------------------------------------------------------
@@ -373,9 +396,6 @@ class ChildPcProcessHarnessIT extends BrokerIntegrationTest<String, String> {
         getKcu().produceMessages(topic, records);
     }
 
-    private static int randomSuffix() {
-        return ThreadLocalRandom.current().nextInt(Integer.MAX_VALUE);
-    }
 
     private static Set<String> clientIds(ConsumerGroupDescription description) {
         return description.members().stream().map(MemberDescription::clientId)

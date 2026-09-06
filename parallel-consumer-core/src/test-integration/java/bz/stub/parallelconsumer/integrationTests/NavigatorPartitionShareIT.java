@@ -28,7 +28,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.CONTRACT;
@@ -36,6 +35,7 @@ import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnve
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.RATE_PER_SECOND;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.RATE_TOLERANCE_PERCENT;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.RESOURCE;
+import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.randomSuffix;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.WINDOW;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.assertCountWithinTolerance;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.assertFleetIdentity;
@@ -131,8 +131,7 @@ class NavigatorPartitionShareIT extends BrokerIntegrationTest<String, String> {
 
         long leftCount = ledger.countIn("left", leftFirst, leftFirst.plus(WINDOW));
         long rightCount = ledger.countIn("right", rightFirst, rightFirst.plus(WINDOW));
-        long aggregate = ledger.countIn("left", commonStart, commonStart.plus(WINDOW))
-                + ledger.countIn("right", commonStart, commonStart.plus(WINDOW));
+        long aggregate = ledger.countAmong(commonStart, commonStart.plus(WINDOW), "left", "right");
         long bystanderCount = ledger.countIn("bystander", bystanderFirst, bystanderFirst.plus(WINDOW));
         log.info("AE1 observation: window {}s - left {} right {} (expected {} each), aggregate {} over the "
                         + "common window (bound {}), bystander {} (unthrottled)",
@@ -198,8 +197,7 @@ class NavigatorPartitionShareIT extends BrokerIntegrationTest<String, String> {
         ledger.awaitBrokerTimePast(convergedEnd, FENCE_BUDGET);
         long survivorConverged = ledger.countIn("survivor", convergedStart, convergedEnd);
         Duration transitionSpan = Duration.between(steadyStart, convergedEnd);
-        long fleetOverTransition = ledger.countIn("survivor", steadyStart, convergedEnd)
-                + ledger.countIn("victim", steadyStart, convergedEnd);
+        long fleetOverTransition = ledger.countAmong(steadyStart, convergedEnd, "survivor", "victim");
         Instant victimTail = ledger.latestFiringOf("victim").orElseThrow(IllegalStateException::new);
         log.info("AE2 observation: KILL LATENCY member gone {} / group stable {} after the kill (session "
                         + "timeout {} ms) - reported, not gated; victim's last firing {} after the kill anchor; "
@@ -248,8 +246,7 @@ class NavigatorPartitionShareIT extends BrokerIntegrationTest<String, String> {
 
         long majorCount = ledger.countIn("major", majorFirst, majorFirst.plus(WINDOW));
         long minorCount = ledger.countIn("minor", minorFirst, minorFirst.plus(WINDOW));
-        long aggregate = ledger.countIn("major", commonStart, commonStart.plus(WINDOW))
-                + ledger.countIn("minor", commonStart, commonStart.plus(WINDOW));
+        long aggregate = ledger.countAmong(commonStart, commonStart.plus(WINDOW), "major", "minor");
         List<String> majorShares = recentDashboardShares(major, 3);
         List<String> minorShares = recentDashboardShares(minor, 3);
         log.info("AE3 observation: major {} (expected {}) minor {} (expected {}) over {}s, aggregate {} "
@@ -395,8 +392,8 @@ class NavigatorPartitionShareIT extends BrokerIntegrationTest<String, String> {
         long a2Count = ledger.countIn("a2", a2First, a2First.plus(WINDOW));
         long b1Count = ledger.countIn("b1", b1First, b1First.plus(WINDOW));
         long b2Count = ledger.countIn("b2", b2First, b2First.plus(WINDOW));
-        long groupATotal = ledger.countIn("a1", commonStart, commonEnd) + ledger.countIn("a2", commonStart, commonEnd);
-        long groupBTotal = ledger.countIn("b1", commonStart, commonEnd) + ledger.countIn("b2", commonStart, commonEnd);
+        long groupATotal = ledger.countAmong(commonStart, commonEnd, "a1", "a2");
+        long groupBTotal = ledger.countAmong(commonStart, commonEnd, "b1", "b2");
         log.info("AE9 observation: group A {}+{}={} group B {}+{}={} over the common {}s window (expected {} "
                         + "per child, {} per group, one group's bound {})",
                 a1Count, a2Count, groupATotal, b1Count, b2Count, groupBTotal, WINDOW.getSeconds(),
@@ -443,7 +440,7 @@ class NavigatorPartitionShareIT extends BrokerIntegrationTest<String, String> {
         ledger.awaitBrokerTimePast(latest(firstFirst, secondFirst).plus(WINDOW), FENCE_BUDGET);
         long firstSteady = ledger.countIn("first", firstFirst, firstFirst.plus(WINDOW));
         long secondSteady = ledger.countIn("second", secondFirst, secondFirst.plus(WINDOW));
-        long fleetSteady = ledger.countIn("first", steadyStart, steadyEnd) + ledger.countIn("second", steadyStart, steadyEnd);
+        long fleetSteady = ledger.countAmong(steadyStart, steadyEnd, "first", "second");
         log.info("AE10 steady state: first {} (share {}) second {} (share {}), fleet {} (expected {})",
                 firstSteady, firstShare, secondSteady, secondShare, fleetSteady, expectedFirings(1.0));
         assertCountWithinTolerance(firstSteady, expectedFirings(firstShare), "AE10 steady: first at its fraction");
@@ -618,7 +615,4 @@ class NavigatorPartitionShareIT extends BrokerIntegrationTest<String, String> {
         return result;
     }
 
-    private static int randomSuffix() {
-        return ThreadLocalRandom.current().nextInt(Integer.MAX_VALUE);
-    }
 }

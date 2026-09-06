@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.data.Percentage.withPercentage;
@@ -189,27 +190,43 @@ public final class NavigatorProofEnvelope {
     }
 
     /**
+     * Both sides of the fleet identity (R10, AE7) over a collected fleet ledger, as a pure projection: the
+     * tagged children's minted and overdraft totals, their summed exact entitlement, and the ceiling that
+     * entitlement plus {@link #conservationSlack} permits. Asserts nothing, so the demo can print it and a lane
+     * can assert it through {@link #assertFleetIdentity} - one definition of the identity for every reader.
+     */
+    public static FleetIdentity fleetIdentity(FiringLedger.FleetLedger fleet) {
+        int tagged = fleet.forResource(RESOURCE).size();
+        double shares = fleet.sharesSummedTotal(RESOURCE);
+        return new FleetIdentity(fleet.mintedTotal(RESOURCE), fleet.overdraftTotal(RESOURCE), shares, tagged,
+                (long) Math.ceil(shares) + conservationSlack(tagged));
+    }
+
+    /**
      * The fleet identity (R10, AE7) over a collected fleet ledger: every child's own identity balances, and the
      * tagged children's minted plus overdraft stays inside their summed shares plus {@link #conservationSlack}.
      * Every record and both sides of the identity go to the log, so a run's evidence outlives the assertion.
      */
     public static FleetIdentity assertFleetIdentity(FiringLedger.FleetLedger fleet) {
         fleet.assertEachIdentityBalances();
-        List<ChildLedgerRecord> tagged = fleet.forResource(RESOURCE);
         for (ChildLedgerRecord record : fleet.getRecords()) {
             log.info("R10 record: {}", record.format());
         }
-        long minted = fleet.mintedTotal(RESOURCE);
-        long overdraft = fleet.overdraftTotal(RESOURCE);
-        double shares = fleet.sharesSummedTotal(RESOURCE);
-        long ceiling = (long) Math.ceil(shares) + conservationSlack(tagged.size());
+        FleetIdentity identity = fleetIdentity(fleet);
         log.info("R10 fleet identity: minted {} + overdraft {} = {} against summed shares {} across {} tagged "
-                + "children (ceiling {})", minted, overdraft, minted + overdraft, shares, tagged.size(), ceiling);
-        assertThat(minted + overdraft)
+                + "children (ceiling {})", identity.getMinted(), identity.getOverdraft(),
+                identity.getMinted() + identity.getOverdraft(), identity.getSharesSummed(),
+                identity.getTaggedChildren(), identity.getCeiling());
+        assertThat(identity.getMinted() + identity.getOverdraft())
                 .as("R10/AE7: the fleet's minted plus overdraft never exceeds its summed shares plus one credit "
                         + "of slack per child")
-                .isLessThanOrEqualTo(ceiling);
-        return new FleetIdentity(minted, overdraft, shares, tagged.size(), ceiling);
+                .isLessThanOrEqualTo(identity.getCeiling());
+        return identity;
+    }
+
+    /** A per-run suffix for topic and group names, so lanes on one broker never collide. */
+    public static int randomSuffix() {
+        return ThreadLocalRandom.current().nextInt(Integer.MAX_VALUE);
     }
 
     // ------------------------------------------------------------------

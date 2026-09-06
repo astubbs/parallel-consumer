@@ -496,26 +496,26 @@ No `-Dsurefire.rerunFailingTestsCount` anywhere - a flake fails the build by des
 
 Six decisions the non-interactive review returned, each with its recommended remedy; the implementer settles them where the units name them and records the choice in the plan.
 
-- **Rounded-up burst budgets exceed the contract's burst fleet-wide** — R2 / R8 / U2 (P1, feasibility, adversarial, Codex adversarial, confidence 100)
+- **Rounded-up burst budgets exceed the contract's burst fleet-wide** - R2 / R8 / U2 (P1, feasibility, adversarial, Codex adversarial, confidence 100)
 
   The documented bound names a burst the mechanism breaks whenever more instances hold partitions than burst has credits. Recommended: state the slack - the bound's burst term is at most burst plus one credit per partition-holding instance, carried by R8, KTD11's formula and U2's scenario. Alternative: distribute burst like credits with floor plus a rotating remainder so the sum is exact.
 
-- **A declined or empty metadata read must publish an unresolved total, not the previous one** — KTD3 / R5 / U3 (P1, feasibility, adversarial, Codex adversarial, confidence 100)
+- **A declined or empty metadata read must publish an unresolved total, not the previous one** - KTD3 / R5 / U3 (P1, feasibility, adversarial, Codex adversarial, confidence 100)
 
   Partition expansion is the one event that changes the total, and keeping the old total at exactly that rebalance lets a member compute a fraction of one and mint the whole grant. Recommended: any timeout, exception, empty or null result publishes the snapshot unresolved (R5's no-share state) until the next assignment resolves it; U3's "a later timeout keeps the previous total" scenario becomes its inverse, and the module test stubs the mock consumer per topic. Alternative: availability-first, keeping the stale total.
 
-- **No pre-registered rule separates an underpriced bound from a defect** — KTD13 (P1, adversarial, confidence 75)
+- **No pre-registered rule separates an underpriced bound from a defect** - KTD13 (P1, adversarial, confidence 75)
 
   Recommended: on the zero-offset rungs the bound is rate times window plus burst plus one quantum with no re-derivation, and any crossing there or any fleet-conservation failure is a defect; only the skew term may be re-derived, and only by a derivation recorded in the dated record before the re-run that tests it.
 
-- **"Spend stops at revocation" contradicts the lease-unchanged model the units build** — R4 / KTD2 / U2 (P1, feasibility, confidence 75)
+- **"Spend stops at revocation" contradicts the lease-unchanged model the units build** - R4 / KTD2 / U2 (P1, feasibility, confidence 75)
 
   Recommended: align R4 to what KTD2 and U2 implement - a revoked partition's share is last minted for the quantum in which the revocation occurs and excluded from the next quantum on; the new holder first mints it at the next boundary, so no index is minted twice - and drop the "spend stops" parenthetical from KTD2.
 
-- **Fleet conservation is not observable from the harness** — U4 / U5 / AE7 (P1, Codex adversarial, confidence 100)
+- **Fleet conservation is not observable from the harness** - U4 / U5 / AE7 (P1, Codex adversarial, confidence 100)
 
   The lane counts firings but never sees minted, expired, outstanding or overdraft credits. Recommended: each child emits an end-of-run machine-readable ledger on a channel the parent reads, and U5 aggregates it to assert the fleet identity.
 
-- **The share fraction has no path through the allocator interface the view holds** — KTD6 / KTD1 (P2, feasibility, confidence 75)
+- **The share fraction has no path through the allocator interface the view holds** - KTD6 / KTD1 (P2, feasibility, confidence 75)
 
   Recommended: define the partition-share allocator's local rate as rate times the snapshot's fraction (rotation-averaged) and derive both gauges and the view accessor from the existing local and global rate reads, leaving the interface unchanged.

@@ -36,8 +36,10 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -179,6 +181,7 @@ public final class ChildPcMain {
         Thread dashboardThread = daemon("child-pc-dashboard", () -> dashboardLoop(module, options, fired, stopping));
         dashboardThread.start();
 
+        AtomicReference<RuntimeException> closeFailure = new AtomicReference<>();
         Runnable shutdown = () -> {
             if (!stopping.compareAndSet(false, true)) {
                 return;
@@ -186,6 +189,9 @@ public final class ChildPcMain {
             try {
                 pc.close();
             } catch (RuntimeException e) {
+                // still emit the ledger - it is the diagnostic - but the exit code below says the close failed,
+                // so the parent's "stops cleanly" assertion fails instead of accepting a broken child's books
+                closeFailure.set(e);
                 System.err.println("close failed: " + e);
             }
             emitLedger(producer, module, options, sampler, fired.get());
@@ -196,33 +202,45 @@ public final class ChildPcMain {
 
         awaitStopSignal(options);
         shutdown.run();
+        RuntimeException failed = closeFailure.get();
+        if (failed != null) {
+            throw new IllegalStateException("the processor did not close cleanly", failed);
+        }
     }
 
     // ------------------------------------------------------------------
     // Lifetime
     // ------------------------------------------------------------------
 
-    /** Returns on a {@value #STOP_COMMAND} line, on stdin EOF (the parent is gone), or after {@code runSeconds}. */
+    /**
+     * Returns on a {@value #STOP_COMMAND} line, on stdin EOF (the parent is gone), or after {@code runSeconds}.
+     * A daemon thread blocks in {@code readLine}, because EOF on a pipe is only ever reported by a blocking
+     * read: {@code ready()} is false and {@code available()} is zero on a closed pipe with nothing buffered, so
+     * a polling loop over them never learns the parent died and an orphan runs forever - the harness's own
+     * self-test closes stdin without a stop line to prove this path.
+     */
     private static void awaitStopSignal(ChildPcOptions options) throws InterruptedException {
-        Instant deadline = options.getRunSeconds() > 0
-                ? Instant.now().plusSeconds(options.getRunSeconds())
-                : Instant.MAX;
-        BufferedReader stdin = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
-        while (Instant.now().isBefore(deadline)) {
+        CountDownLatch stop = new CountDownLatch(1);
+        Thread reader = daemon("child-pc-stdin", () -> {
+            BufferedReader stdin = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
             try {
-                if (stdin.ready()) {
-                    String line = stdin.readLine();
-                    if (line == null || STOP_COMMAND.equals(line.trim())) {
-                        return;
+                String line;
+                while ((line = stdin.readLine()) != null) {
+                    if (STOP_COMMAND.equals(line.trim())) {
+                        break;
                     }
                     System.err.println("ignoring unknown stdin command '" + line + "'");
-                } else if (System.in.available() < 0) {
-                    return;
                 }
             } catch (IOException e) {
-                return; // stdin closed under us - the parent is gone
+                // stdin closed under us - the parent is gone; fall through to the stop
             }
-            TimeUnit.MILLISECONDS.sleep(50);
+            stop.countDown();
+        });
+        reader.start();
+        if (options.getRunSeconds() > 0) {
+            boolean ignoredSignalled = stop.await(options.getRunSeconds(), TimeUnit.SECONDS); // either way, stop
+        } else {
+            stop.await();
         }
     }
 

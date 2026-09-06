@@ -7,8 +7,11 @@ package bz.stub.parallelconsumer.integrationTests.utils;
 import lombok.Getter;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.common.utils.AppInfoParser;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -335,8 +338,8 @@ public final class NavigatorLadderRecord {
     }
 
     private static byte[] readAll(Process process) throws IOException {
-        try (java.io.InputStream in = process.getInputStream();
-             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+        try (InputStream in = process.getInputStream();
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[4096];
             int read;
             while ((read = in.read(buffer)) >= 0) {
@@ -352,6 +355,6 @@ public final class NavigatorLadderRecord {
                 + System.getProperty("os.arch") + ", " + Runtime.getRuntime().availableProcessors()
                 + " processors visible to the parent JVM, " + System.getProperty("java.vendor") + " "
                 + System.getProperty("java.version") + ", kafka-clients "
-                + org.apache.kafka.common.utils.AppInfoParser.getVersion();
+                + AppInfoParser.getVersion();
     }
 }

@@ -27,7 +27,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.BURST;
@@ -36,8 +35,9 @@ import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnve
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.QUANTUM;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.RATE_PER_SECOND;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.RESOURCE;
+import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.randomSuffix;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.SESSION_TIMEOUT;
-import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.conservationSlack;
+import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.fleetIdentity;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 
@@ -436,11 +436,7 @@ public class NavigatorDemo extends BrokerIntegrationTest<String, String> {
     private void printTheBooks(ChildPcProcess tagged1, ChildPcProcess bystander, String killedInstanceId) {
         FiringLedger.FleetLedger fleet = ledger.stopAndCollect(Arrays.asList(tagged1, bystander),
                 STOP_BUDGET, LEDGER_BUDGET);
-        List<ChildLedgerRecord> taggedRecords = fleet.forResource(RESOURCE);
-        double sharesSummed = fleet.sharesSummedTotal(RESOURCE);
-        FleetIdentity identity = new FleetIdentity(fleet.mintedTotal(RESOURCE), fleet.overdraftTotal(RESOURCE),
-                sharesSummed, taggedRecords.size(),
-                (long) Math.ceil(sharesSummed) + conservationSlack(taggedRecords.size()));
+        FleetIdentity identity = fleetIdentity(fleet);
 
         System.out.println("  THE BOOKS, collected from the broker after each survivor stopped cleanly:");
         for (ChildLedgerRecord record : fleet.getRecords()) {
@@ -585,8 +581,5 @@ public class NavigatorDemo extends BrokerIntegrationTest<String, String> {
         return value < 1_000 ? value + " ms" : String.format(Locale.ROOT, "%.1fs", value / 1000.0);
     }
 
-    private static int randomSuffix() {
-        return ThreadLocalRandom.current().nextInt(Integer.MAX_VALUE);
-    }
 
 }

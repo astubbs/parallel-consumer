@@ -19,7 +19,11 @@ import java.util.Map;
  * the same path its firings do.
  * <p>
  * The five monotonic counters are the child's own {@link ConservationLedger} snapshot at close. {@code sharesSummed}
- * is the harness's observation of the share the child was ENTITLED to: the allocator's EXACT per-index
+ * is the harness's observation of the share the child was ENTITLED to over every quantum index it observed,
+ * whether or not the control loop read that index - so the fleet identity it feeds is a COARSE check (minted
+ * can never exceed the entitlement of the indexes the child lived through) rather than the per-index proof;
+ * the ladder's window bound on the broker's clock is the defence against over-mint, and a per-index fleet sum
+ * across children is the sharper check recorded as follow-up. The value itself is the allocator's EXACT per-index
  * entitlement ({@code PartitionShareResourceAllocator#entitledCredits} - what the index's read mints, not the
  * rotation-averaged gauge the view reports), sampled several times per quantum and summed over every quantum
  * index observed - a sum of what the assignment granted, against which {@code minted} (what was actually

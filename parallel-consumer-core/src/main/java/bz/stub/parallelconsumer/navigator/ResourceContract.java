@@ -77,7 +77,10 @@ import java.time.Duration;
  * the idle fraction, and the remedy is demand-weighted allocation, which is the controller rung's, not this
  * one's.
  * <p>
- * <b>The scope is one consumer group.</b> A second group whose instances tag the same resource name receives
+ * <b>The scope is one consumer group whose tagged members share one subscription.</b> Each member's fraction
+ * is taken over ITS subscription's partitions, so two members of one group tagging the same resource while
+ * subscribed to different topics would each hold all of its own denominator and each mint the whole grant;
+ * that mismatch is not detected on this rung, and the promise does not cover it. A second group whose instances tag the same resource name receives
  * the full rate again, so the effective aggregate multiplies by the number of groups. That is the documented
  * scope on this rung, not a defect; sharing a resource across applications belongs to the controller rung.
  * <p>

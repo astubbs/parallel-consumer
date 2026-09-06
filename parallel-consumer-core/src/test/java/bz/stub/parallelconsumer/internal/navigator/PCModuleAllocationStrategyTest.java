@@ -21,6 +21,7 @@ import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.CUSTOM;
@@ -28,6 +29,7 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrateg
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static org.apache.kafka.clients.consumer.OffsetResetStrategy.EARLIEST;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * The module's strategy resolution (the partition-share plan's U3, F4, KTD4): under the default strategy the
@@ -95,7 +97,7 @@ class PCModuleAllocationStrategyTest {
     @Test
     void theCustomStrategyAdoptsTheSuppliedInstance() {
         ResourceAllocator supplied = Mockito.mock(ResourceAllocator.class);
-        Mockito.when(supplied.lookup(API_X)).thenReturn(java.util.Optional.of(POLICY_X));
+        Mockito.when(supplied.lookup(API_X)).thenReturn(Optional.of(POLICY_X));
         var options = optionsBuilder()
                 .resourceTags(UniLists.of(API_X))
                 .allocationStrategy(CUSTOM)
@@ -133,6 +135,26 @@ class PCModuleAllocationStrategyTest {
                 .map(Meter::getId).map(Meter.Id::getName)
                 .filter(name -> name.contains("navigator"))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * The module's own guard when validation was skipped (the review's finding): a tagged instance under
+     * {@code IN_PROCESS} with no allocator is refused by {@code validate()}, and a caller that built the module
+     * without validating gets a fail-fast that names the strategy rather than an inert participant that
+     * silently never throttles.
+     */
+    @Test
+    void aTaggedInstanceWithNoResolvableAllocatorFailsFastNamingTheStrategyWhenValidationWasSkipped() {
+        var options = optionsBuilder()
+                .allocationStrategy(ParallelConsumerOptions.AllocationStrategy.IN_PROCESS)
+                .resourceTags(UniLists.of(API_X))
+                .resourceContracts(UniLists.of(POLICY_X))
+                .build();
+        var module = new PCModule<>(options); // deliberately NOT validated
+
+        IllegalStateException refused = assertThrows(IllegalStateException.class, module::navigatorParticipant);
+        assertThat(refused).hasMessageThat().contains("IN_PROCESS");
+        assertThat(refused).hasMessageThat().contains("validate()");
     }
 
     private static ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> optionsBuilder() {

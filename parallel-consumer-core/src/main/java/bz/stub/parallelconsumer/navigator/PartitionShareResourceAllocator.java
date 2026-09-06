@@ -205,6 +205,10 @@ public class PartitionShareResourceAllocator implements ResourceAllocator {
     }
 
     /**
+     * Instrumentation read, public for the cross-process test harness: {@link NavigatorView} is the supported
+     * production surface, and this projection (with {@link #burstBudget} and {@link #effectiveAssignment}) may
+     * change signature without a deprecation cycle.
+     * <p>
      * Pure read - the credits this instance is ENTITLED to for quantum {@code quantumIndex} of
      * {@code resourceName}: exactly what {@link #readQuantum} mints for that index, from the snapshot effective
      * for it and the rotation, and nothing else. A projection: no lease is minted and no counter moves, so a

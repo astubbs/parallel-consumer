@@ -8,6 +8,7 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -21,9 +22,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 
@@ -125,7 +128,7 @@ public final class ChildPcProcess implements AutoCloseable {
      */
     public static String describeClasspath() {
         String classpath = System.getProperty("java.class.path");
-        String[] entries = classpath.split(java.io.File.pathSeparator, -1);
+        String[] entries = classpath.split(File.pathSeparator, -1);
         if (entries.length != 1) {
             return entries.length + " classpath entries (explicit classpath)";
         }
@@ -184,8 +187,8 @@ public final class ChildPcProcess implements AutoCloseable {
     }
 
     /** The exit code if the child has exited, else empty. */
-    public java.util.OptionalInt exitCode() {
-        return process.isAlive() ? java.util.OptionalInt.empty() : java.util.OptionalInt.of(process.exitValue());
+    public OptionalInt exitCode() {
+        return process.isAlive() ? OptionalInt.empty() : OptionalInt.of(process.exitValue());
     }
 
     // ------------------------------------------------------------------
@@ -241,6 +244,28 @@ public final class ChildPcProcess implements AutoCloseable {
         return took;
     }
 
+    /**
+     * Closes the child's stdin WITHOUT a stop line - what a dead parent looks like from inside the child. The
+     * child is expected to notice the EOF and stop gracefully; the harness self-test asserts that it does.
+     */
+    public void closeStdin() {
+        try {
+            process.getOutputStream().close();
+        } catch (IOException e) {
+            throw new UncheckedIOException("could not close the stdin of child '" + options.getInstanceId() + "'", e);
+        }
+    }
+
+    /** Waits for the child to exit on its own, up to {@code budget}; the exit code, or empty if it is still alive. */
+    public OptionalInt awaitExit(Duration budget) {
+        boolean exited = waitQuietly(budget);
+        if (!exited) {
+            return OptionalInt.empty();
+        }
+        drainPumps();
+        return OptionalInt.of(process.exitValue());
+    }
+
     /** Kills the child if it is still alive - teardown, so a failed test never leaks a JVM. */
     @Override
     public void close() {
@@ -277,10 +302,12 @@ public final class ChildPcProcess implements AutoCloseable {
         text.append("\n  command: ").append(commandLine);
         text.append("\n  alive: ").append(process.isAlive());
         exitCode().ifPresent(code -> text.append(", exit code ").append(code));
-        text.append("\n  stdout (last ").append(DIAGNOSTIC_TAIL).append(" of ").append(stdout.lines().size())
-                .append(" lines):\n    ").append(String.join("\n    ", tail(stdout.lines())));
-        text.append("\n  stderr (last ").append(DIAGNOSTIC_TAIL).append(" of ").append(stderr.lines().size())
-                .append(" lines):\n    ").append(String.join("\n    ", tail(stderr.lines())));
+        List<String> stdoutLines = stdout.lines();
+        List<String> stderrLines = stderr.lines();
+        text.append("\n  stdout (last ").append(DIAGNOSTIC_TAIL).append(" of ").append(stdoutLines.size())
+                .append(" lines):\n    ").append(String.join("\n    ", tail(stdoutLines)));
+        text.append("\n  stderr (last ").append(DIAGNOSTIC_TAIL).append(" of ").append(stderrLines.size())
+                .append(" lines):\n    ").append(String.join("\n    ", tail(stderrLines)));
         return text.toString();
     }
 
@@ -336,9 +363,9 @@ public final class ChildPcProcess implements AutoCloseable {
     private static final class LinePump extends Thread {
         private final InputStream source;
         private final ConcurrentLinkedQueue<String> captured = new ConcurrentLinkedQueue<>();
-        private final java.util.function.Consumer<String> onLine;
+        private final Consumer<String> onLine;
 
-        LinePump(InputStream source, String streamName, String instanceId, java.util.function.Consumer<String> onLine) {
+        LinePump(InputStream source, String streamName, String instanceId, Consumer<String> onLine) {
             super("child-pc-" + streamName + "-pump-" + instanceId);
             this.source = source;
             this.onLine = onLine;

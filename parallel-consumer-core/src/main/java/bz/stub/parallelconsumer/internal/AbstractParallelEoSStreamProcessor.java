@@ -961,6 +961,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // The reset decision itself is taken on the control thread, at the admission tick.
             module.admissionController().onPartitionsRevoked(partitions);
         }
+        // Also FIRST: the navigator's held set loses the revoked partitions before the commit and the
+        // truncation below, either of which can throw. Kafka has already decided the partitions are leaving,
+        // so a failure here must not leave the held set claiming them - the next assign would publish
+        // held-plus over a stale numerator and this instance would mint a share it no longer owns (the one
+        // direction the fleet bound does not cover). Publishing here also ends the revoked lease at the
+        // quantum the revocation STARTS in, which is R4's "the quantum the revocation lands in".
+        publishNavigatorAssignmentAfterLoss(partitions);
         isRebalanceInProgress.set(true);
         while (isTransactionCommittingInProgress())
             Thread.sleep(100); //wait for the transaction to finish committing
@@ -978,7 +985,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } finally {
             isRebalanceInProgress.set(false);
         }
-        publishNavigatorAssignmentAfterLoss(partitions);
         //
         try {
             usersConsumerRebalanceListener.ifPresent(listener -> listener.onPartitionsRevoked(partitions));
@@ -996,12 +1002,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
         numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         log.info("Assigned {} total ({} new) partition(s) {}", numberOfAssignedPartitions, partitions.size(), partitions);
+        // FIRST, before the work manager's registration can throw: the navigator's held set gains the new
+        // partitions and the totals are re-read, so the held set never falls behind the group's view of this
+        // member (the same discipline as the revoke and loss callbacks). The snapshot takes effect from the
+        // next quantum boundary either way.
+        publishNavigatorAssignmentAfterAssign(partitions);
         wm.onPartitionsAssigned(partitions);
         if (isAdaptiveConcurrencyActive()) {
             // cycle end for the KTD9 assignment-delta gate - the controller compares against its baseline here
             module.admissionController().onPartitionsAssigned(partitions);
         }
-        publishNavigatorAssignmentAfterAssign(partitions);
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
         notifySomethingToDo();
     }
@@ -1015,18 +1025,20 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Override
     public void onPartitionsLost(Collection<TopicPartition> partitions) {
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
+        // FIRST, before the truncation can throw - the partitions are already gone (see onPartitionsRevoked)
+        publishNavigatorAssignmentAfterLoss(partitions);
         wm.onPartitionsLost(partitions);
         if (isAdaptiveConcurrencyActive()) {
             // a loss ends a cycle with no assignment half, so the delta gate compares here too
             module.admissionController().onPartitionsLost(partitions);
         }
-        publishNavigatorAssignmentAfterLoss(partitions);
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsLost(partitions));
     }
 
     /**
      * The navigator half of a revoke or loss (the partition-share plan's R4, KTD2): the held set minus
-     * {@code partitions}, published at once so the revoked share stops being minted from the next quantum,
+     * {@code partitions}, published FIRST in the callback - before the commit or truncation that can throw -
+     * so the revoked share stops being minted from the next quantum whatever else the callback does,
      * under the totals the last assignment resolved - a revoke changes no topic's partition count, so the
      * denominator is kept, and only an assign re-reads it. No-op unless this instance runs the engine-built
      * partition-share allocator.

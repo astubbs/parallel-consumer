@@ -12,8 +12,10 @@ import lombok.Value;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * The argument contract between {@link ChildPcProcess} (the launcher, in the failsafe JVM) and
@@ -145,7 +147,7 @@ public class ChildPcOptions {
 
     /** The inverse of {@link #toArgs()}; every key is required so a drifted launcher fails here, not later. */
     public static ChildPcOptions parse(String[] args) {
-        java.util.Map<String, String> values = new java.util.HashMap<>();
+        Map<String, String> values = new HashMap<>();
         for (String arg : args) {
             if (!arg.startsWith("--") || !arg.contains("=")) {
                 throw new IllegalArgumentException("ChildPcOptions: expected --key=value, got '" + arg + "'");
@@ -193,7 +195,7 @@ public class ChildPcOptions {
             "session-timeout-ms", "heartbeat-interval-ms", "clock-offset-millis", "run-seconds",
             "fail-before-subscribe", "spam-stdout-lines");
 
-    private static String required(java.util.Map<String, String> values, String key) {
+    private static String required(Map<String, String> values, String key) {
         String value = values.get(key);
         if (value == null) {
             throw new IllegalArgumentException("ChildPcOptions: missing --" + key);

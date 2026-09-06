@@ -47,6 +47,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
@@ -308,6 +309,46 @@ class NavigatorPartitionShareRebalanceTest {
         assertThat(afterRevoke.getTotalPartitions()).isEqualTo(4);
         assertThat(afterRevoke.getHeldPartitions()).containsExactly(tp(ORDERS, 0), tp(ORDERS, 1));
         assertThat(declineWarnings()).isEmpty();
+    }
+
+    /**
+     * The publish precedes anything in the callback that can throw (the code review's finding, corroborated by
+     * the independent cross-model pass): a commit that fails during a revoke still leaves the held set without
+     * the revoked partitions, so the NEXT assign publishes held-plus over the right numerator. Before the fix
+     * the publish sat after the commit, and a failed commit left this instance minting a share it no longer
+     * owned - the one direction the fleet bound does not cover.
+     */
+    @Test
+    void aRevokeWhoseCommitThrowsStillPublishesTheHeldSetWithoutTheRevokedPartitions() {
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumer)
+                .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
+                .pcInstanceTag(memberId)
+                .resourceTags(UniLists.of(API_X))
+                .resourceContracts(UniLists.of(POLICY))
+                .build();
+        module = new PCModuleTestEnv(options, clock);
+        pc = new ParallelEoSStreamProcessor<String, String>(options, module) {
+            @Override
+            protected void commitOffsetsThatAreReady() {
+                throw new IllegalStateException("commit refused (test)");
+            }
+        };
+        allocator = module.partitionShareAllocator().orElseThrow(AssertionError::new);
+        consumer.topics(ORDERS, 4);
+        pc.subscribe(UniLists.of(ORDERS));
+        pc.onPartitionsAssigned(UniLists.of(tp(ORDERS, 0), tp(ORDERS, 1), tp(ORDERS, 2)));
+
+        assertThrows(RuntimeException.class, () -> pc.onPartitionsRevoked(UniLists.of(tp(ORDERS, 2))));
+
+        AssignmentSnapshot afterFailedRevoke = effectiveNextQuantum();
+        assertWithMessage("the revoked partition left the held set although the commit threw")
+                .that(afterFailedRevoke.getHeldPartitions()).containsExactly(tp(ORDERS, 0), tp(ORDERS, 1));
+
+        pc.onPartitionsAssigned(UniLists.of(tp(ORDERS, 3)));
+        assertWithMessage("the next assign publishes held-plus over the corrected numerator")
+                .that(effectiveNextQuantum().getHeldPartitions())
+                .containsExactly(tp(ORDERS, 0), tp(ORDERS, 1), tp(ORDERS, 3));
     }
 
     @Test

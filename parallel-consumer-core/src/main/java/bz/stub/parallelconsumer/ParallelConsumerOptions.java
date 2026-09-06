@@ -593,7 +593,7 @@ public class ParallelConsumerOptions<K, V> {
      * reconciled against it at {@link #validate()} - that field's javadoc states the reconciliation rule.
      * <p>
      * <b>Supplying it without selecting a strategy that uses it FAILS validation, naming both fields
-     * (KD10).</b> The default strategy, {@link AllocationStrategy#PARTITION_SHARE}, builds its own allocator
+     * (the partition-share plan's KD10).</b> The default strategy, {@link AllocationStrategy#PARTITION_SHARE}, builds its own allocator
      * from the consumer group's assignment, so an instance passed here would be silently unused - and a
      * silently unused allocator is exactly the misconfiguration that looks like a broken rate limit. Selecting
      * the in-process or custom strategy is the deliberate one-line migration from the rung where this field
@@ -620,7 +620,7 @@ public class ParallelConsumerOptions<K, V> {
          * fraction of the subscription's partitions it holds, re-divided by the consumer group's own rebalance
          * when instances come and go - across process boundaries, with nothing new to run and nothing new to
          * configure (astubbs#228). The default: tags plus contracts work out of the box. No
-         * {@link #resourceAllocator} may be supplied alongside it (KD10). The fleet-wide guarantee - rate,
+         * {@link #resourceAllocator} may be supplied alongside it (the partition-share plan's KD10). The fleet-wide guarantee - rate,
          * burst, and the bounded overshoot - is scoped to a uniform partition-share configuration across the
          * group (R6).
          */
@@ -656,7 +656,7 @@ public class ParallelConsumerOptions<K, V> {
      * <b>What it changes.</b> Which allocator the engine uses, and therefore what {@link #resourceAllocator}
      * and {@link #resourceContracts} mean: under partition-share the engine builds the allocator and registers
      * the contracts on it, and an allocator supplied here fails validation naming both fields; under the other
-     * two the supplied instance is used, and it must be supplied (R6, KD10). Every cell of that matrix is
+     * two the supplied instance is used, and it must be supplied (R6, the partition-share plan's KD10). Every cell of that matrix is
      * checked at {@link #validate()}.
      *
      * @see #resourceContracts
@@ -959,11 +959,11 @@ public class ParallelConsumerOptions<K, V> {
     }
 
     /**
-     * The strategy matrix (R6, KD6, KD10): strategy x allocator-present x contracts-present x tags-present,
+     * The strategy matrix (R6, KD6, the partition-share plan's KD10): strategy x allocator-present x contracts-present x tags-present,
      * every cell decided here, at construction, naming the field or fields that disagree.
      * <ul>
      *     <li>{@link AllocationStrategy#PARTITION_SHARE} (explicit or defaulted) with a {@link #resourceAllocator}
-     *     supplied fails naming BOTH fields - the instance would otherwise be silently unused (KD10). Without
+     *     supplied fails naming BOTH fields - the instance would otherwise be silently unused (the partition-share plan's KD10). Without
      *     one, {@link #resourceContracts} are registered into a fresh {@link ContractRegistry} so R7's
      *     unusable-policy and collision rules (R19) fire now rather than on the engine's first quantum read; no
      *     allocator exists at this point under this strategy - the engine builds it later (KTD4).</li>
@@ -998,7 +998,7 @@ public class ParallelConsumerOptions<K, V> {
                                 "allocator from the consumer group's assignment, so the instance you passed " +
                                 "would be silently unused. Either remove the {} and declare the resources in " +
                                 "{}, or select {} {} (a {} shared by every instance in this JVM) or {} (your " +
-                                "own implementation) so the instance you passed is the one that runs (KD10).",
+                                "own implementation) so the instance you passed is the one that runs (the partition-share plan's KD10).",
                         Fields.allocationStrategy, allocationStrategy, Fields.resourceAllocator,
                         resourceAllocator.getClass().getName(), Fields.resourceAllocator,
                         Fields.resourceContracts, Fields.allocationStrategy, AllocationStrategy.IN_PROCESS,

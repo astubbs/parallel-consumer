@@ -274,7 +274,7 @@ public class PCModule<K, V> {
     private final Supplier<Optional<ResourceAllocator>> resourceAllocator = SupplierUtils.memoize(() -> {
         if (options().getAllocationStrategy() == ParallelConsumerOptions.AllocationStrategy.PARTITION_SHARE) {
             Optional<PartitionShareResourceAllocator> built = partitionShareAllocator();
-            return built.isPresent() ? Optional.of(built.get()) : Optional.empty();
+            return built.map(allocator -> allocator);
         }
         return Optional.ofNullable(options().getResourceAllocator());
     });

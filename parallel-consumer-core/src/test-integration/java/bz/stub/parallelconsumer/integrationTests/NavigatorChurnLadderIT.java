@@ -30,20 +30,22 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.CONTRACT;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.CONVERGENCE_DEADLINE;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.QUANTUM;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.RATE_PER_SECOND;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.RESOURCE;
+import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.randomSuffix;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.WINDOW;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.assertFleetIdentity;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.overshootBound;
@@ -94,7 +96,7 @@ class NavigatorChurnLadderIT extends BrokerIntegrationTest<String, String> {
     private static final int PARTITIONS = 12;
 
     /** The N of each rung: N-1 children at the open, the Nth joins, the first is killed. */
-    private static final List<Integer> MEMBER_LADDER = java.util.Arrays.asList(2, 3, 4);
+    private static final List<Integer> MEMBER_LADDER = Arrays.asList(2, 3, 4);
 
     /** The injected skew, a fraction of a quantum: the first child runs ahead by this, the joiner behind. */
     private static final Duration SKEW_OFFSET = Duration.ofMillis(400);
@@ -241,7 +243,7 @@ class NavigatorChurnLadderIT extends BrokerIntegrationTest<String, String> {
                          Set<String> rungInstances) {
         FiringLedger ledger = opened.ledger;
         int members = rung.getMembers();
-        String tag = String.format(java.util.Locale.ROOT, "r%02d", rungsRun);
+        String tag = String.format(Locale.ROOT, "r%02d", rungsRun);
         String groupId = "nav-ladder-" + tag + "-" + randomSuffix();
         getKcu().setGroupId(groupId); // the stability waits and describeGroup() read this rung's group
         Map<String, Long> offsets = new HashMap<>();
@@ -310,7 +312,7 @@ class NavigatorChurnLadderIT extends BrokerIntegrationTest<String, String> {
         boolean inside = scan.max <= bound;
         observation.verdict(inside ? "inside (margin " + (bound - scan.max) + ")"
                 : "CROSSED by " + (scan.max - bound) + (rung.isSkewed() ? "" : " - a DEFECT on a zero-offset rung"));
-        long departedTail = countAmong(ledger, departedBefore, open, close);
+        long departedTail = ledger.countAmong(departedBefore, open, close);
         log.info("rung {} OBSERVATION: max aligned window {} from {} over {} windows in [{}, {}) - strict bound {}, "
                         + "skew term {} (join {} moved / {} skewed / share {} / term {}; kill {} moved / {} skewed / "
                         + "share {} / term {}), bound {} -> {}; join undershoot {} over the deadline, kill undershoot "
@@ -360,7 +362,7 @@ class NavigatorChurnLadderIT extends BrokerIntegrationTest<String, String> {
         WindowScan scan = new WindowScan();
         for (long start = firstStart; start + WINDOW.toMillis() <= close.toEpochMilli(); start += quantumMillis) {
             Instant windowStart = Instant.ofEpochMilli(start);
-            long count = countAmong(ledger, instances, windowStart, windowStart.plus(WINDOW));
+            long count = ledger.countAmong(instances, windowStart, windowStart.plus(WINDOW));
             scan.windows++;
             if (count > scan.max) {
                 scan.max = count;
@@ -370,14 +372,6 @@ class NavigatorChurnLadderIT extends BrokerIntegrationTest<String, String> {
         assertThat(scan.windows).as("the rung's span [%s, %s) holds at least one whole aligned window", open, close)
                 .isPositive();
         return scan;
-    }
-
-    private static long countAmong(FiringLedger ledger, Set<String> instances, Instant start, Instant end) {
-        long total = 0;
-        for (String instance : instances) {
-            total += ledger.countIn(instance, start, end);
-        }
-        return total;
     }
 
     private static Optional<Instant> latestFiringAmong(FiringLedger ledger, Set<String> instances) {
@@ -394,7 +388,7 @@ class NavigatorChurnLadderIT extends BrokerIntegrationTest<String, String> {
     /** Expected firings over the convergence deadline from {@code anchor}, minus what the fleet fired. */
     private static double undershootOver(FiringLedger ledger, Set<String> instances, Instant anchor) {
         double expected = RATE_PER_SECOND * CONVERGENCE_DEADLINE.toMillis() / 1000.0;
-        return expected - countAmong(ledger, instances, anchor, anchor.plus(CONVERGENCE_DEADLINE));
+        return expected - ledger.countAmong(instances, anchor, anchor.plus(CONVERGENCE_DEADLINE));
     }
 
     // ------------------------------------------------------------------
@@ -487,7 +481,4 @@ class NavigatorChurnLadderIT extends BrokerIntegrationTest<String, String> {
         return newline < 0 ? message : message.substring(0, newline);
     }
 
-    private static int randomSuffix() {
-        return ThreadLocalRandom.current().nextInt(Integer.MAX_VALUE);
-    }
 }

@@ -23,6 +23,7 @@ import pl.tlinkowski.unij.api.UniLists;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -230,13 +231,23 @@ public final class FiringLedger implements AutoCloseable {
         return countIn(brokerTimesOf(instanceId), start, end);
     }
 
-    /** Firings by every child in {@code [start, end)} of broker time. */
-    public long countAll(Instant start, Instant end) {
+    /** Firings by the named children in {@code [start, end)} of broker time. */
+    public long countAmong(Collection<String> instanceIds, Instant start, Instant end) {
         long total = 0;
-        for (String instanceId : firingsByInstance.keySet()) {
+        for (String instanceId : instanceIds) {
             total += countIn(instanceId, start, end);
         }
         return total;
+    }
+
+    /** {@link #countAmong(Collection, Instant, Instant)} over instance ids given inline. */
+    public long countAmong(Instant start, Instant end, String... instanceIds) {
+        return countAmong(Arrays.asList(instanceIds), start, end);
+    }
+
+    /** Firings by every child in {@code [start, end)} of broker time. */
+    public long countAll(Instant start, Instant end) {
+        return countAmong(firingsByInstance.keySet(), start, end);
     }
 
     /**
