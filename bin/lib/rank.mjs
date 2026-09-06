@@ -388,7 +388,15 @@ export function rank(index, { prs, register, group = null }) {
         const disagreement = [...new Set(seen.map((v) => v.group))]
             .filter((g) => g !== key)
             .map((g) => {
-                const refs = seen.find((v) => v.group === g).refs
+                // EVERY VERSION IN THE GROUP, not the first one that classifies into it - the same
+                // rule as the line below, one level up. Two branches that closed a note
+                // independently write different words and so produce two distinct blobs sharing one
+                // group, and `find` returned whichever the ref enumeration reached first. Refs are
+                // enumerated by full name, so `refs/backup/*` is read ahead of `refs/remotes/*`:
+                // the archival closure won and the live branch carrying that exact state was never
+                // named, which is the half a reader can go and act on. Deduping across versions
+                // rather than within one was the last place this class of defect was still live.
+                const refs = [...new Set(seen.filter((v) => v.group === g).flatMap((v) => v.refs))].sort()
                 const ref = refs.find((r) => !archival.get(r)) ?? refs[0]
                 return { group: g, ref, archival: archival.get(ref) === true }
             })

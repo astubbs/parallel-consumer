@@ -3653,6 +3653,27 @@ const CHECKS = [
             'const ref = refs.find((r) => !archival.get(r)) ?? refs[0]', 'const ref = refs[0]'),
     },
     {
+        id: 'rank-names-a-live-carrier-when-two-versions-share-one-disagreeing-group',
+        why: "the same rule as the check above, one level up and still unfixed there: the groups were deduped and then the FIRST version classifying into one was read, so two branches that closed a note in different words - two distinct blobs, one group - had only one of them consulted. `for-each-ref` orders by full refname, so a `refs/backup/**` closure is reached before a `refs/remotes/**` one and the row presented the state as parked history while a live branch carried it",
+        run: async (binDir) => {
+            const { formatRank } = await views(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir, 'stall')
+                if (!r.ok) return false
+                const row = rankRow(r, 'bug-two-refs-closed-it-differently')
+                if (!row) return false
+                const dis = row.disagreement.find((d) => d.group === 'closed')
+                // Both closures are real; the LIVE one is the one named, and the archival one that
+                // the enumeration reaches first is never printed.
+                return !!dis && dis.ref === 'origin/z-closes-it-live' && dis.archival === false
+                    && !/backup\/closed-differently/.test(formatRank(r))
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'const refs = [...new Set(seen.filter((v) => v.group === g).flatMap((v) => v.refs))].sort()',
+            'const refs = seen.find((v) => v.group === g).refs'),
+    },
+    {
         id: 'rank-attributes-a-number-its-note-names-only-in-the-fully-qualified-form',
         why: "`AGENTS.md` mandates `astubbs/parallel-consumer#NN` for anything posted to GitHub and notes use it, so testing only the short form called such a number unattributable and printed a confluentinc lookup beside the fork one - a reference that RESOLVES to an unrelated upstream issue, which AGENTS.md rates worse than a broken one. `parseRegister` already read both spellings; this half had not been brought with it",
         run: async (binDir) => {
@@ -3799,6 +3820,10 @@ function manyVersionsFixture() {
  *   pr-207-a-pr-note            `pr-` prefix       - a fork PR number, never printed as an issue
  *   bug-branch-only-stall       one branch only    - carriage names a branch here, unlike on master
  *   bug-archived-only           one TAG only       - preserved, and read from an archival ref
+ *   bug-two-refs-closed-it-differently
+ *                               two closed BLOBS   - one disagreeing group, two versions: a
+ *                                                    `refs/backup` closure the ref enumeration
+ *                                                    reaches first, and a live branch's
  */
 let RANK = null
 function rankFixture() {
@@ -3851,6 +3876,11 @@ function rankFixture() {
     // disagreement line took `refs[0]` and so presented the state as preserved history while a live
     // branch was carrying it.
     note('bug-disagrees-on-two-refs', `# Open here, closed on two refs\n\n${tags('bug', 'stall')}\nbody\n`)
+    // OPEN HERE, CLOSED BY TWO REFS IN DIFFERENT WORDS - two distinct blobs sharing one disagreeing
+    // group, one carried only by an archive whose full refname sorts FIRST. Deduping the groups and
+    // then reaching for the first version that classifies into one took the archival closure and
+    // never named the live branch carrying the same state.
+    note('bug-two-refs-closed-it-differently', `# Open here, closed two ways\n\n${tags('bug', 'stall')}\nbody\n`)
     write('docs/inflight/process-candidate-ranking.md', [
         '# Next candidates, ranked', '', '<!-- inflight-type: register -->', '',
         '- `bug-open-stall.md` - open, so no delta row',
@@ -3917,6 +3947,24 @@ function rankFixture() {
     git('tag', 'archive/disagreement')
     git('checkout', '-q', 'master')
     git('branch', '-q', '-D', 'z-disagrees')
+
+    // TWO DIFFERENT BLOBS, ONE DISAGREEING GROUP. `refs/backup/**` is archival and `for-each-ref`
+    // orders by FULL refname, so the backup's closure is inserted before the live branch's and is
+    // the one a first-match lookup finds - while `origin/z-closes-it-live` carries that same closed
+    // state and is the only half a reader can act on.
+    git('checkout', '-q', '-b', 'closed-on-a-backup', 'master')
+    note('bug-two-refs-closed-it-differently',
+        `# Open here, closed two ways\n\n${tags('bug', 'stall', 'closed - done, on the ref that keeps it')}\nbody\n`)
+    commit('closed, on a ref parked outside the branch spaces')
+    git('update-ref', 'refs/backup/closed-differently', git('rev-parse', 'HEAD'))
+    git('checkout', '-q', '-b', 'z-closes-it-live', 'master')
+    note('bug-two-refs-closed-it-differently',
+        `# Open here, closed two ways\n\n${tags('bug', 'stall', 'closed - done, right here')}\nbody\n`)
+    commit('closed on a live branch, in different words')
+    git('update-ref', 'refs/remotes/origin/z-closes-it-live', git('rev-parse', 'HEAD'))
+    git('checkout', '-q', 'master')
+    git('branch', '-q', '-D', 'z-closes-it-live')
+    git('branch', '-q', '-D', 'closed-on-a-backup')
 
     git('checkout', '-q', '-b', 'closed-live-copy', 'master')
     note('bug-open-only-on-an-archive', `# Closed live, open on a tag\n\n${tags('bug', 'stall', 'closed - done here')}\nbody\n`)
