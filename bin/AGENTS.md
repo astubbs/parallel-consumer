@@ -60,6 +60,15 @@ grant leaves the reviewer quietly running fewer checks than the directory contai
 beyond `gh` reads.** The two prefixes were chosen to keep `deploy.sh`, `chaos-test.sh`,
 `soak-test.sh` and friends outside the grant, and a misnamed script defeats that silently.
 
+**If a gate genuinely needs a non-`gh` network read, make the read OPT-IN behind its own variable
+and keep the name** - `check-integration-shard-balance.mjs` is the worked example: it exits 3
+unless `SHARD_BALANCE_NETWORK=1`, and only the `Repo Hygiene` job sets it. The alternative,
+renaming out of `check-*`, drops the script from `check-all.sh`'s glob, which is the one thing that
+glob exists to prevent. **Do not gate on `CI`.** The reviewer holding the grant runs *inside*
+GitHub Actions, so `CI` disables the read on a laptop - where it is harmless - and leaves it
+enabled exactly where the auto-executing agent is. The variable has to be one only the workflow
+sets.
+
 Everything else about the allowlist - the two boundaries it sits between, what still needs a manual
 grant, and why a grant must land before the pull request that needs it - is in
 [`docs/ci.md`](../docs/ci.md) -> "Editing the reviewer".

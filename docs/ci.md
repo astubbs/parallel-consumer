@@ -67,7 +67,10 @@ document. This section is the detail behind it.
   2026-08-26 and was split on 2026-09-03; see
   ["Chaos does not need the self-hosted box"](#chaos-does-not-need-the-self-hosted-box) and
   ["Chaos runs as four shards"](#chaos-runs-as-four-shards). Every shard is
-  **gating**, like the job they replaced: a chaos RED is a real finding. Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
+  **gating**, like the job they replaced: a chaos RED is a real finding. The **`Integration
+  Tests`** lane is likewise two gating shards since astubbs#442 - a named heavy set and a
+  catch-all defined by subtraction; see
+  ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
   detection, PR-scoped mutation testing (PIT), and dependency vulnerability scanning. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
@@ -389,6 +392,63 @@ own VM, so it inherits the existing per-class rate without adding to it. And the
 master's ruleset required `Chaos Pain Suite` by that exact name, so landing the split means replacing
 it with the four shard names in the same step - a required check that no job reports blocks every
 PR. `gh api repos/astubbs/parallel-consumer/rules/branches/master` lists what is required today.
+
+### The Integration Tests lane runs as two shards
+
+**Since astubbs#442 the `Integration Tests` lane is two jobs: `Integration Tests (heavy)` runs
+exactly the classes named in `HEAVY_CLASSES` in `bin/ci-integration-test.sh`, and `Integration
+Tests` runs everything else, by subtraction.** Both are required checks on `master`; the catch-all
+kept the original name because the ruleset required that context first, and `(heavy)` was added
+alongside it - adding a job never adds a requirement, so a shard nobody required would gate nothing.
+`gh api repos/astubbs/parallel-consumer/rules/branches/master` lists what is required today.
+
+**The shape is one named set plus a catch-all, NOT the chaos suite's four balanced bins, and the
+difference is the point.** A balanced N-way split has to be re-sized as the suite changes, and its
+failure mode is silent: a new class belongs to no bin, stops running, and nothing goes red. Here a
+new test runs in the catch-all by default, and the only way to lose one is to name it in
+`HEAVY_CLASSES` and then delete it - which fails the heavy shard loudly while the catch-all keeps
+running the test. The script header owns the sizing guide and how the seven-class set was derived;
+the measurements, and why the shard COUNT mattered less than splitting one class first, are in
+[`solutions/performance-issues/shard-count-buys-nothing-while-one-class-sets-the-floor-2026-09-07.md`](solutions/performance-issues/shard-count-buys-nothing-while-one-class-sets-the-floor-2026-09-07.md).
+
+**The guards, and what each one caught.** Every one was added because a real run passed while
+doing the wrong thing:
+
+- **Completeness is asserted from bytecode.** `bin/check-integration-shard-coverage.mjs` reads
+  `target/test-classes` through `javap` and demands a failsafe report for every test class whose
+  ancestry reaches an integration package, minus the excluded groups - so an inherited test, a
+  `@Nested` class, a meta-annotated `@Quarantined`, or a class moved out of the package are all
+  seen as `javac` saw them. A `javap` that cannot run exits 2, never a pass over an empty index.
+  Why it reads bytecode rather than `.java` text:
+  [`solutions/best-practices/a-guard-that-greps-java-must-read-what-javac-decided.md`](solutions/best-practices/a-guard-that-greps-java-must-read-what-javac-decided.md).
+- **Every report must come from an `integrationTest` package.** `-Dit.test=!Class` REPLACES
+  failsafe's `<includes>`, and both test source roots compile into one `target/test-classes`, so the
+  first catch-all ran the entire unit suite under failsafe - and passed, because running MORE tests
+  than you meant to fails nothing. The pom now carries a `<excludes>` for the shard, and this guard
+  is what would notice the next such leak.
+- **Every class named in `HEAVY_CLASSES` must produce a report in the heavy shard.** A rename or a
+  deletion turns the LIST wrong, not the suite: the heavy shard fails naming the class while the
+  catch-all, defined by subtraction, keeps running whatever the class became.
+- **No class may appear in two lists**, or it runs and is paid for twice while both shards pass.
+- **Drift is a number.** `bin/check-integration-shard-balance.mjs` recomputes the best two-way
+  partition from recorded per-class times and reports how much wall the shipped one leaves on the
+  table; it also names a listed class with no recorded history, which is what a rename looks like
+  before the build catches it. Advisory by default - this lane's wall-clock noise is too wide to
+  block a merge on - with `--fail-over <seconds>` for a caller that wants it blocking. Its Codecov
+  read is opt-in behind `SHARD_BALANCE_NETWORK`, which only the `Repo Hygiene` job sets, because a
+  `check-*` script is granted to the review agent by name and `bin/AGENTS.md` forbids that prefix a
+  network read; the variable is deliberately not `CI`, since that agent runs inside Actions.
+
+**Reading a red shard.** A red `Integration Tests (heavy)` whose log says a listed class produced
+no report is a LIST defect - a rename or deletion - not a test failure; fix `HEAVY_CLASSES`. A test
+failure names its class in the Maven summary as before; the two integration flakes the lane
+surfaced are in [`inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md)
+with control arms rather than retried into green, and the lane deliberately passes no retry. Both
+shards pass `forkCount=4`, which is a measured ceiling, not a floor - the script header says why.
+
+**Four shards was built, measured faster, and not taken** - a cost trade recorded in
+[`inflight/ci-four-shard-integration-gate.md`](inflight/ci-four-shard-integration-gate.md) with
+what would change the answer.
 
 ### The box decides its own concurrency
 

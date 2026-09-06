@@ -158,7 +158,30 @@ class QuarantinedAnnotationContractTest {
         String flag = "-Dexcluded.groups=";
         int start = body.indexOf(flag);
         assertWithMessage(script + " must pass an explicit -Dexcluded.groups").that(start).isAtLeast(0);
-        return body.substring(start + flag.length()).split("\\s")[0];
+        String value = body.substring(start + flag.length()).split("\\s")[0];
+        // The list may be hardcoded ONCE as a shell variable and passed by reference - a wrapper that
+        // hands the same list to failsafe and to a coverage gate must not carry two copies of it, and
+        // "hardcoded" means "written in this script rather than inherited from the pom", which a
+        // `readonly EXCLUDED_GROUPS=...` line satisfies exactly as an inline literal does. Resolve one
+        // level of `"${NAME}"` / `$NAME` to that assignment; anything else is returned verbatim, so a
+        // wrapper that really did stop hardcoding the list still fails the membership checks.
+        String reference = value.replaceAll("^\"|\"$", "");
+        if (reference.startsWith("$")) {
+            String name = reference.replaceAll("^\\$\\{?|\\}$", "");
+            // The captured value is restricted to list characters, so an assignment of the shape
+            // NAME=${OVERRIDE:-a,b,c} - which would make the gating list env-overridable while its
+            // comma-split still contains every required tag - does not match at all and fails below.
+            java.util.regex.Matcher assignment = java.util.regex.Pattern
+                    .compile("(?m)^\\s*(?:readonly\\s+)?" + java.util.regex.Pattern.quote(name) + "=\"?([A-Za-z0-9_,]+)\"?\\s*$")
+                    .matcher(body);
+            assertWithMessage(script + " passes -Dexcluded.groups=" + value + " but has no plain assignment of " + name
+                    + " - the list must be hardcoded in the script as a literal, not inherited or overridable")
+                    .that(assignment.find()).isTrue();
+            String resolved = assignment.group(1);
+            assertWithMessage(name + " must resolve to a literal list, not another reference").that(resolved).doesNotContain("$");
+            return resolved;
+        }
+        return value;
     }
 
     private static List<String> groups(String commaSeparated) {

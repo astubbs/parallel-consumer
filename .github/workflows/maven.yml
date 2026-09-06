@@ -97,13 +97,32 @@ jobs:
             timeout: 15
             scenarios: ""
             shard: ""
+          # INTEGRATION RUNS AS TWO JOBS: one named heavy set, one catch-all defined by
+          # SUBTRACTION. bin/ci-integration-test.sh owns HEAVY_CLASSES and the guide for when to
+          # add to it, and both entries go through that one script - so the shards cannot select
+          # differently. A new test lands in the catch-all by default and can never belong to no
+          # shard, which is the inversion of N explicit bins.
+          #
+          # TWO AND NOT FOUR, measured rather than assumed: four shards with the same probe split
+          # measured 355s against two shards' ~440s, but cost 1318s of runner time against ~880s
+          # and manufactured ~500s of extra test work, because per-shard fixed costs are paid per
+          # shard. 85s of critical path is not worth a 50% machine-time increase and four lists to
+          # keep straight. The four-way arrangement is preserved on ci/shard-integration-four.
+          #
+          # forkCount=4 inside each shard is a measured CEILING - 6 was slower and destabilising
+          # (docs/plans/2026-09-03-001-investigate-integration-gate-wall-time.md).
+          - suite: integration
+            name: "Integration Tests (heavy)"
+            cmd: "INTEGRATION_SHARD=heavy bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
+            timeout: 60
+            scenarios: ""
+            shard: ""
+          # Keeps the name "Integration Tests" because that is the context the master ruleset
+          # required first; "Integration Tests (heavy)" was added to the ruleset alongside it
+          # (astubbs/parallel-consumer#442), so both shards gate.
           - suite: integration
             name: "Integration Tests"
-            # Forked (process-parallel) mode: each JVM fork gets its own TestContainers
-            # broker, so tests don't contend one shared broker. Reliable AND parallel,
-            # without masking anything (each test runs on an uncontended broker). See
-            # docs/solutions/test-flakiness/. forkCount=4 matches the self-hosted measurement.
-            cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
+            cmd: "INTEGRATION_SHARD=rest bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
             timeout: 60
             scenarios: ""
             shard: ""
@@ -671,7 +690,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      # v1.1.0. The bump is not routine: at c828d78 this action installed jscpd with `npx jscpd@4`
+      # v1.1.1. The bump is not routine: at c828d78 this action installed jscpd with `npx jscpd@4`
       # INSIDE the step it measures, so the base-branch engine step paid a cold install the PR-branch
       # step did not - measured at 288s against 15s on the same tree - and npm's default 300s
       # fetch-timeout meant one stalled registry request consumed this job's whole 5-minute budget.
@@ -680,7 +699,7 @@ jobs:
       # It also stopped unzipping its own PMD distribution into the tree it scans. That had inflated
       # the duplication DENOMINATOR ~4x, so every percentage this check reported was about a quarter
       # of the truth - see cpd-max-duplication below.
-      - uses: astubbs/duplicate-code-cross-check@e5c9f6fbd020be8bc7c95568c1926eda57afb45f # v1.1.0 + astubbs/duplicate-code-cross-check#11
+      - uses: astubbs/duplicate-code-cross-check@b462149cbfcdc7585c851e3109763c72787699a7 # v1.1.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # SCAN EVERYTHING. There is nothing here to exclude, and three earlier attempts at a
