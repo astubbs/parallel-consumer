@@ -235,6 +235,25 @@ aborts the script instead of reaching its documented fail-closed branch. `hook_f
 carries `|| true` on both arms for exactly this, so it is safe to point the other two at - but point
 them, do not copy them back.
 
+### JUnit tag resolution is implemented twice, in two languages, from one rule
+
+`bin/lib/compiled-classes.mjs` (the integration shard's completeness guard) and
+`TransactionalClaimCoverageTest.effectiveTagsOf` (the transactional claim register) both answer "which
+tags would JUnit apply to this test?", and both had to get the same three cases right: a tag on the
+method, a tag on the class, and a tag reached only through a meta-annotation such as `@Quarantined`,
+which is a `@Tag` carrier rather than a `@Tag`. They arrived independently, days apart, and agree.
+
+**Not a consolidation candidate, which is why it is written down rather than queued.** One reads
+`javap` output from Node before any JVM starts; the other resolves annotations inside a running test
+JVM through JUnit's own `AnnotationSupport`. Neither can call the other, and re-deriving the rule in a
+shared place would produce a third implementation rather than removing one.
+
+What is worth doing, if either is ever changed: change both, or record why not. The rule they encode
+is JUnit's, not this repo's, so it moves only when JUnit's does - but a fix applied to one and not the
+other leaves two answers to one question, and each is load-bearing for a different gate. The failure
+is silent in both directions: a guard that under-reads tags reports coverage it does not have, and one
+that over-reads them excuses a test that really runs.
+
 ### Thread model: eliminate the separate poller thread (MASSIVE, UNDECIDED)
 *Mirror: [#142](https://github.com/astubbs/parallel-consumer/issues/142) · orphaned implementation in [confluentinc PR #270](https://github.com/confluentinc/parallel-consumer/pull/270), closed unmerged in the 2023-06-15 sweep.*
 - **confluentinc#200** - "Consider a shared-nothing architecture, to reduce thread

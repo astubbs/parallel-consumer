@@ -143,6 +143,31 @@ Rules:
 A non-empty lane blocks releases - see [`docs/releasing.md`](releasing.md). Run the lane locally
 with `bin/quarantined-test.sh`.
 
+## The transactional claim register (`@Tag("transactions")`)
+
+`TransactionalClaim` records every transactional guarantee this project documents, and
+`TransactionalClaimCoverageTest` gates the register in both directions: each claim recorded as
+covered must be referenced by a `@ProvesClaim` test method, and each claim's recorded sentence must
+still appear in the javadoc or README it was taken from. It is broker-free and untagged, so it runs
+in every default build rather than only in the lane holding the proofs.
+
+Nearly every `@ProvesClaim` method carries `@Tag("transactions")`, which is **not** in the pom's
+default `excluded.groups` - so an ordinary build runs the proofs and the register together.
+
+**Exclude that tag and the register fails rather than reporting coverage it did not exercise.**
+Before this gate existed, `-Dexcluded.groups=transactions,...` deselected every tagged proof while
+the register still reported every claim covered, every parked claim explained and every sentence
+intact - a fully green report over a run that verified nothing, because the register reads compiled
+annotations and cannot see what the run selected. `RunTagFilter` closes that: `pom.xml` forwards
+`${included.groups}`/`${excluded.groups}` into the test JVM through `systemPropertyVariables` on
+**both** surefire and failsafe, and the register refuses to certify a run whose tag filters
+deselected the proofs. Tag filters are checked, lane selection is not - `bin/ci-unit-test.sh` skips
+the ITs by design, and the register deliberately spans both lanes.
+
+If you hit that failure, the fix is to stop excluding the tag, not to weaken the gate. Deleting the
+`systemPropertyVariables` block does not quietly disable it either: `RunTagFilter` raises, because a
+filter it cannot read must never read as "nothing was filtered".
+
 ## Does a test earn its place? Mutate a guard and see who notices (optional)
 
 **Reach for this when a test's value is disputed** - two reviewers wanting opposite things, or a
@@ -218,10 +243,13 @@ bound and then drain completely, the latter two being the seeds
 150s bound looks like *whatever crossed it* - the probe samples every 5s, so the number is bound plus
 detection latency and encodes no severity; do not read a tight cluster of them across runs as
 corroboration. And the liveness claim the bound was standing in for now belongs to
-`INSTANCE_STALL/NO_WORK_COMPLETED`, which watches COMPLETIONS - any returned work result re-arms it -
-so it structurally cannot fire on slow-but-progressing. A run where Class 2 observes and
-`INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT` guards the routing;
-it is untagged deliberately, so it gates every default integration build.
+`INSTANCE_STALL/NO_WORK_COMPLETED`, which watches COMPLETIONS, so it does not fire on an instance
+that is finishing records however slowly. Read that as **only a SUCCESSFUL result re-arms it** -
+`onFailureResult` and the revoked-partition drop both return a work result and notify nothing, and
+the bound's arithmetic budgets for the second but not the first. `ProgressProbe#INSTANCE_STALL_BOUND`
+owns the detail, including why the budget is not established for W1's continuous churn. A run where
+Class 2 observes and `INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT`
+guards the routing; it is untagged deliberately, so it gates every default integration build.
 
 **The demotion REDUCED per-shard coverage, and that is a known gap rather than a relocation.**
 `INSTANCE_STALL` is per-INSTANCE, so one wedged shard on an instance whose other shards keep
