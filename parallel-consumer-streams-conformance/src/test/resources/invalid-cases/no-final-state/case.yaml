@@ -1,0 +1,13 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# AE8 / R3: no stateful operation and no sink, so the final state is empty and the case would pass
+# every proof by observing nothing.
+name: no-final-state
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: in, source: {topic: in}}
+  - {id: m, map-values: {of: in, fn: upper}}
+inputs:
+  - {key: a, value: "1", at-ms: 0}
+perturbation:
+  - {key: b, value: "1", at-ms: 0}

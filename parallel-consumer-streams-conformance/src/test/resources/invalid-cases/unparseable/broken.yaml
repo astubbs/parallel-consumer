@@ -1,0 +1,4 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+name: never-read
+topology: [ {id: in, source: {topic: in}

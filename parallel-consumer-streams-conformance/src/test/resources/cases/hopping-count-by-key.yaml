@@ -1,0 +1,22 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# The corpus's first outcome case: a hopping windowed count, compared at final state.
+# U6 fills the rest of this directory; U2 needs one well-formed case to load.
+name: hopping-count-by-key
+base-instant: 2025-01-01T02:00:00Z      # past the epoch clamp; record offsets are relative to it
+topology:                               # ordered; every entry has an id, every op names its input(s) by id
+  - {id: in, source: {topic: in}}
+  - {id: g, group-by-key: {of: in}}
+  - {id: w, windowed-by: {of: g, size-ms: 3600000, advance-ms: 300000, grace-ms: 0, retention-ms: 3600000}}
+  - {id: c, count: {of: w, store: counts}}
+  - {id: s, to-stream: {of: c}}
+  - {sink: {of: s, topic: out}}         # fed by a windowed handle: compared as the full record list (R3)
+inputs:
+  - {key: a, value: "1", at-ms: 0}
+  - {key: a, value: "2", at-ms: 60000}
+  - {key: z, value: "-", at-ms: 7200000}
+perturbation:                           # count ignores values, so a key change
+  - {key: b, value: "1", at-ms: 0}
+  - {key: a, value: "2", at-ms: 60000}
+  - {key: z, value: "-", at-ms: 7200000}
+agreement: final-state
