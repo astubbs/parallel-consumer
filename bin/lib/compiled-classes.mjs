@@ -21,6 +21,16 @@
 //   same simple name in two modules            - `this_class` is fully qualified
 //   `abstract`                                 - an access flag, not a keyword to match
 //   multi-level inheritance                    - `super_class` is followed exactly, to closure
+//   which METHODS a tag is on                  - a method's annotations are indented under it
+//
+// TAG SCOPE IS READ AT EVERY LEVEL JUNIT READS IT, because a report exists only if at least one test
+// in the class survives the run's excluded groups. Three places a tag can sit, and the first cut of
+// this module read only the first: on the concrete class; on an ANCESTOR class (`@Tag` is
+// `@Inherited`, so a `@Tag("chaos")` base filters every subclass); and on the METHODS, where a class
+// whose every test method is tagged out - or inherits only tagged-out tests - runs nothing and
+// writes no XML. The second Codex review (astubbs#442) found the method case: the gate would have
+// demanded a report from a class failsafe never ran, a permanent false RED on the catch-all shard.
+// No class in the tree had that shape on the day; the guard is for the one that will.
 //
 // THE TRADE, stated because it is real: this can only run AFTER compilation, so it is useless as a
 // pre-push tree gate and its consumer exits 3 ("nothing in scope") when no classes are built. That is
@@ -38,15 +48,15 @@ import { join } from 'node:path'
 // `@ParameterizedTest` lives in `org.junit.jupiter.PARAMS`, not `.api` - the first draft listed it
 // under `.api` and silently un-guarded MultiTopicTest, whose only tests are parameterised. The
 // self-test pins that package.
-const TEST_DESCRIPTORS = [
-    'Lorg/junit/jupiter/api/Test;',
-    'Lorg/junit/jupiter/api/RepeatedTest;',
-    'Lorg/junit/jupiter/api/TestFactory;',
-    'Lorg/junit/jupiter/api/TestTemplate;',
-    'Lorg/junit/jupiter/params/ParameterizedTest;',
+const TEST_ANNOTATIONS = new Set([
+    'org.junit.jupiter.api.Test',
+    'org.junit.jupiter.api.RepeatedTest',
+    'org.junit.jupiter.api.TestFactory',
+    'org.junit.jupiter.api.TestTemplate',
+    'org.junit.jupiter.params.ParameterizedTest',
     // JUnit 4, still reachable through vintage. Cheap to include; expensive to discover the omission.
-    'Lorg/junit/Test;',
-]
+    'org.junit.Test',
+])
 const TAG_ANNOTATION = 'org.junit.jupiter.api.Tag'
 
 /** A JDK tool by name: JAVA_HOME's copy when one is set and present, otherwise whatever PATH has. */
@@ -97,12 +107,14 @@ export function parseJavap(text) {
         // concrete, which would have demanded a report from a class that can never run.
         const classFlags = block.match(/^\s*flags:\s*\(0x[0-9a-fA-F]+\)([^\n]*)$/m)
         const { types, tags } = classLevelAnnotations(block)
+        const testMethods = memberAnnotations(block).filter((m) => m.types.some((t) => TEST_ANNOTATIONS.has(t)))
         records.push({
             name: thisClass[1].replace(/\//g, '.'),
             superName: superClass ? superClass[1].replace(/\//g, '.') : null,
             isAbstract: /ACC_ABSTRACT/.test(classFlags ? classFlags[1] : ''),
             isInterface: /ACC_INTERFACE/.test(classFlags ? classFlags[1] : ''),
-            declaresTest: TEST_DESCRIPTORS.some((d) => block.includes(d)),
+            declaresTest: testMethods.length > 0,
+            testMethods,               // [{ types, tags }] - one per method carrying a test annotation
             classAnnotations: types,
             classTags: tags,
         })
@@ -116,19 +128,48 @@ export function parseJavap(text) {
 // whole of the first review round's finding: a file-wide grep read a method-level tag as exempting
 // the class, and un-guarded LoadTest.
 function classLevelAnnotations(block) {
+    const m = block.match(/^Runtime(?:In)?[Vv]isibleAnnotations:\n((?:[ \t]+[^\n]*\n?)+)/gm)
+    return annotationsIn((m ?? []).flatMap((section) => section.split('\n')))
+}
+
+// Annotation type names and @Tag values from the lines of one or more `Runtime*Annotations:` blocks.
+// Indent-agnostic, so the same reader serves a class-level block (entries at column 2) and a
+// member-level one (entries at column 6).
+function annotationsIn(lines) {
     const types = []
     const tags = []
-    const m = block.match(/^Runtime(?:In)?[Vv]isibleAnnotations:\n((?:[ \t]+[^\n]*\n?)+)/gm)
-    for (const section of m ?? []) {
-        let current = null
-        for (const line of section.split('\n')) {
-            const type = line.match(/^\s+([A-Za-z_$][\w.$]*)\(?\s*$/)
-            if (type && !/^\d+:/.test(type[1])) { current = type[1]; types.push(current); continue }
-            const value = line.match(/^\s+value="([^"]*)"/)
-            if (value && current === TAG_ANNOTATION) tags.push(value[1])
-        }
+    let current = null
+    for (const line of lines) {
+        const type = line.match(/^\s+([A-Za-z_$][\w.$]*)\(?\s*$/)
+        if (type && !/^\d+:/.test(type[1])) { current = type[1]; types.push(current); continue }
+        const value = line.match(/^\s+value="([^"]*)"/)
+        if (value && current === TAG_ANNOTATION) tags.push(value[1])
     }
     return { types, tags }
+}
+
+// MEMBER-level annotations: one record per field or method in the `{ ... }` body. javap prints each
+// member's signature at two spaces and its attributes - `descriptor:`, `flags:`, `Code:`,
+// `RuntimeVisibleAnnotations:` - at four, with the annotation entries nested below that. So a member
+// starts at `^  \S`, its annotation block starts at `^    Runtime...Annotations:`, and the next
+// four-space attribute ends it. This is the reading that separates "one test in this class is tagged
+// performance" from "EVERY test in this class is", which no class-level view can tell apart.
+function memberAnnotations(block) {
+    const open = block.indexOf('\n{\n')
+    if (open < 0) return []
+    const close = block.indexOf('\n}\n', open)
+    const body = block.slice(open + 3, close < 0 ? undefined : close).split('\n')
+    const members = []
+    let current = null
+    let inAnnotations = false
+    for (const line of body) {
+        if (/^  \S/.test(line)) { current = { lines: [] }; members.push(current); inAnnotations = false; continue }
+        if (!current) continue
+        if (/^    Runtime(?:In)?[Vv]isibleAnnotations:/.test(line)) { inAnnotations = true; continue }
+        if (/^    \S/.test(line)) { inAnnotations = false; continue }
+        if (inAnnotations) current.lines.push(line)
+    }
+    return members.map((m) => annotationsIn(m.lines))
 }
 
 /** Run `javap -v -p` over `names` on `classpath`, in batches, and return parsed records. */
@@ -184,7 +225,8 @@ export function buildIndex(names, classpath, opts = {}) {
 function resolveMetaTags(index, classpath, opts) {
     const wanted = new Set()
     for (const r of index.values()) {
-        for (const a of r.classAnnotations) if (a !== TAG_ANNOTATION && !index.has(a)) wanted.add(a)
+        const used = [...r.classAnnotations, ...r.testMethods.flatMap((m) => m.types)]
+        for (const a of used) if (a !== TAG_ANNOTATION && !index.has(a)) wanted.add(a)
     }
     const meta = new Map()
     for (const r of inspect([...wanted], classpath, opts)) meta.set(r.name, r.classTags)
@@ -196,7 +238,36 @@ function resolveMetaTags(index, classpath, opts) {
     for (const r of index.values()) {
         const inherited = r.classAnnotations.flatMap(tagsOf)
         r.effectiveTags = [...new Set([...r.classTags, ...inherited])]
+        // A method can carry @Quarantined too - the repo's own annotation targets METHOD as well as
+        // TYPE - so a method's tags resolve through the same one hop.
+        for (const m of r.testMethods) m.effectiveTags = [...new Set([...m.tags, ...m.types.flatMap(tagsOf)])]
     }
+}
+
+/**
+ * Every class-level tag JUnit applies to `name`: its own, plus each ancestor's. `@Tag` is
+ * `@Inherited`, so a `@Tag("chaos")` on a base class filters every concrete subclass - and JUnit
+ * finds a meta-annotated `@Quarantined` on an ancestor by the same walk.
+ */
+export function classTagsInScope(index, name, seen = new Set()) {
+    const r = index.get(name)
+    if (!r || seen.has(name)) return []
+    seen.add(name)
+    const own = r.effectiveTags ?? r.classTags
+    return [...new Set([...own, ...(r.superName ? classTagsInScope(index, r.superName, seen) : [])])]
+}
+
+/**
+ * Does this class, or anything it inherits from, declare a test method that SURVIVES the excluded
+ * groups? A class whose every test method is tagged out runs nothing under failsafe and writes no
+ * report, so demanding one is a false RED. With no exclusions this is `inheritsTest`.
+ */
+export function hasRunnableTest(index, name, excluded = new Set(), seen = new Set()) {
+    const r = index.get(name)
+    if (!r || seen.has(name)) return false
+    seen.add(name)
+    if (r.testMethods.some((m) => !(m.effectiveTags ?? m.tags).some((t) => excluded.has(t)))) return true
+    return r.superName ? hasRunnableTest(index, r.superName, excluded, seen) : false
 }
 
 /** Does this class, or anything it inherits from, declare a JUnit test method? */
@@ -216,11 +287,13 @@ const NESTED_ANNOTATION = 'org.junit.jupiter.api.Nested'
  * its XML, so the outer class must be demanded even when its own bytecode carries no test at all.
  * A plain (non-@Nested) inner class is not run by failsafe, whose default excludes drop `*$*`.
  */
-export function producesReport(index, name) {
-    if (inheritsTest(index, name)) return true
+export function producesReport(index, name, excluded = new Set()) {
+    if (hasRunnableTest(index, name, excluded)) return true
     for (const [inner, r] of index) {
         if (!inner.startsWith(`${name}$`)) continue
-        if (r.classAnnotations.includes(NESTED_ANNOTATION) && producesReport(index, inner)) return true
+        if (!r.classAnnotations.includes(NESTED_ANNOTATION)) continue
+        if (classTagsInScope(index, inner).some((t) => excluded.has(t))) continue
+        if (producesReport(index, inner, excluded)) return true
     }
     return false
 }
@@ -252,8 +325,8 @@ export function classesRequiringReports(index, packageRe, excludedTags = []) {
         if (r.isAbstract || r.isInterface) continue
         if (name.includes('$')) continue            // inner/@Nested - reported under the enclosing class
         if (!inIntegrationLineage(index, name, packageRe)) continue
-        if (!producesReport(index, name)) continue  // a helper that happens to live in the same package
-        if ((r.effectiveTags ?? r.classTags).some((t) => excluded.has(t))) continue
+        if (classTagsInScope(index, name).some((t) => excluded.has(t))) continue  // tagged out, own or inherited
+        if (!producesReport(index, name, excluded)) continue  // a helper, or every test tagged out
         required.push(name)
     }
     return required.sort()

@@ -19,7 +19,11 @@
 // undecorated intermediate; a javadoc sentence containing "extends AnnotatedBase" on a helper (must
 // NOT be demanded); a generic bound `<T extends Base>` (must NOT be read as inheritance); a @Nested
 // inner class (reported under its enclosing class, never demanded alone); an abstract base; the same
-// simple name in two packages; and @ParameterizedTest as the class's only test.
+// simple name in two packages; @ParameterizedTest as the class's only test; and - from the second
+// Codex review - the three places a tag can sit that a class-level read misses: a class whose EVERY
+// test method is tagged into an excluded group (writes no report, must not be demanded), a base
+// class whose only tests are tagged out (its undecorated subclass runs nothing), and a class-level
+// tag on an ANCESTOR (`@Tag` is `@Inherited`, so the subclass is filtered too).
 //
 // Needs a JDK on JAVA_HOME or PATH. Exits 2 when javac is not available, never 0 - a self-test that
 // could not compile its fixtures has proven nothing.
@@ -29,7 +33,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildIndex, classFilesUnder, classesRequiringReports, inheritsTest, javapBinary, jdkBinary, parseJavap } from './lib/compiled-classes.mjs'
+import { buildIndex, classFilesUnder, classTagsInScope, classesRequiringReports, hasRunnableTest, inheritsTest, javapBinary, jdkBinary, parseJavap } from './lib/compiled-classes.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const GATE = join(HERE, 'check-integration-shard-coverage.mjs')
@@ -50,10 +54,10 @@ const STUBS = {
     'org/junit/jupiter/api/Test.java': 'package org.junit.jupiter.api; import java.lang.annotation.*; @Retention(RetentionPolicy.RUNTIME) public @interface Test {}',
     'org/junit/jupiter/api/RepeatedTest.java': 'package org.junit.jupiter.api; import java.lang.annotation.*; @Retention(RetentionPolicy.RUNTIME) public @interface RepeatedTest { int value(); }',
     'org/junit/jupiter/api/Nested.java': 'package org.junit.jupiter.api; import java.lang.annotation.*; @Retention(RetentionPolicy.RUNTIME) public @interface Nested {}',
-    'org/junit/jupiter/api/Tag.java': 'package org.junit.jupiter.api; import java.lang.annotation.*; @Retention(RetentionPolicy.RUNTIME) public @interface Tag { String value(); }',
+    'org/junit/jupiter/api/Tag.java': 'package org.junit.jupiter.api; import java.lang.annotation.*; @Retention(RetentionPolicy.RUNTIME) @Inherited public @interface Tag { String value(); }',
     'org/junit/jupiter/params/ParameterizedTest.java': 'package org.junit.jupiter.params; import java.lang.annotation.*; @Retention(RetentionPolicy.RUNTIME) public @interface ParameterizedTest {}',
     // Meta-annotated group, exactly as the repo's own Quarantined is.
-    'fx/Quarantined.java': 'package fx; import java.lang.annotation.*; import org.junit.jupiter.api.Tag; @Retention(RetentionPolicy.RUNTIME) @Tag("quarantined") public @interface Quarantined {}',
+    'fx/Quarantined.java': 'package fx; import java.lang.annotation.*; import org.junit.jupiter.api.Tag; @Retention(RetentionPolicy.RUNTIME) @Target({ElementType.TYPE, ElementType.METHOD}) @Tag("quarantined") public @interface Quarantined {}',
 }
 
 const FIXTURES = {
@@ -78,6 +82,23 @@ public class LoadTest { @Test void quick() {} @Tag("performance") @Test void slo
     'fx/integrationTests/ChaosIT.java': `package fx.integrationTests;
 import org.junit.jupiter.api.*;
 @Tag("chaos") public class ChaosIT { @Test void storm() {} }`,
+    // EVERY test method tagged into an excluded group - one plainly, one through the meta-annotation.
+    // failsafe filters both, runs nothing, writes no XML: demanding a report would be a false RED.
+    'fx/integrationTests/AllFilteredIT.java': `package fx.integrationTests;
+import org.junit.jupiter.api.*;
+public class AllFilteredIT { @Tag("performance") @Test void slow() {} @fx.Quarantined @Test void sick() {} void helper() {} }`,
+    // A base whose only tests are tagged out: the undecorated subclass inherits nothing runnable,
+    // while a subclass adding one plain test is demanded.
+    'fx/integrationTests/FilteredBase.java': `package fx.integrationTests;
+import org.junit.jupiter.api.*;
+public abstract class FilteredBase { @Tag("performance") @Test void heavy() {} }`,
+    'fx/integrationTests/FilteredLeafIT.java': 'package fx.integrationTests; public class FilteredLeafIT extends FilteredBase {}',
+    'fx/integrationTests/FilteredPlusIT.java': 'package fx.integrationTests; import org.junit.jupiter.api.Test; public class FilteredPlusIT extends FilteredBase { @Test void own() {} }',
+    // Class-level tag on the ANCESTOR: @Tag is @Inherited, so the untagged subclass is filtered too.
+    'fx/integrationTests/ChaosBase.java': `package fx.integrationTests;
+import org.junit.jupiter.api.*;
+@Tag("chaos") public abstract class ChaosBase { @Test void storm() {} }`,
+    'fx/integrationTests/InheritsChaosIT.java': 'package fx.integrationTests; public class InheritsChaosIT extends ChaosBase {}',
     // Meta-annotated group: exempt through the annotation type's own @Tag.
     'fx/integrationTests/FlakyIT.java': `package fx.integrationTests;
 import org.junit.jupiter.api.Test;
@@ -150,16 +171,27 @@ try {
     check('a method-level @Tag does not become a class tag', get('LoadTest').classTags, [])
     check('a class-level @Tag is read with its value', get('ChaosIT').classTags, ['chaos'])
     check('a meta-annotated group resolves through the annotation type', get('FlakyIT').effectiveTags, ['quarantined'])
+    check('a method\'s tags are read per METHOD, not pooled onto the class', get('AllFilteredIT').testMethods.map((m) => m.effectiveTags), [['performance'], ['quarantined']])
+    check('  ...and LoadTest has one tagged and one untagged test method', get('LoadTest').testMethods.map((m) => m.tags), [[], ['performance']])
+    check('an ancestor\'s class-level tag is in scope for the subclass', classTagsInScope(index, 'fx.integrationTests.InheritsChaosIT'), ['chaos'])
+    const EXCLUDED = new Set(['chaos', 'quarantined', 'performance'])
+    check('every-method-tagged-out has no runnable test under those exclusions', hasRunnableTest(index, 'fx.integrationTests.AllFilteredIT', EXCLUDED), false)
+    check('  ...but does with no exclusions', hasRunnableTest(index, 'fx.integrationTests.AllFilteredIT'), true)
+    check('a subclass of a tagged-out base inherits nothing runnable', hasRunnableTest(index, 'fx.integrationTests.FilteredLeafIT', EXCLUDED), false)
+    check('  ...unless it adds a plain test of its own', hasRunnableTest(index, 'fx.integrationTests.FilteredPlusIT', EXCLUDED), true)
 
-    const required = classesRequiringReports(index, PKG, ['chaos', 'quarantined'])
+    const required = classesRequiringReports(index, PKG, [...EXCLUDED])
     const simple = required.map((n) => n.split('.').pop())
     // `Middle` is in here on purpose: a concrete class with no tests of its own that extends a test
     // base IS a test class - JUnit runs the inherited tests - and the first draft of this expectation
     // left it out. `OuterIT` is in here because its only tests live in a @Nested inner class, which
     // Jupiter reports under the enclosing class.
     check('required set: concrete test classes in integration lineage, minus excluded groups', simple, [
-        'LeafIT', 'LoadTest', 'Middle', 'MultiTopicTest', 'OuterIT', 'Probe2IT', 'Probe3IT', 'Probe4IT', 'ProbeIT', 'SameNameIT', 'StrayIT',
+        'FilteredPlusIT', 'LeafIT', 'LoadTest', 'Middle', 'MultiTopicTest', 'OuterIT', 'Probe2IT', 'Probe3IT', 'Probe4IT', 'ProbeIT', 'SameNameIT', 'StrayIT',
     ])
+    check('  ...a class whose EVERY test method is tagged out is not demanded', simple.includes('AllFilteredIT'), false)
+    check('  ...a subclass inheriting only tagged-out tests is not demanded', simple.includes('FilteredLeafIT'), false)
+    check('  ...a subclass of a @Tag("chaos") base is not demanded (the tag is @Inherited)', simple.includes('InheritsChaosIT'), false)
     check('  ...a test moved OUT of the package but extending an integration base IS demanded', required.includes('fx.misc.StrayIT'), true)
     check('  ...an undecorated concrete subclass of a test base IS demanded', simple.includes('Middle'), true)
     check('  ...a class whose only tests are @Nested IS demanded (reported under it)', simple.includes('OuterIT'), true)
@@ -177,7 +209,7 @@ try {
     check('  ...with the class-level flags, not a member\'s', parsed[0].isAbstract, false)
 
     // --- the gate end to end, against the fixture tree ----------------------------------------------
-    const run = (extraEnv = {}, gatePath = GATE) => spawnSync('node', [gatePath, '--heavy-classes', 'ProbeIT,Probe2IT', '--excluded-groups', 'chaos,quarantined'], {
+    const run = (extraEnv = {}, gatePath = GATE) => spawnSync('node', [gatePath, '--heavy-classes', 'ProbeIT,Probe2IT', '--excluded-groups', 'chaos,quarantined,performance'], {
         encoding: 'utf8', env: { ...process.env, SHARD_COVERAGE_ROOT: tmp, ...extraEnv },
     })
     let r = run()
@@ -215,7 +247,7 @@ try {
     rmSync(linkDir, { recursive: true, force: true })
 
     const report = (fqcn) => writeFileSync(join(reportsDir, `TEST-${fqcn}.xml`), '<testsuite/>\n')
-    for (const s of ['LeafIT', 'LoadTest', 'Middle', 'MultiTopicTest', 'OuterIT', 'Probe3IT', 'ProbeIT', 'Probe2IT', 'SameNameIT']) report(`fx.integrationTests.${s}`)
+    for (const s of ['FilteredPlusIT', 'LeafIT', 'LoadTest', 'Middle', 'MultiTopicTest', 'OuterIT', 'Probe3IT', 'ProbeIT', 'Probe2IT', 'SameNameIT']) report(`fx.integrationTests.${s}`)
     report('fx.misc.StrayIT')
     r = run()
     check('one required class with no report fails (exit 1)', r.status, 1)
