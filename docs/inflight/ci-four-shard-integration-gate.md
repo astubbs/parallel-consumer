@@ -4,6 +4,7 @@
 <!-- inflight-impact: ci -->
 <!-- inflight-state: deferred - a cost trade: 61s of critical path for +526 runner-seconds and four lists to maintain instead of one. Revisit if runner-minutes stop mattering, the catch-all shard dominates again as the suite grows, or the gate has to come in under ~6 minutes for a specific reason -->
 
+<!-- post-merge: checked - names the PR in the past tense; the two-shard lane it describes is what landed -->
 The `Integration Tests` lane runs as two shards (astubbs/parallel-consumer#442). A four-shard
 arrangement was built on `ci/shard-integration-four`, measured green, and not merged. It is kept
 here as future work rather than a rejected idea: it works, it is faster, and the reason it is not
