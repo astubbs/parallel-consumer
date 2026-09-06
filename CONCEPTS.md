@@ -251,6 +251,20 @@ whoever copied it. Its distinguishing property is that it decays silently: when 
 moves, the probe keeps passing, so it needs a correspondence check that fails on divergence or it is
 only as current as its last manual review.
 
+**Agreement level**
+The declared set of observables two runs of one conformance case must match on. The floor is *final
+state* — every store's contents plus each sink's final record per key, the observables a close-driven
+run leaves deterministic. A case widens it to the update stream only by naming a close-driven emit
+rule, because a per-record commit emits every intermediate update a broker's cache would fold away,
+and comparing those counts across engines compares instruments, not behaviour.
+
+**Perturbed twin**
+A conformance case's second input set, chosen by its author so the case's own operations cannot
+absorb the change, run through the same path as the original and required to produce a different
+outcome. It is the positive control for the whole pipeline from execution to comparison: a twin the
+operations can absorb (a value change under a count) proves nothing, and when the twin agrees with
+the original the fix is the twin, never the control.
+
 ## Ratchet
 
 A gate that can only turn one way: the recorded set of accepted findings may **shrink**, never
