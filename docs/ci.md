@@ -426,6 +426,9 @@ doing the wrong thing:
   first catch-all ran the entire unit suite under failsafe - and passed, because running MORE tests
   than you meant to fails nothing. The pom now carries a `<excludes>` for the shard, and this guard
   is what would notice the next such leak.
+- **Every class named in `HEAVY_CLASSES` must produce a report in the heavy shard.** A rename or a
+  deletion turns the LIST wrong, not the suite: the heavy shard fails naming the class while the
+  catch-all, defined by subtraction, keeps running whatever the class became.
 - **No class may appear in two lists**, or it runs and is paid for twice while both shards pass.
 - **Drift is a number.** `bin/check-integration-shard-balance.mjs` recomputes the best two-way
   partition from recorded per-class times and reports how much wall the shipped one leaves on the
