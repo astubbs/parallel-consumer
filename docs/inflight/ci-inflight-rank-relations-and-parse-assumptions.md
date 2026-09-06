@@ -1,4 +1,4 @@
-# `inflight rank` - the relation it will not print, and two assumptions nothing enforces
+# `inflight rank` - the relation it will not print, and the assumptions nothing enforces
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: process -->
@@ -59,7 +59,39 @@ It is not wrong, and both halves are labelled, which is why it was left. The fix
 chosen version's own refs and say so; the reason to wait is that `N` over the whole path is also the
 useful number for a branch-only note, so the row may want both rather than a replacement.
 
+## The same defect classes, found elsewhere and deliberately not fixed here
+
+Merge-prep sweep for other instances of what review found in `rank`. Three live, each left alone
+because fixing it changes a command outside this work's scope - not because it is not real.
+
+**`docsShape` still makes both version choices `rank` had to abandon.** `bin/lib/docs-shape.mjs`
+picks `index.baseline` unconditionally when the path is on the baseline, and
+`[...cluster.liveRefs].sort()[0]` otherwise - the two defects `rank` fixed in that order. It then
+groups the note it read with the same imported `inflightGroupOf`, so a note deferred on the baseline
+and open on a branch is grouped as deferred in the session-start index every agent is handed.
+
+This is the sharpest of the three and the most expensive to change: that index is injected into every
+session, so altering which version it reads changes what every agent sees. It is also the case `rank`
+exists to *report* - the two surfaces disagreeing is a finding the tool can now surface about itself.
+Worth taking deliberately, with a measurement of how many documents move, rather than as a rider.
+
+**`note find` and `stranded` ignore `unreadableRefs`.** Both call `corpusIndex` and neither reads the
+field, so a ref whose listing failed leaves them answering from a corpus they know is incomplete, at
+exit 0. `stranded` is the one that matters: a ref that could not be listed can make a cluster look
+preserved when a live ref carries it. `rank` now fails the run for this; the other two do not, and
+`runFailure` in `bin/lib/rank.mjs` is the shape to reuse rather than re-derive.
+
+**`docs show` takes the first positional and drops the rest.** `showDocument` resolves the path with
+`args.filter(...)[0]`, so `docs show a.md b.md` silently answers about `a.md` - the same
+answering-a-different-question shape `rank stall` had. `docs for-branch` refuses extra arguments and
+is the model to copy.
+
+**Checked and ruled out.** `bin/lib/terms.mjs` already recognises all three issue-reference spellings
+and its docstring says so, so the short-form-only regex was one instance, not a pattern. Among the
+self-test's controls, only the ownership refusal asserted on a data field whose wording is written
+out independently; the other `JSON.stringify` assertions are about data the renderer prints directly.
+
 ## Where this note goes next
 
-Nothing here is blocked; all three are decisions someone could take up. When one is taken up, its
+Nothing here is blocked; every item is a decision someone could take up. When one is taken up, its
 paragraph moves with the work rather than being marked done here.
