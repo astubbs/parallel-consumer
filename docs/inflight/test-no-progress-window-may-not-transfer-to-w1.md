@@ -21,6 +21,7 @@ for it either:
 | Torture soak 2026-08-29, cycle 51 (`bin/torture-overnight.sh`) | `fleet consumed count stuck at 97386/100000 for 30s (bound 30s)` | **`87978223167568`** |
 | Torture soak 2026-08-29, cycle 166 | `fleet consumed count stuck at 97297/100000 for 30s (bound 30s)` | **`106062481479157`** |
 | PR lane, hosted runner, 2026-09-02 - astubbs/parallel-consumer#414 at `810a8b3ac` (a workflow-only branch: no Java differs from master) | `fleet consumed count stuck at 95209/100000 for 30s (bound 30s)` | **`2512758007437016849`** <!-- post-merge: checked - a PR number and a sha are durable; the row reads the same after the merge --> |
+| PR lane, hosted runner, 2026-09-05 - astubbs/parallel-consumer#446 at `e46c4458e` (a docs-only branch: one markdown file differs from master, and the previous push had passed this lane) | `fleet consumed count stuck at 97992/100000 for 30s (bound 30s)`; run summary `consumed=98899`, so the fleet was still short of the total when the run was killed, and the diagnostic was not engaged | **`8064312734196519950`** <!-- post-merge: checked - a PR number and a sha are durable; the row reads the same after the merge --> |
 <!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; named here as the instrument that produced these runs, not as a file in this tree -->
 
 **The soak gives this line its first RATE, and its first control arm.** `NO_PROGRESS` killed
