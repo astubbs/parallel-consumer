@@ -3146,23 +3146,30 @@ const CHECKS = [
         // Attributing every number to the fork is the defect: the legacy note's confluentinc
         // number then prints a fork lookup, which is the reference that resolves to the wrong thing.
         mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
-            "const upstream = new RegExp(`confluentinc#${numbered}(?!\\\\d)`).test(text)",
-            'const upstream = false'),
+            "const upstream = named('confluentinc')", 'const upstream = false'),
     },
     {
         id: 'rank-never-claims-a-branch-or-pull-request-fixes-a-note',
         why: 'a note travels on the branch that produced it, so carriage is cheap and ownership is unavailable - and the worked case is a data-loss note whose own text says the bug predates the pull request of the only branch carrying it. A row reading "fixed by" that PR would be confidently wrong',
         run: async (binDir) => {
-            const { rank } = await rankLib(binDir)
+            const { formatRank } = await views(binDir)
             return inRankFixture(async () => {
-                const r = await rankIndex(binDir)
+                const r = await rankIndex(binDir, 'stall')
                 if (!r.ok) return false
-                const rendered = JSON.stringify(r.groups)
-                return !/\bfix(es|ed)\b/i.test(rendered) && !/\bowns?\b/i.test(rendered)
-                    && rankRows(r).every((row) => row.relation === 'carries')
+                // THE RENDERED SENTENCE, not the data field behind it. `carriage` hard-codes this
+                // wording and never reads `row.relation`, so the earlier version of this check -
+                // which serialised the row objects - stayed green against a renderer changed to say
+                // "fixed by", and its mutant died on an otherwise unused data field. A control whose
+                // mutant dies somewhere other than the behaviour it names is proving nothing.
+                const shown = formatRank(r)
+                if (!/CARRIES the note, which is not the same as fixing what it describes/.test(shown)) return false
+                if (/\bfix(es|ed)\b/i.test(shown) || /\bowns?\b/i.test(shown)) return false
+                return rankRows(r).every((row) => row.relation === 'carries')
             })
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), "relation: 'carries'", "relation: 'fixed-by'"),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            '`${where} - CARRIES the note, which is not the same as fixing what it describes`',
+            '`${where} - FIXED BY this branch`'),
     },
     {
         id: 'rank-reports-an-unanswered-pr-snapshot-as-unknown-not-as-no-pull-request',
@@ -3212,7 +3219,7 @@ const CHECKS = [
         // Collapsing every reason to one is the defect: gone, deferred and untagged need different
         // actions, and one shrug hides which.
         mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
-            "known.length > 0 ? byName.get(known[0]).group : 'absent'", "'absent'"),
+            "known.length > 0 ? reasonFor(known[0]) : 'absent'", "'absent'"),
     },
     {
         id: 'rank-counts-a-note-the-register-ranks-by-number-as-ranked',
@@ -3256,15 +3263,25 @@ const CHECKS = [
         why: '"the delta was empty" and "the delta never ran" are different answers, and the delta is the deliverable - so a register that could not be read is a failed run, reported after everything that did run, the way refactor-window already reports an unmeasurable candidate',
         run: async (binDir) => {
             const { rank } = await rankLib(binDir)
+            // END TO END, because the failure IS a process exit code. This check called only the
+            // pure `rank` and deliberately expected `ok: true`, so deleting the front door's failure
+            // branch outright left it green while its mutant died on a library assertion about the
+            // delta - the behaviour in its own name was covered by nothing.
+            const run = invoke(binDir, ['rank'], { cwd: rankNoRegisterFixture() })
+            if (run.code !== 2) return false
+            // And everything that DID run is printed before the failure, not instead of it.
+            if (!/THE DELTA DID NOT RUN/.test(run.out)) return false
+            if (!/rank --impact stall/.test(run.out)) return false
             return inRankFixture(async () => {
                 const idx = await rankCorpus(binDir)
                 const r = rank(idx, { prs: { ok: true, map: new Map() }, register: { ok: false, reason: 'no such blob' } })
-                // It still ANSWERED the part it could: groups are present, and only the delta failed.
+                // The LIBRARY still answers the part it could: groups are present, only the delta failed.
                 return r.ok === true && r.groups.length > 0 && r.delta.ok === false
                     && typeof r.delta.reason === 'string' && r.delta.reason.length > 0
             })
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'if (register.ok !== true) {', 'if (false) {'),
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            'const failed = runFailure(r)', 'const failed = null'),
     },
     {
         id: 'rank-does-not-pick-one-note-when-a-number-resolves-to-several',
@@ -3370,7 +3387,7 @@ const CHECKS = [
         },
         // Dropping it silently is the defect - the note vanishes and nothing says so.
         mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
-            'if (seen.length === 0) { unreadable.push(path); continue }', 'if (seen.length === 0) { continue }'),
+            'if (seen.length < versions.length) unreadable.push(path)', 'if (false) unreadable.push(path)'),
     },
     {
         id: 'rank-rows-print-the-command-that-shows-the-note-and-an-empty-scope-says-so',
@@ -3499,7 +3516,8 @@ const CHECKS = [
         },
         // Preferring the baseline unconditionally is the defect.
         mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
-            'const pool = rankable.length > 0 ? rankable : ordered', 'const pool = ordered'),
+            'const pool = impactful.length > 0 ? impactful : (rankable.length > 0 ? rankable : ordered)',
+            'const pool = ordered'),
     },
     {
         id: 'rank-does-not-let-a-note-no-live-ref-carries-satisfy-a-register-entry',
@@ -3544,6 +3562,192 @@ const CHECKS = [
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
             'return `${entries} of ${d.items} list items recognised`', 'return `${entries} recognised`'),
+    },
+    {
+        id: 'rank-prefers-an-impact-bearing-version-over-a-baseline-placeholder',
+        why: "`feature` and `unmatched` are open work, so a baseline copy carrying no impact tag TIED with a live copy carrying one and the baseline tie-breaker took the placeholder. Two silent costs: the row landed in `unmatched` rather than its impact bucket, and `delta` accepts only the impact scale - so a register entry naming it was reported STALE while a live ref carried it as ranked work. 85 notes on this repository were in that state; tagging a note on the branch that works it is the ordinary flow, not an exotic one",
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir, 'crash')
+                if (!r.ok) return false
+                const row = rankRow(r, 'bug-untagged-here-impact-there')
+                return !!row && row.group === 'crash'
+                    && row.readRef === 'origin/adds-an-impact' && row.readFromBaseline === false
+                    // The baseline's untagged copy is named as the disagreement, not as the answer.
+                    && row.disagreement.some((dis) => dis.group === 'unmatched')
+                    // And the delta must not be telling the register the entry has gone stale.
+                    && !r.delta.stale.some((e) => e.cites.includes('bug-untagged-here-impact-there.md'))
+            })
+        },
+        // Dropping the impact tier is the defect: the placeholder wins again.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'const impactful = rankable.filter((v) => INFLIGHT_IMPACT_ORDER.includes(v.group))',
+            'const impactful = []'),
+    },
+    {
+        id: 'rank-does-not-call-a-note-open-work-when-only-an-archive-carries-the-open-version',
+        why: "`chooseVersion` picks the tag's version when every live copy has been closed, but the delta was handed the PATH's liveness - so it could print the all-clear a few lines above its own row saying the version it read is archival and the live copies are closed. The row already distinguishes `preserved` from `readRefArchival`; handing the delta the path-level fact threw that distinction away",
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir, 'stall')
+                if (!r.ok) return false
+                const row = rankRow(r, 'bug-open-only-on-an-archive')
+                if (!row) return false
+                const why = new Map(r.delta.stale.map((e) => [e.cites.join(' / '), e.reason]))
+                return row.readRefArchival === true && row.preserved === false
+                    // The REASON is its own finding: not closed, not deferred, not absent - the work
+                    // is still open and survives only where nothing can land it.
+                    && why.get('bug-open-only-on-an-archive.md') === 'open only on an archive'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'byName.set(name, { path, group: key, note, live: chosenLive.length > 0 })',
+            'byName.set(name, { path, group: key, note, live: live.length > 0 })'),
+    },
+    {
+        id: 'rank-reports-a-note-whose-other-version-could-not-be-read',
+        why: 'comparing the read count against zero rather than against the number of versions meant a path with one blob missing and one present was reported as a COMPLETE read - and the version that went missing is exactly the one that could have carried the disagreement this command exists to surface, so the silence lands on the highest-signal case',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const index = await rankCorpus(binDir)
+                // A second version of a path that already has one, whose sha resolves to nothing -
+                // so `cat-file` answers `missing` for it and normally for the other.
+                const partial = 'docs/inflight/bug-open-stall.md'
+                const byPath = new Map(index.byPath)
+                const versions = new Map(byPath.get(partial))
+                if (versions.size !== 1) return false
+                versions.set('0000000000000000000000000000000000000000', ['origin/adds-an-impact'])
+                byPath.set(partial, versions)
+                const r = rank({ ...index, byPath }, { prs: NO_PRS, register: { ok: true, text: '' } })
+                if (!r.ok) return false
+                // Named as incompletely read - which is what makes the run exit 2 - while the row is
+                // still built from the version that DID read, the way the register failure answers
+                // everything it could before reporting that it failed.
+                return r.unreadable.includes(partial) && rankRows(r).some((x) => x.path === partial)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'if (seen.length < versions.length) unreadable.push(path)',
+            'if (seen.length === 0) unreadable.push(path)'),
+    },
+    {
+        id: 'rank-names-a-live-carrier-of-a-disagreement-before-an-archival-one',
+        why: "`refs` is sorted, so a version carried by both a branch and an archive named whichever ref sorted first - and 30 rows on this repository presented a disagreement as preserved history while a live branch was carrying that exact state. That hides the only half a reader can go and act on, and it is the rule `readRef` two lines down already follows",
+        run: async (binDir) => {
+            const { formatRank } = await views(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir, 'stall')
+                if (!r.ok) return false
+                const row = rankRow(r, 'bug-disagrees-on-two-refs')
+                if (!row) return false
+                const dis = row.disagreement.find((d) => d.group === 'closed')
+                return !!dis && dis.ref === 'origin/z-disagrees' && dis.archival === false
+                    // And the archive it sorts behind is never the one printed.
+                    && !/archive\/disagreement/.test(formatRank(r))
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'const ref = refs.find((r) => !archival.get(r)) ?? refs[0]', 'const ref = refs[0]'),
+    },
+    {
+        id: 'rank-attributes-a-number-its-note-names-only-in-the-fully-qualified-form',
+        why: "`AGENTS.md` mandates `astubbs/parallel-consumer#NN` for anything posted to GitHub and notes use it, so testing only the short form called such a number unattributable and printed a confluentinc lookup beside the fork one - a reference that RESOLVES to an unrelated upstream issue, which AGENTS.md rates worse than a broken one. `parseRegister` already read both spellings; this half had not been brought with it",
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir, 'stall')
+                if (!r.ok) return false
+                const row = rankRow(r, 'bug-370-qualified-only')
+                return !!row && !!row.number && row.number.value === 370
+                    && row.number.attribution === 'fork' && row.number.commands.length === 1
+                    && row.number.commands[0].includes('-R astubbs/parallel-consumer')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            "const named = (owner) => new RegExp(`${owner}(?:/parallel-consumer)?#${numbered}(?!\\\\d)`).test(text)",
+            "const named = (owner) => new RegExp(`${owner}#${numbered}(?!\\\\d)`).test(text)"),
+    },
+    {
+        id: 'rank-names-the-pull-request-of-every-off-baseline-read',
+        why: "the row for a note deferred on the baseline and open on a branch returned before reaching the pull-request suffix, so it rendered with no pull request at all - the row where naming it matters most, since the branch is the only place that work is live",
+        run: async (binDir) => {
+            const { rank, registerBlob } = await rankLib(binDir)
+            const { formatRank } = await views(binDir)
+            return inRankFixture(async () => {
+                const index = await rankCorpus(binDir)
+                const prs = { ok: true, map: new Map([['open-on-a-branch', { number: 4243, state: 'OPEN', title: 't' }]]) }
+                const r = rank(index, { prs, register: registerBlob(index), group: 'crash' })
+                if (!r.ok) return false
+                const row = rankRow(r, 'core-deferred-here-open-there')
+                if (!row || row.onBaseline !== true || row.readFromBaseline !== false) return false
+                return row.pr !== null && /astubbs\/parallel-consumer#4243 OPEN/.test(formatRank(r))
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            "NOT ${r.baseline} - the baseline's copy is not open work, this ref's is${pr}",
+            "NOT ${r.baseline} - the baseline's copy is not open work, this ref's is"),
+    },
+    {
+        id: 'rank-refuses-a-positional-argument-rather-than-answering-a-different-question',
+        why: 'validating only tokens beginning with `--` meant `rank stall` ran the UNSCOPED query and `rank --impact stall extra` ran the scoped one with a stray token dropped - both answering a different question than the one that was typed, with nothing in the output to reveal it. This command takes no positional arguments at all',
+        run: async (binDir) => {
+            const at = rankFixture()
+            const bare = invoke(binDir, ['rank', 'stall'], { cwd: at })
+            const extra = invoke(binDir, ['rank', '--impact', 'stall', 'extra'], { cwd: at })
+            // AND NOT OVER-REFUSING: the valid form still runs, and an unknown group is still a
+            // question answered with the valid names rather than a refusal.
+            const typo = invoke(binDir, ['rank', '--impact', 'nosuchgroup'], { cwd: at })
+            return bare.code === 2 && /positional/.test(bare.out) && /stall/.test(bare.out)
+                && extra.code === 2 && /extra/.test(extra.out)
+                && typo.code === 0 && /no group 'nosuchgroup'/.test(typo.out)
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "const stray = args.filter((a, i) => a !== '--impact' && !(at >= 0 && i === at + 1))",
+            'const stray = []'),
+    },
+    {
+        id: 'rank-fails-the-run-when-a-ref-could-not-be-listed',
+        why: 'a ref whose listing failed carries an UNKNOWN number of notes, and the renderer said so while the exit code said 0 - so a caller received the documented "ran successfully" status for a run that may have omitted every note and every disagreement on that ref. The exit code is what a caller tests, and it was the one thing that disagreed',
+        run: async (binDir) => {
+            const { runFailure } = await rankLib(binDir)
+            const clean = { delta: { ok: true }, unreadable: [], unreadableRefs: [] }
+            // All three depths are the same answer, so all three fail the run - and a clean result
+            // must still pass, or the contract would be "always fail".
+            return runFailure(clean) === null
+                && typeof runFailure({ ...clean, unreadableRefs: ['origin/x'] }) === 'string'
+                && typeof runFailure({ ...clean, unreadable: ['docs/inflight/a.md'] }) === 'string'
+                && typeof runFailure({ ...clean, delta: { ok: false, reason: 'no blob' } }) === 'string'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'if (r.unreadableRefs.length > 0) {', 'if (false) {'),
+    },
+    {
+        id: 'rank-does-not-claim-a-note-is-unranked-when-the-parse-did-not-read-the-whole-register',
+        why: 'the numerator-without-a-denominator defect on the OTHER half: a note named by a list item this parse cannot read was counted as "NOT named by the register" three lines under a sentence saying those items are outside the delta entirely. The counts stay - withholding them would lose the view - but they have to say which question they answer',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            const { formatRank } = await views(binDir)
+            return inRankFixture(async () => {
+                const index = await rankCorpus(binDir)
+                const of = (text) => rank(index, { prs: NO_PRS, register: { ok: true, text } })
+                const partial = of('- `bug-open-stall.md` - read\n- see confluentinc#40 - NOT read\n')
+                const whole = of('- `bug-open-stall.md` - read\n')
+                if (!partial.ok || !whole.ok) return false
+                const a = formatRank(partial)
+                const b = formatRank(whole)
+                return partial.delta.items > partial.delta.recognised
+                    && /this is an upper bound/.test(a) && !/open and NOT named by the register/.test(a)
+                    // Complete coverage keeps the unqualified claim, so the hedge is a finding
+                    // rather than boilerplate.
+                    && whole.delta.items === whole.delta.recognised
+                    && /open and NOT named by the register/.test(b)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            "out.push('', d.items > d.recognised", "out.push('', false"),
     },
 ]
 
@@ -3633,6 +3837,20 @@ function rankFixture() {
     // this from its group entirely AND told the register it was deferred, on the baseline's word,
     // with no ref named - the same defect as the first-sorted-live-ref one, a layer up.
     note('core-deferred-here-open-there', `# Deferred on the baseline\n\n${tags('feature', 'crash', 'deferred - after v6')}\nbody\n`)
+    // OPEN ON THE BASELINE BUT CARRYING NO IMPACT, and tagged `crash` on a live branch (added
+    // below). Both versions are open work, so the baseline tie-breaker took the untagged one: the
+    // row landed in `unmatched` and the delta - which accepts only the impact scale - told the
+    // register the entry was stale while a live ref carried it as ranked work.
+    note('bug-untagged-here-impact-there', `# Untagged here, ranked there\n\n${tags('bug', '')}\nbody\n`)
+    // A NUMBER NAMED ONLY IN ITS FULLY QUALIFIED FORM, which `AGENTS.md` mandates for anything
+    // posted to GitHub. The short-form-only test called this unattributable and offered a
+    // confluentinc lookup for 370 beside the fork one - a reference that RESOLVES to the wrong thing.
+    note('bug-370-qualified-only', `# Qualified spelling only\n\n${tags('bug', 'stall')}\n`
+        + 'tracked as astubbs/parallel-consumer#370\n')
+    // OPEN HERE, CLOSED ON A PAIR OF REFS - one live, one an archive whose name sorts FIRST. The
+    // disagreement line took `refs[0]` and so presented the state as preserved history while a live
+    // branch was carrying it.
+    note('bug-disagrees-on-two-refs', `# Open here, closed on two refs\n\n${tags('bug', 'stall')}\nbody\n`)
     write('docs/inflight/process-candidate-ranking.md', [
         '# Next candidates, ranked', '', '<!-- inflight-type: register -->', '',
         '- `bug-open-stall.md` - open, so no delta row',
@@ -3641,6 +3859,8 @@ function rankFixture() {
         '- `bug-closed-thing.md` - closed',
         '- `core-no-impact.md` - open, but no impact bucket claims it',
         '- `core-deferred-here-open-there.md` - deferred on the baseline, open on a live ref',
+        '- `bug-untagged-here-impact-there.md` - untagged on the baseline, impact-bearing on a live ref',
+        '- `bug-open-only-on-an-archive.md` - open, but only where nothing can land it',
         '- astubbs#141 - ranked by NUMBER, and the note that carries it is open',
         '- astubbs#999 - resolves to no note on any ref',
         // The number opens the item and the filename lands on a CONTINUATION line, which is how
@@ -3678,6 +3898,26 @@ function rankFixture() {
     git('checkout', '-q', 'master')
     git('branch', '-q', '-D', 'open-on-a-branch')
 
+    // THE SAME NOTE, TAGGED. Both versions are open work, so nothing but the impact scale separates
+    // them - and the baseline's placeholder used to win.
+    git('checkout', '-q', '-b', 'adds-an-impact', 'master')
+    note('bug-untagged-here-impact-there', `# Untagged here, ranked there\n\n${tags('bug', 'crash')}\nbody\n`)
+    commit('the impact tag a branch added')
+    git('update-ref', 'refs/remotes/origin/adds-an-impact', git('rev-parse', 'HEAD'))
+    git('checkout', '-q', 'master')
+    git('branch', '-q', '-D', 'adds-an-impact')
+
+    // ONE VERSION, TWO REFS: an ARCHIVE whose name sorts before `origin/` and a live branch. Read
+    // order is alphabetical, so `refs[0]` is the tag - and naming it sends a reader to check out a
+    // tag when a branch is carrying the same state and is the half they can act on.
+    git('checkout', '-q', '-b', 'z-disagrees', 'master')
+    note('bug-disagrees-on-two-refs', `# Open here, closed on two refs\n\n${tags('bug', 'stall', 'closed - done')}\nbody\n`)
+    commit('closed on a branch that is also tagged')
+    git('update-ref', 'refs/remotes/origin/z-disagrees', git('rev-parse', 'HEAD'))
+    git('tag', 'archive/disagreement')
+    git('checkout', '-q', 'master')
+    git('branch', '-q', '-D', 'z-disagrees')
+
     git('checkout', '-q', '-b', 'closed-live-copy', 'master')
     note('bug-open-only-on-an-archive', `# Closed live, open on a tag\n\n${tags('bug', 'stall', 'closed - done here')}\nbody\n`)
     commit('closed on the live branch')
@@ -3699,6 +3939,29 @@ function rankFixture() {
     git('branch', '-q', '-D', 'to-tag')
 
     RANK = dir
+    return dir
+}
+
+/**
+ * A corpus whose BASELINE has no register at all, so `registerBlob` fails and the delta never runs.
+ *
+ * Its own repository rather than a mutation of the rank fixture: the mutant phase re-runs every
+ * check against whatever the earlier ones left behind, so deleting the register from the shared
+ * fixture would turn unrelated delta checks red one phase later with nothing pointing back at the
+ * cause - the reason `bin/lib/fixture-repos.mjs` gives for keeping the drift corpus separate.
+ */
+let RANK_NO_REGISTER = null
+function rankNoRegisterFixture() {
+    if (RANK_NO_REGISTER) return RANK_NO_REGISTER
+    const { dir, git, commit } = windowRepo()
+    mkdirSync(join(dir, 'docs', 'inflight'), { recursive: true })
+    writeFileSync(join(dir, 'docs', 'inflight', 'bug-open-stall.md'),
+        '# An open stall\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\nbody\n')
+    commit('a corpus with no register on the baseline')
+    // `baseline()` prefers origin/master, and the front door reads the register from the baseline's
+    // blob rather than the working tree - which is the whole reason this fixture works.
+    git('update-ref', 'refs/remotes/origin/master', git('rev-parse', 'HEAD'))
+    RANK_NO_REGISTER = dir
     return dir
 }
 

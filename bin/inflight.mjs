@@ -61,7 +61,7 @@ import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/note
 import { DOC_AREAS, NOTES_DIR } from './lib/repo.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
 import { loadCandidates, refactorWindow } from './lib/refactor-window.mjs'
-import { RANKED_GROUPS, rank, registerBlob } from './lib/rank.mjs'
+import { RANKED_GROUPS, rank, registerBlob, runFailure } from './lib/rank.mjs'
 import {
     formatBranch, formatCache, formatCoverage, formatDrift, formatFind, formatFlakes, formatRefactorWindow, formatSlowest,
     formatRank, formatStranded, formatTimeline, formatWarnings,
@@ -535,6 +535,16 @@ value is the reasoning attached to the order, which no computed scheme carries.
             if (args.filter((a) => a === '--impact').length > 1) {
                 return { ok: false, reason: 'rank: --impact given more than once - which one did you mean?' }
             }
+            // AND THIS COMMAND TAKES NO POSITIONALS, so anything not consumed as the `--impact` value
+            // is refused rather than dropped. Filtering on `startsWith('--')` alone let `rank stall`
+            // and `rank --impact stall extra` run the UNSCOPED and the partially-scoped query
+            // respectively - answering a different question than the one that was typed, with
+            // nothing in the output to reveal it. Last of the three guards, so the more specific
+            // messages above win when they apply.
+            const stray = args.filter((a, i) => a !== '--impact' && !(at >= 0 && i === at + 1))
+            if (stray.length) {
+                return { ok: false, reason: `rank: takes no positional argument(s): ${stray.join(', ')} - did you mean --impact ${stray[0]}?` }
+            }
             const group = at >= 0 ? args[at + 1] : null
             // AN UNKNOWN GROUP IS NOT AN ERROR, it is a question answered with the valid names -
             // the shape `docs list` already uses, so a typo prints the command that would have
@@ -551,16 +561,12 @@ value is the reasoning attached to the order, which no computed scheme carries.
             const r = rank(index, { prs, register: registerBlob(index), group })
             if (!r.ok) return { ok: false, reason: `rank: ${r.reason}` }
             emit(formatRank(r))
-            // THE DELTA IS THE DELIVERABLE, so a register it could not read is a FAILED RUN - and it
-            // is reported after everything that did run, the way refactor-window reports a candidate
-            // it could not measure. "The delta was empty" and "the delta never ran" are different.
-            if (!r.delta.ok) return { ok: false, reason: `rank: the register delta did not run - ${r.delta.reason}` }
-            // A NOTE THE REF LISTING NAMED AND `cat-file` DID NOT RETURN means part of the corpus was
-            // not read. Everything that did run is above; the exit code says the answer is partial,
-            // because a dropped note is exactly the silence this command exists to prevent.
-            if (r.unreadable.length > 0) {
-                return { ok: false, reason: `rank: could not read ${r.unreadable.length} listed note(s) - the answer above is incomplete` }
-            }
+            // EVERYTHING THAT DID RUN IS ALREADY EMITTED, and only then does the run report that it
+            // failed - the shape `refactor-window` uses for a candidate it could not measure. "The
+            // delta was empty" and "the delta never ran" are different answers, and so are "no note
+            // was dropped" and "a ref was never listed". `runFailure` owns which is which.
+            const failed = runFailure(r)
+            if (failed) return { ok: false, reason: `rank: ${failed}` }
             return { ok: true }
         },
     },

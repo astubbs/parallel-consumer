@@ -485,7 +485,9 @@ export function formatRank(r) {
         out.push('')
     }
     if (r.unreadable.length > 0) {
-        out.push(`  COULD NOT READ ${plural(r.unreadable.length, 'note')} that the ref listing named - this answer is INCOMPLETE:`)
+        // EVERY LISTED VERSION, because a path with one version missing and one read still appears
+        // below as a row - built from what did read, and named here as incompletely read.
+        out.push(`  COULD NOT READ every listed version of ${plural(r.unreadable.length, 'note')} - this answer is INCOMPLETE:`)
         for (const p of r.unreadable) out.push(`      ${p}`)
         out.push('')
     }
@@ -512,7 +514,16 @@ export function formatRank(r) {
             for (const e of d.stale) out.push(`      ${e.cites.join(' / ').padEnd(52)}${e.reason}`)
         }
         if (d.unrankedCounts.length > 0) {
-            out.push('', '  open and NOT named by the register:')
+            // "NOT NAMED BY THE REGISTER" IS A CLAIM THE PARSE CANNOT MAKE WHEN IT DID NOT READ THE
+            // WHOLE REGISTER. The same numerator-without-a-denominator defect `coverage` fixed for
+            // the recognised count, on the other half: a note named by one of the list items this
+            // parse does not reach was counted here as unranked, three lines under a sentence saying
+            // those items are outside the delta entirely. The counts stay - withholding them would
+            // lose the view - but they say which question they answer.
+            out.push('', d.items > d.recognised
+                ? '  open and not named by any entry this parse RECOGNISED - the unread items above may'
+                    + '\n  name some of these, so this is an upper bound:'
+                : '  open and NOT named by the register:')
             for (const u of d.unrankedCounts) {
                 out.push(r.scoped === null
                     ? `      ${u.key.padEnd(18)}${String(u.count).padStart(4)}    ${cmd(u.key)}`
@@ -602,11 +613,15 @@ function carriage(row, r) {
     // open on a branch is read from that branch, and the every-branch-carries-it sentence would be a
     // lie about the row whose whole point is that branch.
     if (row.readFromBaseline) return `on ${r.baseline} - every branch cut from it carries this, so carriage names no owner`
+    // EVERY OFF-BASELINE READ GETS THE PULL-REQUEST SUFFIX, because the ref is the point of the row.
+    // This one returned before reaching it, so a note deferred on the baseline and open on a branch
+    // with an open pull request rendered with no pull request at all - the row where naming it
+    // matters most, since the branch is the only place the work is live.
+    const pr = row.pr ? `  [astubbs/parallel-consumer#${row.pr.number} ${row.pr.state}]` : (row.prKnown ? '' : '  [PR state UNKNOWN]')
     if (row.onBaseline) {
-        return `read from ${row.readRef}, NOT ${r.baseline} - the baseline's copy is not open work, this ref's is`
+        return `read from ${row.readRef}, NOT ${r.baseline} - the baseline's copy is not open work, this ref's is${pr}`
             + ` - CARRIES the note, which is not the same as fixing what it describes`
     }
-    const pr = row.pr ? `  [astubbs/parallel-consumer#${row.pr.number} ${row.pr.state}]` : (row.prKnown ? '' : '  [PR state UNKNOWN]')
     const where = row.preserved
         ? `preserved only on ${row.readRef} - an archive, so nothing here will land it`
         // READ FROM AN ARCHIVE WHILE SOMETHING LIVE CARRIES IT: every live copy is closed and the

@@ -124,8 +124,15 @@ function numberFor(path, text) {
     //
     // So the row asks the note. A qualified mention of ITS OWN number attributes it; one qualified
     // both ways, or neither, is unattributable and gets both commands rather than a guess.
-    const fork = new RegExp(`astubbs#${numbered}(?!\\d)`).test(text)
-    const upstream = new RegExp(`confluentinc#${numbered}(?!\\d)`).test(text)
+    // BOTH SPELLINGS OF EACH REPOSITORY, because `AGENTS.md` mandates the fully qualified form for
+    // anything posted to GitHub and notes use it. `bug-370-a-record-is-selectable-before-its-offset-
+    // is-registered.md` names only `astubbs/parallel-consumer#370` - so the short-form-only test
+    // called its own number unattributable and printed a confluentinc lookup for 370 beside the fork
+    // one, which is the wrong-reference-that-resolves failure this function exists to prevent.
+    // `parseRegister` already read both spellings; this half had not been brought with it.
+    const named = (owner) => new RegExp(`${owner}(?:/parallel-consumer)?#${numbered}(?!\\d)`).test(text)
+    const fork = named('astubbs')
+    const upstream = named('confluentinc')
     const attribution = fork && !upstream ? 'fork' : (upstream && !fork ? 'upstream' : 'unknown')
     const forkCmd = `gh issue view ${numbered} -R ${REPO}`
     const upstreamCmd = `gh issue view ${numbered} -R confluentinc/parallel-consumer`
@@ -160,8 +167,17 @@ function chooseVersion(seen, { onBaseline, readable, baseline }) {
     // from its group AND the delta told the register it was deferred - on the baseline's word, with
     // no ref named anywhere. Answering from the baseline while a live ref says otherwise is the
     // failure this whole command exists to prevent.
+    // AND AN IMPACT-BEARING VERSION BEATS A PLACEHOLDER, which is the same defect once more. `feature`
+    // and `unmatched` are in RANKED_GROUPS - they are open work and must not vanish - so a baseline
+    // copy carrying no impact tag tied with a live copy carrying `crash`, and the baseline
+    // tie-breaker took the placeholder. Two costs, both silent: the row landed in `unmatched` rather
+    // than its impact bucket, and `delta`'s `isOpenWork` accepts only `INFLIGHT_IMPACT_ORDER`, so a
+    // register entry naming it was reported STALE while a live ref carried it as ranked work. 85
+    // notes on this repository were in that state when this was written; tagging a note on the
+    // branch that works it is the ordinary flow, so this is the common case, not an exotic one.
     const rankable = ordered.filter((v) => RANKED_GROUPS.includes(v.group))
-    const pool = rankable.length > 0 ? rankable : ordered
+    const impactful = rankable.filter((v) => INFLIGHT_IMPACT_ORDER.includes(v.group))
+    const pool = impactful.length > 0 ? impactful : (rankable.length > 0 ? rankable : ordered)
     return (onBaseline ? pool.find((v) => v.refs.includes(baseline)) : null) ?? pool[0]
 }
 
@@ -317,13 +333,33 @@ export function rank(index, { prs, register, group = null }) {
         // that is not there - a partial clone, a gc race, corruption. Dropping it silently is the
         // empty-backlog-from-a-failure shape this whole file is written against, so it is named and
         // the run reports that it could not look.
-        if (seen.length === 0) { unreadable.push(path); continue }
+        //
+        // ANY MISSING VERSION, not only all of them. Comparing against zero meant a path whose OTHER
+        // version came back was reported as a complete read - and the version that went missing is
+        // exactly the one that could have carried the disagreement this command exists to surface,
+        // so the silence lands on the highest-signal case. The row is still built from what did read
+        // - answering the part it could is the shape the register failure already uses - and the
+        // path is named as incompletely read, which is what makes the run exit 2.
+        if (seen.length < versions.length) unreadable.push(path)
+        if (seen.length === 0) continue
 
         const chosen = chooseVersion(seen, { onBaseline, readable, baseline: index.baseline })
         const note = chosen.note
         const key = chosen.group
         const name = path.slice(NOTES_DIR.length + 1)
-        byName.set(name, { path, group: key, note, live: live.length > 0 })
+        // FROM THE CHOSEN VERSION'S OWN REFS, never the path-level `readable`. Those two sets can be
+        // disjoint: a note closed on every live ref but still open on a preserved tag makes
+        // `chooseVersion` pick the tag's version, while `readable` holds only the live refs - so the
+        // lookup found nothing and the row crashed on `readRef.replace(...)`. Reproduced before this
+        // was written; `rank-reads-a-note-that-is-open-only-on-an-archival-ref` holds the line.
+        const chosenLive = chosen.refs.filter((r) => !archival.get(r))
+        // REACHABLE MEANS THE CHOSEN VERSION IS REACHABLE, not the path. `delta` reads this to decide
+        // whether a register entry is still open work, and the path-level answer said yes for a note
+        // whose live copies are all CLOSED and whose open one survives on a tag - so the delta could
+        // print the all-clear a few lines above its own row saying the version it read is archival.
+        // Same distinction the row draws between `preserved` and `readRefArchival`, which is the tell
+        // that the path-level fact was the wrong one to hand the delta.
+        byName.set(name, { path, group: key, note, live: chosenLive.length > 0 })
         const numbered = numberFor(path, chosen.text)
         // NOT AN UPSTREAM-ATTRIBUTED NUMBER. The register keys its numbers as `astubbs#<n>`, so a
         // note whose own text says the number is confluentinc's must not satisfy a fork entry -
@@ -342,23 +378,24 @@ export function rank(index, { prs, register, group = null }) {
         }
 
         // What the OTHER versions say, so one status never hides a disagreement between branches.
+        //
+        // A LIVE CARRIER NAMES THE DISAGREEMENT WHEREVER ONE EXISTS - the same rule `readRef` two
+        // lines down already follows, which had not been brought here. `refs` is sorted, so a
+        // version carried by both a branch and an archive named whichever sorted first: 30 rows on
+        // this repository presented a disagreement as preserved history while a live branch was
+        // carrying that exact state. That hides the actionable half, which is the only half a reader
+        // can go and do something about.
         const disagreement = [...new Set(seen.map((v) => v.group))]
             .filter((g) => g !== key)
             .map((g) => {
-                const ref = seen.find((v) => v.group === g).refs[0]
+                const refs = seen.find((v) => v.group === g).refs
+                const ref = refs.find((r) => !archival.get(r)) ?? refs[0]
                 return { group: g, ref, archival: archival.get(ref) === true }
             })
 
-        // FROM THE CHOSEN VERSION'S OWN REFS, never the path-level `readable`. Those two sets can be
-        // disjoint: a note closed on every live ref but still open on a preserved tag makes
-        // `chooseVersion` pick the tag's version, while `readable` holds only the live refs - so the
-        // lookup found nothing and the row crashed on `readRef.replace(...)`. Reproduced before this
-        // was written; `rank-reads-a-note-that-is-open-only-on-an-archival-ref` holds the line.
-        //
         // Live refs of the chosen version first, so a version carried by both is read from somewhere
         // a reader can go; its own first ref otherwise, which is the archival case and is why the
         // preserved row can name a tag at all.
-        const chosenLive = chosen.refs.filter((r) => !archival.get(r))
         const readRef = onBaseline && chosen.refs.includes(index.baseline)
             ? index.baseline
             : (chosenLive.length > 0 ? chosenLive[0] : chosen.refs[0])
@@ -438,6 +475,31 @@ export function rank(index, { prs, register, group = null }) {
 }
 
 /**
+ * Why the run FAILED, after everything that did run - or null. The front door's exit-2 contract.
+ *
+ * ONE PLACE, because these three are the same answer at three depths and they kept being decided
+ * separately: a delta that never ran, a note whose versions did not all come back, and a ref whose
+ * listing failed. The last one was rendered as a warning and then returned exit 0 - so a caller
+ * received the documented "ran successfully" status for a run that may have omitted every note and
+ * every disagreement on that ref, which is a could-not-look wearing the authority of a found-nothing.
+ *
+ * A PURE FUNCTION SO EACH CLAUSE HAS A CONTROL. Held here rather than in the front door because a
+ * check that drives the front door end to end can only reach whichever failure it can construct on
+ * disk, and a control that cannot construct its case is a control that asserts nothing. The end-to-
+ * end run stays the proof that the front door actually calls this; the clauses are proved here.
+ */
+export function runFailure(r) {
+    if (!r.delta.ok) return `the register delta did not run - ${r.delta.reason}`
+    if (r.unreadable.length > 0) {
+        return `could not read every listed version of ${r.unreadable.length} note(s) - the answer above is incomplete`
+    }
+    if (r.unreadableRefs.length > 0) {
+        return `could not list the notes on ${r.unreadableRefs.length} ref(s) - the answer above does not cover them`
+    }
+    return null
+}
+
+/**
  * The register delta - the deliverable.
  *
  * ENTRY-SCOPED, because the register cites a note by filename AND by number on the same line. Asking
@@ -482,6 +544,18 @@ function delta(register, { byName, byNumber, buckets, group }) {
     // finding: gone needs deleting from the register, deferred needs a schedule decision, and one no
     // impact bucket claims needs a tag. Reporting all three as "not open" turns three different
     // actions into one shrug.
+    //
+    // AND "STILL OPEN, BUT ONLY IN HISTORY" IS ITS OWN REASON. The group alone would print `stall`
+    // as the reason a stall note is not open work, which reads as a bug in the delta rather than as
+    // the finding it is: every live copy has been closed and the open version survives on an
+    // archival ref, so the register is ranking work no branch can land.
+    const reasonFor = (nm) => {
+        const hit = byName.get(nm)
+        if (!hit) return 'absent'
+        if (!hit.live && INFLIGHT_IMPACT_ORDER.includes(hit.group)) return 'open only on an archive'
+        return hit.group
+    }
+
     const stale = []
     for (const e of entries) {
         const cited = [...e.names, ...e.numbers.flatMap((n) => byNumber.get(n) ?? [])]
@@ -489,7 +563,7 @@ function delta(register, { byName, byNumber, buckets, group }) {
         const known = cited.filter((nm) => byName.has(nm))
         stale.push({
             cites: [...e.names, ...e.numbers.map((n) => `astubbs#${n}`)],
-            reason: known.length > 0 ? byName.get(known[0]).group : 'absent',
+            reason: known.length > 0 ? reasonFor(known[0]) : 'absent',
         })
     }
 
