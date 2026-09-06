@@ -241,7 +241,7 @@ class RiderSupplierGuardTest {
         assertWithMessage("a throwing supplier must cost the rider only - no envelope is written, so the commit "
                         + "carries exactly what this build commits with no supplier configured at all")
                 .that(Base64.getDecoder().decode(first.metadata())[0])
-                .isNotEqualTo(OffsetRiderEnvelope.MAGIC_BYTE);
+                .isNotEqualTo((int) OffsetRiderEnvelope.MAGIC_BYTE); // int vs int: Integer.equals(Byte) is never true
         assertWithMessage("R15: the failure is logged and treated as no rider, so the NEXT commit still happens")
                 .that(second.offset())
                 .isAtLeast(first.offset());
@@ -487,7 +487,7 @@ class RiderSupplierGuardTest {
                         + "envelope with an empty rider in it would still decode, which is exactly what this "
                         + "distinguishes", whatItDid)
                 .that(payload[0])
-                .isNotEqualTo(OffsetRiderEnvelope.MAGIC_BYTE);
+                .isNotEqualTo((int) OffsetRiderEnvelope.MAGIC_BYTE); // int vs int: Integer.equals(Byte) is never true
         assertWithMessage("and the hole map the partition would have committed anyway is untouched")
                 .that(OffsetMapCodecManager
                         .deserialiseIncompleteOffsetMapFromBase64(committed.offset(), committed.metadata())

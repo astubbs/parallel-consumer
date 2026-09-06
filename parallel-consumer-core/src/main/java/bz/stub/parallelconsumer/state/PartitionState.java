@@ -605,11 +605,20 @@ public class PartitionState<K, V> {
             // KTD9: encode the holes ONCE, then ask for the rider, then assemble. A second encode pass here would
             // snapshot a later hole map (the confluentinc#894 tear class) and double-count the encoding meters.
             byte[] innerBytes = om.encodeOffsetsToInnerBytes(offsetOfNextExpectedMessage, this);
-            var rider = riderFromSupplier(offsetOfNextExpectedMessage, innerBytes.length);
+            var offered = riderFromSupplier(offsetOfNextExpectedMessage, innerBytes.length);
+            // KTD4/R9: the ladder picks its rung by PREDICTED length and only then assembles, so the outer codec
+            // runs once on the winner rather than once per rung.
+            var rider = fitRiderToBudget(offered, innerBytes.length);
             String offsetMapPayload = om.assembleMetadataPayload(innerBytes, rider);
             ratioPayloadUsedDistributionSummary.record(offsetMapPayload.length() / (double) offsetRange);
             ratioMetadataSpaceUsedDistributionSummary.record(offsetMapPayload.length() / (double) OffsetMapCodecManager.DefaultMaxMetadataSize);
-            boolean mustStrip = updateBlockFromEncodingResult(offsetMapPayload);
+            // KTD4: two lengths, both in encoded characters. With no envelope the assembled string IS the inner
+            // encoding's string, so its own length is today's number byte for byte; with one, the inner length is
+            // derived from the byte count by Base64's closed form rather than by a second encode.
+            int innerEncodingCharacterLength = rider.getState() == OffsetRiderEnvelope.RiderState.NONE
+                    ? offsetMapPayload.length()
+                    : RiderBudgetRung.base64Characters(innerBytes.length);
+            boolean mustStrip = updateBlockFromEncodingResult(innerEncodingCharacterLength, offsetMapPayload.length());
             if (mustStrip) {
                 return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
             } else {
@@ -623,36 +632,67 @@ public class PartitionState<K, V> {
     }
 
     /**
+     * The two size checks a commit makes, and they are deliberately made against <b>different lengths</b> (KTD4,
+     * R7).
+     * <p>
+     * <b>Back pressure measures the offset map alone</b>, because back pressure exists so that a payload can
+     * <em>shrink</em> as work completes. Rider bytes do not shrink - the embedder hands over whatever it hands
+     * over, whatever the hole map is doing - so charging them here would make a rider a floor back pressure can
+     * never relieve, and on a caught-up partition a permanent block.
+     * <p>
+     * <b>The hard limit measures the whole assembled string</b>, rider included, because that is what actually
+     * goes to the broker.
+     * <p>
+     * With no rider configured the two numbers are the same string's length, so this is byte for byte the check
+     * this build has always made, and the point at which back pressure engages does not move.
+     *
+     * @param innerEncodingCharacterLength the offset map's own encoded length, in characters
+     * @param assembledPayloadLength       the length of the string that will actually be committed
      * @return true if the payload is too large and must be stripped
      */
-    private boolean updateBlockFromEncodingResult(String offsetMapPayload) {
-        int metaPayloadLength = offsetMapPayload.length();
+    private boolean updateBlockFromEncodingResult(int innerEncodingCharacterLength, int assembledPayloadLength) {
         boolean mustStrip = false;
 
-        if (metaPayloadLength > DefaultMaxMetadataSize) {
+        if (assembledPayloadLength > DefaultMaxMetadataSize) {
             // exceeded maximum API allowed, strip the payload
-            mustStrip = true;
-            setAllowedMoreRecords(false);
-            log.warn("Offset map data too large (size: {}) to fit in metadata payload hard limit of {} - cannot include in commit. " +
-                            "Warning: messages might be replayed on rebalance. " +
-                            "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {} and confluentinc issue #47.",
-                    metaPayloadLength, DefaultMaxMetadataSize, DefaultMaxMetadataSize);
-        } else if (metaPayloadLength > getPressureThresholdValue()) { // and thus metaPayloadLength <= DefaultMaxMetadataSize
+            mustStrip = stripPayloadForSize(assembledPayloadLength);
+        } else if (innerEncodingCharacterLength > getPressureThresholdValue()) { // payload within the hard limit
             // try to turn on back pressure before max size is reached
             setAllowedMoreRecords(false);
-            log.warn("Payload size {} higher than threshold {}, but still lower than max {}. Will write payload, but will " +
+            log.warn("Offset map size {} higher than threshold {}, but the payload of {} is still lower than max {}. " +
+                            "Will write payload, but will " +
                             "not allow further messages, in order to allow the offset data to shrink (via succeeding messages).",
-                    metaPayloadLength, getPressureThresholdValue(), DefaultMaxMetadataSize);
+                    innerEncodingCharacterLength, getPressureThresholdValue(), assembledPayloadLength,
+                    DefaultMaxMetadataSize);
 
-        } else { // and thus (metaPayloadLength <= pressureThresholdValue)
+        } else { // and thus (innerEncodingCharacterLength <= pressureThresholdValue)
             if (allowedMoreRecords == false) {
                 // guard is useful for debugging to catch the transition from false to true
                 setAllowedMoreRecords(true);
             }
-            log.debug("Payload size {} within threshold {}", metaPayloadLength, getPressureThresholdValue());
+            log.debug("Offset map size {} within threshold {}", innerEncodingCharacterLength,
+                    getPressureThresholdValue());
         }
 
         return mustStrip;
+    }
+
+    /**
+     * The bottom rung of the budget ladder, and the only one that predates the rider: not even the bare offset map
+     * fits the metadata field, so the commit carries a bare offset and the partition is blocked.
+     * <p>
+     * A single method so that it is one place, not three: the ladder above it has already shed the rider and the
+     * envelope by the time this is reached, so what is stripped here is the offset map itself.
+     *
+     * @return always true - the caller's {@code mustStrip}, named rather than assumed
+     */
+    private boolean stripPayloadForSize(int assembledPayloadLength) {
+        setAllowedMoreRecords(false);
+        log.warn("Offset map data too large (size: {}) to fit in metadata payload hard limit of {} - cannot " +
+                        "include in commit. Warning: messages might be replayed on rebalance. " +
+                        "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {} and confluentinc#47.",
+                assembledPayloadLength, DefaultMaxMetadataSize, DefaultMaxMetadataSize);
+        return true;
     }
 
     private double getPressureThresholdValue() {
@@ -777,6 +817,77 @@ public class PartitionState<K, V> {
      */
     private static int base64CapacityInBytes(int characters) {
         return characters < 4 ? 0 : (characters / 4) * 3;
+    }
+
+    /**
+     * Walks the ladder for this commit and returns the rider slot the payload will actually carry.
+     * <p>
+     * Nothing is encoded here: the rung is chosen from predicted lengths and the caller assembles once, on the
+     * winner. A rider already over its own derived cap was turned into the marker by {@link #riderFromSupplier}
+     * before this point, so what descends here is a rider that fits its cap but not this particular payload.
+     */
+    private OffsetRiderEnvelope.Rider fitRiderToBudget(OffsetRiderEnvelope.Rider offered, int innerEncodingByteLength) {
+        var state = offered.getState();
+        if (state == OffsetRiderEnvelope.RiderState.NONE) {
+            // no envelope to shed - today's payload, and today's strip below it if even that does not fit
+            return offered;
+        }
+
+        int riderByteLength = offered.getByteLength();
+        var rung = RiderBudgetRung.choose(state, riderByteLength, innerEncodingByteLength, DefaultMaxMetadataSize);
+        switch (rung) {
+            case RIDER:
+                return offered;
+            case MARKER:
+                return state == OffsetRiderEnvelope.RiderState.PRESENT
+                        ? shedRiderForSize(riderByteLength, innerEncodingByteLength)
+                        : offered; // already the marker, and the guard has already warned about it
+            default:
+                return shedEnvelopeForSize(innerEncodingByteLength);
+        }
+    }
+
+    /**
+     * The ladder's first descent: the rider does not fit beside this offset map, so the envelope carries the
+     * zero-length marker instead. The offset map is untouched - that is R9.
+     */
+    private OffsetRiderEnvelope.Rider shedRiderForSize(int riderByteLength, int innerEncodingByteLength) {
+        var limiter = module.riderBudgetLadderWarnLimiter();
+        limiter.performIfNotLimited(() ->
+                log.warn("Dropping the {} bytes your {} returned for partition {}: with the {}-byte offset map they " +
+                                "would need {} characters of metadata and the limit is {}. The offset map is " +
+                                "committed regardless, carrying the marker that tells a reader the rider was " +
+                                "dropped rather than never configured. This warning is rate limited to once per {}.",
+                        riderByteLength,
+                        ParallelConsumerOptions.Fields.riderSupplier,
+                        tp,
+                        innerEncodingByteLength,
+                        RiderBudgetRung.RIDER.predictedCharacters(riderByteLength, innerEncodingByteLength),
+                        DefaultMaxMetadataSize,
+                        limiter.getRate()));
+        return OffsetRiderEnvelope.Rider.dropped();
+    }
+
+    /**
+     * The ladder's second descent: the marker itself does not fit, so the envelope goes and the payload becomes
+     * the one this build writes with no rider configured - which is exactly how it reads back (R6). The alternative
+     * would be dropping an offset map that fits, which R9 forbids.
+     */
+    private OffsetRiderEnvelope.Rider shedEnvelopeForSize(int innerEncodingByteLength) {
+        var limiter = module.riderBudgetLadderWarnLimiter();
+        limiter.performIfNotLimited(() ->
+                log.warn("Dropping the rider envelope entirely for partition {}: the {}-byte offset map is within " +
+                                "the envelope's own {} bytes of the {}-character metadata limit, so keeping the " +
+                                "envelope would cost the offset map. This commit reads back as though no {} were " +
+                                "configured - not as one whose rider was dropped. This warning is rate limited to " +
+                                "once per {}.",
+                        tp,
+                        innerEncodingByteLength,
+                        OffsetRiderEnvelope.HEADER_BYTES,
+                        DefaultMaxMetadataSize,
+                        ParallelConsumerOptions.Fields.riderSupplier,
+                        limiter.getRate()));
+        return OffsetRiderEnvelope.Rider.none();
     }
 
     /**

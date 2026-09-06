@@ -172,6 +172,17 @@ public class OffsetRiderEnvelope {
         }
 
         /**
+         * How many bytes this rider occupies - zero for every state but {@link RiderState#PRESENT}.
+         * <p>
+         * Here because Parallel Consumer needs the rider's <em>length</em> and nothing else (R5): the budget
+         * ladder sizes every rung from this number, and reading it through {@link #getBytes()} would copy the
+         * embedder's whole blob once per commit to look at one field of it.
+         */
+        public int getByteLength() {
+            return bytes.length;
+        }
+
+        /**
          * A copy of the rider's bytes.
          *
          * @throws IllegalStateException if there are none. Returning an empty array instead would hand an embedder's
