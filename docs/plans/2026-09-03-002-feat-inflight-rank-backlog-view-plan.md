@@ -168,7 +168,17 @@ U1 lands with the first commit. U2 lands before U3 and U4 so their checks can be
 - **Goal:** the pull request has a `docs/inflight/` note from its first commit, collecting findings where they happen rather than reconstructing them at the end.
 - **Requirements:** the directory contract in `docs/inflight/AGENTS.md`; the pull-request template's note checkbox.
 - **Dependencies:** none.
-- **Files:** `docs/inflight/branch-inflight-rank-cross-ref-backlog-view.md`
+- **Files:** `docs/inflight/ci-inflight-rank-relations-and-parse-assumptions.md` - opened as
+  `branch-inflight-rank-cross-ref-backlog-view.md` and renamed at merge prep, once the work had a
+  pull request and the `branch-` prefix (work on a branch with no pull request) had stopped being
+  true. Renaming breaks citations, so it was done while this plan was the only one - it is free
+  exactly once, before the note reaches the baseline.
+  <!-- file-refs: N/A - the old name is quoted as history; the note under it no longer exists -->
+- **Where its general lessons went:** version selection and parsing a document written for people to
+  `docs/solutions/best-practices/a-source-that-can-disagree-with-itself-needs-a-reader-that-says-so.md`;
+  the untested renderer and the vacuous control to
+  `docs/solutions/test-issues/a-view-no-check-renders-has-an-unenforced-contract.md`. The note keeps
+  only what is still open - the deferred `candidate` relation and two assumptions nothing enforces.
 - **Approach:**
   1. Name it for its subject, not its pull request, so the name survives the merge.
   2. Tag it `inflight-type: task` and `inflight-impact: process` - the work is about how work is ranked and recorded.
