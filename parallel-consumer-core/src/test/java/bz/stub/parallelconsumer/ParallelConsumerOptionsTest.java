@@ -5,14 +5,23 @@ package bz.stub.parallelconsumer;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.apache.kafka.clients.producer.Producer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
+import org.slf4j.LoggerFactory;
+
 import java.time.Duration;
+import java.util.List;
+import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
@@ -251,4 +260,105 @@ class ParallelConsumerOptionsTest {
         assertThrows(NullPointerException.class, options::validate,
                 "and validation is still where a null commit mode stops the run");
     }
+
+    /*
+     * The rider supplier hook (R13, R17). Its own guard, its call site and the thread it runs on are
+     * RiderSupplierGuardTest's; what belongs here is the option itself - that leaving it unset changes nothing, and
+     * that setting it announces the compatibility hazard exactly once.
+     */
+
+    /**
+     * R13: supplying no rider is the default, and the default has to be silent. The INFO line below is a warning
+     * about a durable, group-wide hazard; logged at anyone who has not configured a rider it would be noise that
+     * teaches readers to skip it.
+     */
+    @Test
+    void optionsWithNoRiderSupplierValidateAndSayNothingAboutRiders() {
+        var options = optionsBuilder().build();
+
+        options.validate();
+
+        assertWithMessage("unset means unset - no builder default, so the encoder path can test for null")
+                .that(options.getRiderSupplier())
+                .isNull();
+
+        var lines = riderLinesLoggedWhileConstructing(options);
+
+        assertWithMessage("a build with no rider configured must say nothing about riders. Saw: %s", lines)
+                .that(lines)
+                .isEmpty();
+    }
+
+    /**
+     * R17/KTD11: the hazard a rider creates is not this instance's - it is every OTHER member of the group, and
+     * any rollback, because the payload is durable and every released Parallel Consumer throws on an unknown magic
+     * byte from inside the rebalance callback. A javadoc nobody re-reads at deploy time is not enough, so the
+     * requirement and its recovery procedure are logged when the option is configured.
+     * <p>
+     * Once, and at startup: this is configuration, not an event.
+     */
+    @Test
+    void configuringARiderSupplierAnnouncesTheReaderRequirementAndTheRecoveryProcedureOnce() {
+        var options = optionsBuilder()
+                .riderSupplier(context -> new byte[]{1})
+                .build();
+
+        options.validate();
+
+        var lines = riderLinesLoggedWhileConstructing(options);
+
+        assertWithMessage("exactly one line, at startup - repeating it would be an event, and this is a "
+                        + "configuration fact. Saw: %s", lines)
+                .that(lines)
+                .hasSize(1);
+        assertWithMessage("the line has to name the recovery procedure, because by the time anyone needs it the "
+                        + "group is already crash-looping and this log line is what they will search for")
+                .that(lines.get(0))
+                .contains("kafka-consumer-groups --reset-offsets");
+    }
+
+    /**
+     * Builds a processor from the given options and returns the {@code INFO} lines it logged about the rider
+     * option while doing so.
+     * <p>
+     * Scoped to the calling thread: surefire runs this module's test methods in parallel, the appender attaches to
+     * a class logger every one of them shares, and other suites construct processors with rider suppliers of their
+     * own. A log event carries the thread that emitted it, and construction happens on the thread that asked for
+     * it, so the thread name is the cheapest correct filter.
+     * <p>
+     * The processor is deliberately not closed, as {@link #setTimeBetweenCommits()} above also does not: nothing
+     * here starts a control thread, and closing a processor that never polled is a longer story than this
+     * assertion is worth.
+     */
+    private List<String> riderLinesLoggedWhileConstructing(ParallelConsumerOptions<String, String> options) {
+        var thisThread = Thread.currentThread().getName();
+        var logger = (Logger) LoggerFactory.getLogger(AbstractParallelEoSStreamProcessor.class);
+        var appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        // The test profile runs above INFO, and logback drops a call below the effective level before any appender
+        // sees it - so without this the capture is empty whether the line is logged or not, and both cases below
+        // would pass for the wrong reason. Restored in the finally, because the level is on a shared logger.
+        var levelBefore = logger.getLevel();
+        logger.setLevel(Level.INFO);
+        logger.addAppender(appender);
+        try {
+            var ignoredProcessor = new ParallelEoSStreamProcessor<>(options); // constructed for its logging only
+            assertThat(ignoredProcessor).isNotNull();
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(levelBefore);
+            appender.stop();
+        }
+        return appender.list.stream()
+                .filter(event -> event.getLevel() == Level.INFO)
+                .filter(event -> thisThread.equals(event.getThreadName()))
+                .map(ILoggingEvent::getFormattedMessage)
+                // startsWith, not contains: the options object renders every field name including this one, so the
+                // ordinary "initialise..." line mentions riderSupplier whether one is configured or not, and a
+                // contains filter would match it and make the negative case pass for the wrong reason
+                .filter(message -> message.startsWith("A " + ParallelConsumerOptions.Fields.riderSupplier
+                        + " is configured"))
+                .collect(Collectors.toList());
+    }
+
 }

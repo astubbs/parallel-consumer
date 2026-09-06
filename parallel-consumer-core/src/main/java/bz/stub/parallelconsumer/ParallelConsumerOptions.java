@@ -435,6 +435,44 @@ public class ParallelConsumerOptions<K, V> {
     private final Function<RecordContext<K, V>, Duration> retryDelayProvider;
 
     /**
+     * Opaque bytes to carry in each partition's committed offset metadata - Parallel Consumer's one generalised
+     * extension slot, which it never interprets.
+     * <p>
+     * Unset by default, and unset is byte-for-byte the behaviour of a build that has never heard of riders. When
+     * set, PC calls it once per commit per partition with a {@link RiderContext} naming that partition, the offset
+     * being committed and the byte budget available, and stores whatever comes back inside its own payload. The
+     * rider is <b>partition-scoped and instance-agnostic</b>: whichever member of the group next owns the
+     * partition reads it, not necessarily the one that wrote it.
+     * <p>
+     * <b>Which thread it runs on.</b> Under the consumer commit modes, the broker-poll thread. Under
+     * {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER}, the control thread, while it holds the produce write
+     * lock - so a supplier that blocks there blocks every worker trying to produce. It also runs on the shutdown
+     * commit, which is the commit a restart reads, so an embedder's rider state has to outlive its own teardown.
+     * <p>
+     * <b>The contract.</b> It must be <em>pure, cheap and non-blocking</em>: it may be called more than once in a
+     * commit cycle and its result may be discarded without ever reaching the broker, so it must not be where the
+     * embedder advances any state of its own. Returning {@code null} or a zero-length array both mean "no rider
+     * for this call" - a zero-length rider is not a representable value, because that spelling is reserved for
+     * PC's own marker for a rider it had to drop for size. A throw is caught, logged once through a rate limiter,
+     * counted, and treated as no rider: the commit still happens, carrying the payload it would have carried
+     * anyway. There is no versioning here and there will not be; the bytes are opaque, so the embedder puts its
+     * own version byte first.
+     * <p>
+     * <b>Compatibility - read this before configuring it.</b> A rider changes the shape of the metadata PC
+     * commits, and that metadata is durable in {@code __consumer_offsets}. <b>Every member of the consumer group
+     * must already be running a Parallel Consumer that carries the unreadable-offset-metadata policy</b>
+     * ({@link #getInvalidOffsetMetadataPolicy()}, astubbs/parallel-consumer#207). Every previously released build
+     * throws from inside the rebalance callback when it meets an offset encoding it does not know, before any
+     * policy gets a say - so one such member in the group, or a rollback to one, crash-loops on every restart and
+     * rebalance. Unsetting this option does not heal it: a partition with nothing outstanding never commits, so
+     * the offending metadata is never overwritten. Recovery is external and preserves the committed position -
+     * {@code kafka-consumer-groups --reset-offsets --to-current} against the group, with the members stopped. The
+     * {@code docs/features/} entry for this option carries the procedure in full, and PC logs the same
+     * requirement once at {@code INFO} when a supplier is configured.
+     */
+    private final Function<RiderContext, byte[]> riderSupplier;
+
+    /**
      * Controls how long to block while waiting for the {@link Producer#send} to complete for any ProducerRecords
      * returned from the user-function. Only relevant if using one of the produce-flows and providing a
      * {@link ParallelConsumerOptions#producer}. If the timeout occurs the record will be re-processed in the

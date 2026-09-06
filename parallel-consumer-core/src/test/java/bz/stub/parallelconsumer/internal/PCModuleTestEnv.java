@@ -108,6 +108,19 @@ public class PCModuleTestEnv extends PCModule<String, String> {
         this(ParallelConsumerOptions.<String, String>builder().build());
     }
 
+    /**
+     * The module's {@link ProducerManager}, reachable by a test outside this package.
+     * <p>
+     * {@link PCModule#producerManager()} is {@code protected}, which is right for the engine - collaborators are
+     * reached through the module rather than fetched by callers - but a test in another package that has to drive
+     * a transactional commit needs <em>this</em> memoised instance. Building its own would carry a second
+     * {@code producerTransactionLock}, at which point the produce lock and the commit lock stop being two sides of
+     * one lock, and every assertion about the lock is about the wrong one.
+     */
+    public ProducerManager<String, String> exposedProducerManager() {
+        return producerManager();
+    }
+
     @Override
     protected ProducerWrapper<String, String> producerWrap() {
         return mockProducerWrapTransactional();

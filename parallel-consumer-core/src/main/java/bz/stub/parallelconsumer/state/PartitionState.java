@@ -6,13 +6,17 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.RiderContext;
 import bz.stub.parallelconsumer.internal.BrokerPollSystem;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.offsets.NoEncodingPossibleException;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
+import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Tag;
@@ -567,6 +571,12 @@ public class PartitionState<K, V> {
      * Tries to encode the incomplete offsets for this partition. This may not be possible if there are none, or if no
      * encodings are possible ({@link NoEncodingPossibleException}. Encoding may not be possible of - see
      * {@link OffsetMapCodecManager#makeOffsetMetadataPayload}.
+     * <p>
+     * <b>This method is the whole commit snapshot, and everything the payload says is sampled inside it</b>: the
+     * offset, the hole map, and - when one is configured - the embedder's rider (see
+     * {@link #riderFromSupplier}). Reading any of them again elsewhere is the confluentinc#893 defect class, so
+     * the write side is two steps rather than one: encode the offset map once, then assemble the string around
+     * whatever the rider slot turned out to hold.
      *
      * @return the encoded offset map if one was possible, paired with the offset it was encoded
      *         against. The two travel together deliberately: committing the payload against a
@@ -577,14 +587,26 @@ public class PartitionState<K, V> {
         long offsetOfNextExpectedMessage = getOffsetToCommit();
 
         if (incompleteOffsets.isEmpty()) {
+            // KTD6: this early return is the ONLY place a partition blocked by back pressure unblocks once it has
+            // caught up, so a rider must ride on it rather than replace it - otherwise configuring a rider could
+            // leave a partition with no work left to complete permanently blocked.
             setAllowedMoreRecords(true);
-            return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
+            var caughtUpRider = riderFromSupplier(offsetOfNextExpectedMessage, NO_INNER_BYTES.length);
+            if (caughtUpRider.getState() == OffsetRiderEnvelope.RiderState.NONE) {
+                return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
+            }
+            return ParallelConsumer.Tuple.pairOf(of(om.assembleMetadataPayload(NO_INNER_BYTES, caughtUpRider)),
+                    offsetOfNextExpectedMessage);
         }
 
         try {
             // todo refactor use of null shouldn't be needed. Is OffsetMapCodecManager stateful? remove null - confluentinc#233
             var offsetRange = getOffsetHighestSucceeded() - offsetOfNextExpectedMessage;
-            String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, this);
+            // KTD9: encode the holes ONCE, then ask for the rider, then assemble. A second encode pass here would
+            // snapshot a later hole map (the confluentinc#894 tear class) and double-count the encoding meters.
+            byte[] innerBytes = om.encodeOffsetsToInnerBytes(offsetOfNextExpectedMessage, this);
+            var rider = riderFromSupplier(offsetOfNextExpectedMessage, innerBytes.length);
+            String offsetMapPayload = om.assembleMetadataPayload(innerBytes, rider);
             ratioPayloadUsedDistributionSummary.record(offsetMapPayload.length() / (double) offsetRange);
             ratioMetadataSpaceUsedDistributionSummary.record(offsetMapPayload.length() / (double) OffsetMapCodecManager.DefaultMaxMetadataSize);
             boolean mustStrip = updateBlockFromEncodingResult(offsetMapPayload);
@@ -635,6 +657,174 @@ public class PartitionState<K, V> {
 
     private double getPressureThresholdValue() {
         return DefaultMaxMetadataSize * PartitionStateManager.getUSED_PAYLOAD_THRESHOLD_MULTIPLIER();
+    }
+
+    /**
+     * What a caught-up partition has to encode: nothing. The rider, if there is one, rides alone.
+     */
+    private static final byte[] NO_INNER_BYTES = new byte[0];
+
+    /**
+     * Asks the embedder's {@link ParallelConsumerOptions#getRiderSupplier() riderSupplier} for this commit's
+     * rider, and turns every way it can be unhelpful into a rider slot the rest of the write side can trust.
+     * <p>
+     * <b>This is user code on an engine thread</b> - the broker-poll thread under the consumer commit modes, the
+     * control thread under the produce write lock under transactions - so nothing it does may escape. A throw is
+     * caught (including an {@link Error}: a supplier that throws {@code NoClassDefFoundError} from a
+     * half-deployed embedder must still cost only the rider), logged through a rate limiter and treated as no
+     * rider. The shape and the reasoning are {@code WorkContainer#getRetryDelayConfig}'s, and the failure it
+     * guards against is not hypothetical - a throwing meter registry took the poll thread down and stranded
+     * {@code close()}:
+     * {@code docs/solutions/runtime-errors/a-throwing-meter-registry-kills-the-poll-thread-and-strands-close.md}.
+     * <p>
+     * <b>KTD3 - normalisation happens here and nowhere else.</b> {@code null} and a zero-length array both become
+     * {@link OffsetRiderEnvelope.Rider#none()} before anything below sees them, so the only writer of a
+     * zero-length envelope is the drop below and an embedder cannot forge that marker.
+     *
+     * @param offsetToCommit              the offset this rider will be committed against - sampled once, by the
+     *                                    caller, in the same snapshot as everything else about this commit (R11)
+     * @param innerEncodingByteLength     how many bytes the encoded offset map took, or zero when the partition is
+     *                                    caught up and there is no map to write
+     * @return never {@code null}; {@code NONE} when there is no rider to carry
+     */
+    private OffsetRiderEnvelope.Rider riderFromSupplier(long offsetToCommit, int innerEncodingByteLength) {
+        var supplier = module.options().getRiderSupplier();
+        if (supplier == null) {
+            return OffsetRiderEnvelope.Rider.none();
+        }
+
+        int allowance = maxRiderBytes(innerEncodingByteLength,
+                DefaultMaxMetadataSize,
+                PartitionStateManager.getUSED_PAYLOAD_THRESHOLD_MULTIPLIER());
+
+        byte[] theirs;
+        try {
+            theirs = supplier.apply(new RiderContext(tp, offsetToCommit, allowance));
+        } catch (Throwable theirSupplierThrew) {
+            warnBrokenRiderSupplier(theirSupplierThrew);
+            return OffsetRiderEnvelope.Rider.none();
+        }
+
+        if (theirs == null || theirs.length == 0) {
+            return OffsetRiderEnvelope.Rider.none();
+        }
+
+        if (theirs.length > allowance) {
+            warnOversizedRider(theirs.length, allowance);
+            // KTD4: a caught-up partition whose rider will not fit writes no metadata at all, rather than an
+            // envelope whose only content is the marker saying it is empty. With a hole map to sit beside, the
+            // marker is worth its three bytes - it is how a reader tells a rider that was shed from one that was
+            // never configured (R6).
+            return innerEncodingByteLength > 0
+                    ? OffsetRiderEnvelope.Rider.dropped()
+                    : OffsetRiderEnvelope.Rider.none();
+        }
+
+        return OffsetRiderEnvelope.Rider.present(theirs);
+    }
+
+    /**
+     * The most rider bytes that may be carried alongside an offset map of {@code innerEncodingByteLength} bytes,
+     * per KTD4 of the rider plan. Pure, so it can be asserted directly.
+     * <p>
+     * Two independent limits, and the answer is the smaller:
+     * <ol>
+     *     <li><b>The rider cap</b> - {@code maxMetadataSizeInCharacters * (1 - multiplier)} encoded characters,
+     *     the slice of the metadata field that back pressure deliberately never uses. Independent of the offset
+     *     map, and it is what buys the property an embedder depends on: a rider at its cap can only push the
+     *     assembled payload over the hard limit once the hole map has already crossed the back-pressure
+     *     threshold, so configuring a rider cannot cost a partition metadata it would otherwise have
+     *     committed.</li>
+     *     <li><b>What is actually left</b> in this commit once the offset map and the envelope's own header are
+     *     accounted for. Without this a small cap plus a large map would promise room that does not exist.</li>
+     * </ol>
+     * Both start life in <em>encoded characters</em>, because that is the unit the broker's limit is in and the
+     * unit the existing checks use, and are converted to raw bytes by inverting Base64's closed form: {@code n}
+     * bytes encode to {@code 4*ceil(n/3)} characters, so the largest {@code n} fitting in {@code c} characters is
+     * {@code 3*floor(c/4)}. Base64 is the more expansive of the outer codecs in play, so a rider that fits under
+     * it fits under the alternatives too.
+     *
+     * @param innerEncodingByteLength         bytes of encoded offset map this rider shares the payload with; zero
+     *                                        for a caught-up partition
+     * @param maxMetadataSizeInCharacters     the hard metadata limit, in characters
+     *                                        ({@link OffsetMapCodecManager#DefaultMaxMetadataSize})
+     * @param usedPayloadThresholdMultiplier  the back-pressure threshold as a fraction of that limit
+     *                                        ({@link PartitionStateManager#getUSED_PAYLOAD_THRESHOLD_MULTIPLIER()})
+     * @return zero or more bytes - zero meaning there is no room for a rider on this commit at all, which is what
+     *         a multiplier at or above 1 produces for every limit
+     */
+    // visible for testing - the budget ladder asserts these values directly rather than through a commit
+    static int maxRiderBytes(int innerEncodingByteLength,
+                             int maxMetadataSizeInCharacters,
+                             double usedPayloadThresholdMultiplier) {
+        int riderCapInCharacters = (int) Math.floor(maxMetadataSizeInCharacters * (1 - usedPayloadThresholdMultiplier));
+        int riderCap = base64CapacityInBytes(riderCapInCharacters);
+
+        int remaining = base64CapacityInBytes(maxMetadataSizeInCharacters)
+                - OffsetRiderEnvelope.HEADER_BYTES
+                - innerEncodingByteLength;
+
+        int allowed = Math.min(riderCap, remaining);
+        // the format's own ceiling: the length field is 16 bits, so no derived cap may promise more than it can
+        // describe, however large the metadata limit is set
+        return Math.max(0, Math.min(allowed, OffsetRiderEnvelope.MAX_RIDER_BYTES));
+    }
+
+    /**
+     * The largest number of raw bytes whose Base64 encoding fits in {@code characters} characters - the inverse of
+     * {@code 4*ceil(n/3)}. Negative inputs (a threshold multiplier above 1) answer zero rather than a negative
+     * capacity.
+     */
+    private static int base64CapacityInBytes(int characters) {
+        return characters < 4 ? 0 : (characters / 4) * 3;
+    }
+
+    /**
+     * One rate-limited warning for a supplier that threw.
+     * <p>
+     * Rate limited because this is a coding error rather than a transient: a supplier broken once is broken on
+     * every commit of every partition, so an unlimited warning turns one bad lambda into a log nobody can read.
+     * The counterpart to that is that the warning has to be self-contained - it says which option, which
+     * partition, and what PC did instead - because the next one may be half a minute away.
+     */
+    private void warnBrokenRiderSupplier(Throwable theirs) {
+        var limiter = module.brokenRiderSupplierWarnLimiter();
+        limiter.performIfNotLimited(() ->
+                ThrowableUtils.logWithoutEscaping(theirs, () ->
+                        log.warn("Your {} threw for partition {} - committing without a rider while it keeps " +
+                                        "happening. Offsets are unaffected and still committed, but nothing is " +
+                                        "being carried in the offset metadata, so whatever reads the rider back " +
+                                        "will find none. Fix the supplier. This warning is rate limited to once " +
+                                        "per {}. Cause: {}",
+                                ParallelConsumerOptions.Fields.riderSupplier,
+                                tp,
+                                limiter.getRate(),
+                                ThrowableUtils.describeWithRootCause(theirs),
+                                theirs)));
+    }
+
+    /**
+     * One rate-limited warning for a supplier that returned more than the {@link RiderContext#getMaxRiderBytes()}
+     * it was handed (R8).
+     * <p>
+     * Its own limiter rather than the broken-supplier one: a supplier that returns too much and a supplier that
+     * throws are different faults with different fixes, and sharing a limiter would let whichever happened first
+     * silence the other for its whole window.
+     */
+    private void warnOversizedRider(int riderLength, int allowance) {
+        var limiter = module.oversizedRiderWarnLimiter();
+        limiter.performIfNotLimited(() ->
+                log.warn("Your {} returned {} bytes for partition {}, more than the {} it was given room for in " +
+                                "this commit - dropping the rider. The offset map is still committed; the rider " +
+                                "is not, so whatever reads it back will see that one existed and was dropped. " +
+                                "The allowance is in RiderContext and moves with how much of the metadata the " +
+                                "offset map is using, so size the rider for the crowded case. This warning is " +
+                                "rate limited to once per {}.",
+                        ParallelConsumerOptions.Fields.riderSupplier,
+                        riderLength,
+                        tp,
+                        allowance,
+                        limiter.getRate()));
     }
 
     public void onPartitionsRemoved(ShardManager<K, V> sm) {

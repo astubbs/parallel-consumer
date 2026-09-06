@@ -382,6 +382,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.info("Confluent Parallel Consumer initialise... groupId: {}, Options: {}",
                 consumerManager.groupMetadata().groupId(),
                 newOptions);
+        if (options.getRiderSupplier() != null) {
+            announceRiderCompatibilityRequirement();
+        }
         //Initialize global metrics - should be initialized before any of the module objects are created so that meters can be bound in them.
         pcMetrics = module.pcMetrics();
 
@@ -406,6 +409,36 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
         //Initialize metrics for this class once all the objects are created
         initMetrics();
+    }
+
+    /**
+     * Says once, at startup, what configuring a rider commits the whole consumer group to.
+     * <p>
+     * The hazard is not this instance's: PC writes offset metadata in a shape that <em>every previously released
+     * build</em> refuses from inside the rebalance callback, before any policy gets a say, and the metadata is
+     * durable in {@code __consumer_offsets}. So one un-upgraded member, or a rollback weeks later, crash-loops on
+     * every restart - and unsetting the option does not heal it, because a partition with nothing outstanding
+     * never commits and so never overwrites the offending payload.
+     * <p>
+     * A javadoc carries this too, but nobody re-reads a javadoc at deploy time, and the person who hits the
+     * crash-loop is usually not the person who set the option. So it is also said here, where it lands in the log
+     * of the instance that turned it on, next to the recovery command they will be searching for.
+     * <p>
+     * Once and at {@code INFO}, because it is a fact about the configuration rather than an event: repeating it
+     * per commit would be the noise that teaches people to filter it.
+     */
+    private static void announceRiderCompatibilityRequirement() {
+        log.info("A {} is configured, so this instance writes offset metadata in the rider envelope format. " +
+                        "EVERY member of this consumer group must be running a Parallel Consumer that carries the " +
+                        "unreadable-offset-metadata policy (astubbs/parallel-consumer#207): every earlier released " +
+                        "build throws from inside the rebalance callback on an offset encoding it does not know, " +
+                        "and the metadata is durable in __consumer_offsets - so one such member, or a rollback to " +
+                        "one, crash-loops on every restart and rebalance. Unsetting the option does NOT heal it: a " +
+                        "partition with nothing outstanding never commits, so the payload is never overwritten. " +
+                        "Recovery is external and keeps the committed position: stop the members, then " +
+                        "kafka-consumer-groups --reset-offsets --to-current --group <group> --all-topics --execute. " +
+                        "The docs/features/ entry for the option carries the full procedure.",
+                ParallelConsumerOptions.Fields.riderSupplier);
     }
 
     private void initMetrics() {
