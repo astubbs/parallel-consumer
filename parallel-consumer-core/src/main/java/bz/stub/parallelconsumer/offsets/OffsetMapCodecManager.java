@@ -81,10 +81,14 @@ public class OffsetMapCodecManager<K, V> {
      * <p>Concurrent, and populated with a single {@code computeIfAbsent} rather than a
      * {@code get}-then-{@code put}, because the map is a cache whose miss handler <em>registers a meter</em> -
      * so the check and the act have to be one step. Two encoders interleaving inside that window both see the
-     * miss, both register, and one of the two {@code put}s is lost; the losing thread's entry then never
-     * appears, so every later encode of that encoding pays a fresh registration - which re-enters
-     * {@code PCMetrics.track} under {@code metersLock}, the monitor {@code close()} and every rebalance's
-     * meter registration also contend for. The last of the four unguarded metrics collections named by
+     * miss and both register, and that second registration is the cost: one redundant trip through
+     * {@code PCMetrics.track} under {@code metersLock} - the monitor {@code close()} and every rebalance's
+     * meter registration also contend for it - paid once. Both threads {@code put} the <em>same</em> key, so an
+     * entry exists whichever write wins and every later encode hits the cache; micrometer returns the same
+     * {@code Counter} for the same id, so the reported value is right too. An entry that never appears needs
+     * two <em>different</em> encodings landing in one bucket of the plain {@link HashMap}, with one thread's
+     * write of the chain head dropping the other's node - and that needs no resize, so the map's size does not
+     * rule it out. The last of the four unguarded metrics collections named by
      * {@code docs/solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md};
      * astubbs#267 made the other three concurrent and missed this one because it sits on the encode path
      * rather than in the rebalance callbacks.
@@ -108,7 +112,7 @@ public class OffsetMapCodecManager<K, V> {
      *
      * <p><b>What is NOT the argument</b>, so nobody re-derives it: table corruption on resize. There are
      * twelve {@link OffsetEncoding} constants and a default {@link HashMap} resizes above twelve entries, so
-     * this map never resized and never could.
+     * this map never resized and never could; the dropped bucket node above is the corruption that needs none.
      */
     private final Map<OffsetEncoding, Counter> encodingCounters = new ConcurrentHashMap<>();
 

@@ -17,8 +17,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.util.Arrays;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.concurrent.CountDownLatch;
@@ -29,6 +32,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
 import static bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * Registering the counter for an encoding must happen exactly once, however two encoders interleave.
@@ -56,10 +60,24 @@ import static com.google.common.truth.Truth.assertThat;
  * <b>Verdict against the pre-fix tree</b>: {@code expected 1, but was 2} - both encoders registered the counter
  * for the chosen encoding. Against the fix, the second encoder blocks inside {@code computeIfAbsent} until the
  * first has published its entry, then reads it, so the rendezvous below times out by design and the count is 1.
+ * <p>
+ * <b>The count alone is not enough</b>, and the test asserts one more fact for that reason. On the pre-fix tree a
+ * second encoder that reaches the lookup only <em>after</em> the window has closed finds the first encoder's
+ * entry, registers nothing, and the count is 1 - a green run against the broken code. So the seam also records
+ * where the second encoder was when the window closed: inside the counter lookup (blocked beneath it on the fix,
+ * or registering on the pre-fix tree), or not there yet. Only the first is a valid run; the second is the harness
+ * failing to open the window it needs, and it fails as that rather than passing as a verdict.
  *
  * @author Antony Stubbs
  */
 @Slf4j
+// READ side of the codec's static state. The encode path reads OffsetMapCodecManager.forcedCodec and
+// OffsetSimultaneousEncoder.compressionForced, which OffsetEncodingTests and OffsetEncodingBackPressureUnitTest
+// write under these locks - and the root pom runs methods in parallel unless -Pci says otherwise, so without
+// declaring them here a writer could force a codec under this test mid-encode. Same shape as
+// WorkManagerOffsetMapCodecManagerTest; READ mode excludes only the writers.
+@ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ)
+@ResourceLock(value = OffsetSimultaneousEncoder.COMPRESSION_FORCED_RESOURCE_LOCK, mode = ResourceAccessMode.READ)
 class EncodingCounterRegistrationIsAtomicTest {
 
     private static final TopicPartition TP = new TopicPartition("encoding-counter-atomicity", 0);
@@ -119,6 +137,7 @@ class EncodingCounterRegistrationIsAtomicTest {
         awaitLatch(metrics.firstEncoderInsideWindow, THREAD_JOIN_SECONDS);
 
         var secondEncoder = encoderThread("second-encoder", codecManager, state, firstFailure, encodesCompleted);
+        metrics.secondEncoder.set(secondEncoder);
         secondEncoder.start();
 
         firstEncoder.join(TimeUnit.SECONDS.toMillis(THREAD_JOIN_SECONDS));
@@ -130,6 +149,13 @@ class EncodingCounterRegistrationIsAtomicTest {
 
         assertThat(encodesCompleted.get())
                 .isEqualTo(2);
+        // the harness precondition, before the verdict: a second encoder that was not yet at the lookup when the
+        // window closed would find the first's entry on ANY tree, so a count of 1 from that run proves nothing
+        assertWithMessage("the second encoder must be inside the counter lookup when the registration window "
+                + "closes - registering (pre-fix) or blocked beneath it (fixed); a late arrival is a harness "
+                + "failure, not a pass")
+                .that(metrics.secondEncoderInsideLookupWhenWindowClosed)
+                .isTrue();
         assertThat(metrics.encodingUsageRegistrations.get())
                 .isEqualTo(1);
     }
@@ -185,6 +211,20 @@ class EncodingCounterRegistrationIsAtomicTest {
          */
         private final CountDownLatch secondEncoderReachedRegistration = new CountDownLatch(1);
 
+        /**
+         * The second encoder's thread, set by the test before it starts, so the seam can ask where that thread is
+         * at the one moment it matters - while the first encoder still holds the window, before it publishes.
+         */
+        private final AtomicReference<Thread> secondEncoder = new AtomicReference<>();
+
+        /**
+         * Where the second encoder was when the window closed. {@code true} if it was inside
+         * {@code getCounterMeterForEncoding} - registering, on the pre-fix tree, or blocked beneath it on the fix.
+         * {@code false} means it had not reached the lookup yet, and the run establishes nothing: see the class
+         * javadoc. Written by the first encoder's thread, read by the test thread after {@code join}.
+         */
+        private volatile boolean secondEncoderInsideLookupWhenWindowClosed;
+
         private WindowHoldingMetrics() {
             super(new SimpleMeterRegistry(),
                     UniLists.of(Tag.of("test", "encoding-counter-atomicity")),
@@ -201,12 +241,32 @@ class EncodingCounterRegistrationIsAtomicTest {
                 firstEncoderInsideWindow.countDown();
                 boolean secondArrived =
                         secondEncoderReachedRegistration.await(WINDOW_HOLD_SECONDS, TimeUnit.SECONDS);
+                // sampled here, still inside the window: once this method returns the first encoder publishes
+                // its entry and the second is free to finish, so the test thread could only ever see it gone
+                secondEncoderInsideLookupWhenWindowClosed = secondArrived || secondEncoderIsInsideTheLookup();
                 log.info("First encoder releasing the registration window; a second encoder reached "
-                        + "registration during it: {}", secondArrived);
+                        + "registration during it: {}; a second encoder was inside the lookup as it closed: {}",
+                        secondArrived, secondEncoderInsideLookupWhenWindowClosed);
             } else {
                 secondEncoderReachedRegistration.countDown();
             }
             return super.getCounterFromMetricDef(metricDef, additionalTags);
+        }
+
+        /**
+         * Whether the second encoder's stack currently passes through the codec manager's counter lookup. On the
+         * fix that thread is blocked inside {@code computeIfAbsent} beneath it; before the fix it would already
+         * have counted the latch down and never be asked. A thread not yet started, still encoding, or already
+         * finished is not inside it.
+         */
+        private boolean secondEncoderIsInsideTheLookup() {
+            Thread thread = secondEncoder.get();
+            if (thread == null) {
+                return false;
+            }
+            return Arrays.stream(thread.getStackTrace())
+                    .anyMatch(frame -> frame.getClassName().equals(OffsetMapCodecManager.class.getName())
+                            && frame.getMethodName().equals("getCounterMeterForEncoding"));
         }
     }
 }

@@ -446,10 +446,13 @@ cosmetic - see the last bullet.*
 - **The cached-and-shared instance is still only safe by the schedule, not by construction.**
   Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition
   `PartitionState.om` for encoding; one `PartitionStateManager.offsetMapCodecManager` for
-  decode). Its one mutable field, `encodingCounters`, is now a `ConcurrentHashMap` populated
-  with a single `computeIfAbsent` - so that field no longer depends on the schedule, and the
-  discriminator that made it safe (`commitLock`, not the identity of any one thread) is
-  recorded on it. Re-audit the rest of the class if confluentinc#200 parallelises encoding.
+  decode). The `encodingCounters` cache - a final reference - is now a `ConcurrentHashMap`
+  populated with a single `computeIfAbsent`, so its check-then-act no longer depends on the
+  schedule, and the discriminator that made the class safe (`commitLock`, not the identity of any
+  one thread) is recorded on that field. The fields that still do depend on it are the non-final
+  ones: `offsetEncodingTimer`, and the two mutable statics `DefaultMaxMetadataSize` and
+  `forcedCodec` - the last of which the encode path reads on every commit. Re-audit those three if
+  confluentinc#200 parallelises encoding.
 
 ### offsets/OffsetSimultaneousEncoder.java
 - `TODO VERY large offset ranges is slow`: large offset ranges (→ `Integer.MAX_VALUE`) are slow -

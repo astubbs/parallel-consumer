@@ -3,15 +3,15 @@ title: "The metrics counter maps were plain HashMaps - three fixed by a sweep, a
 date: 2026-09-05
 category: logic-errors
 module: parallel-consumer-core
-problem_type: race_condition
+problem_type: logic_error
 component: metrics
 root_cause: check_then_act_on_unsynchronised_collection
 resolution_type: code_fix
 severity: low
 symptoms:
   - "A Lincheck harness aimed at commit-path torn reads threw ArrayIndexOutOfBoundsException out of a metrics collection, with no stack recorded"
-  - "A counter map populated with get-then-put registers the same meter twice when two callers interleave, and one of the two puts is discarded"
-  - "The losing thread's entry never appears, so every later use of that key pays a fresh meter registration under a contended monitor"
+  - "A counter map populated with get-then-put registers the same meter twice when two callers interleave - one redundant trip through the metrics monitor, once, since both put the same key and every later lookup hits"
+  - "Two different keys landing in one HashMap bucket can drop one node without any resize, and only that shape leaves a key missing on every later lookup"
 applies_when:
   - Sweeping a defect class across a codebase and one instance sits on a different call path from the rest
   - A lazily populated cache's miss handler has a side effect, so the check and the act must be one step
@@ -102,12 +102,15 @@ return counter;
 ```
 
 The miss handler *registers a meter*, so this is not a cache lookup with a slow path; it is a
-check-then-act whose act is externally visible. Two callers inside the window both miss, both
-register, and one of the two `put`s is discarded. The discarded entry never appears, so every later
-encode of that encoding pays a fresh registration - which re-enters `PCMetrics.track` under
-`metersLock`, the monitor `close()` and every rebalance's meter registration also contend for. A hot
-path acquiring a contended global monitor per commit is the cost, not a wrong counter value:
-micrometer's registry dedupes by meter id, so the *reported* number is right either way.
+check-then-act whose act is externally visible. Two callers inside the window both miss and both
+register, and the second registration is the cost: one redundant trip through `PCMetrics.track` under
+`metersLock` - the monitor `close()` and every rebalance's meter registration also contend for it -
+paid once. It is not more than that, because both callers `put` the *same* key: an entry exists
+whichever write wins, every later encode hits the cache, and micrometer's registry returns the same
+`Counter` for the same meter id, so the *reported* number is right too. The outcome where an entry
+never appears needs two *different* encodings landing in one bucket of the plain `HashMap`, with one
+thread's write of the chain head dropping the other's node - and that needs no resize, so the map's
+size does not rule it out. Only then does an encoding keep missing and re-registering on every commit.
 
 `computeIfAbsent` on a `ConcurrentHashMap` is the whole fix, and it is what astubbs#267 used on the
 other three:
@@ -120,7 +123,8 @@ return encodingCounters.computeIfAbsent(encoding, enc ->
 
 **Two arguments that look right here and are not.** The first is table corruption on resize: there
 are twelve `OffsetEncoding` constants and a default `HashMap` resizes only above twelve entries, so
-this map never resized and never could. The second is `ConcurrentModificationException`: nothing
+this map never resized and never could - the dropped bucket node above is the corruption that needs
+none. The second is `ConcurrentModificationException`: nothing
 iterates any of the four. Reaching for either would have made the write-up wrong in a way no test
 would catch, and both are recorded on the field so nobody re-derives them.
 
