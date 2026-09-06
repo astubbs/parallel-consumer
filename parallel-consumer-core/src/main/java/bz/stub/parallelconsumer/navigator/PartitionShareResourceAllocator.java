@@ -58,20 +58,7 @@ import static bz.stub.parallelconsumer.navigator.QuantumArithmetic.startOfQuantu
  * {@link CreditLedger}'s - lifted from the in-process allocator, not reimplemented (KTD1).
  */
 @Slf4j
-public class PartitionShareResourceAllocator implements ResourceAllocator {
-
-    /** The production time source (KTD4): taken at construction, used by the no-argument overloads. */
-    private final Clock clock;
-
-    /** Registered policies by resource name; its own thread safety is the concurrency control for that half. */
-    private final ContractRegistry registry = new ContractRegistry();
-
-    /** THE monitor (KTD12). Guards the lease ledger. */
-    private final Object stateLock = new Object();
-
-    /** The lease ledger and conservation counters (KTD2) - every call into it is made under the monitor. */
-    @GuardedBy("stateLock")
-    private final CreditLedger ledger = new CreditLedger(registry);
+public class PartitionShareResourceAllocator extends LedgerBackedResourceAllocator {
 
     /**
      * The publication history, oldest first, as an immutable list behind an atomic reference (KTD2): a
@@ -92,21 +79,7 @@ public class PartitionShareResourceAllocator implements ResourceAllocator {
      *              passes a {@code MutableClock}
      */
     public PartitionShareResourceAllocator(Clock clock) {
-        this.clock = clock;
-    }
-
-    // ------------------------------------------------------------------
-    // Registry
-    // ------------------------------------------------------------------
-
-    @Override
-    public void register(ResourceContract contract) {
-        registry.register(contract);
-    }
-
-    @Override
-    public Optional<ResourceContract> lookup(String resourceName) {
-        return registry.lookup(resourceName);
+        super(clock);
     }
 
     // ------------------------------------------------------------------
@@ -258,33 +231,32 @@ public class PartitionShareResourceAllocator implements ResourceAllocator {
     }
 
     // ------------------------------------------------------------------
-    // The per-pass quantum pull (KTD4) - mutating
+    // The division (KTD1): the base class pulls, debits and reads; this says what the share IS
     // ------------------------------------------------------------------
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The rotation share of every held partition's ordinal under the snapshot effective for the quantum. An
+     * instance is always a participant here: a zero share (total unresolved, nothing held - R5) is issued as
+     * zero, so the same quantum is never re-resolved.
+     */
     @Override
-    public void readQuantum(String memberId, Instant now) {
-        synchronized (stateLock) {
-            ledger.settle(now);
-            for (ResourceContract contract : registry.all()) {
-                mintShareIfUnissued(memberId, contract, now);
-            }
-        }
-    }
-
-    /** {@link #readQuantum(String, Instant)} on the allocator's own clock - the production entry point. */
-    public void readQuantum(String memberId) {
-        readQuantum(memberId, clock.instant());
-    }
-
     @GuardedBy("stateLock")
-    private void mintShareIfUnissued(String memberId, ResourceContract contract, Instant now) {
-        long quantumIndex = quantumIndexOf(now, contract.getQuantum());
-        if (ledger.isIssued(memberId, contract.getName(), quantumIndex)) {
-            return; // this quantum's grant is already issued - never re-mint (R14)
-        }
-        AssignmentSnapshot assignment = effectiveFor(contract, quantumIndex);
-        long share = shareOf(assignment, contract, quantumIndex);
-        ledger.mint(memberId, contract.getName(), quantumIndex, share);
+    long shareOf(String memberId, ResourceContract contract, long quantumIndex) {
+        return shareOf(effectiveFor(contract, quantumIndex), contract, quantumIndex);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The declared burst scaled by the effective snapshot's fraction, rounded up (R2, R8) - read together
+     * with the debit it governs, so a publish cannot land between the two.
+     */
+    @Override
+    @GuardedBy("stateLock")
+    long burstBudgetFor(String memberId, ResourceContract contract, long quantumIndex) {
+        return effectiveFor(contract, quantumIndex).burstBudgetFor(contract);
     }
 
     /**
@@ -306,42 +278,8 @@ public class PartitionShareResourceAllocator implements ResourceAllocator {
     }
 
     // ------------------------------------------------------------------
-    // The soft debit (KTD1/KD10) - mutating
+    // Projections the division owns (KTD5 wakeup, R18 views) - never mutate
     // ------------------------------------------------------------------
-
-    @Override
-    public void spend(String memberId, String resourceName, Instant now) {
-        ResourceContract contract = registry.require(resourceName);
-        long quantumIndex = quantumIndexOf(now, contract.getQuantum());
-        synchronized (stateLock) {
-            // the budget is read under the monitor with the debit it governs, so a publish cannot land
-            // between the two and leave the debit judged against a snapshot the ledger never minted from
-            long burstBudget = effectiveFor(contract, quantumIndex).burstBudgetFor(contract);
-            ledger.settle(now);
-            ledger.spend(memberId, contract, quantumIndex, burstBudget);
-        }
-    }
-
-    /** {@link #spend(String, String, Instant)} on the allocator's own clock - the production entry point. */
-    public void spend(String memberId, String resourceName) {
-        spend(memberId, resourceName, clock.instant());
-    }
-
-    // ------------------------------------------------------------------
-    // Pure reads (KTD1 eligibility, KTD5 wakeup, R18 views) - never mutate
-    // ------------------------------------------------------------------
-
-    @Override
-    public Optional<CapacityLease> currentLease(String memberId, String resourceName, Instant now) {
-        Optional<ResourceContract> contract = registry.lookup(resourceName);
-        if (!contract.isPresent()) {
-            return Optional.empty();
-        }
-        long quantumIndex = quantumIndexOf(now, contract.get().getQuantum());
-        synchronized (stateLock) {
-            return ledger.currentLease(memberId, contract.get(), quantumIndex);
-        }
-    }
 
     /**
      * {@inheritDoc}
@@ -375,21 +313,6 @@ public class PartitionShareResourceAllocator implements ResourceAllocator {
         return Optional.empty(); // no slot is this instance's under any effective snapshot (R5)
     }
 
-    @Override
-    public Optional<Instant> nextCreditAt(String resourceName, Instant now) {
-        Optional<ResourceContract> contract = registry.lookup(resourceName);
-        if (!contract.isPresent() || grantPerQuantum(contract.get()) == 0) {
-            return Optional.empty();
-        }
-        return Optional.of(startOfQuantum(quantumIndexOf(now, contract.get().getQuantum()) + 1,
-                contract.get().getQuantum()));
-    }
-
-    @Override
-    public double globalRatePerSecond(String resourceName) {
-        return registry.lookup(resourceName).map(ResourceContract::getRatePerSecond).orElse(0.0);
-    }
-
     /**
      * {@inheritDoc}
      * <p>
@@ -403,15 +326,6 @@ public class PartitionShareResourceAllocator implements ResourceAllocator {
                 .map(contract -> contract.getRatePerSecond()
                         * effectiveFor(contract, quantumIndexOf(now, contract.getQuantum())).fraction())
                 .orElse(0.0);
-    }
-
-    @Override
-    public ConservationLedger conservationLedger(String resourceName, Instant now) {
-        ResourceContract contract = registry.require(resourceName);
-        long quantumIndex = quantumIndexOf(now, contract.getQuantum());
-        synchronized (stateLock) {
-            return ledger.snapshot(resourceName, quantumIndex);
-        }
     }
 
     /** One {@link #publish}: the snapshot and the instant it landed, effective from the quantum after it. */

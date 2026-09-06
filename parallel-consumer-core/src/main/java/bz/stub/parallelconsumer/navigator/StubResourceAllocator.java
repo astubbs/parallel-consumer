@@ -58,7 +58,7 @@ import static bz.stub.parallelconsumer.navigator.QuantumArithmetic.startOfQuantu
  * read counts them lazily without mutating - the identity holds at every observation point.
  */
 @Slf4j
-public class StubResourceAllocator implements ResourceAllocator {
+public class StubResourceAllocator extends LedgerBackedResourceAllocator {
 
     /**
      * How many quanta a member may go without a {@link #readQuantum} before its membership lapses (R16).
@@ -66,26 +66,6 @@ public class StubResourceAllocator implements ResourceAllocator {
      * small so a dead instance's share returns to the survivors within a few quanta.
      */
     public static final int MEMBERSHIP_LEASE_TTL_QUANTA = 3;
-
-    /**
-     * The production time source (KTD4): taken at construction, never an instance's module clock. Used by the
-     * no-argument convenience overloads; the explicit-{@code now} methods trust their caller to have read the
-     * same canonical clock.
-     */
-    private final Clock clock;
-
-    /** Registered policies by resource name; its own thread safety is the concurrency control for that half. */
-    private final ContractRegistry registry = new ContractRegistry();
-
-    /**
-     * THE monitor (KTD11). Guards the membership event log, the lease ledger, the last-read renewals, and
-     * the issued-membership record below.
-     */
-    private final Object stateLock = new Object();
-
-    /** The lease ledger and conservation counters (KTD2) - every call into it is made under the monitor. */
-    @GuardedBy("stateLock")
-    private final CreditLedger ledger = new CreditLedger(registry);
 
     /**
      * Append-only membership event log (R16): joins and leaves, each effective from the quantum AFTER its
@@ -120,21 +100,7 @@ public class StubResourceAllocator implements ResourceAllocator {
      *              passes the {@code MutableClock} it shares with every participating instance
      */
     public StubResourceAllocator(Clock clock) {
-        this.clock = clock;
-    }
-
-    // ------------------------------------------------------------------
-    // Registry (U1)
-    // ------------------------------------------------------------------
-
-    @Override
-    public void register(ResourceContract contract) {
-        registry.register(contract);
-    }
-
-    @Override
-    public Optional<ResourceContract> lookup(String resourceName) {
-        return registry.lookup(resourceName);
+        super(clock);
     }
 
     // ------------------------------------------------------------------
@@ -172,75 +138,49 @@ public class StubResourceAllocator implements ResourceAllocator {
     }
 
     // ------------------------------------------------------------------
-    // The per-pass quantum pull (KTD4) - mutating
+    // The division (KTD4): the base class pulls, debits and reads; this says what the share IS
     // ------------------------------------------------------------------
 
+    /** A pull renews the member's lease (KTD4) before any share is minted. */
     @Override
-    public void readQuantum(String memberId, Instant now) {
-        synchronized (stateLock) {
-            settle(now);
-            renewLease(memberId, now);
-            for (ResourceContract contract : registry.all()) {
-                mintShareIfUnissued(memberId, contract, now);
-            }
-        }
-    }
-
-    /** {@link #readQuantum(String, Instant)} on the allocator's own clock - the production entry point. */
-    public void readQuantum(String memberId) {
-        readQuantum(memberId, clock.instant());
-    }
-
     @GuardedBy("stateLock")
-    private void mintShareIfUnissued(String memberId, ResourceContract contract, Instant now) {
-        long quantumIndex = quantumIndexOf(now, contract.getQuantum());
-        if (ledger.isIssued(memberId, contract.getName(), quantumIndex)) {
-            return; // this quantum's grant is already issued to this member - never re-mint (R14)
-        }
+    void onQuantumRead(String memberId, Instant now) {
+        renewLease(memberId, now);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The member's rotation share by its position in the membership the quantum was issued with, or
+     * {@link #NOT_A_PARTICIPANT} when it holds no position (not joined, joined this quantum, left, or
+     * TTL-lapsed) - nothing is issued then, so a later read of the same quantum may still find one.
+     */
+    @Override
+    @GuardedBy("stateLock")
+    long shareOf(String memberId, ResourceContract contract, long quantumIndex) {
         List<String> members = issuedMembershipFor(contract, quantumIndex);
         int position = members.indexOf(memberId);
         if (position < 0) {
-            return; // not a member for this quantum (not joined, joined this quantum, left, or TTL-lapsed)
+            return NOT_A_PARTICIPANT;
         }
-        long share = shareFor(position, members.size(), grantPerQuantum(contract), quantumIndex);
-        ledger.mint(memberId, contract.getName(), quantumIndex, share);
+        return shareFor(position, members.size(), grantPerQuantum(contract), quantumIndex);
     }
 
-    // ------------------------------------------------------------------
-    // The soft debit (KTD1/KD10) - mutating
-    // ------------------------------------------------------------------
-
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Every member's overdraft budget is the whole declared burst - the in-process rung has no share to
+     * scale it by (the partition-share rung scales it, R2 there).
+     */
     @Override
-    public void spend(String memberId, String resourceName, Instant now) {
-        ResourceContract contract = registry.require(resourceName);
-        synchronized (stateLock) {
-            settle(now);
-            // every member's overdraft budget is the whole declared burst - the in-process rung has no share
-            // to scale it by (the partition-share rung scales it, R2 there)
-            ledger.spend(memberId, contract, quantumIndexOf(now, contract.getQuantum()), contract.getBurst());
-        }
-    }
-
-    /** {@link #spend(String, String, Instant)} on the allocator's own clock - the production entry point. */
-    public void spend(String memberId, String resourceName) {
-        spend(memberId, resourceName, clock.instant());
+    @GuardedBy("stateLock")
+    long burstBudgetFor(String memberId, ResourceContract contract, long quantumIndex) {
+        return contract.getBurst();
     }
 
     // ------------------------------------------------------------------
-    // Pure reads (KTD1 eligibility, KTD5 wakeup, R18 views) - never renew, never mutate
+    // Projections the division owns (KTD5 wakeup, R18 views) - never renew, never mutate
     // ------------------------------------------------------------------
-
-    @Override
-    public Optional<CapacityLease> currentLease(String memberId, String resourceName, Instant now) {
-        Optional<ResourceContract> contract = registry.lookup(resourceName);
-        if (!contract.isPresent()) {
-            return Optional.empty();
-        }
-        long quantumIndex = quantumIndexOf(now, contract.get().getQuantum());
-        synchronized (stateLock) {
-            return ledger.currentLease(memberId, contract.get(), quantumIndex);
-        }
-    }
 
     @Override
     public Optional<Instant> nextCreditAt(String memberId, String resourceName, Instant now) {
@@ -271,21 +211,6 @@ public class StubResourceAllocator implements ResourceAllocator {
     }
 
     @Override
-    public Optional<Instant> nextCreditAt(String resourceName, Instant now) {
-        Optional<ResourceContract> contract = registry.lookup(resourceName);
-        if (!contract.isPresent() || grantPerQuantum(contract.get()) == 0) {
-            return Optional.empty();
-        }
-        return Optional.of(startOfQuantum(quantumIndexOf(now, contract.get().getQuantum()) + 1,
-                contract.get().getQuantum()));
-    }
-
-    @Override
-    public double globalRatePerSecond(String resourceName) {
-        return registry.lookup(resourceName).map(ResourceContract::getRatePerSecond).orElse(0.0);
-    }
-
-    @Override
     public double localRatePerSecond(String memberId, String resourceName, Instant now) {
         Optional<ResourceContract> registered = registry.lookup(resourceName);
         if (!registered.isPresent()) {
@@ -301,27 +226,14 @@ public class StubResourceAllocator implements ResourceAllocator {
         }
     }
 
-    @Override
-    public ConservationLedger conservationLedger(String resourceName, Instant now) {
-        ResourceContract contract = registry.require(resourceName);
-        long quantumIndex = quantumIndexOf(now, contract.getQuantum());
-        synchronized (stateLock) {
-            return ledger.snapshot(resourceName, quantumIndex);
-        }
-    }
-
     // ------------------------------------------------------------------
     // Internals
     // ------------------------------------------------------------------
 
-    /**
-     * Folds every stale lease into the expired counter (the ledger's settle) and prunes issued-membership
-     * records from passed quanta. Called at the top of every MUTATING operation - pure reads instead account
-     * for staleness lazily, so they never write.
-     */
+    /** Prunes issued-membership records from passed quanta once the ledger has settled. */
+    @Override
     @GuardedBy("stateLock")
-    private void settle(Instant now) {
-        ledger.settle(now);
+    void onSettle(Instant now) {
         for (Map.Entry<String, Map<Long, List<String>>> entry : issuedMemberships.entrySet()) {
             ResourceContract contract = registry.require(entry.getKey());
             long currentIndex = quantumIndexOf(now, contract.getQuantum());

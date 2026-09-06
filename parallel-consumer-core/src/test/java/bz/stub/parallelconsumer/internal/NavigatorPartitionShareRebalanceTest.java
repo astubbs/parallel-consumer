@@ -513,9 +513,17 @@ class NavigatorPartitionShareRebalanceTest {
     }
 
     private static Object controlThreadMonitorOf(PartitionShareResourceAllocator allocator) throws Exception {
-        Field stateLock = PartitionShareResourceAllocator.class.getDeclaredField("stateLock");
-        stateLock.setAccessible(true);
-        return stateLock.get(allocator);
+        Class<?> type = allocator.getClass();
+        while (type != null) {
+            try {
+                Field stateLock = type.getDeclaredField("stateLock");
+                stateLock.setAccessible(true);
+                return stateLock.get(allocator);
+            } catch (NoSuchFieldException declaredHigherUp) {
+                type = type.getSuperclass(); // the monitor lives on the shared ledger-backed base
+            }
+        }
+        throw new AssertionError("no stateLock field in the allocator's hierarchy");
     }
 
     // ------------------------------------------------------------------
