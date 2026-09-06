@@ -4,7 +4,9 @@ package bz.stub.parallelconsumer.internal.navigator;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.navigator.AssignmentSnapshot;
 import bz.stub.parallelconsumer.navigator.ConservationLedger;
+import bz.stub.parallelconsumer.navigator.PartitionShareResourceAllocator;
 import bz.stub.parallelconsumer.navigator.ResourceAllocator;
 import bz.stub.parallelconsumer.navigator.ResourceContract;
 import bz.stub.parallelconsumer.navigator.ResourceDeferral;
@@ -14,6 +16,7 @@ import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.ShardKey;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -21,7 +24,11 @@ import org.threeten.extra.MutableClock;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -234,6 +241,55 @@ class NavigatorAttributionMetricsTest {
     }
 
     // --- helpers ---
+
+    // ------------------------------------------------------------------
+    // The share pair (partition-share R9, KTD6): fraction and credits per quantum, tagged by resource
+    // ------------------------------------------------------------------
+
+    @Test
+    void shareGaugesReportTheFractionAndCreditsPerQuantumPerResource() {
+        var allocator = new PartitionShareResourceAllocator(clock);
+        allocator.register(new ResourceContract(API_A, 4.0, 4, Duration.ofSeconds(1)));
+        var participant = NavigatorParticipant.activeMember(allocator, UniLists.of(API_A), MEMBER);
+        pcMetrics = new PCMetrics(registry, UniLists.of(), "navigator-metrics-test");
+        participant.initMetrics(pcMetrics, clock);
+
+        // nothing published yet: a real zero, and the gauges exist
+        assertThat(resourceGauge(PCMetricsDef.NAVIGATOR_SHARE_FRACTION, API_A)).isEqualTo(0.0);
+        assertThat(resourceGauge(PCMetricsDef.NAVIGATOR_SHARE_CREDITS_PER_QUANTUM, API_A)).isEqualTo(0.0);
+
+        Map<String, Integer> totals = new HashMap<>();
+        totals.put("orders", 4);
+        Set<TopicPartition> held = new HashSet<>();
+        for (int partition = 0; partition < 3; partition++) {
+            held.add(new TopicPartition("orders", partition));
+        }
+        allocator.publish(AssignmentSnapshot.resolved(held, totals), clock.instant());
+        clock.add(Duration.ofSeconds(1)); // effective from the next quantum (R4)
+
+        assertThat(resourceGauge(PCMetricsDef.NAVIGATOR_SHARE_FRACTION, API_A)).isEqualTo(0.75);
+        assertThat(resourceGauge(PCMetricsDef.NAVIGATOR_SHARE_CREDITS_PER_QUANTUM, API_A)).isEqualTo(3.0);
+        assertWithMessage("every navigator meter carries the pcinstance tag")
+                .that(registry.find(PCMetricsDef.NAVIGATOR_SHARE_FRACTION.getName())
+                        .tag("resource", API_A).tag("pcinstance", "navigator-metrics-test").gauge())
+                .isNotNull();
+    }
+
+    @Test
+    void inertParticipantRegistersNoShareMeters() {
+        pcMetrics = new PCMetrics(registry, UniLists.of(), "navigator-metrics-test");
+
+        NavigatorParticipant.inert().initMetrics(pcMetrics, clock);
+
+        assertThat(registry.find(PCMetricsDef.NAVIGATOR_SHARE_FRACTION.getName()).gauge()).isNull();
+        assertThat(registry.find(PCMetricsDef.NAVIGATOR_SHARE_CREDITS_PER_QUANTUM.getName()).gauge()).isNull();
+    }
+
+    private double resourceGauge(PCMetricsDef def, String resourceName) {
+        Gauge found = registry.find(def.getName()).tag("resource", resourceName).gauge();
+        assertThat(found).isNotNull();
+        return found.value();
+    }
 
     private NavigatorParticipant instrumented(String resourceName) {
         var allocator = new StubResourceAllocator(clock);

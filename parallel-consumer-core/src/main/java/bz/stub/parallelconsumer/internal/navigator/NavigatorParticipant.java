@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.navigator.CapacityLease;
 import bz.stub.parallelconsumer.navigator.ConservationLedger;
 import bz.stub.parallelconsumer.navigator.NavigatorView;
 import bz.stub.parallelconsumer.navigator.ResourceAllocator;
+import bz.stub.parallelconsumer.navigator.ResourceContract;
 import bz.stub.parallelconsumer.navigator.ResourceDeferral;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
@@ -424,6 +425,47 @@ public final class NavigatorParticipant {
         }
     }
 
+    /**
+     * Pure read for the view and the share gauge (the partition-share plan's R9, KTD6): this instance's current
+     * share of {@code resourceName}'s declared rate as a fraction - {@link #localRatePerSecond} over
+     * {@link #globalRatePerSecond}, {@code 0.0} when the global rate is zero (the shut valve, or an unknown
+     * name). Derived from the two interface reads alone, so it holds for every allocator behind the seam and
+     * never reaches into an implementation; under partition-share it is the fraction of the subscription's
+     * partitions this instance holds, or zero while the total is unresolved (R5). {@code 0.0} when inert.
+     */
+    public double shareFraction(String resourceName, Instant now) {
+        double global = globalRatePerSecond(resourceName);
+        if (global <= 0.0) {
+            return 0.0;
+        }
+        return localRatePerSecond(resourceName, now) / global;
+    }
+
+    /**
+     * Pure read for the view and the share gauge (R9, KTD6): what this instance's current share of
+     * {@code resourceName} is worth in credits per quantum - {@link #localRatePerSecond} times the registered
+     * contract's quantum in seconds. Fractional values are real (a share below one credit per quantum accrues
+     * through the remainder rotation). {@code 0.0} when inert, when the name is unknown, or when the
+     * allocator threw (the fail-safe zero shape).
+     */
+    public double creditsPerQuantum(String resourceName, Instant now) {
+        if (!isActive()) {
+            return 0.0;
+        }
+        Optional<ResourceContract> contract;
+        try {
+            contract = allocator.lookup(resourceName);
+        } catch (RuntimeException e) {
+            recordAllocatorFailure(e);
+            return 0.0;
+        }
+        if (!contract.isPresent()) {
+            return 0.0;
+        }
+        double quantumSeconds = contract.get().getQuantum().toMillis() / 1000.0;
+        return localRatePerSecond(resourceName, now) * quantumSeconds;
+    }
+
     /** The latest-reason gauge's live value (U4, KTD6) - {@link NavigatorDecisionReason#NO_DEFERRAL_VALUE} before any episode. */
     public int lastReasonValue() {
         return lastReasonValue.get();
@@ -433,7 +475,9 @@ public final class NavigatorParticipant {
      * Registers the {@code pc.navigator.*} meters (U4): the deferred-count, latest-reason and
      * allocator-failure gauges, one episode counter per {@link NavigatorDecisionReason}, and
      * per-tagged-resource spent/overdraft/overdraft-beyond-burst/next-credit
-     * gauges read live from the allocator's {@link ConservationLedger} - mirrors
+     * gauges read live from the allocator's {@link ConservationLedger}, plus the share pair (fraction and
+     * credits per quantum, the partition-share plan's R9) read through {@link #shareFraction} and
+     * {@link #creditsPerQuantum} - mirrors
      * {@code AdmissionController#initMetrics}'s mode-gated pattern. A NO-OP for {@link #inert()} (R3: an
      * untagged instance registers nothing) or when {@code pcMetrics} is null. Called once, by
      * {@code PCModule#navigatorParticipant()} immediately after construction.
@@ -479,6 +523,11 @@ public final class NavigatorParticipant {
                     p -> p.guardedGaugeRead(() -> p.allocator.nextCreditAt(resourceName, clock.instant())
                             .map(Instant::getEpochSecond).orElse(-1L), -1),
                     resourceTag);
+            // the share pair (partition-share R9, KTD6): already fail-safe inside, so no guard needed here
+            pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_SHARE_FRACTION, this,
+                    p -> p.shareFraction(resourceName, clock.instant()), resourceTag);
+            pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_SHARE_CREDITS_PER_QUANTUM, this,
+                    p -> p.creditsPerQuantum(resourceName, clock.instant()), resourceTag);
         }
     }
 

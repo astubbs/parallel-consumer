@@ -28,6 +28,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.IN_PROCESS;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
@@ -98,6 +99,7 @@ class NavigatorSelectionTest {
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
                 .pcInstanceTag(MEMBER)
                 .resourceTags(tags)
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(allocatorForOptions)
                 .build();
         module = clock == null ? new PCModuleTestEnv(options) : new PCModuleTestEnv(options, clock);

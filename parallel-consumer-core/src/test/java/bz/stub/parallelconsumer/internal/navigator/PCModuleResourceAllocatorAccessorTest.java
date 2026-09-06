@@ -10,6 +10,7 @@ import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import org.junit.jupiter.api.Test;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.IN_PROCESS;
 import static org.apache.kafka.clients.consumer.OffsetResetStrategy.EARLIEST;
 import static com.google.common.truth.Truth.assertThat;
 
@@ -29,7 +30,7 @@ class PCModuleResourceAllocatorAccessorTest {
     @Test
     void aConfiguredAllocatorIsReturnedAndMemoised() {
         var allocator = new StubResourceAllocator();
-        var module = new PCModule<>(optionsBuilder().resourceAllocator(allocator).build());
+        var module = new PCModule<>(optionsBuilder().allocationStrategy(IN_PROCESS).resourceAllocator(allocator).build());
 
         assertThat(module.resourceAllocator()).hasValue(allocator);
         // second read is the memoised value, not a fresh wrap

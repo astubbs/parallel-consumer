@@ -28,6 +28,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.IN_PROCESS;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.CUSTOM;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -76,6 +78,7 @@ class NavigatorWakeupAndLifecycleTest {
         allocator.register(new ResourceContract(API_X, 1.0, 1, Duration.ofSeconds(1)));
         buildHarness(optionsBuilder()
                 .resourceTags(UniLists.of(API_X))
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(allocator)
                 .build());
     }
@@ -268,6 +271,7 @@ class NavigatorWakeupAndLifecycleTest {
         allocator.register(new ResourceContract(API_X, 1.0, 1, Duration.ofSeconds(1)));
         buildHarness(optionsBuilder()
                 .resourceTags(UniLists.of(API_X))
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(allocator)
                 .build());
         pc.joinNavigatorOnRunning();
@@ -285,6 +289,7 @@ class NavigatorWakeupAndLifecycleTest {
         clock = MutableClock.epochUTC();
         ResourceAllocator untouched = Mockito.mock(ResourceAllocator.class);
         buildHarness(optionsBuilder()
+                .allocationStrategy(CUSTOM)
                 .resourceAllocator(untouched) // present but untagged - the zero-cost path is decided by TAGS
                 .build());
         pc.setState(State.RUNNING);

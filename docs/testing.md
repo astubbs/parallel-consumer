@@ -345,3 +345,29 @@ extend them. Duplicating an existing helper is how bugs get reintroduced - a cop
 logic once drifted to a 1-second timeout and became a flaky-CI source (see
 [`docs/solutions/test-issues/`](solutions/test-issues/)). When you must add a helper, put it in the
 shared util, not the test.
+
+**Multi-process tests never touch a `Process` directly.** The child-JVM harness lives beside those
+helpers in `integrationTests/utils/`: `ChildPcProcess` launches, observes and kills a child JVM running
+`ChildPcMain` (one PC instance, built from `ChildPcOptions` - the one argument contract both sides
+share), `FiringLedger` counts every child's firings on the broker's clock from a log-append-time
+output topic and aggregates the children's end-of-run `ChildLedgerRecord`s, and `BrokerIntegrationTest`
+carries the group-observation waits (`awaitGroupStable` for uneven splits, `awaitGroupMemberCount`,
+`rungBarrier`). `ChildPcProcessHarnessIT` is the harness's own proof - a harness failure must be
+distinguishable from a mechanism failure, and every scenario there is one such distinction - so read
+it before extending the harness, and extend the harness rather than a lane when a lane needs more.
+
+**Two navigator lanes ride that harness**, and their class javadocs own the detail.
+`NavigatorPartitionShareIT` is the asserted two-JVM storyline: tagged children sharing one rate,
+an untagged bystander untouched, kill-one convergence, uneven splits, idle share, two groups, and a
+joiner - counts over windows anchored to observed group stability, never gated on latency.
+`NavigatorChurnLadderIT` is the churn ladder: rungs of N children joining and leaving under both
+assignment protocols with clock skew injected per child, measuring the fleet's maximum aggregate
+overshoot per rung. It writes its dated record into `target/navigator-ladder/`, the Integration Tests
+row uploads that beside the failsafe report as one artifact, and **the record is committed under
+[`docs/test-hardening/`](test-hardening/) from that artifact, verbatim, with the workflow run URL in
+its header** - a CI job cannot commit into the PR, so the only hand step is the download and the
+provenance. Both lanes close a storyline through the same fleet ledger, and its ceiling is the
+**exact per-index entitlement**: what each quantum index's read actually mints, sampled per index on
+the child's own clock with one more sample after the processor stops so the last minted index is in
+the sum. It is deliberately not the share gauge a user reads - that one is the rotation AVERAGE, and
+a conservation check against an average is off by the rotation's phase.

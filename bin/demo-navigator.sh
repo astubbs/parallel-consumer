@@ -3,14 +3,21 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Watch the navigator's global rate limiting work, live: two PC instances split one 2-credits/sec
-# resource at ~1 record/sec each, an untagged bystander drains flat-out beside them, one tagged
-# instance closes and the survivor inherits the whole rate - printed as a clean per-second
-# dashboard with no log noise. The storyline runs about 25 seconds once the broker is up.
+# Watch the navigator's global rate limiting work across JVMs, live: two child processes in one
+# consumer group split one 2-credits/sec resource at ~1 record/sec each - each holding one of two
+# partitions, so each reports a share of 0.500 - while an untagged bystander process drains
+# flat-out beside them. Then one tagged JVM is KILLED outright and the survivor inherits the whole
+# rate. Printed as a clean per-second dashboard with no log noise.
+#
+# The storyline runs about 30 seconds once the broker is up - a little longer than the in-process
+# demo it replaced, because a killed member is only rebalanced away after session.timeout.ms, which
+# the children run at the broker's floor (~6s). Those six seconds of the group not yet knowing are
+# part of the story, not dead air.
 #
 # Runs NavigatorDemo (failsafe-collected, off by default behind -Dpc.demo=true - the same
 # discipline as the classic Demo and AdaptiveConcurrencyDemo). The asserted version of the same
-# storyline is NavigatorRateShareTest, which CI runs on every PR; this one is for eyes.
+# storyline is NavigatorPartitionShareIT (its AE1 and AE2 scenarios), which CI runs on every PR;
+# this one is for eyes.
 #
 # Needs: JDK 17 on JAVA_HOME (Jabel - see the root AGENTS.md), and Docker running
 # (TestContainers starts a real Kafka broker).

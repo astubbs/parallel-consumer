@@ -345,6 +345,7 @@ without operational burden or harming the cluster's performance
 * Java 8 compatibility
 * Throttle control and broker liveliness management
 * Adaptive concurrency (experimental): rather than trusting a static `maxConcurrency` guess, measure how the workload responds and discover the sustainable in-flight target - with an observe-only mode that reports what it would do without acting, see the <<adaptive-concurrency>> section
+* Global rate limiting (experimental): declare a resource and its rate once, and every instance of a consumer group respects it collectively - each instance's share is the fraction of the partitions it holds, so a rebalance re-divides the rate with no controller and nothing on the record path, and a waiting record can say which resource it waits on and when its next credit mints, see the <<global-rate-limiting>> section
 * Clean draining shutdown cycle
 * Manual global pause / resume of all partitions, without unsubscribing from topics (useful for implementing a simplistic https://en.wikipedia.org/wiki/Circuit_breaker_design_pattern[circuit breaker])
 ** Circuit breaker patterns for individual paritions or keys can be done through throwing failure exceptions in the processing function (see https://github.com/confluentinc/parallel-consumer/pull/291[confluentinc PR #291 Explicit terminal and retriable exceptions] for further refinement)
@@ -1297,6 +1298,47 @@ So on an ordering-starved workload the honest outcome is a *diagnosis*, not a sp
 The measuring harness that would establish what `ENFORCE` is worth lands separately, and *no benchmark result has been published yet*.
 Until one is, this documentation describes enforcement; it does not recommend it.
 `OBSERVE` is the mode to adopt: it is a diagnostic that costs nothing to run, and it answers a question - how far the sustainable target is from your configured one - that you currently cannot answer at all.
+
+[[navigator]]
+[[global-rate-limiting]]
+== Global Rate Limiting (the Navigator)
+
+WARNING: *Experimental.* The navigator surface is under active development and may change in a minor release - the `resourceTags` option carries the same warning on the field itself.
+
+A rate limit belongs to the service being called, not to the process calling it.
+Ten instances sharing one 100/s vendor API each need a tenth of it, and that tenth changes every time an instance starts, stops or dies.
+The usual answers are to divide the number by hand - wrong the first time an instance fails - or to stand up a shared cache and coordinate through it, which is a second distributed system in the path of every record.
+
+The navigator does neither, because the consumer group has already done the division.
+*Your share of a resource is the fraction of the subscription's partitions you currently hold*: an instance holding three of four partitions takes three quarters of the declared rate, the instance holding the fourth takes a quarter, and when one instance dies the group's own rebalance grows the survivors' shares to match.
+Credit is minted locally from the assignment the instance already has, so there is no controller to elect, no control topic, and nothing distributed on the record path.
+
+You declare two things on the options, and nothing inside your processing function.
+`resourceContracts` registers a resource - its name, its rate, the quantum credit mints on, and its burst.
+`resourceTags` names the resources this instance's function consumes.
+`allocationStrategy` chooses how the share is decided, and defaults to `PARTITION_SHARE`, the strategy described above; `IN_PROCESS` shares one application-supplied allocator between instances in a single JVM, and `CUSTOM` takes an allocator of your own.
+The `allocationStrategy` and `AllocationStrategy` javadoc carry the rest, including the combinations that deliberately fail validation rather than silently ignoring what you configured: an allocator supplied alongside the default strategy would never be used, so it fails naming both fields, and selecting `IN_PROCESS` or `CUSTOM` without one fails naming the omission.
+
+[source,java]
+----
+ParallelConsumerOptions.<String, String>builder()
+        .consumer(consumer)
+        .resourceContracts(Collections.singletonList(
+                new ResourceContract("api-x", 2.0, 2, Duration.ofSeconds(1))))
+        .resourceTags(Collections.singletonList("api-x"))
+        .build();
+----
+
+*What the fleet is promised is stated in one place and deliberately not repeated here:* the `ResourceContract` javadoc.
+It covers credits per quantum, burst as one fleet-wide budget divided by share, the no-overshoot rule under a stable assignment, the bounded overshoot across a rebalance together with the domain that bound was measured over, the utilisation property, the per-consumer-group scope, and the convergence clock after an instance leaves or joins.
+
+Waiting for credit is explained, not silent.
+`PollContext.getNavigatorView()` gives the processing function a read-only view of why its own work is held: `blockingResourceDeferrals()` returns each resource currently withholding work paired with the instant its next credit mints - "waiting on api-x, next credit at T" - beside the per-shard deferred counts and this instance's current share.
+The same facts reach a dashboard as meters under `pc.navigator.*` - the deferral reason and episode counts, the conservation counters, and `pc.navigator.share.fraction` and `pc.navigator.share.credits.per.quantum` for the share itself - each carrying its own description; see the <<metrics>> section for registry setup.
+
+The proof is a measurement rather than a claim.
+`NavigatorPartitionShareIT` runs the storyline across real JVM process boundaries, and `NavigatorChurnLadderIT` churns a ladder of instances under both assignment protocols with clock skew injected per process, publishing the measured overshoot curve as a dated record written by the run itself and committed under link:docs/test-hardening/[`docs/test-hardening/`] with the CI run that produced it.
+`bin/demo-navigator.sh` shows the same storyline for human eyes; link:docs/demos.md[`docs/demos.md`] explains why a demo is never the evidence.
 
 // [[mertics]] is a long-standing misspelling. Kept so existing links still resolve.
 [[mertics]]

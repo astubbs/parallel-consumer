@@ -289,6 +289,22 @@ jobs:
         run: |
           set -euo pipefail
           bash bin/check-execution-mode.sh "${{ matrix.mode }}" | tee -a "$GITHUB_STEP_SUMMARY"
+      # The navigator churn ladder (NavigatorChurnLadderIT) writes its dated overshoot record - the published
+      # curve behind the partition-share bound - into target/navigator-ladder/ beside its failsafe report, and
+      # the two travel together as one artifact (chaos-pain.yml's shape) so a maintainer can download the record
+      # and commit it under docs/test-hardening/ with this run's URL in its header. Integration row only: no
+      # other row runs the ladder. `error` on no files, deliberately: the ladder writes the record even when a
+      # rung fails, so an absent record means the class never ran, which must not read as a quiet green.
+      - name: Upload navigator ladder record
+        if: always() && matrix.suite == 'integration'
+        uses: actions/upload-artifact@v7
+        with:
+          name: navigator-ladder-${{ github.run_number }}
+          path: |
+            **/target/navigator-ladder/*
+            **/target/failsafe-reports/*NavigatorChurnLadderIT*
+          if-no-files-found: error
+          retention-days: 30
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5

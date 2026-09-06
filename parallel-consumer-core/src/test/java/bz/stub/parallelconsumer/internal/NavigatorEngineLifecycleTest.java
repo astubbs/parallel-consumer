@@ -24,6 +24,7 @@ import java.time.Instant;
 import java.util.Collections;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.IN_PROCESS;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
@@ -82,6 +83,7 @@ class NavigatorEngineLifecycleTest {
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
                 .pcInstanceTag(MEMBER)
                 .resourceTags(UniLists.of(API_X))
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(allocator)
                 .build();
         var module = new PCModuleTestEnv(options, clock);
@@ -149,6 +151,64 @@ class NavigatorEngineLifecycleTest {
      * RUNNING, so completing the drain REQUIRES credits minted while DRAINING - a ticker thread advances the
      * shared virtual clock a quantum at a time while close(DRAIN) blocks the test thread.
      */
+    /**
+     * The partition-share plan's U3 integration scenario, through the REAL selection path under the DEFAULT
+     * strategy: the first assignment's metadata read declines (the stock {@link MockConsumer} knows no
+     * partitions for the topic until told), so the total is unresolved and a tagged record is deferred across
+     * quantum boundaries - R5, minting nothing is not the same as minting at a boundary - until a resolving
+     * assignment lands, after which the loop's own quantum pull at the next boundary mints the share and the
+     * record dispatches. The view reports the resolved share alongside (R9).
+     */
+    @Test
+    void underPartitionShareATaggedRecordIsDeferredWhileTheTotalIsUnresolvedAndDispatchesAfterItResolves() {
+        mockConsumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(mockConsumer)
+                .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
+                .pcInstanceTag(MEMBER)
+                .resourceTags(UniLists.of(API_X))
+                .resourceContracts(UniLists.of(new ResourceContract(API_X, 1.0, 1, QUANTUM)))
+                .build();
+        var module = new PCModuleTestEnv(options, clock);
+        pc = new ParallelEoSStreamProcessor<>(options, module);
+        var view = module.navigatorView();
+
+        pc.subscribe(UniLists.of(TOPIC));
+        mockConsumer.updateBeginningOffsets(Collections.singletonMap(tp, 0L));
+        mockConsumer.rebalance(Collections.singletonList(tp));
+        // the mock knows no partitions for TOPIC yet: the timed read returns empty, a decline - unresolved (KTD3)
+        pc.onPartitionsAssigned(UniLists.of(tp));
+
+        pc.poll(context -> invocations.incrementAndGet());
+        mockConsumer.addRecord(new ConsumerRecord<>(TOPIC, 0, 0, "key-0", "value-0"));
+
+        // R5: two full quantum boundaries pass with the record buffered, and nothing mints because the
+        // denominator is unknown - hundreds of dispatch opportunities, zero invocations
+        clock.add(QUANTUM);
+        clock.add(QUANTUM);
+        Awaitility.await("no function invocation while the partition total is unresolved")
+                .during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(10))
+                .until(() -> invocations.get() == 0);
+        assertThat(view.shareFraction(API_X).getAsDouble()).isEqualTo(0.0);
+
+        // the resolving assignment: the metadata now names the topic's one partition, and a (cooperative-shape,
+        // empty) assign re-reads it - published from this thread the way the poll thread would, lock-free
+        mockConsumer.updatePartitions(TOPIC, UniLists.of(
+                new org.apache.kafka.common.PartitionInfo(TOPIC, 0, null, null, null)));
+        pc.onPartitionsAssigned(Collections.emptyList());
+
+        // still nothing until the NEXT boundary (R4's next-quantum rule)...
+        Awaitility.await("nothing dispatches inside the quantum the resolution landed in")
+                .during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(10))
+                .until(() -> invocations.get() == 0);
+        // ...and at it, the loop's own per-pass read mints the whole share (1 of 1) and the record runs
+        clock.add(QUANTUM);
+        Awaitility.await("the deferred record dispatches once the total resolves")
+                .atMost(Duration.ofSeconds(10)).until(() -> invocations.get() == 1);
+        assertThat(view.shareFraction(API_X).getAsDouble()).isEqualTo(1.0);
+        assertThat(view.creditsPerQuantum(API_X).getAsDouble()).isEqualTo(1.0);
+    }
+
     @Test
     void closeWithDrainCompletesAResourceDeferredBacklogAndLeavesExactlyOnce() {
         var leaveCalls = new AtomicInteger();
@@ -166,6 +226,7 @@ class NavigatorEngineLifecycleTest {
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
                 .pcInstanceTag(MEMBER)
                 .resourceTags(UniLists.of(API_X))
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(countingAllocator)
                 .drainTimeout(Duration.ofSeconds(20))
                 .build();
@@ -243,6 +304,7 @@ class NavigatorEngineLifecycleTest {
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
                 .pcInstanceTag(MEMBER)
                 .resourceTags(UniLists.of(API_X))
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(countingAllocator)
                 .drainTimeout(Duration.ofSeconds(2))
                 .build();

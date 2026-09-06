@@ -97,7 +97,7 @@ fi
 # expectation, and the two cancel to a green. A derived count could only ever catch the include
 # pattern, never the roster - so the hand-maintained number is not a compromise here, it is the only
 # version that can fail.
-EXPECTED_LINCHECK_CLASSES=7
+EXPECTED_LINCHECK_CLASSES=8
 if [ -z "${LINCHECK_TEST:-}" ] && [ "$selected" -ne "$EXPECTED_LINCHECK_CLASSES" ]; then
     printf 'Lincheck report files: %s, EXPECTED %s.\n' "$selected" "$EXPECTED_LINCHECK_CLASSES"
     printf 'The lane selected the wrong roster. Either a harness stopped being selected (a rename, a\n'

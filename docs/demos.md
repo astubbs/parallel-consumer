@@ -9,14 +9,14 @@ against a real broker.
 so it carries no assertions, runs real infrastructure, and optimises its output for eyes. The
 worked example that set the current bar is `NavigatorDemo` (`bin/demo-navigator.sh`): a banner
 saying what is about to happen, a per-second dashboard while it happens, and a plain-words
-"WHAT JUST HAPPENED" summary - a ~25 second storyline a stranger can follow without knowing the
+"WHAT JUST HAPPENED" summary - a ~30 second storyline a stranger can follow without knowing the
 codebase.
 
 ## The rules
 
 - **Every demo has an asserted twin, and the demo is never the evidence.** The same storyline must
   exist as a CI-gated test before it exists as a demo - `NavigatorDemo` is the eyes-optimised twin
-  of `NavigatorRateShareTest`; `AdaptiveConcurrencyDemo` demonstrates what the adaptive suites
+  of `NavigatorPartitionShareIT`; `AdaptiveConcurrencyDemo` demonstrates what the adaptive suites
   assert. A demo with no asserted twin is a claim nobody checks, and it will drift into fiction the
   first time the engine changes. The twin also frees the demo from measurement scaffolding: the
   demo shows, the test proves.
@@ -80,7 +80,7 @@ codebase.
 
 | Demo | Asserted twin | The story | Run |
 |---|---|---|---|
-| `NavigatorDemo` (core) | `NavigatorRateShareTest` | Two instances split one 2/s resource at ~1Hz each; a tagless bystander drains flat-out; one closes and the survivor inherits the whole rate; the throttle explains itself | `bin/demo-navigator.sh` |
+| `NavigatorDemo` (core) | `NavigatorPartitionShareIT` (AE1, AE2) | Two separate JVMs in one consumer group split one 2/s resource at ~1Hz each, holding one partition of two apiece and each reporting share 0.500; a tagless bystander process drains flat-out; one tagged JVM is KILLED and, once the missed heartbeats add up, the survivor inherits the whole rate at share 1.000; the fleet's books are collected from the broker and printed | `bin/demo-navigator.sh` |
 | `AdaptiveConcurrencyDemo` (core) | the adaptive-concurrency suites | Adaptive discovery finds downstream capacity nobody configured, against the default and an over-provisioned guess | javadoc route (`-Dit.test=AdaptiveConcurrencyDemo`) |
 | `Demo` (vertx, the classic) | the vertx suites | The 2021 cast's shape: how fast PC eats a backlog when every record needs an HTTP call | javadoc route (`-Dit.test=Demo -Dpc.demo=true`) |
 

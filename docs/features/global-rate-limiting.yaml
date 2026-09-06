@@ -1,0 +1,80 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Global rate limiting (the navigator)
+category: operability
+module: parallel-consumer-core
+maturity: alpha
+availability:
+  status: planned
+  target_release: 0.6.0.0
+readme_anchor: global-rate-limiting
+summary: >-
+  Declare a resource and its rate once, and every instance of a consumer group respects it
+  collectively. Under the default partition-share strategy each instance's share is the fraction of
+  the subscription's partitions it holds, so the group's own rebalance re-divides the rate when
+  instances start, stop or die - no controller, no control topic, nothing on the record path. A
+  record that waits for credit can say which resource it waits on and when its next credit mints.
+use_this_when:
+  - Several instances call one rate-limited service (a vendor API, a database connection budget, a downstream with a contractual quota) and dividing the limit by hand is wrong the first time an instance fails.
+  - You want the limit enforced by the engine rather than by limiter code inside the processing function, with no worker thread blocked waiting for a permit.
+  - You need to explain a slow instance - "waiting on api-x, next credit at T" - from that instance alone, without querying the fleet.
+setup:
+  options:
+    - ParallelConsumerOptions.resourceContracts - the resources this application declares, each a name, a rate per second, the quantum credit mints on, and a burst.
+    - ParallelConsumerOptions.resourceTags - the resource names this instance's processing function consumes.
+    - ParallelConsumerOptions.allocationStrategy - PARTITION_SHARE (default), IN_PROCESS (one application-supplied allocator shared by every instance in one JVM) or CUSTOM (an allocator of your own).
+    - ParallelConsumerOptions.resourceAllocator - the allocator instance IN_PROCESS and CUSTOM require; forbidden under the default.
+  validation: >-
+    ParallelConsumerOptions.validate() fails a tag with no contract, a duplicate contract name with
+    a different policy, an allocator supplied under the default strategy (it would never be used,
+    so the failure names both fields), and IN_PROCESS or CUSTOM selected without an allocator.
+    Nothing is chosen silently.
+  observe:
+    - PollContext.getNavigatorView() - the read-only view a processing function gets of why its own work is held; blockingResourceDeferrals() pairs each withholding resource with the instant its next credit mints, and shareFraction() and creditsPerQuantum() report this instance's current share.
+    - pc.navigator.share.fraction and pc.navigator.share.credits.per.quantum - the same two numbers as meters, the answer to "why am I at 1Hz".
+    - pc.navigator.credits.spent, pc.navigator.credits.overdraft and pc.navigator.credits.overdraft.beyond.burst - the conservation counters, read live from the allocator; a nonzero beyond-burst count means spends are outrunning the declared policy.
+    - The navigator's deferral log - one line per wait episode naming the resource and the reason, never one per record.
+opt_in:
+  mechanism: Declare resourceContracts and resourceTags when building ParallelConsumerOptions; an instance with no tags runs the zero-cost path with no allocator built and no navigator meters registered.
+  isolated_from_stable_modules: false
+boundaries:
+  - >-
+    The scope is one consumer group whose tagged members share one subscription. A second group
+    tagging the same resource name receives the full rate again, and two members of one group
+    subscribed to different topics would each mint the whole grant; neither is detected on this rung.
+    Sharing a resource across applications is the controller rung, designed and not built.
+  - >-
+    The share is a proxy for demand by partition, not a measurement of it. A share nobody has work
+    for goes unspent, so under uneven demand the fleet runs below the declared rate by the idle
+    fraction; demand-weighted allocation belongs to the controller rung.
+  - >-
+    Across a rebalance the overshoot is bounded, not zero: rate x window + burst + one quantum's
+    credits over any quantum-aligned window on a common clock, plus a priced term when the
+    instances' clocks disagree. The bound is measured by a churn ladder whose dated record is
+    committed from the CI run; the ResourceContract javadoc states the promise in full.
+  - >-
+    A killed instance's share returns to the survivors only after session.timeout.ms plus the
+    rebalance, so the fleet runs below the rate for those seconds. Burst is one fleet-wide overdraft
+    budget divided by share and rounded up per holder, so the summed budgets can exceed the declared
+    burst by one credit per partition-holding instance.
+  - >-
+    Credits are soft: a debit always succeeds and the overshoot is counted, never a blocked thread
+    or a deadlock. Enforcement is an admission predicate - an ineligible record is simply not
+    selected until its credit arrives.
+references:
+  - label: The promise a contract makes across a fleet
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/navigator/ResourceContract.java
+  - label: The options surface, the strategy menu and its validation matrix
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
+  - label: The partition-share allocator
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/navigator/PartitionShareResourceAllocator.java
+  - label: The read-only view a processing function gets
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/navigator/NavigatorView.java
+  - label: Metric definitions
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/metrics/PCMetricsDef.java
+  - label: The plan - product contract, requirements and the settled decisions
+    path: docs/plans/2026-09-05-1046-feat-navigator-partition-share-plan.md
+  - label: The demo - two JVMs sharing one rate, for eyes
+    path: bin/demo-navigator.sh

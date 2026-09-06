@@ -1,7 +1,7 @@
-# Distributed throttling - ideation done, direction not chosen
+# Distributed throttling - direction chosen, shipping as the navigator
 
 <!-- inflight-type: feature -->
-<!-- inflight-state: deferred - after v6, direction not yet chosen -->
+<!-- inflight-state: deferred - after v6; the direction is chosen and shipping rung by rung as the navigator, and the cross-application half is what is still open -->
 
 
 The ask is astubbs#228 (mirror of confluentinc#24), with confluentinc#766 as the production
@@ -28,19 +28,31 @@ research produces the headline user-facing capability astubbs#228 has asked for 
 What distinguishes it from a bolt-on limiter stays the product edge and must survive the rungs:
 engine-integrated (declare a tag, no limiter code in the user function, no blocked workers),
 soft/cooperative credits (degrades honestly, never deadlocks), and first-class attribution ("you
-waited because api-a, next credit at T"). The remaining rung between here and that MVP is the
-Kafka-coordinated allocator behind the same `ResourceAllocator` seam
-([`core-shared-execution-resources.md`](core-shared-execution-resources.md) owns the design).
+waited because api-a, next credit at T"). The partition-share rung then delivered that feature for
+one application: every instance of one consumer group collectively respects one rate, with the
+group's own assignment as the division. The remaining rung is the Kafka-coordinated controller
+behind the same `ResourceAllocator` seam, which is what reaches astubbs#228's cross-application half
+([`core-shared-execution-resources.md`](core-shared-execution-resources.md) owns both designs, and
+records what the partition-share rung settled for the controller).
 
-Decisions that gate any build:
+Decisions that gate any build. **The first two are TAKEN - the code took them, so they are recorded
+here rather than left reading as open** (the partition-share plan's KD9):
 
-- **Standalone throttle vs self-scaling controller** (idea 8): does rate limiting ship as its
-  own feature, or as one signal into the auto-scaling controller (see `core-auto-scaling.md`)?
-  Capacity limits are discoverable; contractual quotas are not - so explicit ceilings and
-  adaptive discovery are complements composed by `min()`, which argues for the strategy-menu
-  shape (idea 5) either way.
-- **Enforcement fork**: per-shard gate + `availableAt` deferral (idea 2) vs Little's Law
-  in-flight controller (idea 3). Internal plumbing, not user policy - pick one, don't offer both.
+- **Standalone throttle vs self-scaling controller** (idea 8): **TAKEN 2026-09-01 - standalone
+  first.** The owner's ruling in the section above, that the finished navigator IS PC's global rate
+  limiting feature, settles it: rate limiting ships as its own feature, and the auto-scaling
+  controller ([`core-auto-scaling.md`](core-auto-scaling.md)) composes with it rather than owning
+  it. The reasoning that once argued both ways is why it composes: capacity limits are discoverable,
+  contractual quotas are not, so explicit ceilings and adaptive discovery are complements joined by
+  `min()` - the strategy-menu shape (idea 5), which is what the navigator's `AllocationStrategy`
+  option now is.
+- **Enforcement fork**: **TAKEN - the per-shard gate with `availableAt` deferral (idea 2), not the
+  Little's Law in-flight controller (idea 3).** Settled by the navigator micro-MVP's own KD1
+  ([`../plans/2026-08-31-2029-feat-navigator-micro-mvp-plan.md`](../plans/2026-08-31-2029-feat-navigator-micro-mvp-plan.md))
+  and built with the in-process rung that landed 2026-09-01: a resource requirement is an admission
+  predicate, a record with no spendable credit is deferred carrying its `availableAt` and the reason
+  that bound it, and no worker thread ever blocks waiting for a permit. Internal plumbing, picked
+  once, and never offered both ways.
 - "Who owns the number" is dissolved by the strategy menu: partition-share, downstream-signal
   (structured rate-limit exception from the user function), and adaptive all ship as
   implementations of one SPI; users pick per deployment.
@@ -66,5 +78,6 @@ restated with the service as the scope. The governance view ("requested 170, all
 function") belongs to [`web-control-plane.md`](web-control-plane.md).
 
 Idea 7 (decorrelated retry jitter) is independently shippable and needs none of these.
-Next step when picked up: ce-brainstorm idea 8's scope boundary (what ships in the controller
-vs the standalone strategies) into requirements.
+Next step when picked up: the controller rung, whose design and settled questions are recorded in
+[`core-shared-execution-resources.md`](core-shared-execution-resources.md) - brainstorm that into
+requirements rather than re-opening idea 8's fork, which the entries above have already taken.

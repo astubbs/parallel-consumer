@@ -10,7 +10,9 @@ import bz.stub.parallelconsumer.internal.utils.SupplierUtils;
 import bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant;
 import bz.stub.parallelconsumer.internal.navigator.ParticipantBackedNavigatorView;
 import bz.stub.parallelconsumer.navigator.NavigatorView;
+import bz.stub.parallelconsumer.navigator.PartitionShareResourceAllocator;
 import bz.stub.parallelconsumer.navigator.ResourceAllocator;
+import bz.stub.parallelconsumer.navigator.ResourceContract;
 import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
@@ -195,19 +197,87 @@ public class PCModule<K, V> {
     }
 
     /**
-     * The navigator's allocator handle (KD2, KTD3): the application-supplied {@link ResourceAllocator}, wrapped
-     * so an untagged instance (no allocator configured, {@link ParallelConsumerOptions#getResourceTags()} empty)
-     * reads a plain {@link Optional#empty()} rather than every future caller null-checking
-     * {@link ParallelConsumerOptions#getResourceAllocator()} itself.
+     * The partition-share allocator this instance BUILDS for itself (the partition-share plan's KTD4, F4):
+     * present exactly when the strategy resolves to {@link ParallelConsumerOptions.AllocationStrategy#PARTITION_SHARE}
+     * AND the instance tags at least one resource. An untagged instance builds nothing (R3's zero-cost path),
+     * and the in-process and custom strategies adopt the application's instance through
+     * {@link #resourceAllocator()} instead, so this reads empty for them.
      * <p>
-     * The three navigator accessors memoise through {@link SupplierUtils#memoize} rather than this class's
-     * older {@code synchronized}-accessor shape: they are reached at runtime from more than one thread - every
+     * Typed as the concrete class, deliberately: the rebalance callbacks
+     * ({@code AbstractParallelEoSStreamProcessor#onPartitionsAssigned} and siblings) publish
+     * {@link bz.stub.parallelconsumer.navigator.AssignmentSnapshot assignment snapshots} through
+     * {@link PartitionShareResourceAllocator#publish}, which is not part of the {@link ResourceAllocator} seam - it
+     * is the engine's own handoff, never an application's. The processor captures this once at construction,
+     * so the callbacks read a final field and never touch the memoisation lock.
+     * <p>
+     * Construction is {@link #buildPartitionShareAllocator()}'s, the protected seam; the options-supplied
+     * {@link ParallelConsumerOptions#getResourceContracts() contracts} are registered here, after it, so an
+     * override that substitutes a differently-clocked allocator still gets the declared policies (R6).
+     * {@code validate()} has already applied R7's rules to those contracts against a throwaway registry, so a
+     * registration failure here would mean the two registries disagree - it is allowed to propagate.
+     */
+    private final Supplier<Optional<PartitionShareResourceAllocator>> partitionShareAllocator =
+            SupplierUtils.memoize(() -> {
+                boolean partitionShare = options().getAllocationStrategy()
+                        == ParallelConsumerOptions.AllocationStrategy.PARTITION_SHARE;
+                if (!partitionShare || !isTagged()) {
+                    return Optional.empty();
+                }
+                PartitionShareResourceAllocator built = buildPartitionShareAllocator();
+                List<ResourceContract> contracts = options().getResourceContracts();
+                if (contracts != null) {
+                    for (ResourceContract contract : contracts) {
+                        built.register(contract);
+                    }
+                }
+                return Optional.of(built);
+            });
+
+    public Optional<PartitionShareResourceAllocator> partitionShareAllocator() {
+        return partitionShareAllocator.get();
+    }
+
+    /**
+     * The seam through which the engine's OWN allocator is constructed (KTD4, the {@code producerWrap()} shape):
+     * one {@link PartitionShareResourceAllocator} per instance, on the module's {@link #clock()} - the one
+     * canonical clock the quantum arithmetic, the admission controller and the navigator meters all read (KTD4
+     * of the micro-MVP). Called at most once, from {@link #partitionShareAllocator()}, and only when the strategy
+     * resolves to partition-share for a tagged instance. Override to substitute the allocator (a subclass of it,
+     * or one on another clock) - the contracts are registered by the caller, not here.
+     */
+    protected PartitionShareResourceAllocator buildPartitionShareAllocator() {
+        return new PartitionShareResourceAllocator(clock());
+    }
+
+    /** Whether this instance tags any resource at all - R3's gate, read straight off the options. */
+    private boolean isTagged() {
+        List<String> resourceTags = options().getResourceTags();
+        return resourceTags != null && !resourceTags.isEmpty();
+    }
+
+    /**
+     * The navigator's allocator handle (KD2, KTD3), resolved by {@link ParallelConsumerOptions#getAllocationStrategy()
+     * strategy} (the partition-share plan's KD6, R6): under {@code PARTITION_SHARE} the instance the engine built
+     * ({@link #partitionShareAllocator()} - empty for an untagged instance, which builds nothing); under
+     * {@code IN_PROCESS} and {@code CUSTOM} the application-supplied
+     * {@link ParallelConsumerOptions#getResourceAllocator()}, wrapped so callers read a plain
+     * {@link Optional#empty()} rather than null-checking the option themselves. Validation has already refused
+     * every mismatched cell of the matrix (an instance supplied under partition-share, none supplied under the
+     * other two), so the two arms never disagree with the options.
+     * <p>
+     * The navigator accessors memoise through {@link SupplierUtils#memoize} rather than this class's older
+     * {@code synchronized}-accessor shape: they are reached at runtime from more than one thread - every
      * {@code WorkContainer} construction (once per inbound record), the control thread's per-pass quantum read,
      * and the lifecycle hooks - so the post-initialisation fast path must be a lock-free read, not a monitor
      * acquisition per record. The utility serialises only the one-time construction and publishes safely.
      */
-    private final Supplier<Optional<ResourceAllocator>> resourceAllocator =
-            SupplierUtils.memoize(() -> Optional.ofNullable(options().getResourceAllocator()));
+    private final Supplier<Optional<ResourceAllocator>> resourceAllocator = SupplierUtils.memoize(() -> {
+        if (options().getAllocationStrategy() == ParallelConsumerOptions.AllocationStrategy.PARTITION_SHARE) {
+            Optional<PartitionShareResourceAllocator> built = partitionShareAllocator();
+            return built.map(allocator -> allocator);
+        }
+        return Optional.ofNullable(options().getResourceAllocator());
+    });
 
     public Optional<ResourceAllocator> resourceAllocator() {
         return resourceAllocator.get();
@@ -216,9 +286,12 @@ public class PCModule<K, V> {
     /**
      * This instance's navigator membership (U3's engine seam): member id, tagged resources and allocator handle
      * resolved ONCE per instance - {@link NavigatorParticipant#inert()} when the instance tags nothing, which is
-     * R3's zero-cost path (callers check {@link NavigatorParticipant#isActive()} and go no further). Memoised
-     * lock-free after first touch - see {@link #resourceAllocator}'s note; hot callers additionally hold the
-     * returned reference in a final field rather than re-calling per record ({@code WorkContainer}'s field).
+     * R3's zero-cost path (callers check {@link NavigatorParticipant#isActive()} and go no further). "Tagged"
+     * is decided by the tags alone (the partition-share plan's KD6): under the default strategy the allocator
+     * is the engine's own, so its presence can no longer stand in for the application having opted in.
+     * Memoised lock-free after first touch - see {@link #resourceAllocator}'s note; hot callers additionally
+     * hold the returned reference in a final field rather than re-calling per record ({@code WorkContainer}'s
+     * field).
      * <p>
      * The member id is the SAME identity {@link PCMetrics} publishes as the {@code pcinstance} meter tag (and
      * {@code AbstractParallelEoSStreamProcessor} derives its log id from): a user-supplied
@@ -226,15 +299,17 @@ public class PCModule<K, V> {
      * membership view, a metric and a log line all name the instance the same way.
      */
     private final Supplier<NavigatorParticipant> navigatorParticipant = SupplierUtils.memoize(() -> {
-        List<String> resourceTags = options().getResourceTags();
-        Optional<ResourceAllocator> allocator = resourceAllocator();
-        boolean tagged = allocator.isPresent() && resourceTags != null && !resourceTags.isEmpty();
-        NavigatorParticipant participant = tagged
-                ? NavigatorParticipant.activeMember(allocator.get(), resourceTags,
-                pcMetrics().getInstanceTag().getValue())
-                : NavigatorParticipant.inert();
-        // U4: registers the pc.navigator.* meters once, immediately after construction - a no-op for the
-        // inert (untagged) shape, mirroring AdmissionController#initMetrics's mode-gated pattern (R3).
+        if (!isTagged()) {
+            return NavigatorParticipant.inert();
+        }
+        ResourceAllocator allocator = resourceAllocator().orElseThrow(() -> new IllegalStateException(
+                "A tagged instance resolved no resource allocator under strategy "
+                        + options().getAllocationStrategy() + " - ParallelConsumerOptions#validate() refuses this "
+                        + "configuration, so the options were not validated before the module was built"));
+        NavigatorParticipant participant = NavigatorParticipant.activeMember(allocator,
+                options().getResourceTags(), pcMetrics().getInstanceTag().getValue());
+        // U4: registers the pc.navigator.* meters once, immediately after construction, mirroring
+        // AdmissionController#initMetrics's mode-gated pattern (R3: the inert shape above registers nothing).
         participant.initMetrics(pcMetrics(), clock());
         return participant;
     });
@@ -247,11 +322,16 @@ public class PCModule<K, V> {
      * The navigator's observed-state surface (U5, R18): {@link #navigatorParticipant()} bound to the module
      * clock as a {@link NavigatorView}, resolved ONCE and handed to every {@code PollContextInternal} at its
      * construction sites - the processor exposes this NARROW view to user code, never the module itself.
-     * Side-effect-free to read, by that interface's contract (AE6). Memoised lock-free after first touch - see
-     * {@link #resourceAllocator}'s note.
+     * Side-effect-free to read, by that interface's contract (AE6). An untagged instance gets the
+     * {@link NavigatorView#inert()} singleton - R3's zero-cost path holds no clock and no participant of its own.
+     * Memoised lock-free after first touch - see {@link #resourceAllocator}'s note.
      */
-    private final Supplier<NavigatorView> navigatorView =
-            SupplierUtils.memoize(() -> ParticipantBackedNavigatorView.of(navigatorParticipant(), clock()));
+    private final Supplier<NavigatorView> navigatorView = SupplierUtils.memoize(() -> {
+        NavigatorParticipant participant = navigatorParticipant();
+        return participant.isActive()
+                ? ParticipantBackedNavigatorView.of(participant, clock())
+                : NavigatorView.inert();
+    });
 
     public NavigatorView navigatorView() {
         return navigatorView.get();
