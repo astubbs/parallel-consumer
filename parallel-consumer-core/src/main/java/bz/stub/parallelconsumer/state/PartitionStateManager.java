@@ -279,13 +279,29 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
      * <b>A revoked partition may have no state, and that is survivable.</b> {@link #onPartitionsAssigned} records
      * the epoch before it loads the state, so anything thrown by the load - {@code consumer.committed()} failing, or
      * {@code invalidOffsetMetadataPolicy(FAIL)} rejecting metadata - leaves the partition with an epoch and no
-     * entry here. Kafka keeps it assigned regardless and revokes it on the next rebalance or on close, and this
-     * sweep runs on the broker-poll thread inside {@code consumer.poll}, so a throw here is the poller-death shape
-     * on top of an assignment failure already logged. There is nothing to sweep for a state that was never
-     * installed - no work was registered against it, no shard references it - and
-     * {@link #incrementPartitionAssignmentEpoch} has already fenced anything that somehow carried the old epoch.
-     * So the partition is marked removed, the gap is logged, and the sweep moves on.
-     * {@code PartitionStateManagerRevokeAfterFailedAssignmentTest} drives both routes.
+     * entry here. Kafka keeps it assigned regardless: the assignment is applied before the listener runs, and the
+     * exception is rethrown out of {@code poll()} with the member STABLE.
+     * <p>
+     * <b>How this sweep is then reached - not on "the next rebalance".</b> That exception propagates the whole way:
+     * {@link #onPartitionsAssigned} logs and rethrows, {@code AbstractParallelEoSStreamProcessor.onPartitionsAssigned}
+     * has no catch, and {@code BrokerPollSystem.controlLoop}'s catch notifies the committer and rethrows, so the
+     * broker-poll thread ends and there is no next poll. The route left is the close sequence, on the
+     * <em>control</em> thread: {@code supervise()} surfaces the dead poller, {@code doClose} runs, and
+     * {@code maybeCloseConsumer} closes the consumer, whose {@code onLeavePrepare} drives {@code onPartitionsRevoked}
+     * (or {@code onPartitionsLost}) into this sweep before it sends LeaveGroup. That step is gated on
+     * {@code committer instanceof ProducerManager}, so this is a live path only in
+     * {@code PERIODIC_TRANSACTIONAL_PRODUCER} mode; in the default consumer-commit modes nothing closes the consumer
+     * after a poller death and this branch is insurance -
+     * {@code docs/inflight/bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md} owns that gap.
+     * <p>
+     * On the live route a throw here is expensive twice over: Kafka's close throws out of {@code onLeavePrepare}
+     * before {@code maybeLeaveGroup}, so the member's departure is left to the session timeout, and the {@code for}
+     * loop below aborts, leaving every partition after this one in the same revoke unswept. There is nothing to
+     * sweep for a state that was never installed - no work was registered against it, no shard references it - and
+     * {@link #incrementPartitionAssignmentEpoch} has already fenced anything that somehow carried the old epoch. So
+     * the partition is marked removed, the gap is logged, and the sweep moves on.
+     * {@code PartitionStateManagerRevokeAfterFailedAssignmentTest} drives both routes into the partial state and the
+     * mixed revoke of a stateless partition alongside a stateful one.
      */
     private void resetOffsetMapAndRemoveWork(Collection<TopicPartition> allRemovedPartitions) {
         for (TopicPartition removedPartition : allRemovedPartitions) {
