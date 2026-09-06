@@ -341,3 +341,12 @@ every instance derives the same division and the fleet's shares sum to exactly t
 changing hands does not change a lease already issued: its share is last minted for the quantum in
 which the revocation lands, and its new holder first mints it at the following boundary - so a move
 briefly under-uses the rate rather than minting one quantum twice.
+
+**Conservation identity**
+The navigator's books balancing at every observation point: everything minted plus everything
+overdrawn equals everything spent plus everything expired plus everything still outstanding, per
+instance, from monotonic counters that are never clamped or corrected. Across a fleet the same
+identity is checked against entitlement - the exact credits each instance's share was worth for
+each quantum it lived through, never a rate or gauge that averages them - so a fleet that mints more
+than its members were entitled to is caught by the books, and a check that sums an average instead
+is off by the rotation's phase and proves nothing.
