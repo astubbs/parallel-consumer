@@ -21,7 +21,7 @@ import org.junit.jupiter.api.parallel.ResourceAccessMode;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import pl.tlinkowski.unij.api.UniLists;
 
-import java.util.Arrays;
+import java.util.Map;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.concurrent.CountDownLatch;
@@ -64,9 +64,15 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * <b>The count alone is not enough</b>, and the test asserts one more fact for that reason. On the pre-fix tree a
  * second encoder that reaches the lookup only <em>after</em> the window has closed finds the first encoder's
  * entry, registers nothing, and the count is 1 - a green run against the broken code. So the seam also records
- * where the second encoder was when the window closed: inside the counter lookup (blocked beneath it on the fix,
- * or registering on the pre-fix tree), or not there yet. Only the first is a valid run; the second is the harness
- * failing to open the window it needs, and it fails as that rather than passing as a verdict.
+ * whether the second encoder had reached the miss when the window closed, and it accepts exactly two kinds of
+ * evidence: the second encoder came through the registration seam itself, which only a caller that observed the
+ * miss does; or it is <em>parked</em> - blocked or waiting, not runnable - inside a {@code java.util.Map} operation
+ * called from the counter lookup, which is where the fix holds it. Merely finding the lookup on its stack is not
+ * evidence: a runnable thread that has entered the lookup but not yet executed the {@code get} has observed
+ * nothing, and on the pre-fix tree it would go on to read the first encoder's published entry and register
+ * nothing - count 1, a green run - which is the path an earlier version of this predicate left open. Anything
+ * short of those two is the harness failing to open the window it needs, and it fails as that rather than
+ * passing as a verdict.
  *
  * @author Antony Stubbs
  */
@@ -149,12 +155,13 @@ class EncodingCounterRegistrationIsAtomicTest {
 
         assertThat(encodesCompleted.get())
                 .isEqualTo(2);
-        // the harness precondition, before the verdict: a second encoder that was not yet at the lookup when the
-        // window closed would find the first's entry on ANY tree, so a count of 1 from that run proves nothing
-        assertWithMessage("the second encoder must be inside the counter lookup when the registration window "
-                + "closes - registering (pre-fix) or blocked beneath it (fixed); a late arrival is a harness "
+        // the harness precondition, before the verdict: a second encoder that had not yet observed the miss when
+        // the window closed would find the first's entry on ANY tree, so a count of 1 from that run proves nothing
+        assertWithMessage("the second encoder must have reached the miss when the registration window closes - "
+                + "through the registration seam (pre-fix) or parked inside the map operation beneath the lookup "
+                + "(fixed); a late arrival, or a runnable thread that is merely inside the lookup, is a harness "
                 + "failure, not a pass")
-                .that(metrics.secondEncoderInsideLookupWhenWindowClosed)
+                .that(metrics.secondEncoderAtTheMissWhenWindowClosed)
                 .isTrue();
         assertThat(metrics.encodingUsageRegistrations.get())
                 .isEqualTo(1);
@@ -218,12 +225,14 @@ class EncodingCounterRegistrationIsAtomicTest {
         private final AtomicReference<Thread> secondEncoder = new AtomicReference<>();
 
         /**
-         * Where the second encoder was when the window closed. {@code true} if it was inside
-         * {@code getCounterMeterForEncoding} - registering, on the pre-fix tree, or blocked beneath it on the fix.
-         * {@code false} means it had not reached the lookup yet, and the run establishes nothing: see the class
-         * javadoc. Written by the first encoder's thread, read by the test thread after {@code join}.
+         * Whether the second encoder had reached the miss when the window closed. {@code true} if it came through
+         * this seam - registering, on the pre-fix tree - or is parked inside the map operation beneath
+         * {@code getCounterMeterForEncoding}, which is where the fix holds it. {@code false} means it had not
+         * observed the miss yet - not started, still encoding, or inside the lookup but runnable and ahead of the
+         * {@code get} - and the run establishes nothing: see the class javadoc. Written by the first encoder's
+         * thread, read by the test thread after {@code join}.
          */
-        private volatile boolean secondEncoderInsideLookupWhenWindowClosed;
+        private volatile boolean secondEncoderAtTheMissWhenWindowClosed;
 
         private WindowHoldingMetrics() {
             super(new SimpleMeterRegistry(),
@@ -243,10 +252,10 @@ class EncodingCounterRegistrationIsAtomicTest {
                         secondEncoderReachedRegistration.await(WINDOW_HOLD_SECONDS, TimeUnit.SECONDS);
                 // sampled here, still inside the window: once this method returns the first encoder publishes
                 // its entry and the second is free to finish, so the test thread could only ever see it gone
-                secondEncoderInsideLookupWhenWindowClosed = secondArrived || secondEncoderIsInsideTheLookup();
+                secondEncoderAtTheMissWhenWindowClosed = secondArrived || secondEncoderIsParkedInsideTheMapOperation();
                 log.info("First encoder releasing the registration window; a second encoder reached "
-                        + "registration during it: {}; a second encoder was inside the lookup as it closed: {}",
-                        secondArrived, secondEncoderInsideLookupWhenWindowClosed);
+                        + "registration during it: {}; a second encoder had reached the miss as it closed: {}",
+                        secondArrived, secondEncoderAtTheMissWhenWindowClosed);
             } else {
                 secondEncoderReachedRegistration.countDown();
             }
@@ -254,19 +263,56 @@ class EncodingCounterRegistrationIsAtomicTest {
         }
 
         /**
-         * Whether the second encoder's stack currently passes through the codec manager's counter lookup. On the
-         * fix that thread is blocked inside {@code computeIfAbsent} beneath it; before the fix it would already
-         * have counted the latch down and never be asked. A thread not yet started, still encoding, or already
-         * finished is not inside it.
+         * Whether the second encoder is parked - blocked or waiting, not runnable - inside a {@link Map} operation
+         * that {@code getCounterMeterForEncoding} called. That is the fix's shape: the second caller of
+         * {@code computeIfAbsent} blocks on the first's reservation of the bin until the first has published, so
+         * it is held at the exact point where it would otherwise have observed the miss. A plain {@code HashMap}'s
+         * {@code get} takes no monitor and can never be seen in that state, which is why the predicate asks for
+         * it rather than for the lookup frame alone: a runnable thread that has entered the lookup and not yet run
+         * its {@code get} has observed nothing, and before the fix it would go on to find the published entry.
+         * A thread not yet started, still encoding, already finished, or parked anywhere other than a map
+         * operation directly beneath the lookup is not evidence.
+         * <p>
+         * State is read before the stack: a thread parked on the map stays parked until the first encoder
+         * publishes, which cannot happen before this method returns, so the two samples describe one moment.
          */
-        private boolean secondEncoderIsInsideTheLookup() {
+        private boolean secondEncoderIsParkedInsideTheMapOperation() {
             Thread thread = secondEncoder.get();
             if (thread == null) {
                 return false;
             }
-            return Arrays.stream(thread.getStackTrace())
-                    .anyMatch(frame -> frame.getClassName().equals(OffsetMapCodecManager.class.getName())
-                            && frame.getMethodName().equals("getCounterMeterForEncoding"));
+            Thread.State state = thread.getState();
+            boolean parked = state == Thread.State.BLOCKED
+                    || state == Thread.State.WAITING
+                    || state == Thread.State.TIMED_WAITING;
+            StackTraceElement[] stack = thread.getStackTrace();
+            // stack[0] is the top, so the frame the lookup called is the one BEFORE the lookup's own frame
+            int lookupFrame = -1;
+            for (int i = 0; i < stack.length; i++) {
+                if (stack[i].getClassName().equals(OffsetMapCodecManager.class.getName())
+                        && stack[i].getMethodName().equals("getCounterMeterForEncoding")) {
+                    lookupFrame = i;
+                    break;
+                }
+            }
+            boolean insideMapOperationCalledFromLookup = lookupFrame > 0 && isMapImplementation(stack[lookupFrame - 1]);
+            log.info("Second encoder at window close: state {}, frame beneath the lookup {}",
+                    state, lookupFrame > 0 ? stack[lookupFrame - 1] : "<not in the lookup>");
+            return parked && insideMapOperationCalledFromLookup;
+        }
+
+        /**
+         * Whether the class a stack frame executes in is a {@link Map}. Resolved by name without initialising it -
+         * the frames that reach here are JDK collection classes, already loaded.
+         */
+        private static boolean isMapImplementation(StackTraceElement frame) {
+            try {
+                Class<?> frameClass = Class.forName(frame.getClassName(), false,
+                        EncodingCounterRegistrationIsAtomicTest.class.getClassLoader());
+                return Map.class.isAssignableFrom(frameClass);
+            } catch (ClassNotFoundException e) {
+                return false;
+            }
         }
     }
 }

@@ -125,12 +125,14 @@ adding a class with a narrow guess in it.
    `partitionsAssignmentEpochs` are both `ConcurrentHashMap`s keyed by the same `TopicPartition` and
    must agree; each is individually safe and the pair is not. The identically-keyed-maps signature,
    verbatim.
-5. **The unsynchronised counter maps.** `PartitionStateManager.slowWorkCounters`,
-   `WorkManager.succeededRecordsCounters` and `failedRecordsCounters` are plain `HashMap`s mutated
-   from the rebalance callbacks and the completion path, and `RemovedPartitionState.READ_ONLY_EMPTY_SET`
-   is a mutable `TreeSet` shared by every PC instance in the JVM
-   (`bug-shared-collections-across-the-poll-boundary.md`). Cheap, and it becomes the regression
-   detector the moment the sweep on `fix/concurrent-collection-sweep` lands.
+5. **The counter maps, as a regression detector only.** Nothing here is open any more: astubbs#267
+   made `PartitionStateManager.slowWorkCounters`, `WorkManager.succeededRecordsCounters` and
+   `failedRecordsCounters` `ConcurrentHashMap`s and `RemovedPartitionState.READ_ONLY_EMPTY_SET` an
+   immutable `Collections.emptySortedSet()`, and `OffsetMapCodecManager.encodingCounters` followed
+   (item 2 names the write-up). A harness over them would be a regression detector against fixes
+   that have landed, the same standing as item 2 - and the fourth map already has a deterministic
+   one in `EncodingCounterRegistrationIsAtomicTest`. Rank it below everything that still has a live
+   defect behind it.
 6. **Close the encoder's range-top leg.** The one verdict in the calibration that is not clean:
    `OffsetMapCodecManager.encodeOffsetsCompressed` came back HALF-FOUND, because the *snapshot* leg
    was exhibited and the two-reads-return-different-values leg was not, and is not expressible in

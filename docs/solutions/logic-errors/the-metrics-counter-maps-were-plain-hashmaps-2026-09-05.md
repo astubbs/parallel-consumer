@@ -11,7 +11,7 @@ severity: low
 symptoms:
   - "A Lincheck harness aimed at commit-path torn reads threw ArrayIndexOutOfBoundsException out of a metrics collection, with no stack recorded"
   - "A counter map populated with get-then-put registers the same meter twice when two callers interleave - one redundant trip through the metrics monitor, once, since both put the same key and every later lookup hits"
-  - "Two different keys landing in one HashMap bucket can drop one node without any resize, and only that shape leaves a key missing on every later lookup"
+  - "Two different keys can leave one missing on every later lookup: the first put on an empty HashMap allocates the table inside resize(), so two first-time callers each allocate one and the loser's is dropped; or two keys land in one bucket and one chain-head write drops the other's node - neither needs the map to grow"
 applies_when:
   - Sweeping a defect class across a codebase and one instance sits on a different call path from the rest
   - A lazily populated cache's miss handler has a side effect, so the check and the act must be one step
@@ -65,8 +65,10 @@ grep -rnE 'private (final )?(List|Map|Set|HashMap|ArrayList|HashSet)<' \
 
 ### A sweep by path misses the instance on a different path
 
-The four fields the grep names split two-and-two by *where they are mutated*, and that is what
-decided which of them got fixed and when.
+The grep names five fields. One is the sibling, `PCMetrics.registeredMeters` - a `LinkedHashSet`
+behind `metersLock` since astubbs#57, and not a counter map. The other four are the counter maps, and
+they split three-to-one by *where they are mutated*, which is what decided which of them got fixed
+and when.
 
 Three - `PartitionStateManager.slowWorkCounters`, and `WorkManager.succeededRecordsCounters` and
 `failedRecordsCounters` - are registered and deregistered from the rebalance callbacks. astubbs#267
@@ -75,7 +77,8 @@ made all three `ConcurrentHashMap` and replaced their `containsKey`-then-`put` p
 boundary, so it found them together.
 
 The fourth - `OffsetMapCodecManager.encodingCounters` - is on the **encode path**, not the rebalance
-callbacks, and survived that sweep by a year. It was found later by grepping the class of field
+callbacks, and survived that sweep by about a week (astubbs#267 merged on 2026-08-27). It was found
+later by grepping the class of field
 rather than the class of caller, which is the transferable part: **a sweep organised around a call
 path terminates at the boundary of that path, and the instance one step outside it looks like a
 different problem.** The grep above is organised around the *shape of the field* and does not have
@@ -108,9 +111,16 @@ register, and the second registration is the cost: one redundant trip through `P
 paid once. It is not more than that, because both callers `put` the *same* key: an entry exists
 whichever write wins, every later encode hits the cache, and micrometer's registry returns the same
 `Counter` for the same meter id, so the *reported* number is right too. The outcome where an entry
-never appears needs two *different* encodings landing in one bucket of the plain `HashMap`, with one
-thread's write of the chain head dropping the other's node - and that needs no resize, so the map's
-size does not rule it out. Only then does an encoding keep missing and re-registering on every commit.
+never appears needs two *different* encodings, and a plain `HashMap` has two ways to lose one of them
+without ever growing. The first is on the very first `put`: a default `HashMap` starts with a null
+table, and JDK 17's `HashMap.putVal` allocates it by calling `resize()` -
+`if ((tab = table) == null || (n = tab.length) == 0) n = (tab = resize()).length` - so two first-time
+callers on an empty cache each allocate their own table, each insert into the one they allocated, and
+whichever `table` assignment lands second drops the other's table with its entry in it. No collision
+is needed. The second is after the table exists: two keys landing in one bucket, where one thread's
+write of the chain head drops the other's node. Neither needs a resize past the threshold, so the
+map's size does not rule either out. Only then does an encoding keep missing and re-registering on
+every commit.
 
 `computeIfAbsent` on a `ConcurrentHashMap` is the whole fix, and it is what astubbs#267 used on the
 other three:
@@ -121,12 +131,14 @@ return encodingCounters.computeIfAbsent(encoding, enc ->
                 Tag.of("encoding", enc.name())));
 ```
 
-**Two arguments that look right here and are not.** The first is table corruption on resize: there
-are twelve `OffsetEncoding` constants and a default `HashMap` resizes only above twelve entries, so
-this map never resized and never could - the dropped bucket node above is the corruption that needs
-none. The second is `ConcurrentModificationException`: nothing
-iterates any of the four. Reaching for either would have made the write-up wrong in a way no test
-would catch, and both are recorded on the field so nobody re-derives them.
+**Two arguments that look right here and are not.** The first is table corruption on a *growth*
+resize: there are twelve `OffsetEncoding` constants and a default `HashMap` grows only above twelve
+entries, so this map never grew and never could. That rules out the rehash race and nothing else -
+`resize()` is also how the table is first allocated, which is the initial-allocation race above, and
+the dropped bucket node needs no resize at all. The second is `ConcurrentModificationException`:
+nothing iterates any of the four. Reaching for either would have made the write-up wrong in a way no
+test would catch, and both are recorded on the field so nobody re-derives them. (An earlier version
+of this paragraph said resize was unreachable outright, which review caught against the JDK source.)
 
 ### Fixing a race the scheduler currently makes unreachable
 
@@ -176,8 +188,8 @@ because a green test against a fixed tree establishes nothing about what it woul
 ## Why This Matters
 
 The interesting failure here is not the race; on today's scheduler it cannot fire. It is that a
-defect class was swept, three of its four instances were fixed, and the fourth stayed open for a
-year with two notes describing it - while the notes for the three that *were* fixed also stayed open,
+defect class was swept, three of its four instances were fixed, and the fourth stayed open for
+another week with two notes describing it - while the notes for the three that *were* fixed also stayed open,
 describing code that no longer existed. Both halves of that are the same mistake seen from opposite
 sides: **the record and the code were never re-derived from each other**, and each command that would
 have done it takes seconds.

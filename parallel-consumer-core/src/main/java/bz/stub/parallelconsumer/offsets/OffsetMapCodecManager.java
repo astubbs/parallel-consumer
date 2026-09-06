@@ -86,9 +86,12 @@ public class OffsetMapCodecManager<K, V> {
      * meter registration also contend for it - paid once. Both threads {@code put} the <em>same</em> key, so an
      * entry exists whichever write wins and every later encode hits the cache; micrometer returns the same
      * {@code Counter} for the same id, so the reported value is right too. An entry that never appears needs
-     * two <em>different</em> encodings landing in one bucket of the plain {@link HashMap}, with one thread's
-     * write of the chain head dropping the other's node - and that needs no resize, so the map's size does not
-     * rule it out. The last of the four unguarded metrics collections named by
+     * two <em>different</em> encodings, and a plain {@link HashMap} loses one of them two ways without ever
+     * growing: on the very first {@code put}, where JDK 17's {@code HashMap.putVal} allocates the null table by
+     * calling {@code resize()}, so two first-time callers on an empty cache each allocate a table and the one
+     * whose {@code table} assignment lands second drops the other's, entry and all, with no collision needed;
+     * or, once the table exists, two keys in one bucket where one thread's write of the chain head drops the
+     * other's node. The last of the four unguarded metrics collections named by
      * {@code docs/solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md};
      * astubbs#267 made the other three concurrent and missed this one because it sits on the encode path
      * rather than in the rebalance callbacks.
@@ -110,9 +113,11 @@ public class OffsetMapCodecManager<K, V> {
      * thread reaches this field. {@code EncodingCounterRegistrationIsAtomicTest} pins the atomicity instead,
      * by driving the interleaving through a seam rather than waiting for the scheduler to supply one.
      *
-     * <p><b>What is NOT the argument</b>, so nobody re-derives it: table corruption on resize. There are
-     * twelve {@link OffsetEncoding} constants and a default {@link HashMap} resizes above twelve entries, so
-     * this map never resized and never could; the dropped bucket node above is the corruption that needs none.
+     * <p><b>What is NOT the argument</b>, so nobody re-derives it: table corruption on a <em>growth</em> resize.
+     * There are twelve {@link OffsetEncoding} constants and a default {@link HashMap} grows above twelve entries,
+     * so this map never grew and never could - which rules out the rehash race and nothing else. {@code resize()}
+     * is also how the table is first allocated, so the initial-allocation race above is reachable on the very
+     * first commit, and the dropped bucket node needs no resize at all.
      */
     private final Map<OffsetEncoding, Counter> encodingCounters = new ConcurrentHashMap<>();
 
