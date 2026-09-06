@@ -1,9 +1,18 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 
-# Cheap, repo-wide static checks: things that need no JDK, no broker and no build.
+# Cheap, repo-wide static checks: things that need no broker and no build.
 #
-# Separate from copyright.yml deliberately: these checks are not about copyright and never were,
-# and bolting them there left a job called "Copyright header check" doing two unrelated things.
+# THREE STANDALONE GATE JOBS WERE FOLDED IN HERE, and each was already running here before it was
+# deleted: `Copyright header check` (the whole of copyright.yml), and maven.yml's `quarantine: audit`
+# and `docs data: audit`. The sweep below globs bin/check-*.sh, so check-copyright-headers.sh,
+# check-quarantine-registry.sh, check-quarantine-owners.sh and check-docs-data.sh - and each one's
+# self-test - ran in this job on every PR alongside the dedicated jobs, which were a second copy with
+# a second checkout each. The one thing each dedicated job carried that this lane did not is now an
+# explicit step or env line below (the fork-point strictness, the PyYAML check), so nothing was lost
+# in the fold; and the quarantine OWNER check keeps its authenticated run in quarantine-lane.yml,
+# whose `tests` check is required, because this lane deliberately holds no token (see PR_NUMBER).
+# The three retired names are required contexts in the master ruleset until it is edited -
+# docs/inflight/ci-fewer-jobs-ruleset-edits.md carries the edit and its ordering.
 #
 # ONE LANE, DISCOVERED - and this replaced one-job-per-concern deliberately. That shape gave each
 # gate its own required-status-check candidate and its own red tick, which reads well, and cost
@@ -32,8 +41,9 @@
 
 name: Repo Hygiene
 
-# push scoped to master (matching copyright.yml and maven.yml) so PR-branch commits run once via
-# the pull_request event instead of twice.
+# push scoped to master (matching maven.yml) so PR-branch commits run once via the pull_request
+# event instead of twice. copyright.yml ran on push to master too, so its fold into this workflow
+# keeps that cadence.
 on:
   push:
     branches: [ master ]
@@ -64,12 +74,17 @@ jobs:
     # already carries the number, so this costs nothing and needs no token.
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
+      # The checkout below fetches full history, so a missing fork point here is a broken checkout,
+      # not an expected shallow clone: make bin/check-copyright-headers.sh hard-fail (exit 2) on it
+      # instead of its default warn-and-skip exit 0, which the sweep would count as a pass.
+      COPYRIGHT_CHECK_REQUIRE_FORK_POINT: "1"
     steps:
       - uses: actions/checkout@v6
         with:
           # Gates that read history must not see a truncated graft. A shallow clone does not error
           # on `git log` or `git merge-base` - it answers, wrongly, which is the exact class
-          # .claude/hooks/check-shallow-history.sh exists to stop locally.
+          # .claude/hooks/check-shallow-history.sh exists to stop locally. The copyright scanner
+          # also classifies provenance from the fork-point commit, which only full history holds.
           fetch-depth: 0
 
       # ubuntu-latest ships shellcheck, but an image change that removed it must fail rather than
@@ -78,6 +93,12 @@ jobs:
       # reader looks.
       - name: Confirm shellcheck is present
         run: shellcheck --version
+
+      # Same shape for PyYAML: bin/check-docs-data.sh fails CLOSED without it, exit 2 "cannot run".
+      # ubuntu-latest ships it; the dedicated docs-data job used to pip-install it explicitly, and
+      # this is that dependency made visible rather than inherited from the image.
+      - name: Confirm PyYAML is present
+        run: python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
 
       # A JDK IS REQUIRED, and the requirement is not obvious from the job name. The self-test
       # `bin/test-check-infer.sh` FAILS rather than skips when no JDK resolves and `CI` is set - by
@@ -91,8 +112,12 @@ jobs:
           java-version: '17'
           # No `cache: maven` - see the caching strategy note at the top of maven.yml
 
+      # --strict: a CANNOT (exit 2) fails the sweep here. Without it check-all exits 0 with a CANNOT
+      # as long as something else ran - right for a laptop with no `gh` credential, wrong on a hosted
+      # image where a CANNOT is only ever a missing tool or a shallow checkout. The two "Confirm ..."
+      # steps above name the dependencies; this is what turns a third one nobody named into a red.
       - name: Every gate and every self-test, discovered rather than listed
-        run: bash bin/check-all.sh --with-tests
+        run: bash bin/check-all.sh --with-tests --strict
 
       # The sweep above deliberately does NOT reach Codecov: check-integration-shard-balance.mjs
       # exits 3 unless SHARD_BALANCE_NETWORK is set, because `check-*` is blanket-granted to the PR

@@ -70,7 +70,7 @@ document. This section is the detail behind it.
   **gating**, like the job they replaced: a chaos RED is a real finding. The **`Integration
   Tests`** lane is likewise two gating shards since astubbs#442 - a named heavy set and a
   catch-all defined by subtraction; see
-  ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
+  ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). Also carries SpotBugs, duplicate
   detection, PR-scoped mutation testing (PIT), and dependency vulnerability scanning. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
@@ -78,10 +78,6 @@ document. This section is the detail behind it.
 - **`publish.yml`** - publishes to Maven Central on every push to `master`. The pom version is the
   source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full
   releases (and create a git tag + GitHub release). See [`docs/releasing.md`](releasing.md).
-- **`copyright.yml`** - header conformance via `bin/check-copyright-headers.sh` (its self-test
-  `bin/test-check-copyright-headers.sh` runs first, then the real scan) on every push/PR.
-  GitHub-hosted; needs `fetch-depth: 0` so the fork-point commit is in history. Rules:
-  [`docs/copyright.md`](copyright.md).
 - **`quarantine-lane.yml`** - runs the `@Quarantined` tests on every PR push, every push to master,
   and on dispatch. Its job is the **required** check `tests`, so the job name is an API here too -
   but the test-running step is `continue-on-error`, so red quarantined tests cannot block a merge.
@@ -110,11 +106,31 @@ document. This section is the detail behind it.
   of order.
 - **`repo-hygiene.yml`** - cheap repo-wide static checks needing no broker, no Docker and no build.
   **ONE job, `repo: hygiene`, which DISCOVERS rather than enumerates**: it runs
-  `bin/check-all.sh --with-tests`, globbing `bin/check-*.sh` and `bin/test-*.sh`. It was one job per
-  concern until that shape cost more than it bought - a gate added to `bin/` ran NOWHERE until
+  `bin/check-all.sh --with-tests --strict`, globbing `bin/check-*.sh` and `bin/test-*.sh`. It was one
+  job per concern until that shape cost more than it bought - a gate added to `bin/` ran NOWHERE until
   somebody remembered to name it here, and nothing went red, because a check that is not running
   looks exactly like a check that is passing. The job name is still an API: it is a required status
   check, and renaming it silently stops satisfying the ruleset.
+
+  **`--strict` makes a CANNOT fail the lane.** By default `check-all.sh` reports a gate that exits 2
+  ("cannot run") in its own column and still exits 0, which is right on a laptop with no `gh`
+  credential and wrong on a hosted image, where a CANNOT is only ever a missing tool or a shallow
+  checkout. Before the flag, an image that stopped shipping PyYAML would have turned
+  `check-docs-data.sh` into a CANNOT the lane read as green. The job also names each such
+  dependency in a `Confirm ... is present` step, so the log says which one went missing.
+
+  **Three standalone jobs were folded in here on 2026-09-07** - `copyright.yml`'s `Copyright header
+  check`, and `maven.yml`'s `quarantine: audit` and `docs data: audit` - because the sweep's glob
+  was already running `check-copyright-headers.sh`, `check-quarantine-registry.sh`,
+  `check-quarantine-owners.sh` and `check-docs-data.sh` (each with its self-test) on every PR, so
+  the dedicated jobs were a second copy with a second checkout each. What each carried that the lane
+  did not is now explicit in the job: `COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1` (the scanner's default
+  on a missing fork point is warn-and-skip, exit 0), and the PyYAML assertion. The lane holds no
+  token, so `check-quarantine-owners.sh` verifies owner claims only where `gh` is authenticated -
+  `quarantine-lane.yml`, whose required `tests` check runs it with `github.token` on every PR push.
+  Copyright rules: [`docs/copyright.md`](copyright.md); the ruleset still names the three retired
+  contexts until it is edited - see
+  [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md).
 
   What the lane covers, and why each one is not obvious:
 
@@ -150,12 +166,13 @@ document. This section is the detail behind it.
   (they can never block anything) and additions wait until the job exists on master - which is why
   `shell: sigpipe` and `workflows: action versions` were dropped from the ruleset in the same change
   that deleted those jobs. **Neither name exists any more, and neither is required.** `repo: hygiene`,
-  the single lane that replaced them (and the rest of `repo-hygiene.yml`'s old per-concern jobs), is
-  **also absent from the required list** as of the last live check -
-  `gh api repos/astubbs/parallel-consumer/rulesets/15055005` enumerates every required context by
-  name and `repo: hygiene` is not among them. Whether that is the pending "addition" this paragraph
-  describes, still waiting for its turn, or simply missed when the jobs were collapsed, is not
-  settled here - confirm against the live ruleset rather than assuming either.
+  the single lane that replaced them (and the rest of `repo-hygiene.yml`'s old per-concern jobs),
+  **is in the required list** as of the live check on 2026-09-07 -
+  `gh api repos/astubbs/parallel-consumer/rules/branches/master` enumerates every required context
+  by name. The three contexts retired into it that day - `Copyright header check`,
+  `quarantine: audit`, `docs data: audit` - are the removals currently owed to the ruleset;
+  [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md) owns
+  that edit. Confirm against the live ruleset rather than assuming this paragraph is current.
   - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
     exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
     (retiring them needs someone else to act, on no timetable we control) and *temporary* (the
@@ -263,7 +280,11 @@ renamed job: the ruleset keeps the old name, which then blocks nothing visibly a
 is how a bare `spotbugs` context outlived the job that became `static: spotbugs` and sat required with
 no producer until 2026-08-26. **A skip does not satisfy a required check either** - it waits - so a
 job that can legitimately have nothing in scope should report success rather than skip before anyone
-requires it.
+requires it. **Removals are the other half of the same ordering**: a job deleted from the tree leaves
+its context in the ruleset, required and never produced, so every PR pends until the ruleset drops
+it - the edit belongs to the merge of the PR that deletes the job, not before (the job still runs on
+every other PR) and not after (nothing merges). The live instance of this is
+[`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md).
 
 **These are deliberately NOT required, and each would break something if promoted:**
 

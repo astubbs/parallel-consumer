@@ -25,7 +25,6 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `claude-code-review-dispatch.yml` | The dispatched code reviewer - the expensive half, run when somebody asks for it. |
 | `claude-code-review.yml` | The review gate. Invokes no Claude and costs nothing. What satisfies it: [`docs/ci.md`](../../docs/ci.md), stated once there. |
 | `claude.yml` | Answers `@claude` comments, and reviews when asked to - the only route that can raise inline review threads. |
-| `copyright.yml` | Checks source headers against the fork policy on every push and PR. |
 | `dependency-audit.yml` | Scans the **whole** resolved dependency tree for CVEs - the only place OSS Index is switched on. Per-PR, on demand, and weekly, because a new advisory needs no push to arrive. |
 | `maven.yml` | The main build: unit, integration and performance suites, SpotBugs, duplicate detection, PIT, dependency scanning. |
 | `mutation-full-sweep.yml` | The whole-repo PIT mutation sweep - nightly, plus on demand. Too slow for a PR. Self-hosted high-CPU lane, plus a hosted trial arm. |
@@ -33,7 +32,7 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `publish.yml` | Publishes to Maven Central on every push to `master`; the pom version decides snapshot or release. |
 | `quarantine-lane.yml` | Runs the quarantined tests separately, so known-flaky tests neither block nor disappear. |
 | `release.yml` | Cuts a release. `workflow_dispatch`, and deliberately the most dangerous button here. |
-| `repo-hygiene.yml` | Always-on repo checks - shell sigpipe traps, one pinned version per GitHub Action, and expiring the pom's temporary CVE exclusions - plus `shell: macos`, the one lane not on `ubuntu-latest`: it runs the shell self-tests and a `bash -n` sweep against Apple's bash 3.2, where GNU-only constructs fail silently. |
+| `repo-hygiene.yml` | Always-on repo checks, every `bin/check-*` gate and self-test by glob - copyright headers against the fork policy, the quarantine registry, the release-documentation data, shell hazards, one pinned version per GitHub Action, expiring the pom's temporary CVE exclusions - plus `shell: macos`, the one lane not on `ubuntu-latest`: it runs the shell self-tests and a `bash -n` sweep against Apple's bash 3.2, where GNU-only constructs fail silently. |
 
 ## One required check is not in this directory
 
@@ -48,12 +47,14 @@ trade costs is in [`docs/ci.md`](../../docs/ci.md).
 ## Two conventions that will bite you
 
 - **Job names are an API.** `claude-review`, `review: human LGTM`, `Check PR Dependencies`,
-  `quarantine: audit`, `Copyright header check` and the `maven.yml` suites are required status
-  checks matched **by name** in the master ruleset. Rename a job and the ruleset silently stops
-  being satisfied by anything - it does not fail, it just never passes. `shell: sigpipe` and
-  `workflows: action versions` were two such names; both jobs were folded into `repo-hygiene.yml`'s
-  single `repo: hygiene` lane, and - as of the last live check of the ruleset - that replacement
-  lane is not itself in the required list. See [`docs/ci.md`](../../docs/ci.md) for the detail.
+  `repo: hygiene` and the `maven.yml` suites are required status checks matched **by name** in the
+  master ruleset. Rename a job and the ruleset silently stops being satisfied by anything - it does
+  not fail, it just never passes. `shell: sigpipe` and `workflows: action versions` were two such
+  names, folded into `repo-hygiene.yml`'s single `repo: hygiene` lane; `Copyright header check`,
+  `quarantine: audit` and `docs data: audit` followed them there, and until the ruleset drops those
+  three contexts they are required names no job produces -
+  [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](../../docs/inflight/ci-fewer-jobs-ruleset-edits.md)
+  carries the edit. See [`docs/ci.md`](../../docs/ci.md) for the detail.
 - **Most of these run PR-authored code.** A `pull_request` job checks out the PR, so anything it
   executes is whatever the PR says it is. That is why the review jobs hold no write scope, and why
   `actions: write` lives alone in a job that checks nothing out. See "The reviewer runs PR code"

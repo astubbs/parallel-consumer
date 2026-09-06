@@ -143,8 +143,9 @@ jobs:
           restore-keys: |
             setup-java-Linux-x64-maven-
 
-      # Before the guard runs, prove the guard still works - the sequencing repo-hygiene.yml and
-      # copyright.yml both use. A guard nobody has watched fail is decoration.
+      # Before the guard runs, prove the guard still works - the sequencing repo-hygiene.yml uses
+      # (bin/check-all.sh runs every self-test ahead of the gates). A guard nobody has watched fail
+      # is decoration.
       - name: Self-test the did-it-actually-scan guard
         run: bash bin/test-check-ossindex-audit.sh
 
