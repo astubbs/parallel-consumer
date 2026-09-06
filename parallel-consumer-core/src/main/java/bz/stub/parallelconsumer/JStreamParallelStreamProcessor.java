@@ -13,6 +13,18 @@ import java.util.List;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
+/**
+ * Streaming counterpart to {@link ParallelStreamProcessor}: results are handed back through a
+ * {@link Stream} instead of a callback.
+ * <p>
+ * The stream is <b>live</b>. It yields each result as it is produced and blocks in between, so consuming it
+ * is what keeps the backing queue drained; it ends when this processor closes, after the results already
+ * queued have been delivered. Consume it on a thread that can stay with it - a consumer that walks away
+ * early leaves the producer with nobody draining, which is
+ * <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>.
+ *
+ * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
+ */
 public interface JStreamParallelStreamProcessor<K, V> extends DrainingCloseable {
 
     static <K, V> JStreamParallelStreamProcessor<K, V> createJStreamEosStreamProcessor(ParallelConsumerOptions<K, V> options) {
