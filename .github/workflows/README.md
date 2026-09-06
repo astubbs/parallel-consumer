@@ -28,11 +28,10 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `dependency-audit.yml` | Scans the **whole** resolved dependency tree for CVEs - the only place OSS Index is switched on. Per-PR, on demand, and weekly, because a new advisory needs no push to arrive. |
 | `maven.yml` | The main build: unit, integration and performance suites, SpotBugs, duplicate detection, PIT, dependency scanning. |
 | `mutation-full-sweep.yml` | The whole-repo PIT mutation sweep - nightly, plus on demand. Too slow for a PR. Self-hosted high-CPU lane, plus a hosted trial arm. |
-| `pr-checklist.yml` | Makes the PR template binding: the checklist must be present and every box resolved. |
 | `publish.yml` | Publishes to Maven Central on every push to `master`; the pom version decides snapshot or release. |
 | `quarantine-lane.yml` | Runs the quarantined tests separately, so known-flaky tests neither block nor disappear. |
 | `release.yml` | Cuts a release. `workflow_dispatch`, and deliberately the most dangerous button here. |
-| `repo-hygiene.yml` | Always-on repo checks, every `bin/check-*` gate and self-test by glob - copyright headers against the fork policy, the quarantine registry, the release-documentation data, shell hazards, one pinned version per GitHub Action, expiring the pom's temporary CVE exclusions - plus `shell: macos`, the one lane not on `ubuntu-latest`: it runs the shell self-tests and a `bash -n` sweep against Apple's bash 3.2, where GNU-only constructs fail silently. |
+| `repo-hygiene.yml` | Always-on repo checks, every `bin/check-*` gate and self-test by glob - copyright headers against the fork policy, the quarantine registry, the release-documentation data, shell hazards, one pinned version per GitHub Action, expiring the pom's temporary CVE exclusions - and the PR-body gates that were `pr-checklist.yml`: the template checklist must be present and every box resolved, issue and file references must resolve, a changelog entry cites an issue, a roadmap-carrying PR moves its stage - plus `shell: macos`, the one lane not on `ubuntu-latest`: it runs the shell self-tests and a `bash -n` sweep against Apple's bash 3.2, where GNU-only constructs fail silently. |
 
 ## One required check is not in this directory
 

@@ -790,7 +790,7 @@ poll and is covered by `PartitionStateCommittedOffsetTest`.
 
 A generated `docs/INACTIVE_TESTS.md` with a `--check` gate (the `bin/todo-index.sh` shape) was
 considered and **deliberately not built**: the previous audit was lost to invisibility, not drift, and
-such a gate would fail the PR Checklist job on any open PR touching a test annotation. Worth
+such a gate would fail the `repo: hygiene` job on any open PR touching a test annotation. Worth
 revisiting once the audit has been in use.
 <!-- file-refs: N/A - names a generated file this entry records as NOT built -->
 

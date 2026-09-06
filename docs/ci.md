@@ -91,15 +91,19 @@ document. This section is the detail behind it.
   See [`docs/testing.md`](testing.md), and
   [`docs/solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md`](solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md)
   for the class.
-- **`pr-checklist.yml`** - hosts the PR-body gates: the template checklist (rule in AGENTS.md, PR
-  Discipline), the changelog-citation gate (`changelog-ref-gate.js`, see
-  [`docs/releasing.md`](releasing.md)), the issue-reference gate (`issue-ref-gate.js`, see
-  [`docs/issue-references.md`](issue-references.md)) and the file-reference gate
-  (`file-ref-gate.js`, see [`docs/citations.md`](citations.md)), which fails a cited repo path that
-  does not exist - whole tree, so a deletion that strands a citation fails the PR that made it. Each gate's logic is a unit-tested module and its self-test runs first, so a
-  broken rule fails loudly rather than passing - or failing - every PR silently. The self-test step
-  **discovers** `.github/scripts/*.test.js` rather than naming them, so a module added there is
-  covered without an edit here or in the workflow.
+- **The PR-body gates** - formerly the `PR Checklist` job in `pr-checklist.yml`, now the tail of
+  `repo: hygiene` in `repo-hygiene.yml` (folded 2026-09-07; the old context is a removal owed to the
+  ruleset, see below): the template checklist (rule in AGENTS.md, PR Discipline), the
+  changelog-citation gate (`changelog-ref-gate.js`, see [`docs/releasing.md`](releasing.md)), the
+  issue-reference gate (`issue-ref-gate.js`, see [`docs/issue-references.md`](issue-references.md)),
+  the file-reference gate (`file-ref-gate.js`, see [`docs/citations.md`](citations.md)), which fails
+  a cited repo path that does not exist - whole tree, so a deletion that strands a citation fails the
+  PR that made it - and the roadmap stage gate (`roadmap-stage-gate.js`). Each gate's logic is a
+  unit-tested module and its self-test runs first, so a broken rule fails loudly rather than
+  passing - or failing - every PR silently. The self-test step **discovers**
+  `.github/scripts/*.test.js` rather than naming them, so a module added there is covered without an
+  edit here or in the workflow. The gates read the PR body, so the workflow runs on the `edited`
+  pull_request type too, and each is skipped on a push run, which has no PR to read.
 - **`check-dependencies.yml`** - "PR Dependency Check". Reads `depends on
   astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has
   merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out
@@ -125,12 +129,21 @@ document. This section is the detail behind it.
   `check-quarantine-owners.sh` and `check-docs-data.sh` (each with its self-test) on every PR, so
   the dedicated jobs were a second copy with a second checkout each. What each carried that the lane
   did not is now explicit in the job: `COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1` (the scanner's default
-  on a missing fork point is warn-and-skip, exit 0), and the PyYAML assertion. The lane holds no
-  token, so `check-quarantine-owners.sh` verifies owner claims only where `gh` is authenticated -
+  on a missing fork point is warn-and-skip, exit 0), and the PyYAML assertion. The shell sweep sees
+  no token, so `check-quarantine-owners.sh` verifies owner claims only where `gh` is authenticated -
   `quarantine-lane.yml`, whose required `tests` check runs it with `github.token` on every PR push.
-  Copyright rules: [`docs/copyright.md`](copyright.md); the ruleset still names the three retired
-  contexts until it is edited - see
-  [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md).
+  Copyright rules: [`docs/copyright.md`](copyright.md).
+
+  **A fourth, `PR Checklist` (all of `pr-checklist.yml`), followed the same day** - the PR-body
+  gates described above, now the last steps of the job. Not a duplicate: those gates need the PR
+  body and `pulls.listFiles`, so the job gained `pull-requests: read` (its first token use; the shell
+  sweep still gets no `GH_TOKEN`, so its `gh` calls behave as before) and the `edited` trigger, and
+  its concurrency group is keyed on the PR number with a SHA fallback so master pushes never cancel
+  each other. Three of the checklist's named self-test steps were dropped as duplicates of the
+  sweep's glob; the marker-index check stays as a named step because `bin/todo-index.sh --check` is
+  not a `check-*.sh` gate. The ruleset still names the four retired contexts until it is edited -
+  see [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md),
+  which also records why this job was the host rather than `Check PR Dependencies`.
 
   What the lane covers, and why each one is not obvious:
 
@@ -169,8 +182,9 @@ document. This section is the detail behind it.
   the single lane that replaced them (and the rest of `repo-hygiene.yml`'s old per-concern jobs),
   **is in the required list** as of the live check on 2026-09-07 -
   `gh api repos/astubbs/parallel-consumer/rules/branches/master` enumerates every required context
-  by name. The three contexts retired into it that day - `Copyright header check`,
-  `quarantine: audit`, `docs data: audit` - are the removals currently owed to the ruleset;
+  by name. The four contexts retired into it that day - `Copyright header check`,
+  `quarantine: audit`, `docs data: audit`, `PR Checklist` - are the removals currently owed to the
+  ruleset;
   [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md) owns
   that edit. Confirm against the live ruleset rather than assuming this paragraph is current.
   - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
@@ -210,7 +224,7 @@ Every one of them was written for the throughput comment in astubbs/parallel-con
 one of them had been WRONG in production. They live in a module rather than in three copies of the
 YAML because copying them is how the original defects reached two steps at once. The module's header
 carries the reasoning and the measurements behind each; `sticky-report-comment.test.js` pins each
-against the defect it replaced, and the PR Checklist job runs it.
+against the defect it replaced, and the `repo: hygiene` job runs it.
 
 **What a "status change" means is the caller's, and only that.** The throughput report's status is
 its verdict; the quarantine lane's is a sorted digest of every quarantined test's outcome, so a test

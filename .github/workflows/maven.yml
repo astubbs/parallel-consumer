@@ -336,7 +336,7 @@ jobs:
             // owns the five behaviours every report needs: paginated Bot-only lookup of our own last
             // comment, reading its payload back, update-in-place versus post-fresh on a status change,
             // retire-before-create, and the sha/run/time stamp. Both modules carry the reasoning and
-            // the measurements behind each, and both have self-tests the PR Checklist job runs.
+            // the measurements behind each, and both have self-tests the `repo: hygiene` job runs.
             //
             // They moved out of this YAML when the quarantine lane needed the identical behaviours.
             // Copying them is precisely how the original defects reached two steps at once - the
@@ -345,7 +345,7 @@ jobs:
             // which is the second half of the argument.
             //
             // `require` of a repo file works because github-script runs with the workspace checked
-            // out; .github/workflows/pr-checklist.yml loads its gate modules the same way.
+            // out; .github/workflows/repo-hygiene.yml loads its gate modules the same way.
             const report = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/throughput-report-comment.js`)
             await report.post({ github, context, core, body })
 
@@ -556,7 +556,7 @@ jobs:
           restore-keys: |
             setup-java-Linux-x64-maven-
       - name: Self-test the mutation verdict
-        # Ahead of the lane it protects, the same ordering repo-hygiene.yml and pr-checklist.yml use.
+        # Ahead of the lane it protects, the same ordering repo-hygiene.yml uses.
         # Seconds, no maven: it feeds canned PIT logs through the verdict and asserts the exit codes.
         run: bash bin/test-ci-mutation-test.sh
 

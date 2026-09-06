@@ -103,7 +103,7 @@ Not a bulk rewrite - opportunistic, in any file a PR touches anyway:
 
 ## The gate, and checking locally
 
-**Check before you push: `bin/check-issue-refs.sh`.** The `PR Checklist` workflow fails a PR whose
+**Check before you push: `bin/check-issue-refs.sh`.** The `repo: hygiene` gate fails a PR whose
 *added* lines contain an unqualified `#NN` below the threshold, and finding that out from CI costs a
 push cycle for a one-character fix. The script applies the same rule as the gate because it calls
 the same `.github/scripts/issue-ref-gate.js` module rather than a second copy, so the rule cannot
