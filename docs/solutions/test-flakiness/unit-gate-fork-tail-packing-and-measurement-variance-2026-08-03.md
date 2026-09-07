@@ -59,12 +59,22 @@ Gotchas worth knowing:
   class at least makes something appear on disk unranked; a class that shrinks changes nothing you
   can see. `balanced` keeps sorting, by numbers that describe a suite which no longer exists, and the
   packing decays toward the unordered scan it replaced - with no red build, because ordering is not
-  something any assertion can be wrong about. The live case is `RunLengthEncoderTest`, the last line
-  of core's file at roughly three times the next-slowest entry: astubbs#106 collapses it to a
-  fraction of that, after which the tail is set by whatever is next
-  (`ParallelEoSStreamProcessorTest.lessKeysThanThreads` today). **So refresh the stats after any
+  something any assertion can be wrong about. The live case is `RunLengthEncoderTest`, core's
+  heaviest class: astubbs#106 collapses it by an order of magnitude, after which the tail is set by
+  the next class down (`ParallelEoSStreamProcessorTest` today). **So refresh the stats after any
   change that materially speeds up a class near the tail, not only after adding one** - a full
   `bin/ci-unit-test.sh` run rewrites every module's file.
+- **Read that file per CLASS, never per line.** Each line is one test METHOD, and a heavy class is
+  spread over many of them, so the longest *line* is not the longest *class* - and the class is the
+  scheduling unit, because `balanced` sorts classes and forking cannot split one. Sorting the raw
+  lines badly overstates how far the top class stands above the next; it is the mistake to expect,
+  and a review of this very change made it. Aggregate first, and take the numbers from the tree
+  rather than from here:
+
+  ```bash
+  awk -F, '{t[$3]+=$2} END {for (c in t) printf "%9.0f  %s\n", t[c], c}' \
+      parallel-consumer-core/.surefire-pc-unit-times | sort -rn | head -5
+  ```
 - Forking cannot split a single class, so ordering can only pack *around* the slowest class; it can
   never get under it.
 
@@ -115,7 +125,15 @@ redistribute it - which points at the `OffsetSimultaneousEncoder.invoke()` full-
 ArchUnit classpath-scan cost.
 
 **Those two overlap rather than sum**, and it is worth being explicit about which. Packing removes the
-idle fork at the end of the run; astubbs#106 removes the work that made the fork long. Once the work is
-gone, the tail this packing was built to hide is a fraction of its size, so the packing keeps helping
-by proportionally less - the remaining tail is whatever class is next in line. Neither change makes
-the other pointless, but adding their measured gains together would double-count.
+idle fork at the end of the run; astubbs#106 removes the work that made that fork long. Neither change
+makes the other pointless, and adding their measured gains together would double-count.
+
+**How much packing survives astubbs#106 is a question about the SECOND-heaviest class, and per class
+the gap between the top two is small** - `ParallelEoSStreamProcessorTest` sits just under
+`RunLengthEncoderTest`, not at a third of it (aggregate with the `awk` line above rather than trusting
+a ratio written here, which goes stale at the next refresh). So the residual tail after astubbs#106
+is most of the present one, and packing keeps most of its value rather than being largely obsoleted -
+a substantial un-splittable class scheduled last still strands a fork for its own length. Forking
+cannot split a class, so the floor moves down to the next class and no further; that is the same
+result the integration lane measured in
+[`shard-count-buys-nothing-while-one-class-sets-the-floor`](../performance-issues/shard-count-buys-nothing-while-one-class-sets-the-floor-2026-09-07.md).
