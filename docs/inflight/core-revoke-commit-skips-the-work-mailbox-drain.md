@@ -145,14 +145,75 @@ change and its own reviewer"* (astubbs/parallel-consumer#262's residuals commit)
   mocked producer. What the unit arms establish is that the offset map is wrong, which is upstream of
   any observable duplicate - but the size of the practical window under a real rebalance, and how
   often a revoke lands with undrained produced work, is unmeasured.
-- **Whether astubbs/parallel-consumer#408 narrows or widens it.** Declining more often means
-  committing on revoke less often, which would make it rarer - still nobody measured.
+- **astubbs/parallel-consumer#408 neither narrows nor widens the reachable case - checked, 2026-09-07.**
+  That PR declines the commit only when the transaction lock is *contended*; its own amended
+  `RebalanceEoSDeadlockTest` accepts "committed inline if the dwell had already ended" as a resolved
+  outcome. The uncontended inline commit is exactly this defect's path, and astubbs#408 leaves it untouched.
+  What astubbs#408 does establish is the machinery the fix below reuses: a decline branch that is
+  documented safe, and a test contract that already counts "declined" as success.
 - **Whether `onPartitionsLost` has the same gap.** It does not commit at all, so it looks unaffected,
   but it was not the subject of this work and was not tested.
 - **Relationship to astubbs/parallel-consumer#173 (confluentinc#777),** *"Handling Partition
   Revocation in Parallel-Consumer Leading to Duplicate Event Processing"*, which is open and reports
   this symptom from the field. This mechanism is a candidate cause; attribution needs its own
   experiment, and the two must not be conflated on the strength of matching symptoms.
+
+## What the fix should be, and the one question that decides whether it is correct
+
+Recorded at merge prep so the next piece of work starts from a position rather than from the three
+candidates above. **Take the first candidate, unconditionally, in transactional mode only.**
+
+**Why unconditional.** The candidate list above already establishes that a mailbox-emptiness test
+does not close the window wherever it is placed - `processWorkCompleteMailBox` drains into a local
+deque and only then loops calling `handleFutureResult`, so a poll-thread check can land in the gap.
+Declining unconditionally has no gap to land in. It also adds no cross-thread mutation at all, which is
+the property the other two candidates both still have to work around: declining performs no
+transactional action, so nothing new runs on the poll thread and the astubbs#29 hazard is sidestepped
+rather than handled carefully.
+
+**Why transactional mode only.** In consumer-commit mode the revoke commits offsets and nothing
+else; an undrained success is simply not included and its record is redelivered, which is the
+consumer lane's published at-least-once contract doing its job. Nothing was produced inside a
+transaction, so there is no output to duplicate. The defect is specific to EoS.
+
+**Where.** Its own pull request, cut from master - not on astubbs/parallel-consumer#408. That PR's
+subject is the unbounded *wait* (confluentinc#803) and it is stacked two deep on astubbs#410 and astubbs#262;
+changing its subject would delay it and blur its record. The two will collide on
+`tryCommitOffsetsOnRevoke`, and that is resolved at merge rather than dodged by relocating either
+change. This note and astubbs#408's note should each name the other. The precedent for the split is the one
+this note already cites: a main-code correctness fix deserves its own change and its own reviewer.
+
+**THE QUESTION THAT DECIDES CORRECTNESS, AND IT IS NOT YET ESTABLISHED.** When the revoke declines,
+what becomes of the open transaction's *already-produced* output? Two outcomes, opposite in effect:
+
+- **The transaction is aborted.** The output is never visible to a `read_committed` consumer; the
+  next owner reprocesses from the last committed offset, produces again, and commits atomically.
+  Exactly-once is *preserved*, not degraded, and the decline is the correct behaviour rather than a
+  compromise.
+- **The control thread commits it later, without the revoked partition's offset.** Output committed,
+  input offset not - the same defect through a different door.
+
+astubbs#408's body says declining "costs a replay: offsets stay dirty and travel to the new assignee" and is
+silent on the produced output, so the design's own record does not settle it. **It must be settled by
+running it, not by arguing it** - the diagnosis this note records was needed because a plausible
+argument about reachability was backwards until someone measured. The instrument already exists:
+`aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced`, un-quarantined, goes green exactly
+when the defect is gone, and a broker-level check that no duplicate reaches the output topic settles
+which of the two outcomes the decline actually produces.
+
+**The cost to measure before shipping.** How often a revoke lands with undrained produced work. That
+is the entire price of going unconditional - each such revoke discards completed work for redelivery.
+If it is rare the fix is free; if it is common the fix trades a correctness defect for a throughput
+regression at every rebalance, and that should be known before the change lands rather than after.
+State the prediction first.
+
+**What the fix makes possible, and owes.** Under an unconditional decline the revoke path stops
+touching control-thread state - so the confinement declaration the next section says cannot yet be
+written truthfully *becomes* truthful, and the fix owes it in the same change, with its assertion.
+
+**Acceptance.** The quarantined proof leaves the registry and gates; the confinement declaration and
+its runtime assertion land with it; C9 and C4 return to `PROVED` on the strength of the observed
+control, and the README caution comes out.
 
 ## The annotation this seam cannot truthfully carry yet - and what the fix owes
 
