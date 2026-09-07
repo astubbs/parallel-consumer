@@ -44,16 +44,16 @@ class InstanceStallProbeIT {
         long outForProcessing;
         long workResultsReturned;
         Object incarnation = new Object();
-        /** Unknown by default, so every test written before the busy/idle rule still exercises the old one. */
-        int idleWorkers = ProgressProbe.IDLE_WORKERS_UNKNOWN;
+        /** Unknown by default, so every test written before the busy-worker rule still exercises the old one. */
+        int busyWorkers = ProgressProbe.BUSY_WORKERS_UNKNOWN;
 
         FakeInstance(int id) {
             this.id = id;
         }
 
         @Override
-        public int idleWorkers() {
-            return idleWorkers;
+        public int busyWorkers() {
+            return busyWorkers;
         }
 
         @Override
@@ -334,60 +334,63 @@ class InstanceStallProbeIT {
     }
 
     /**
-     * The 2026-09-07 diagnosis in one test: a member holding work with a frozen count and EVERY
-     * worker running user code is full, not stalled. It must not fail the run, and it must not be
-     * invisible either - past the bound it is reported once, as an observation.
+     * The 2026-09-07 diagnosis in one test: a member holding work with a frozen count and a worker
+     * running user code is working, not stalled - ten busy workers or one, since a single long
+     * function freezes the count and PC's backpressure counts records, not workers. It must not fail
+     * the run, and it must not be invisible either - past the bound it is reported once.
      */
     @Test
-    void aFullMemberIsReportedOnceAndNeverAccused() {
-        FakeInstance instance = new FakeInstance(7);
-        instance.queued = 0;
-        instance.outForProcessing = 30;
-        instance.workResultsReturned = 24_967;
-        instance.idleWorkers = 0;
-        ProgressProbe probe = probeWatching(instance);
+    void aWorkingMemberIsReportedOnceAndNeverAccused() {
+        for (int busy : new int[]{10, 1}) {
+            FakeInstance instance = new FakeInstance(7);
+            instance.queued = 0;
+            instance.outForProcessing = 30;
+            instance.workResultsReturned = 24_967;
+            instance.busyWorkers = busy;
+            ProgressProbe probe = probeWatching(instance);
 
-        probe.sampleInstanceProgress(T0);
-        probe.sampleInstanceProgress(pastBound(T0));
-        probe.sampleInstanceProgress(pastBound(T0).plusSeconds(1));
-        probe.sampleInstanceProgress(pastBound(pastBound(T0)));
+            probe.sampleInstanceProgress(T0);
+            probe.sampleInstanceProgress(pastBound(T0));
+            probe.sampleInstanceProgress(pastBound(T0).plusSeconds(1));
+            probe.sampleInstanceProgress(pastBound(pastBound(T0)));
 
-        assertWithMessage("all workers busy in user code is a claim about the user function, not PC")
-                .that(probe.getViolations()).isEmpty();
-        List<String> observations = probe.getObservations();
-        assertWithMessage("saturation past the bound is reported exactly once per stretch")
-                .that(observations).hasSize(1);
-        assertThat(observations.get(0)).contains("INSTANCE_SATURATED: instance 7");
+            assertWithMessage("%s worker(s) in user code is a claim about the user function, not PC", busy)
+                    .that(probe.getViolations()).isEmpty();
+            List<String> observations = probe.getObservations();
+            assertWithMessage("a busy stretch past the bound is reported exactly once (busy=%s)", busy)
+                    .that(observations).hasSize(1);
+            assertThat(observations.get(0)).contains("INSTANCE_BUSY_IN_USER_CODE: instance 7");
+        }
     }
 
     /**
-     * The half that keeps the detector a detector: the clock starts the moment a worker is free while
-     * work is still held and the count still frozen - not before, and not from the start of the
-     * saturated stretch. A member that was full for a minute and then sits on held work with an idle
-     * worker for the whole bound is PC's stall, and it fires.
+     * The half that keeps the detector a detector: the clock starts the moment the last worker leaves
+     * user code while work is still held and the count still frozen - not before, and not from the
+     * start of the busy stretch. A member that worked for a minute and then sits on held work with
+     * nobody in user code for the whole bound has results with nobody: PC's stall, and it fires.
      */
     @Test
-    void theStallClockStartsWhenAWorkerFreesWithWorkStillHeld() {
+    void theStallClockStartsWhenTheLastWorkerLeavesUserCodeWithWorkStillHeld() {
         FakeInstance instance = new FakeInstance(7);
         instance.queued = 12;
         instance.outForProcessing = 10;
         instance.workResultsReturned = 500;
-        instance.idleWorkers = 0;
+        instance.busyWorkers = 3;
         ProgressProbe probe = probeWatching(instance);
 
-        Instant lastFullSample = pastBound(T0);
+        Instant lastBusySample = pastBound(T0);
         probe.sampleInstanceProgress(T0);
-        probe.sampleInstanceProgress(lastFullSample);
-        assertWithMessage("full past the bound: reported, not accused")
+        probe.sampleInstanceProgress(lastBusySample);
+        assertWithMessage("busy past the bound: reported, not accused")
                 .that(probe.getViolations()).isEmpty();
 
-        instance.idleWorkers = 1;
-        probe.sampleInstanceProgress(lastFullSample.plusSeconds(1));
-        assertWithMessage("a worker just freed - the saturated minute must not count toward the stall")
+        instance.busyWorkers = 0;
+        probe.sampleInstanceProgress(lastBusySample.plusSeconds(1));
+        assertWithMessage("the workers just left user code - the busy minute must not count toward the stall")
                 .that(probe.getViolations()).isEmpty();
 
-        probe.sampleInstanceProgress(pastBound(lastFullSample));
-        assertWithMessage("held work, frozen count, a free worker, for the whole bound: that is the stall")
+        probe.sampleInstanceProgress(pastBound(lastBusySample));
+        assertWithMessage("held work, frozen count, nobody in user code, for the whole bound: that is the stall")
                 .that(probe.getViolations()).hasSize(1);
         assertThat(probe.getViolations().get(0)).contains("INSTANCE_STALL/NO_WORK_COMPLETED: instance 7");
     }
@@ -395,11 +398,11 @@ class InstanceStallProbeIT {
     /**
      * The count behind the rule, against a real pool: a worker parked between tasks sits in
      * {@code ThreadPoolExecutor.getTask}, a worker running one does not, and a worker the pool has not
-     * created yet is idle by definition. Names follow PC's default-factory shape and the exact
+     * created yet needs no accounting. Names follow PC's default-factory shape and the exact
      * {@code -PC-<id>} suffix, so the lookalike instance's worker is not counted.
      */
     @Test
-    void idleWorkersAreCountedFromTheWorkersOwnStacks() throws InterruptedException {
+    void busyWorkersAreCountedFromTheWorkersOwnStacks() throws InterruptedException {
         CountDownLatch release = new CountDownLatch(1);
         ThreadPoolExecutor pool = new ThreadPoolExecutor(3, 3, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<>(), pcNamed("pc-pool-77-thread-", "-PC-4242"));
@@ -419,19 +422,19 @@ class InstanceStallProbeIT {
             await().atMost(Duration.ofSeconds(5)).until(() -> pool.getActiveCount() == 2);
             await().atMost(Duration.ofSeconds(5)).until(() -> lookalike.getActiveCount() == 1);
 
-            assertWithMessage("two of three busy, the third never created: one idle")
-                    .that(ProgressProbe.idleWorkersOf(4242, 3)).isEqualTo(1);
-            assertWithMessage("capacity two, both busy: none idle")
-                    .that(ProgressProbe.idleWorkersOf(4242, 2)).isEqualTo(0);
-            assertWithMessage("-PC-4242 is a substring of -PC-42421; the lookalike's busy worker must not count")
-                    .that(ProgressProbe.idleWorkersOf(42421, 1)).isEqualTo(0);
+            assertWithMessage("two tasks running, the third worker never created: two busy")
+                    .that(ProgressProbe.busyWorkersOf(4242)).isEqualTo(2);
+            assertWithMessage("-PC-4242 is a substring of -PC-42421; the lookalike's busy worker is its own")
+                    .that(ProgressProbe.busyWorkersOf(42421)).isEqualTo(1);
+            assertWithMessage("an instance with no pool threads at all counts nothing busy")
+                    .that(ProgressProbe.busyWorkersOf(424_242)).isEqualTo(0);
 
             release.countDown();
             // awaited, not asserted: a worker's active flag clears a few instructions before it is
             // back inside getTask, and the count reads the frame, not the flag
-            await().alias("released: the two parked-between-tasks workers plus the uncreated one")
+            await().alias("released: both workers parked between tasks, none busy")
                     .atMost(Duration.ofSeconds(5))
-                    .until(() -> ProgressProbe.idleWorkersOf(4242, 3) == 3);
+                    .until(() -> ProgressProbe.busyWorkersOf(4242) == 0);
         } finally {
             release.countDown();
             pool.shutdownNow();

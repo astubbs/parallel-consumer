@@ -193,13 +193,13 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * that churn every heavy dwell is revoked before it ends and redelivered while the old copy sleeps
      * on, so a member's workers fill with dwells whose results will be dropped, and its count freezes
      * for as long as the churn keeps them stale - 53s on the replayed seed, longer than the bound on
-     * the CI sightings. That is a full member, not a stalled one, and the detector now asks
-     * {@link InstanceProgressView#idleWorkers()} before it counts: a member with every worker running
+     * the CI sightings. That is a working member, not a stalled one, and the detector now asks
+     * {@link InstanceProgressView#busyWorkers()} before it counts: a member with any worker running
      * user code re-arms the clock on every sample and is reported past this bound as a non-gating
-     * {@code INSTANCE_SATURATED} observation; the violation is reserved for a member holding work with
-     * a worker FREE, which is the only shape that accuses PC's control loop. The record, the dumps and
-     * the control arm are in {@code docs/inflight/test-857-churn-storm-async-stalls.md},
-     * "DIAGNOSED, 2026-09-07".
+     * {@code INSTANCE_BUSY_IN_USER_CODE} observation; the violation is reserved for a member holding
+     * work with NO worker in user code, which is the only shape that accuses PC's control loop - its
+     * results are then with nobody. The record, the dumps and the control arm are in
+     * {@code docs/inflight/test-857-churn-storm-async-stalls.md}, "DIAGNOSED, 2026-09-07".
      */
     public static final Duration INSTANCE_STALL_BOUND = Duration.ofSeconds(150);
     private static final Duration SAMPLE_INTERVAL = Duration.ofSeconds(1);
@@ -271,20 +271,26 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         }
 
         /**
-         * Workers NOT running user code right now - the difference between a member that is stalled
-         * and one that is merely full. {@link #IDLE_WORKERS_UNKNOWN} when the view cannot say, which
-         * the detector treats as "assume one is free": the pre-2026-09-07 rule, kept for scripted views.
+         * Workers running user code right now - the difference between a member that is stalled and
+         * one that is working. {@link #BUSY_WORKERS_UNKNOWN} when the view cannot say, which the
+         * detector treats as "assume none": the pre-2026-09-07 rule, kept for scripted views.
          * <p>
          * <b>Why the detector needs it.</b> The instance-stall line on {@code ChaosChurnStormIT} was
          * classified as a wedge and turned out to be all ten workers asleep in the scenario's heavy
-         * dwell, on records revoked out from under them - a saturated member, with a control loop that
+         * dwell, on records revoked out from under them - a working member, with a control loop that
          * had nothing to finish ({@code docs/inflight/test-857-churn-storm-async-stalls.md},
          * "DIAGNOSED, 2026-09-07"). Held work plus a frozen completion count is the detector's whole
-         * signal, and a full member produces it for as long as its user functions run. Only a member
-         * with a worker FREE and work still held is making a claim about PC.
+         * signal, and a member produces it for as long as ANY of its user functions run: one long
+         * function freezes the count, and PC's own backpressure counts records rather than workers,
+         * so a free worker beside a busy one proves nothing. Only a member holding work with NO
+         * worker in user code is making a claim about PC - its results are with nobody.
+         * <p>
+         * A busy count rather than an idle one because idle needs a capacity to subtract from, and a
+         * pool that has not created its last thread has a free slot no thread shows - the first cut
+         * of this rule read such a member as "one idle" and would have accused it.
          */
-        default int idleWorkers() {
-            return IDLE_WORKERS_UNKNOWN;
+        default int busyWorkers() {
+            return BUSY_WORKERS_UNKNOWN;
         }
 
         /** Monotone count of work results returned - see {@code ManagedPCInstance#workResultsReturned}. */
@@ -337,9 +343,9 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 }
 
                 @Override
-                public int idleWorkers() {
-                    return pc.getParallelConsumer() == null ? IDLE_WORKERS_UNKNOWN
-                            : idleWorkersOf(pc.getInstanceId(), pc.getConfig().getMaxConcurrency());
+                public int busyWorkers() {
+                    return pc.getParallelConsumer() == null ? BUSY_WORKERS_UNKNOWN
+                            : busyWorkersOf(pc.getInstanceId());
                 }
 
                 @Override
@@ -374,10 +380,10 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     private final Map<Integer, InstanceProgressMark> instanceProgressMarks = new ConcurrentHashMap<>();
     /** Instances already given an early stall dump in their CURRENT frozen stretch - one per stretch, not per sample. */
     private final java.util.Set<Integer> stallDumpedThisStretch = ConcurrentHashMap.newKeySet();
-    /** When each instance's CURRENT full-workers stretch began; absent = not saturated. */
-    private final Map<Integer, Instant> saturatedSince = new ConcurrentHashMap<>();
-    /** Instances whose current saturated stretch has already been reported - once per stretch. */
-    private final java.util.Set<Integer> saturationObservedThisStretch = ConcurrentHashMap.newKeySet();
+    /** When each instance's CURRENT workers-in-user-code stretch began; absent = no worker busy. */
+    private final Map<Integer, Instant> busySince = new ConcurrentHashMap<>();
+    /** Instances whose current busy stretch has already been reported - once per stretch. */
+    private final java.util.Set<Integer> busyObservedThisStretch = ConcurrentHashMap.newKeySet();
     @Getter
     private volatile long peakInstanceStallMs = 0;
 
@@ -699,30 +705,34 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
             if (advanced || !holdsWork) {
                 instanceProgressMarks.put(id, new InstanceProgressMark(returned, incarnation, now));
                 stallDumpedThisStretch.remove(id);
-                saturatedSince.remove(id);
+                busySince.remove(id);
+                busyObservedThisStretch.remove(id);
                 continue;
             }
             // Held work and a frozen count: the signal. Now ask what the workers are doing, because a
-            // member whose every worker is running user code produces this signal for as long as those
-            // functions run, and it is not a claim about PC (see InstanceProgressView#idleWorkers).
-            if (view.idleWorkers() == 0) {
-                // Saturated: the stall clock does not run. It is re-armed to NOW on every sample, so it
-                // starts the moment a worker frees while the count is still frozen - which is the case
-                // that IS PC's. The saturation itself is reported once, non-gating, past the same bound,
-                // so a fleet that spends its whole tail full is visible without failing the run.
+            // member with any worker running user code produces this signal for as long as that
+            // function runs, and it is not a claim about PC (see InstanceProgressView#busyWorkers).
+            int busy = view.busyWorkers();
+            if (busy > 0) {
+                // Working: the stall clock does not run. It is re-armed to NOW on every sample, so it
+                // starts the moment the last worker leaves user code while the count is still frozen -
+                // which is the case that IS PC's, because then the results are with nobody. The busy
+                // stretch itself is reported once, non-gating, past the same bound, so a fleet that
+                // spends its whole tail in user code is visible without failing the run.
                 instanceProgressMarks.put(id, new InstanceProgressMark(returned, incarnation, now));
-                Instant since = saturatedSince.computeIfAbsent(id, ignored -> now);
-                long saturatedMs = Duration.between(since, now).toMillis();
-                if (saturatedMs > INSTANCE_STALL_BOUND.toMillis() && saturationObservedThisStretch.add(id)) {
-                    observe("INSTANCE_SATURATED: instance " + id + " has held work (queued=" + queued
-                            + ", outForProcessing=" + outForProcessing + ") for " + (saturatedMs / 1000)
-                            + "s with every worker running user code and no work result returned - a full "
-                            + "member, not a stalled control loop; the stall clock starts when a worker frees");
+                Instant since = busySince.computeIfAbsent(id, ignored -> now);
+                long busyMs = Duration.between(since, now).toMillis();
+                if (busyMs > INSTANCE_STALL_BOUND.toMillis() && busyObservedThisStretch.add(id)) {
+                    observe("INSTANCE_BUSY_IN_USER_CODE: instance " + id + " has held work (queued=" + queued
+                            + ", outForProcessing=" + outForProcessing + ") for " + (busyMs / 1000)
+                            + "s with " + busy + " worker(s) running user code and no work result returned - "
+                            + "a working member, not a stalled control loop; the stall clock starts when the "
+                            + "last worker leaves user code");
                 }
                 continue;
             }
-            saturatedSince.remove(id);
-            saturationObservedThisStretch.remove(id);
+            busySince.remove(id);
+            busyObservedThisStretch.remove(id);
             long stalledMs = Duration.between(mark.getSince(), now).toMillis();
             if (stalledMs > peakInstanceStallMs) peakInstanceStallMs = stalledMs;
             if (stalledMs > INSTANCE_STALL_DUMP_AFTER.toMillis() && stallDumpedThisStretch.add(id)) {
@@ -755,15 +765,15 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     /** Enough frames to see past the executor plumbing to whatever a worker is actually parked in. */
     private static final int STALL_DUMP_FRAMES = 40;
 
-    /** {@link InstanceProgressView#idleWorkers()} when the view cannot count them. */
-    static final int IDLE_WORKERS_UNKNOWN = -1;
+    /** {@link InstanceProgressView#busyWorkers()} when the view cannot count them. */
+    static final int BUSY_WORKERS_UNKNOWN = -1;
 
     /**
-     * How many of an instance's {@code capacity} workers are NOT running user code, read from the
-     * worker threads' own stacks - the same reading {@link #instanceThreadDump} hands a human, made
-     * mechanical. A worker between tasks is parked inside {@code ThreadPoolExecutor.getTask}; one
-     * running a task has no such frame. Threads the pool has not created yet are idle by definition,
-     * which is why the answer is {@code capacity - busy} rather than a count of parked threads.
+     * How many of an instance's workers are running user code, read from the worker threads' own
+     * stacks - the same reading {@link #instanceThreadDump} hands a human, made mechanical. A worker
+     * between tasks is parked inside {@code ThreadPoolExecutor.getTask}; one running a task has no
+     * such frame. A thread the pool has not created yet is not counted and needs no capacity to be
+     * accounted for, which is the point of counting busy rather than idle.
      * <p>
      * Read from the stacks rather than from the pool because the pool is the engine's, held behind a
      * protected getter, and this suite does not add main-code accessors for a probe (the same rule
@@ -773,10 +783,10 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * <p>
      * Membership is the {@code pc-pool-} prefix and the exact {@code -PC-<id>} suffix, the names
      * {@code AbstractParallelEoSStreamProcessor#setupWorkerPool} gives the default factory's threads;
-     * a scenario that supplies its own {@code managedThreadFactory} would count nothing busy and read
-     * as all-idle, which is the old rule, not a silent exemption.
+     * a scenario that supplies its own {@code managedThreadFactory} counts nothing busy and gets the
+     * old rule, which accuses - a stricter reading than the truth, never a silent exemption.
      */
-    static int idleWorkersOf(int instanceId, int capacity) {
+    static int busyWorkersOf(int instanceId) {
         String suffix = "-PC-" + instanceId;
         int busy = 0;
         for (var entry : Thread.getAllStackTraces().entrySet()) {
@@ -792,7 +802,7 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
             }
             if (!betweenTasks) busy++;
         }
-        return Math.max(capacity - busy, 0);
+        return busy;
     }
 
     /**
