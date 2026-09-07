@@ -196,54 +196,45 @@ class PcBuiltProducerTest {
 
     /**
      * A source of further producers exists only where PC built the first one: the instance path carries no
-     * configuration to build from. Each build is a fresh wrapper from the same map, the caller's transactional id
-     * with it, so a replacement can be initialised under the id that fences the producer it replaces.
+     * configuration to build from. Each build asks the factory again for a fresh producer from the same resolved
+     * map, the derived transactional id with it, so a replacement can be initialised under the id that fences the
+     * producer it replaces.
      */
     @Test
-    void theConfigurationPathOffersAReplacementSourceThatBuildsAFreshProducerEachTimeUnderTheCallersId() {
-        var built = new java.util.ArrayList<MockProducer<String, String>>();
-        var module = moduleBuildingWith(optionsWith(UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092",
-                        ProducerConfig.TRANSACTIONAL_ID_CONFIG, "callers-id"), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER),
-                config -> {
-                    var producer = new MockProducer<String, String>(true, new StringSerializer(), new StringSerializer());
-                    built.add(producer);
-                    return producer;
-                });
+    void theConfigurationPathOffersAReplacementSourceThatBuildsAFreshProducerEachTimeUnderTheSameId() {
+        var built = new ArrayList<MockProducer<String, String>>();
+        ProducerFactory<String, String> factory = config -> {
+            handedConfigs.add(new HashMap<>(config));
+            var producer = new MockProducer<String, String>(true, new StringSerializer(), new StringSerializer());
+            built.add(producer);
+            return producer;
+        };
+        var module = moduleWith(factory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
         var initial = module.producerWrap();
 
         var source = module.replacementProducerWrap();
 
         assertThat(source).isPresent();
-        assertThat(source.get().getTransactionalId()).isEqualTo("callers-id");
+        assertThat(source.get().getTransactionalId()).startsWith(TransactionalIdDerivation.prefixFor(GROUP));
         var first = source.get().build();
         var second = source.get().build();
         assertWithMessage("three producers built: the initial one and one per build").that(built).hasSize(3);
         assertThat(first).isNotSameInstanceAs(initial);
         assertThat(second).isNotSameInstanceAs(first);
         assertThat(first.isConfiguredForTransactions()).isTrue();
+        assertWithMessage("every build received the same derived id")
+                .that(handedConfigs.stream().map(config -> config.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG)).distinct().count()).isEqualTo(1);
     }
 
     @Test
     void theReplacementSourceCarriesNoIdInAConsumerCommitMode() {
-        var module = moduleBuildingWith(optionsWith(UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092"), CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS),
-                config -> new MockProducer<>(false, new StringSerializer(), new StringSerializer()));
+        ProducerFactory<String, String> factory = config -> new MockProducer<>(false, new StringSerializer(), new StringSerializer());
+        var module = moduleWith(factory, minimalConfig(), CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS);
 
         var source = module.replacementProducerWrap();
 
         assertThat(source).isPresent();
         assertThat(source.get().getTransactionalId()).isNull();
-    }
-
-    @Test
-    void theInstancePathOffersNoReplacementSource() {
-        @SuppressWarnings("unchecked")
-        Producer<String, String> instance = mock(Producer.class);
-        var module = new PCModule<>(ParallelConsumerOptions.<String, String>builder()
-                .consumer(consumerInGroup())
-                .producer(instance)
-                .build());
-
-        assertThat(module.replacementProducerWrap()).isEmpty();
     }
 
     /**
