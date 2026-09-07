@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -24,10 +25,17 @@ import static com.google.common.truth.Truth.assertWithMessage;
 /**
  * Self-test of the quarantine lane's wiring - the {@link Quarantined} mechanism only works while a set
  * of otherwise-unrelated string sites stay in agreement (annotation meta-tag, pom group exclusion, the
- * gating CI scripts, the lane runner, the workflow job, the release guard). Any one of them drifting in
+ * gating CI scripts, the lane runner, the lane workflow, the release guard). Any one of them drifting in
  * a big refactor breaks the lane SILENTLY - worst case, quarantined tests vanish from both lanes (no
  * red anywhere, coverage just gone). This test pins them all together so drift fails the gating unit
  * suite instead.
+ * <p>
+ * WHERE THE PER-PR AUDIT RUNS: not in a job of its own, and not in maven.yml. It reaches every pull
+ * request through {@code repo: hygiene}'s discovering {@code bin/check-all.sh} sweep, and again as
+ * explicit fail-fast steps in quarantine-lane.yml. A grep for the script names in a workflow therefore
+ * proves nothing about the first of those - see
+ * {@link #theHygieneSweepRunsTheAuditOnEveryPrAndTheLaneWorkflowRunsTheTests()} for what is asserted
+ * instead, and why.
  */
 class QuarantinedAnnotationContractTest {
 
@@ -158,11 +166,99 @@ class QuarantinedAnnotationContractTest {
         String flag = "-Dexcluded.groups=";
         int start = body.indexOf(flag);
         assertWithMessage(script + " must pass an explicit -Dexcluded.groups").that(start).isAtLeast(0);
-        return body.substring(start + flag.length()).split("\\s")[0];
+        String value = body.substring(start + flag.length()).split("\\s")[0];
+        // The list may be hardcoded ONCE as a shell variable and passed by reference - a wrapper that
+        // hands the same list to failsafe and to a coverage gate must not carry two copies of it, and
+        // "hardcoded" means "written in this script rather than inherited from the pom", which a
+        // `readonly EXCLUDED_GROUPS=...` line satisfies exactly as an inline literal does. Resolve one
+        // level of `"${NAME}"` / `$NAME` to that assignment; anything else is returned verbatim, so a
+        // wrapper that really did stop hardcoding the list still fails the membership checks.
+        String reference = value.replaceAll("^\"|\"$", "");
+        if (reference.startsWith("$")) {
+            String name = reference.replaceAll("^\\$\\{?|\\}$", "");
+            // The captured value is restricted to list characters, so an assignment of the shape
+            // NAME=${OVERRIDE:-a,b,c} - which would make the gating list env-overridable while its
+            // comma-split still contains every required tag - does not match at all and fails below.
+            java.util.regex.Matcher assignment = java.util.regex.Pattern
+                    .compile("(?m)^\\s*(?:readonly\\s+)?" + java.util.regex.Pattern.quote(name) + "=\"?([A-Za-z0-9_,]+)\"?\\s*$")
+                    .matcher(body);
+            assertWithMessage(script + " passes -Dexcluded.groups=" + value + " but has no plain assignment of " + name
+                    + " - the list must be hardcoded in the script as a literal, not inherited or overridable")
+                    .that(assignment.find()).isTrue();
+            String resolved = assignment.group(1);
+            assertWithMessage(name + " must resolve to a literal list, not another reference").that(resolved).doesNotContain("$");
+            return resolved;
+        }
+        return value;
     }
 
     private static List<String> groups(String commaSeparated) {
         return Arrays.asList(commaSeparated.split(","));
+    }
+
+    /**
+     * The trigger names declared in a workflow's top-level {@code on:} block - and nothing else in the file.
+     * <p>
+     * A plain {@code contains("pull_request:")} over the whole file CANNOT assert a trigger, and
+     * repo-hygiene.yml is the live proof: it carries that exact literal inside a comment describing the
+     * roadmap gate's carrier line ({@code pull_request: astubbs#NNN}), so deleting the real trigger would
+     * leave the grep green. An assertion a comment can satisfy is prose-matching, not a contract.
+     * <p>
+     * So this walks the block instead: it opens at a column-0 {@code on:} (or {@code "on":} - YAML 1.1
+     * reads a bare {@code on} as a boolean, so some editors quote it), closes at the next column-0 key,
+     * skips comment and blank lines, and returns the keys at the block's own indent - which is why
+     * {@code types:} under {@code pull_request:} is not mistaken for a trigger. The inline forms
+     * ({@code on: push}, {@code on: [push, pull_request]}) are handled too, so rewriting the block in
+     * flow style does not silently empty the result.
+     */
+    private static List<String> workflowTriggers(String yaml) {
+        List<String> triggers = new ArrayList<>();
+        boolean inOnBlock = false;
+        int blockIndent = -1;
+        for (String raw : yaml.split("\n", -1)) {
+            String line = raw.replaceAll("\\s+$", "");
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                continue;
+            }
+            java.util.regex.Matcher onKey = java.util.regex.Pattern
+                    .compile("^[\"']?on[\"']?:\\s*(.*)$").matcher(line);
+            if (onKey.matches()) {
+                String inline = onKey.group(1).replaceAll("\\s+#.*$", "").trim();
+                if (inline.isEmpty()) {
+                    inOnBlock = true;
+                    blockIndent = -1;
+                } else {
+                    for (String t : inline.replaceAll("^\\[", "").replaceAll("]$", "").split(",")) {
+                        if (!t.trim().isEmpty()) {
+                            triggers.add(t.trim());
+                        }
+                    }
+                    inOnBlock = false;
+                }
+                continue;
+            }
+            if (!line.startsWith(" ")) {   // any other column-0 key closes the block
+                inOnBlock = false;
+                continue;
+            }
+            if (!inOnBlock) {
+                continue;
+            }
+            java.util.regex.Matcher key = java.util.regex.Pattern
+                    .compile("^(\\s+)([A-Za-z_][A-Za-z0-9_-]*):.*$").matcher(line);
+            if (!key.matches()) {
+                continue;
+            }
+            int indent = key.group(1).length();
+            if (blockIndent == -1) {
+                blockIndent = indent;
+            }
+            if (indent == blockIndent) {
+                triggers.add(key.group(2));
+            }
+        }
+        return triggers;
     }
 
     @Test
@@ -173,35 +269,111 @@ class QuarantinedAnnotationContractTest {
                 .that(lane).contains("-Dexcluded.groups=");
     }
 
+    /**
+     * The two registry gates, named as {@code bin/check-all.sh} names them - basenames, because that is
+     * the spelling its exception lists use.
+     */
+    private static final List<String> QUARANTINE_AUDIT_GATES =
+            Arrays.asList("check-quarantine-registry.sh", "check-quarantine-owners.sh");
+
+    /**
+     * The per-PR audit has TWO homes, and neither of them is maven.yml any more.
+     * <p>
+     * It used to be maven.yml's {@code quarantine: audit} job, which named both scripts literally, so this
+     * test could grep the workflow for them. That job was folded away because the same scripts were already
+     * running in {@code repo: hygiene}'s {@code bin/check-all.sh --with-tests --strict} sweep, and the sweep
+     * DISCOVERS gates by globbing {@code bin/check-*.sh} rather than naming them - deliberately, so that a
+     * gate added to {@code bin/} cannot run nowhere. Nothing literally names the scripts on the per-PR path
+     * now, so grepping a workflow for them can only fail.
+     * <p>
+     * What replaces the grep is the chain the glob actually depends on, asserted link by link: the sweep runs
+     * on {@code pull_request} with both flags; each gate EXISTS at a path the glob matches; and neither is
+     * named in {@code check-all.sh}'s two exception lists, {@code PR_SCOPED} and {@code NEEDS_ARGS}, which are
+     * the only ways a globbed gate is skipped. That last link is the one doing the work - without it "the
+     * glob covers them" is an assumption rather than a measurement.
+     * <p>
+     * The second home is quarantine-lane.yml, which still names both scripts explicitly as fail-fast steps
+     * ahead of the lane run, and is asserted separately below. The lane RUN itself must stay out of maven.yml.
+     */
     @Test
-    void perPrWorkflowRunsTheAuditAndTheLaneWorkflowRunsTheTests() throws IOException {
-        String maven = read(REPO_ROOT.resolve(".github/workflows/maven.yml"));
-        assertWithMessage("per-PR audit must enforce the registry")
-                .that(maven).contains("bin/check-quarantine-registry.sh");
-        assertThat(maven).contains("bin/check-quarantine-owners.sh");
-        assertWithMessage("the lane RUN must NOT be in maven.yml - it lives in its own workflow " +
-                "with its own trigger set")
-                .that(maven).doesNotContain("bin/quarantined-test.sh");
+    void theHygieneSweepRunsTheAuditOnEveryPrAndTheLaneWorkflowRunsTheTests() throws IOException {
+        // (a) The per-PR audit, reached through the discovering sweep rather than by name.
+        String hygiene = read(REPO_ROOT.resolve(".github/workflows/repo-hygiene.yml"));
+        assertWithMessage("the per-PR audit reaches the quarantine gates only through check-all.sh's sweep, " +
+                "and only --with-tests --strict makes that sweep run the self-tests and refuse a CANNOT")
+                .that(hygiene).contains("bin/check-all.sh --with-tests --strict");
+        assertWithMessage("the sweep must run on pull_request or the audit is not per-PR at all. Read from "
+                + "the parsed `on:` block, not the file text: this workflow also carries `pull_request:` in a "
+                + "comment, so a grep would stay green with the trigger deleted. Declared triggers: "
+                + workflowTriggers(hygiene))
+                .that(workflowTriggers(hygiene)).contains("pull_request");
+
+        String checkAll = read(REPO_ROOT.resolve("bin/check-all.sh"));
+        assertWithMessage("check-all.sh must discover gates by glob - a hardcoded list is what the fold " +
+                "away from per-gate jobs relies on NOT existing")
+                .that(checkAll).contains("bin/check-*.sh");
+        String prScoped = exceptionList(checkAll, "PR_SCOPED");
+        String needsArgs = exceptionList(checkAll, "NEEDS_ARGS");
+        for (String gate : QUARANTINE_AUDIT_GATES) {
+            assertWithMessage("bin/" + gate + " must exist where check-all.sh's bin/check-*.sh glob finds it")
+                    .that(Files.exists(REPO_ROOT.resolve("bin/" + gate))).isTrue();
+            assertWithMessage(gate + " is in check-all.sh's PR_SCOPED list, so the per-PR sweep SKIPS it and " +
+                    "no workflow runs the quarantine audit on a pull request. Found: " + prScoped)
+                    .that(groups(prScoped.replace(' ', ','))).doesNotContain(gate);
+            assertWithMessage(gate + " is in check-all.sh's NEEDS_ARGS list, so the sweep skips it and the " +
+                    "per-PR quarantine audit does not run. Found: " + needsArgs)
+                    .that(groups(needsArgs.replace(' ', ','))).doesNotContain(gate);
+        }
+
+        // (b) The lane workflow, which does still name both scripts - see quarantineLaneRunnerIncludesOnly...
         String lane = read(REPO_ROOT.resolve(".github/workflows/quarantine-lane.yml"));
         assertThat(lane).contains("bin/quarantined-test.sh");
         assertWithMessage("the lane fail-fasts on rule violations before spending a test run")
                 .that(lane).contains("bin/check-quarantine-registry.sh");
         assertThat(lane).contains("bin/check-quarantine-owners.sh");
+
+        String maven = read(REPO_ROOT.resolve(".github/workflows/maven.yml"));
+        assertWithMessage("the lane RUN must NOT be in maven.yml - it lives in its own workflow " +
+                "with its own trigger set")
+                .that(maven).doesNotContain("bin/quarantined-test.sh");
+    }
+
+    /**
+     * The space-separated value of one of {@code bin/check-all.sh}'s exception lists. A list that stopped
+     * being a plain double-quoted assignment fails here rather than silently reading as empty, which would
+     * turn every membership check above into a pass.
+     */
+    private static String exceptionList(String checkAllBody, String name) {
+        java.util.regex.Matcher assignment = java.util.regex.Pattern
+                .compile("(?m)^" + java.util.regex.Pattern.quote(name) + "=\"([^\"]*)\"\\s*$")
+                .matcher(checkAllBody);
+        assertWithMessage("bin/check-all.sh must assign " + name + " as a plain double-quoted list - this test "
+                + "reads it to prove the quarantine gates are not excluded from the glob")
+                .that(assignment.find()).isTrue();
+        return assignment.group(1);
     }
 
     /**
      * The lane workflow must DECLARE the triggers it exists for - a real bug this test guards: the
      * dispatch trigger was once missing while docs claimed "run it manually", making that impossible.
+     * <p>
+     * Read through {@link #workflowTriggers(String)} rather than by substring for the reason that method
+     * records: this file discusses all three trigger names in its own prose, so a text match would be
+     * satisfiable by a comment. It happens to have no comment carrying the literal WITH its colon today,
+     * which makes the substring form correct by luck rather than by construction - the same shape that
+     * did go wrong one method up.
      */
     @Test
     void laneWorkflowDeclaresItsTriggers() throws IOException {
         String lane = read(REPO_ROOT.resolve(".github/workflows/quarantine-lane.yml"));
-        assertWithMessage("lane runs on every PR push (pre-merge attribution)")
-                .that(lane).contains("pull_request:");
-        assertWithMessage("lane must run after every merge to master (canonical master-state record)")
-                .that(lane).contains("push:");
-        assertWithMessage("manual lane runs need a declared workflow_dispatch trigger")
-                .that(lane).contains("workflow_dispatch:");
+        List<String> triggers = workflowTriggers(lane);
+        assertWithMessage("lane runs on every PR push (pre-merge attribution). Declared: " + triggers)
+                .that(triggers).contains("pull_request");
+        assertWithMessage("lane must run after every merge to master (canonical master-state record). "
+                + "Declared: " + triggers)
+                .that(triggers).contains("push");
+        assertWithMessage("manual lane runs need a declared workflow_dispatch trigger. Declared: " + triggers)
+                .that(triggers).contains("workflow_dispatch");
     }
 
     @Test
