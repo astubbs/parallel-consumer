@@ -216,6 +216,16 @@ Evidence is in `docs/data/testing-evidence.yaml`; the checks to run are in
 `docs/data/module-maturity.yaml` under `release_validation`. If a check fails, amend the claim rather
 than waive the item.
 
+**The claim is amended, 2026-09-07: one known critical defect is outside 0.6.0.0's scope, and the
+release notes must name it.** The unbounded transactional revoke wait - astubbs#44, upstream's only
+verified-bug label, `PERIODIC_TRANSACTIONAL_PRODUCER` only, detail in
+[`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md) - has its fix in
+astubbs#408, which depends on producer-fencing recovery (astubbs#410) by design, and the owner has
+placed that work after v6 for now. So the published sentence is not "every known critical defect",
+it is "every known critical defect except this one, which is named, reproduced, and fixed on a
+branch". The standard is unchanged; the claim is what moved, which is the order this paragraph asks
+for. If astubbs#410 lands before the tag, delete this paragraph.
+
 **Deliberately not in this release:** virtual threads, micro-batching and the dead letter queue. These
 are new capabilities rather than known-defect exceptions, so deferring them does not weaken the gate.
 They carry horizons in `docs/data/roadmap.yaml`.

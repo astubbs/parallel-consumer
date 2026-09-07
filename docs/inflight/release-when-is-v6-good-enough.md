@@ -51,17 +51,30 @@ A date makes the failure mode concrete. Until now the risk was never shipping, w
 individually justified; with a date the risk becomes shipping the date and quietly dropping the
 announcement or the roadmap, which are the parts that make the release cost less than it looks.
 
+## Decided 2026-09-07, by the owner
+
+- **The bar is the stability release, and nothing else.** "Every known critical defect resolved, with
+  a guard" is the whole bar. Anything not fixing an open bug or clearing a release gate is out of v6,
+  however finished it looks. That one sentence settles the feature PRs without arguing each: the
+  commit-failure seam, virtual threads, residence time, the proxy stack, the perf campaign.
+- **Streams and Connect do not ship in v6.** Both move to the `next-0x` horizon in
+  `docs/data/roadmap.yaml`; the announcement carries them as what is coming, which is the resolution
+  above being used for exactly the pressure it was written for.
+- **The transactional revoke wait (astubbs#44) is undecided, and for now is not in v6.** Its fix
+  (astubbs#408) is stacked on producer-fencing recovery (astubbs#410) by design, not by chronology:
+  declining the lock is only safe once a fenced producer is recoverable, and 408's later commits
+  call 410's recovery machinery. So the choice is the whole fencing work in v6 or the claim naming
+  the exception, and the owner chose the exception for now. `release-0.6.0.0.md`'s release condition
+  carries the amended claim.
+- **The 0.6.0.0 issue label now means "closes when the release ships".** Swept the same day; the
+  features and the decision-only mirrors lost it.
+
 ## Still open
 
-- **What is the actual bar for v6?** "Stability release" is stated in `release-0.6.0.0.md` under
-  *"This release is a stability release, and that is the point"*. Is that the whole bar, or does
-  something else have to be true?
-- **Which currently-open items are genuinely v6, and which are v6 only because they are finished?**
-  A thing being ready is not a reason to ship it in this release.
 - **Does the roadmap announcement have to be simultaneous with the release**, or can it precede it
   and take some of the pressure off sooner?
 
-Nothing here is blocked on engineering. It is blocked on the call.
+What is left is blocked on the call, not on engineering.
 
 **High priority, and it needs a conversation rather than a PR.** Flagged as needing discussion by
 the owner on 2026-08-19, explicitly NOT as work to fold into whatever PR is open at the time - a

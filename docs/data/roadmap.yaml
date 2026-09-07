@@ -86,10 +86,13 @@ entries:
       one term, on both rebalance assignors, with the pre-fix arm failing every repetition and the
       fixed arm none. The family is not closed by it - the transactional revoke wait (astubbs#44,
       which carries upstream's verified-bug label) is a separate defect in a commit mode that fix
-      cannot reach, a third mechanism (a closing instance polling too little to leave its group
-      cleanly) has an open fix attempt in astubbs#444, and the family ledger
-      (`docs/inflight/bug-857-family.md`) still carries unattributed stall sightings reproducing on
-      trees that already carry astubbs#29's fix.
+      cannot reach - and on 2026-09-07 the owner placed it outside 0.6.0.0 for now, so the release
+      claim names it as the known exception rather than the release waiting on it. The suspected
+      third mechanism (a closing instance polling too little to leave its group cleanly) was measured
+      by astubbs#444 as the consumer-group protocol under the test's churn rate, not a PC defect. The
+      family ledger (`docs/inflight/bug-857-family.md`) still carries stall sightings on trees that
+      already carry astubbs#29's fix; the ones since classified are calibration and worker
+      saturation, not wedges.
     why_now: The release claim rests on it, and the evidence has to be inspectable rather than asserted.
     done_when: >-
       No known critical defect open in release scope, and each resolution has a named guard that
@@ -100,7 +103,7 @@ entries:
   - id: streams-parallelism-preview
     title: Give a Kafka Streams topology the per-key parallelism of Parallel Consumer
     serves: [flexibility, performance]
-    horizon: "0.6.0.0"
+    horizon: next-0x
     blocks_1_0: false
     stage: limited-poc
     stage_delivery: draft
@@ -117,7 +120,7 @@ entries:
   - id: connect-integration-preview
     title: Run a Kafka Connect sink with Parallel Consumer underneath
     serves: [flexibility]
-    horizon: "0.6.0.0"
+    horizon: next-0x
     blocks_1_0: false
     stage: limited-poc
     stage_delivery: draft
