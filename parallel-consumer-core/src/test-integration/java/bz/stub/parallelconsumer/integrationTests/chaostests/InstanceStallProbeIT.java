@@ -10,8 +10,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.function.IntFunction;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -193,6 +195,54 @@ class InstanceStallProbeIT {
         // a further full window with still nothing returned is a further violation
         probe.sampleInstanceProgress(pastBound(firstFire));
         assertThat(probe.getViolations()).hasSize(2);
+    }
+
+    /** Every instance whose threads the sampler asked for, in call order - the dump COUNT is the
+     * property under test, so a ledger rather than a flag. */
+    private static final class DumpLedger implements IntFunction<String> {
+        final List<Integer> dumped = Collections.synchronizedList(new ArrayList<>());
+
+        @Override
+        public String apply(int instanceId) {
+            dumped.add(instanceId);
+            return "  \"pc-control-PC-" + instanceId + "\" WAITING\n";
+        }
+    }
+
+    /**
+     * A firing takes ONE thread dump, and the default configuration is the case that needs saying so:
+     * {@link ProgressProbe#INSTANCE_STALL_DUMP_AFTER} defaults to
+     * {@link ProgressProbe#INSTANCE_STALL_BOUND} itself, so the first sample past the bound satisfies
+     * the early-dump condition and the violation condition on the same {@code stalledMs}. Taking the
+     * dump in both branches paid a second {@code ThreadMXBean#getThreadInfo(ids, true, true)} - the
+     * expensive lock-info form - to print the same stacks twice, in the sample where the run is
+     * already failing, and the unconfigured case is precisely the gating one.
+     * <p>
+     * Counting through the seam rather than reading the log is the point: the previous test on this
+     * detector asserted only {@code violations.hasSize(1)}, which the double dump satisfied happily.
+     */
+    @Test
+    void takesOneThreadDumpPerFiringInTheDefaultConfiguration() {
+        FakeInstance instance = new FakeInstance(8);
+        instance.outForProcessing = 4;
+        DumpLedger dumps = new DumpLedger();
+        ProgressProbe probe = probeWatching(instance).withThreadDumpSource(dumps);
+
+        probe.sampleInstanceProgress(T0);
+        Instant firstFire = pastBound(T0);
+        probe.sampleInstanceProgress(firstFire);
+
+        assertWithMessage("the firing itself, so the dump count below is a count per FIRING")
+                .that(probe.getViolations()).hasSize(1);
+        assertWithMessage("one dump, of the accused member - at the default both branches trip on this "
+                + "one sample, and each dump is a full getThreadInfo with lock info")
+                .that(dumps.dumped).containsExactly(8);
+
+        // the re-armed stretch earns its own dump: the duplicate is what goes, not the coverage
+        probe.sampleInstanceProgress(pastBound(firstFire));
+        assertThat(probe.getViolations()).hasSize(2);
+        assertWithMessage("each firing carries its own single dump")
+                .that(dumps.dumped).containsExactly(8, 8).inOrder();
     }
 
     @Test

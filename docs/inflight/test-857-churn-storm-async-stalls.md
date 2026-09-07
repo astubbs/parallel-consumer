@@ -577,7 +577,9 @@ instance 0`, no stop, in the whole timeline), so its stretch is the longest.
 
 **What the dump shows**, taken 20s into the freeze on instances 0, 10 and 12 by the new
 `-Dchaos.instanceStallDumpAfterSeconds=20` (a 150s default keeps a gating run's dump at the firing
-and nowhere else):
+and nowhere else - the two thresholds are then EQUAL, so the firing sample trips both branches and
+the sampler takes one dump for it, not two, which
+`InstanceStallProbeIT.takesOneThreadDumpPerFiringInTheDefaultConfiguration` counts):
 
 - all ten `pc-pool-*-PC-<id>` workers `TIMED_WAITING` in `ChaosScenarioBase.newInstance`'s heavy
   branch - the `Thread.sleep(Math.min(left, 1_000))` loop - on every one of the three instances;

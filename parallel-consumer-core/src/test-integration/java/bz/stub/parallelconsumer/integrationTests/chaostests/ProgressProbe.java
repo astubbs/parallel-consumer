@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.IntFunction;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
@@ -338,13 +339,34 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     private final Map<Integer, InstanceProgressMark> instanceProgressMarks = new ConcurrentHashMap<>();
     /** Instances already given an early stall dump in their CURRENT frozen stretch - one per stretch, not per sample. */
     private final java.util.Set<Integer> stallDumpedThisStretch = ConcurrentHashMap.newKeySet();
+    /**
+     * How the accused member's threads are read: {@link #instanceThreadDump} in every real run.
+     * <p>
+     * The seam exists because the cost this file guards is the NUMBER of
+     * {@link #instanceThreadDump} calls one firing makes, and a log line cannot show that - the
+     * default configuration once took two, because {@link #INSTANCE_STALL_DUMP_AFTER} defaults to
+     * {@link #INSTANCE_STALL_BOUND} and both branches then fire on the same sample.
+     * {@code InstanceStallProbeIT#takesOneThreadDumpPerFiringInTheDefaultConfiguration} counts
+     * through here, so a return to two dumps fails a test rather than merely doubling a log.
+     */
+    private volatile IntFunction<String> threadDumpSource = ProgressProbe::instanceThreadDump;
     @Getter
     private volatile long peakInstanceStallMs = 0;
 
     /**
      * How long an instance may hold work and return nothing before its threads are dumped -
      * {@code -Dchaos.instanceStallDumpAfterSeconds=<n>}, defaulting to the bound itself, so an
-     * unconfigured run dumps exactly once per firing and nowhere else. Lower it under
+     * unconfigured run dumps exactly once per firing and nowhere else.
+     * <p>
+     * <b>That "exactly once" is held by {@link #sampleInstanceProgress}, not by the default.</b> At
+     * the default the two thresholds are EQUAL, so the first sample past the bound satisfies the
+     * early-dump condition and the violation condition together - taking the dump in both branches
+     * gives the gating, unconfigured run two near-identical dumps from one
+     * {@code ThreadMXBean#getThreadInfo(ids, true, true)} each, at the moment the run is already
+     * failing. The sampler therefore takes at most one dump per sample and the violation branch
+     * points at the early dump when that branch already took it.
+     * <p>
+     * Lower it under
      * {@code -Dchaos.diagnoseStallRecovery=true} to see inside a stretch the run outlives: the
      * tokens from {@link #instanceProgressSnapshot} can show a member frozen for the whole tail of a
      * run that still finishes under the bound, and then there is no firing to hang a dump on.
@@ -419,6 +441,15 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      */
     public ProgressProbe withInstanceProgress(Supplier<List<InstanceProgressView>> fleetSupplier) {
         this.instanceProgressSupplier = fleetSupplier;
+        return this;
+    }
+
+    /**
+     * Replaces the thread-dump reader for a broker-free seam test - see {@link #threadDumpSource}
+     * for why counting the calls is the property, and package-private because no run may swap it.
+     */
+    ProgressProbe withThreadDumpSource(IntFunction<String> source) {
+        this.threadDumpSource = source;
         return this;
     }
 
@@ -663,14 +694,16 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
             }
             long stalledMs = Duration.between(mark.getSince(), now).toMillis();
             if (stalledMs > peakInstanceStallMs) peakInstanceStallMs = stalledMs;
-            if (stalledMs > INSTANCE_STALL_DUMP_AFTER.toMillis() && stallDumpedThisStretch.add(id)) {
+            boolean earlyDumpedThisSample =
+                    stalledMs > INSTANCE_STALL_DUMP_AFTER.toMillis() && stallDumpedThisStretch.add(id);
+            if (earlyDumpedThisSample) {
                 // Diagnostic only, and only when the property lowers it below the bound: a stretch that
                 // ends before the bound leaves no violation and no dump, so a wedge that clears when
                 // the run happens to finish first was invisible - which is how seed 6077035105695 read
                 // as clean on a tree where its instance 0 sat frozen for the whole tail of the run.
                 log.warn("INSTANCE_STALL early dump ({}s frozen, bound {}s) for instance {}: {}\n{}",
                         stalledMs / 1000, INSTANCE_STALL_BOUND.getSeconds(), id, view.engineSnapshot(),
-                        instanceThreadDump(id));
+                        threadDumpSource.apply(id));
             }
             if (stalledMs > INSTANCE_STALL_BOUND.toMillis()) {
                 violate("INSTANCE_STALL/NO_WORK_COMPLETED: instance " + id + " holds work (queued="
@@ -682,8 +715,19 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 // The dump is taken HERE, inside the sample that fired, because the accused instance's
                 // threads are what the violation is a claim about, and nothing else captures them - a
                 // gating run aborts on this violation and a CI log outlives the JVM by nothing.
-                log.warn("INSTANCE_STALL thread dump for instance {} at the moment the detector fired: {}\n{}",
-                        id, view.engineSnapshot(), instanceThreadDump(id));
+                //
+                // Unless this same sample already took it: at the DEFAULT the two thresholds are equal,
+                // so the first sample past the bound satisfies both branches, and dumping again would
+                // pay a second getThreadInfo(ids, true, true) to print the same stacks. See
+                // INSTANCE_STALL_DUMP_AFTER for the contract this keeps.
+                if (earlyDumpedThisSample) {
+                    log.warn("INSTANCE_STALL thread dump for instance {} at the moment the detector fired: {}"
+                                    + "\n  (its threads are in the early dump logged immediately above - same sample)",
+                            id, view.engineSnapshot());
+                } else {
+                    log.warn("INSTANCE_STALL thread dump for instance {} at the moment the detector fired: {}\n{}",
+                            id, view.engineSnapshot(), threadDumpSource.apply(id));
+                }
                 instanceProgressMarks.put(id, new InstanceProgressMark(returned, incarnation, now)); // re-arm
                 stallDumpedThisStretch.remove(id); // the re-armed stretch may earn its own early dump
             }
