@@ -722,6 +722,14 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 instanceProgressMarks.put(id, new InstanceProgressMark(returned, incarnation, now));
                 Instant since = busySince.computeIfAbsent(id, ignored -> now);
                 long busyMs = Duration.between(since, now).toMillis();
+                if (busyMs > INSTANCE_STALL_DUMP_AFTER.toMillis() && stallDumpedThisStretch.add(id)) {
+                    // The diagnostic dump keys on the busy stretch here, not the stall clock (which this
+                    // branch keeps re-armed), or a working member could never be dumped - and a dump of
+                    // a working member is exactly what told the stall apart from a wedge in the first place.
+                    log.warn("INSTANCE_BUSY early dump ({}s in user code, bound {}s) for instance {}: {} worker(s) busy, {}\n{}",
+                            busyMs / 1000, INSTANCE_STALL_BOUND.getSeconds(), id, busy, view.engineSnapshot(),
+                            instanceThreadDump(id));
+                }
                 if (busyMs > INSTANCE_STALL_BOUND.toMillis() && busyObservedThisStretch.add(id)) {
                     observe("INSTANCE_BUSY_IN_USER_CODE: instance " + id + " has held work (queued=" + queued
                             + ", outForProcessing=" + outForProcessing + ") for " + (busyMs / 1000)
@@ -731,7 +739,10 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 }
                 continue;
             }
-            busySince.remove(id);
+            if (busySince.remove(id) != null) {
+                // the busy stretch just ended with work still held: a fresh stretch, which may earn its own dump
+                stallDumpedThisStretch.remove(id);
+            }
             busyObservedThisStretch.remove(id);
             long stalledMs = Duration.between(mark.getSince(), now).toMillis();
             if (stalledMs > peakInstanceStallMs) peakInstanceStallMs = stalledMs;
