@@ -26,6 +26,8 @@ classes. **None of these are in source control.** They are produced by `truth-ge
 (see the `truth-generator-maven-plugin` execution in `parallel-consumer-core/pom.xml`), bound to the
 **`generate-test-sources`** phase, and written to:
 
+**A nested type inside a test class breaks the build one build later.** The `truth-generator-maven-plugin` generates a Subject for every type it finds in the configured packages, nested ones included, and writes the outer test class's name into an `import` as though it were a package - the build that generates it passes, the next fails with `package ...OffsetRiderOverheadTest does not exist`. A nested type whose simple name matches another test's nested type (two `Scenario`s) collides in the generated `ManagedSubjectBuilder` the same way. Keep test-local shapes as constants or top-level package-private types; found while writing `OffsetRiderOverheadTest`, verified stable across three consecutive clean builds once the nesting was removed.
+
 ```
 parallel-consumer-core/target/generated-test-sources/truth-assertions-managed/
 parallel-consumer-core/target/generated-test-sources/truth-assertions-templates/

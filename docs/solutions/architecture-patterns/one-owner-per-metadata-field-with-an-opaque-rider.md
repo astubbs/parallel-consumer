@@ -1,7 +1,7 @@
 ---
 title: Give a single-slot metadata field one owner and let the other side ride inside it as an opaque blob
 date: 2026-08-10
-updated: 2026-09-06
+updated: 2026-09-07
 category: architecture-patterns
 module: parallel-consumer-core
 problem_type: architecture_pattern
@@ -26,9 +26,10 @@ tags:
 # Give a single-slot metadata field one owner and let the other side ride inside it as an opaque blob
 
 > **Written 2026-08-10 on the Kafka Streams spike branches, migrated to `master` on 2026-09-06 with the
-> slot it describes.** Two things were corrected on the way and are marked where they occur: the
-> unreadable-metadata policy's default, which moved from `FAIL` to `IGNORE` in astubbs#207 after this was
-> written, and the enumeration of Parallel Consumer's magic bytes. Every `file:line` citation became a
+> slot it describes.** Three things were corrected on the way and are marked where they occur: the
+> unreadable-metadata policy's default, which moved from `FAIL` to `IGNORE` in astubbs#207 after this
+> was written; the enumeration of Parallel Consumer's magic bytes; and the budget note's account of
+> what a rider costs, which is now measured rather than feared. Every `file:line` citation became a
 > greppable anchor, and every `io.confluent` path a `bz.stub` one, per `docs/citations.md`. The `module`
 > field moved from `parallel-consumer-streams` to `parallel-consumer-core`, because that is where the slot
 > was built; the Streams module remains its first customer and is not on `master`. **What shipped** is a
@@ -235,6 +236,30 @@ hole encoding. The too-large fallback in `PartitionState` (anchor `stripPayloadF
 must account for both, or the rider will quietly evict the encoding that is the reason the
 field has an owner in the first place.
 
+**Measured 2026-09-07 - "competes with the hole encoding" was the wrong shape, and the cost is now
+stated from measured strings rather than feared.** They compete for the broker's cap and nowhere
+else. The single measurement this paragraph assumed is two: the hole encoding alone is judged
+against the back-pressure threshold, and the assembled string, rider included, against the cap.
+Rider bytes do not shrink as work completes, so charging them against back pressure would make a
+rider a floor the mechanism can never relieve - and on a caught-up partition a permanent block -
+which is why the split is the design and not an optimisation. The rider's cost against the cap is
+closed-form, because the outer codec is Base64 with padding: `n` raw bytes occupy `4*ceil(n/3)`
+characters, so an envelope around a hole map costs `4*ceil((3 + rider + hole map)/3)` characters and
+the rider's own footprint is that minus `4*ceil(hole map/3)` - a step function of the rider's length
+that never exceeds the cost of encoding the envelope on its own.
+
+Two consequences follow, and both are measured over the whole rider domain and over a corpus of
+hole-map shapes and densities against every encoding PC ships - `OffsetRiderOverheadTest` is the
+reproduce command, and the numbers are deliberately left there rather than copied here. **The point
+at which back pressure engages does not move at all** when a rider is configured: it is the same
+incompletes count, for every shape and every encoding, because the threshold never sees the rider.
+**The point at which the cap engages moves earlier by exactly the rider's Base64 footprint and no
+further** - at the shifted point the bare hole map is already within that footprint of the cap.
+Below it the ladder sheds the rider, then the drop marker, then the envelope, and only then does the
+pre-existing strip touch the hole map, so the eviction this paragraph feared cannot happen. The
+table is Base64-only and says so: astubbs/parallel-consumer#306's Z85 outer codec changes the closed
+form for payloads from 22 bytes up, and the test gains a column there.
+
 ### What shipped, 2026-09-06
 
 The rider is no longer a direction. The core half was built against
@@ -256,7 +281,8 @@ without reopening it; the Streams consumer of the slot is a later rung and is no
   the envelope altogether, and only below all three does the pre-existing strip touch the hole map
   (`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/RiderBudgetRung.java`). So
   configuring a rider can never cost a partition metadata it would otherwise have committed - the
-  hazard this write-up flagged.
+  hazard this write-up flagged. What it costs instead is measured over the whole rider domain rather
+  than argued: the 2026-09-07 note under "Choosing the owner" states the shape and names the test.
 - **The write seam.** `ParallelConsumerOptions.riderSupplier` (anchor `riderSupplier`), a function
   from a context naming the partition, the offset the commit is paired with and the byte budget
   available. It is user code on an engine thread, so it is guarded the way the retry-delay provider
