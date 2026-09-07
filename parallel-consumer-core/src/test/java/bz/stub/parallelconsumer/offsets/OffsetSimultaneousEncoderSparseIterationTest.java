@@ -12,6 +12,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -43,6 +44,18 @@ class OffsetSimultaneousEncoderSparseIterationTest {
      * Fixed so failures are reproducible.
      */
     private static final long SEED = 20260803L;
+
+    /**
+     * How many hand-written scenarios {@link #scenarios()} adds before the generated ones - a sizing hint, not a
+     * contract.
+     */
+    private static final int FIXED_SCENARIOS = 17;
+
+    private static final int[] ALTERNATING_RUN_WIDTHS = {1, 2, 3, 17, 500};
+
+    private static final long[] RANDOM_LENGTHS = {1, 2, 3, 7, 64, 999, 5_000};
+
+    private static final double[] RANDOM_DENSITIES = {0.0, 0.01, 0.1, 0.5, 0.9, 1.0};
 
     /**
      * A single encode input: the base offset to commit, how many offsets the range spans, and which actual offsets
@@ -106,16 +119,6 @@ class OffsetSimultaneousEncoderSparseIterationTest {
         return new Scenario(name, baseOffset, length, incompletes);
     }
 
-    private static Scenario randomDensity(Random random, long baseOffset, long length, double density) {
-        SortedSet<Long> incompletes = new TreeSet<>();
-        for (long relative = 0; relative < length; relative++) {
-            if (random.nextDouble() < density) {
-                incompletes.add(baseOffset + relative);
-            }
-        }
-        return new Scenario("random density " + density, baseOffset, length, incompletes);
-    }
-
     /**
      * Deliberately covers: empty and single-offset ranges, no/all incompletes, incompletes at the very first and very
      * last offset of the range (the two positions the sparse construction has to clamp), consecutive blocks, long
@@ -124,7 +127,8 @@ class OffsetSimultaneousEncoderSparseIterationTest {
      * tests.
      */
     static List<Scenario> scenarios() {
-        List<Scenario> scenarios = new ArrayList<>();
+        // sizing hint only - the exact count is whatever this method ends up adding, and ArrayList grows if it drifts
+        List<Scenario> scenarios = new ArrayList<>(FIXED_SCENARIOS + ALTERNATING_RUN_WIDTHS.length + RANDOM_LENGTHS.length * RANDOM_DENSITIES.length);
 
         // base 5 (not the offset absence sentinel), so the constructor really does derive a zero length range
         scenarios.add(scenario("zero length range", 5, 0));
@@ -151,20 +155,42 @@ class OffsetSimultaneousEncoderSparseIterationTest {
         outOfRange.add(1_000L); // above the end
         scenarios.add(new Scenario("incompletes outside the range", 100, 20, outOfRange));
 
-        for (int runWidth : new int[]{1, 2, 3, 17, 500}) {
+        for (int runWidth : ALTERNATING_RUN_WIDTHS) {
             scenarios.add(alternating("alternating runs of " + runWidth, 100, 2_000, runWidth));
         }
 
+        scenarios.addAll(randomScenarios());
+
+        return scenarios;
+    }
+
+    /**
+     * The randomised half of {@link #scenarios()}, kept in its own method so the seeding is visible in one place.
+     * <p>
+     * A single generator seeded from {@link #SEED} draws every base offset and every completion state, so the whole
+     * block is reproducible from that constant alone.
+     * <p>
+     * SpotBugs reports {@code DMI_RANDOM_USED_ONLY_ONCE} here and it is a false positive: the detector matches a
+     * seeded {@link Random} held in a local, which is precisely what a reproducible fixture needs. Four shapes were
+     * tried - the draws split across a helper, a per-scenario generator seeded from this one, both draws inlined
+     * here, and {@code nextDouble} in place of {@code nextInt} - and it fires on all of them. Left as the clearest
+     * of the four rather than contorted further.
+     */
+    private static List<Scenario> randomScenarios() {
+        List<Scenario> scenarios = new ArrayList<>(RANDOM_LENGTHS.length * RANDOM_DENSITIES.length);
         Random random = new Random(SEED);
-        long[] lengths = {1, 2, 3, 7, 64, 999, 5_000};
-        double[] densities = {0.0, 0.01, 0.1, 0.5, 0.9, 1.0};
-        for (long length : lengths) {
-            for (double density : densities) {
+        for (long length : RANDOM_LENGTHS) {
+            for (double density : RANDOM_DENSITIES) {
                 long baseOffset = random.nextInt(1_000_000);
-                scenarios.add(randomDensity(random, baseOffset, length, density));
+                SortedSet<Long> incompletes = new TreeSet<>();
+                for (long relative = 0; relative < length; relative++) {
+                    if (random.nextDouble() < density) {
+                        incompletes.add(baseOffset + relative);
+                    }
+                }
+                scenarios.add(new Scenario("random density " + density, baseOffset, length, incompletes));
             }
         }
-
         return scenarios;
     }
 
@@ -264,6 +290,83 @@ class OffsetSimultaneousEncoderSparseIterationTest {
                 .that(encoder.isSparseIterationUsed()).isTrue();
         // the trailing run still overflows even the v2 (Integer) run-length, so every encoding is dropped
         Truth.assertThat(encoder.getEncodingMap()).isEmpty();
+    }
+
+    /**
+     * Regression guard: an offset range whose inclusive top is {@link Long#MAX_VALUE}.
+     * <p>
+     * The in-range filter used to compare against an <em>exclusive</em> end offset, computed as
+     * {@code lowWaterMark + lengthBetweenBaseAndHighOffset} - which is {@code highestSucceededOffset + 1}, and so wraps
+     * to {@link Long#MIN_VALUE} here. Every incomplete then compared as out-of-range, so none reached the visit set and
+     * the whole span encoded as one completed run: incomplete offsets silently committed as complete. That run also
+     * overflows even the v2 (int) run length, so the symptom was an empty encoding map - a commit with no encoding at
+     * all.
+     * <p>
+     * None of the generated scenarios reach this shape: they are all small ranges at modest base offsets, so the
+     * differential test could not have caught it. The bound is now the inclusive last offset, which reconstructs
+     * {@code highestSucceededOffset} and cannot wrap.
+     */
+    @ResourceLock(value = COMPRESSION_FORCED_RESOURCE_LOCK, mode = READ)
+    @Test
+    void anInclusiveLongMaxValueRangeTopDoesNotDropEveryIncomplete() {
+        // one wider than the bitset limit, so no BitSetEncoder can be built and the sparse path is taken for real
+        final long baseOffset = Long.MAX_VALUE - Integer.MAX_VALUE;
+        final long midRangeIncomplete = baseOffset + (Integer.MAX_VALUE / 2);
+
+        SortedSet<Long> incompletes = new TreeSet<>();
+        incompletes.add(midRangeIncomplete);
+
+        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(baseOffset, Long.MAX_VALUE, incompletes);
+        encoder.invoke();
+
+        Truth.assertWithMessage("a range wider than the bitset limit must take the sparse path")
+                .that(encoder.isSparseIterationUsed()).isTrue();
+
+        // the incomplete splits the span into two runs, each comfortably inside an int, so v2 must survive. Before the
+        // fix the incomplete was dropped, leaving one run too long for any run-length encoder and an empty map.
+        Truth.assertWithMessage("the mid-range incomplete must survive into the encoding, splitting the span into representable runs")
+                .that(encoder.getEncodingMap().keySet()).contains(OffsetEncoding.RunLengthV2);
+    }
+
+    /**
+     * Regression guard: a caller-supplied {@link SortedSet} whose comparator is not the natural one.
+     * <p>
+     * The in-range filter used to {@code break} on the first entry above the range, which is only sound for ascending
+     * iteration. The constructor is public and the {@code incompleteOffsets} field's own javadoc promises "no order
+     * requirement, but SortedSet just in case", so that was an ordering assumption the class explicitly disclaims -
+     * and a reverse-ordered set presenting an above-range offset first made the loop exit before reaching a perfectly
+     * valid in-range incomplete. Note {@link SortedSet#subSet}, which the hand-written loop replaced, would have
+     * honoured the set's own comparator.
+     * <p>
+     * The full scan only ever calls {@link java.util.Set#contains}, so it is order-independent and remains the trusted
+     * reference here.
+     */
+    @ResourceLock(value = COMPRESSION_FORCED_RESOURCE_LOCK, mode = READ)
+    @Test
+    void aNonNaturalComparatorDoesNotHideInRangeIncompletes() {
+        final long baseOffset = 100;
+        final long highestSucceededOffset = 119; // range [100, 119]
+
+        // reverse order, so iteration presents the above-range offset BEFORE the in-range one
+        SortedSet<Long> incompletes = new TreeSet<>(Comparator.reverseOrder());
+        incompletes.add(1_000L); // above the range
+        incompletes.add(105L); // inside it, and must not be skipped
+
+        OffsetSimultaneousEncoder sparse = new OffsetSimultaneousEncoder(baseOffset, highestSucceededOffset, incompletes);
+        sparse.dropEncodersRequiringEveryOffset();
+        sparse.invoke();
+
+        OffsetSimultaneousEncoder full = new OffsetSimultaneousEncoder(baseOffset, highestSucceededOffset, incompletes);
+        full.dropEncodersRequiringEveryOffset();
+        full.invoke(false);
+
+        Truth.assertWithMessage("sparse encoder must actually have taken the sparse path")
+                .that(sparse.isSparseIterationUsed()).isTrue();
+
+        assertEncodingsIdentical(sparse.getEncodingMap(), full.getEncodingMap());
+
+        Truth.assertWithMessage("expected at least the v2 run-length encoding to survive")
+                .that(sparse.getEncodingMap().keySet()).contains(OffsetEncoding.RunLengthV2);
     }
 
     private void assertEncodingsIdentical(Map<OffsetEncoding, byte[]> sparse, Map<OffsetEncoding, byte[]> full) {

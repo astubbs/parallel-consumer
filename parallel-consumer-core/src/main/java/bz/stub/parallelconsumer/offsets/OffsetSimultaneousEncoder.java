@@ -329,15 +329,26 @@ public class OffsetSimultaneousEncoder {
         // Only incompletes that actually fall inside the encoded range matter - the full scan never looks outside it.
         // Filtered by hand rather than via subSet(): this set is caller-supplied, and SortedSet#subSet throws
         // IllegalArgumentException when the bounds fall outside an already-restricted view. That would surface as a
-        // failure to encode a commit, so it is not worth the risk - iteration stops early anyway because the set is
-        // sorted, giving the same cost as a subSet view.
-        final long endOffsetExclusive = getEndOffsetExclusive();
+        // failure to encode a commit, so it is not worth the risk.
+        //
+        // There is deliberately NO early exit, and the bound is the INCLUSIVE last offset. Three reasons, the first
+        // being the one that stops a reader putting the break back:
+        //  - it would never fire. OffsetMapCodecManager#encodeOffsetsCompressed samples highestSucceeded ONCE and
+        //    derives both this set (getIncompleteOffsetsBelow, which keeps x < that sample) and this encoder's range
+        //    top from it, so the set's maximum is highestSucceeded - 1 while an above-range test needs
+        //    > highestSucceeded. The two cannot overlap. The scan over entries below lowWaterMark is the `continue`
+        //    below, and is there with or without an early exit.
+        //  - incompleteOffsets is caller-supplied and its comparator need not be the natural one (the field's own
+        //    javadoc promises no order requirement), so breaking on the first out-of-range entry can skip in-range
+        //    ones. Note subSet WOULD have honoured the set's comparator - avoiding it must not import an ordering
+        //    assumption it never had.
+        //  - an exclusive bound is lowWaterMark + length, i.e. highestSucceededOffset + 1, which wraps to
+        //    Long.MIN_VALUE at Long.MAX_VALUE and silently drops every incomplete - encoding them as completed. The
+        //    inclusive form reconstructs highestSucceededOffset, a long that already existed, so it cannot wrap.
+        final long lastOffsetInclusive = lowWaterMark + lastRelativeOffset; // == highestSucceededOffset, cannot wrap
         for (Long incompleteOffset : this.incompleteOffsets) {
-            if (incompleteOffset < lowWaterMark) {
-                continue; // below the range - later entries may still be inside it
-            }
-            if (incompleteOffset >= endOffsetExclusive) {
-                break; // sorted, so nothing beyond this point is in range either
+            if (incompleteOffset < lowWaterMark || incompleteOffset > lastOffsetInclusive) {
+                continue; // outside the encoded range - the full scan never looks there either
             }
             final long relativeOffset = incompleteOffset - lowWaterMark;
             relativeOffsetsToVisit.add(Math.max(0, relativeOffset - 1));
