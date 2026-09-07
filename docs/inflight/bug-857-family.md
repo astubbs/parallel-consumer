@@ -82,18 +82,26 @@ assignor arms, the captured seeds opened the window ZERO times. The chaos suite 
 luck; only a purpose-built probe finds it by construction. Two write-ups were retracted the same day
 for reading a green replay as evidence when the mechanism had never executed.
 
-**THE ASYNC LINE NOW HAS A REPLAYABLE SEED - the first this family has ever had.**
-`9086872209853284830` on `ChaosChurnStormIT` reproduces `NO_PROGRESS` in most runs on unmodified
-master, in minutes, on a laptop. Found by RANDOM-SEED HUNTING in CI, not by replaying anything.
-astubbs#344 was the obvious candidate - same commit mode, right symptom shape - and is **refuted**:
-both arms either side of it fail. Details in
-[`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md).
+**THE ASYNC LINE IS TWO LINES, AND NEITHER IS THE OPEN `NO_PROGRESS` QUESTION THIS PARAGRAPH USED
+TO POSE.** [`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md) **owns
+both** - its dated sections are the record, with the seeds, the sample sizes and the rulings-out.
+This file keeps only the shape, so that a reader arriving here is not told the opposite of what is
+established:
 
-**A DETECTOR SILENCE PROBLEM, and it bears on everything below.** Across the astubbs#344 arms, **a
-third of the failures went red with `NO_PROGRESS` not firing at all**. Since the 2026-08-25 demotion
-moved the Class 2 bound to non-gating, the liveness claim rests on `INSTANCE_STALL` and this
-detector. **A detector whose silence cannot be trusted is worse than one that is absent**, because
-the suite goes green on its say-so. Settle it before reading any quiet run from it as evidence.
+- The fleet-scoped `NO_PROGRESS` firings are a **timing proxy** - the backlog drains every time the
+  detector fires. Its `## ANSWERED, 2026-08-28` and `## CONFIRMED, 2026-08-28` sections.
+- The per-instance `INSTANCE_STALL/NO_WORK_COMPLETED` firings are **a different line from the
+  fleet-scoped one and must not be read with it**: one member stays live, keeps taking work, and
+  returns nothing while the fleet finishes around it. What that member's workers are doing is the
+  churn note's question, not this file's - read from its `## CLASSIFIED, 2026-09-03` section
+  forward, and take the latest dated section as the current reading.
+
+**THE DETECTOR SILENCE PROBLEM IS WITHDRAWN.** This paragraph once reported a third of the
+astubbs#344 arms going red with `NO_PROGRESS` silent, and told readers to settle that before trusting
+any quiet run. The observation was a grep counting one detector's name, so a failure caught by a
+different detector read as caught by none. The churn note's
+`## The detector "silence" is EXPLAINED, 2026-08-28` section owns the retraction. Anything below
+that leans on the silence claim predates it.
 
 **THE SYMPTOM IS A BUCKET, and this file only ever covered part of it.** Read from upstream's own
 comments rather than the mirror's summary: at least four distinguishable behaviours are reported,

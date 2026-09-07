@@ -1,7 +1,7 @@
 # `ChaosChurnStormIT` stalls - three sightings no known defect explains
 
 <!-- inflight-type: bug -->
-<!-- inflight-impact: stall -->
+<!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
 
 **Commit mode: `PERIODIC_CONSUMER_ASYNCHRONOUS`** (`ChaosChurnStormIT`, verified in source). This is
@@ -550,3 +550,142 @@ the wedge rather than a second timing proxy.
 an unrelated branch nine minutes later and passes on three other branches in the same window, so it
 is master-state rather than either branch's doing. Noted here only because the two arriving together
 is what a reader of this run's checks will see.
+
+## DIAGNOSED, 2026-09-07: the instance-stall line is worker saturation by stale heavy dwells under eager rebalance churn - the control loop is healthy
+
+The thread dump the `## CLASSIFIED, 2026-09-03` section asked for has been taken, and it overturns
+that section's reading. The samples there were right; the sentence "a wedge that never recovers"
+was not. Nothing in PC is stuck. The accused member's ten workers are all inside the scenario's own
+45-second heavy dwell, most of them on records whose partition was revoked while they slept, and
+ordinary records queue in the executor behind them until they too go stale.
+
+**How the seed behaves on master `9999144b5`.** Seed `6077035105695` replayed three times under
+`-Dchaos.diagnoseStallRecovery=true`, on a 32-core box at load ~2 with nothing else running: green
+every time, ~105s each, `maxInstanceStall` 52.9s, 53.0s and 53.0s - the schedule is deterministic
+to the second. **The seed reproduces the frozen shape every time. It does not reproduce the
+firing**, because the run finishes about 46s into the freeze and the bound is 150s. The 2026-09-03
+replays fired only because their tail outlasted the bound; that run's own record says `done=true`,
+so it finished too. The only core change between the two trees is a `volatile` on
+`lastCommitTime` and a confinement assertion on the retry-queue iterator (astubbs#433), neither
+of which can shorten a tail.
+
+**The frozen window IS the tail.** In every replay the fleet's consumed count has already passed
+100,000 when instance 0's `res` freezes; the wait that remains is for the last few keys. In that
+window *every* member's `res` is frozen - there is nothing left to complete. Instance 0 is singled
+out by the detector only because it is the one member the conductor never stops (one `Starting
+instance 0`, no stop, in the whole timeline), so its stretch is the longest.
+
+**What the dump shows**, taken 20s into the freeze on instances 0, 10 and 12 by the new
+`-Dchaos.instanceStallDumpAfterSeconds=20` (a 150s default keeps a gating run's dump at the firing
+and nowhere else - the two thresholds are then EQUAL, so the firing sample trips both branches and
+the sampler takes one dump for it, not two, which
+`InstanceStallProbeIT.takesOneThreadDumpPerFiringInTheDefaultConfiguration` counts):
+
+- all ten `pc-pool-*-PC-<id>` workers `TIMED_WAITING` in `ChaosScenarioBase.newInstance`'s heavy
+  branch - the `Thread.sleep(Math.min(left, 1_000))` loop - on every one of the three instances;
+- `pc-control-PC-<id>` parked in `processWorkCompleteMailBox`, waiting for results that are not
+  coming; `pc-broker-poll-PC-<id>` in `Selector.select`. The control loop is idle and healthy.
+- instance 0's engine counters at the same instant: `incompleteOffsets=2 recordsInShards=2
+  parkedForRetry=0`, against `out=17` climbing to `22` two samples later. **At least fifteen of the
+  records it had out belonged to partitions it no longer owned.**
+
+**The mechanism, and it is arithmetic rather than chance.** The scenario uses the eager assignor
+(it never sets `useCooperativeAssignor`), so every rebalance revokes a member's whole assignment:
+instance 0 logged 28 `Partitions revoked` lines in the 50s window, one every ~2s. Each revoke bumps
+the epoch under every dwell in flight, so a heavy record's result is dropped as stale when its
+sleep ends and the record is redelivered to the partition's next owner - which starts a fresh 45s
+dwell while the old one keeps sleeping (the dwell is deliberately non-interruptible). A 45s dwell
+against a ~2-3s rebalance period spawns fifteen to twenty concurrent copies per heavy record; 25
+heavy records against 160 worker slots fleet-wide saturates them. Ordinary records are then
+dispatched into an executor queue behind sleeping workers (`out` reaching 30 on a 10-worker
+instance is that queue), and by the time a worker frees they are stale too: `out` drops 30 to 15
+in one sample with `res` unmoved, which is the skip path, not the success path. Progress happens
+only in rebalance lulls - the one 6s gap between revokes in the replay-2 tail is where 26 of its
+last 30 consumptions landed.
+
+**Ruled in and out, against the list the CLASSIFIED section left:**
+
+- `bug-worker-future-swallows-framework-exceptions.md` - **refuted here.** A swallowed framework
+  exception leaves a worker idle in the pool's `take()`; every worker in the dump is running user
+  code.
+- "a REDELIVERY CHAIN of heavy records" - **confirmed**, and it is the whole explanation. The
+  supply arithmetic that ruled out clustering (25 heavy records cannot occupy 160 workers) omitted
+  the multiplier.
+- the control-thread wedge, the phantom counter, the order recorder - stayed ruled out.
+
+**What this makes the detector.** `INSTANCE_STALL/NO_WORK_COMPLETED` names its prey as "this
+instance's control loop is holding work and finishing nothing". Here the control loop is finishing
+everything it is given; the workers are busy in user code. On this scenario the detector is
+therefore a timing proxy for the length of the tail - the same verdict this file reached for
+`NO_PROGRESS` - and it fires when churn keeps the heavy records stale for longer than 150s. Every
+CI firing on record fits: instance 42, 14 and 0 were live members with work out late in a run.
+
+**What is still open, 2026-09-07.**
+
+- **The detector could not tell workers-busy from workers-idle - closed the same day.** A member
+  holding work with any worker running user code is working, not stalled: one long function
+  freezes the count, and PC's backpressure counts records rather than workers, so a free worker
+  beside a busy one proves nothing. Only a member holding work with NO worker in user code has
+  results with nobody, and that is PC's. `ProgressProbe` now reads the `-PC-<id>` worker threads'
+  own stacks (a worker between tasks sits in `ThreadPoolExecutor.getTask`) and asks before it
+  counts: a working member re-arms the clock on every sample and is reported past the bound as a
+  non-gating `INSTANCE_BUSY_IN_USER_CODE` observation; the `INSTANCE_STALL` violation is reserved
+  for nobody-in-user-code. The first cut accused a member with any idle worker, and the seed
+  `1630088991107806597` replay shows why that is wrong: its instance 5 was dumped with eight
+  workers in the dwell, two parked between tasks, one incomplete offset, and its count frozen -
+  a working member with spare hands and nothing to hand them, which that rule would have accused
+  at the bound. (The commit that made the change cited nine-of-ten threads instead; that was a
+  miscount in the summarising script, and every dump in both replays shows ten. The correction
+  stands on instance 5.) `InstanceStallProbeIT` pins both halves and the count. So an `INSTANCE_STALL` red is
+  once again a claim about PC - and every sighting recorded above predates the rule, so read them
+  as busy members. One has been replayed under it: seed `6077035105695` drew its long tail - 198
+  diagnostic samples, the same count as the CLASSIFIED run, instance 0 frozen for six and a half
+  minutes with up to 88 records out - the run the old rule failed as a wedge. Under the rule it
+  stayed green, dumped instances 0, 10 and 12 at 20s with all ten workers in the dwell, and
+  reported instance 0 once as `INSTANCE_BUSY_IN_USER_CODE` past the bound.
+- **Whether the amplification is a product concern.** At-least-once plus eager rebalances plus
+  records longer than the rebalance period multiplies load by design; PC already skips stale work at
+  dispatch. The cooperative-sticky assignor is the standard answer, and the control arm below
+  measures how much of the tail it removes on this seed.
+
+**Control arm, same seed, one term changed: the cooperative-sticky assignor.** A scratch edit
+setting `useCooperativeAssignor(true)` on the scenario's instance config, run once, then reverted -
+it is not a change this file proposes to the scenario, whose eager churn is deliberate. Under it a
+rebalance revokes only the partitions that move, so the prediction was fewer stale dwells, a smaller
+`out`, fewer duplicates, and a tail no longer than one honest heavy dwell. All four held:
+
+| | eager (replay 6) | cooperative (replay 7) |
+|---|---|---|
+| `Partitions revoked` on instance 0 in the tail | 28 | 3 |
+| workers in the heavy dwell at the 20s dump, instances 0 / 10 / 12 | 10 / 10 / 10 | 8 / 1 / 4 |
+| instance 0 `out` at the dump | 17, climbing to 22 | 8, climbing to 9 |
+| `maxInstanceStall` | 53.0s | 40.1s |
+| duplicates in the ledger | 286 | 210 |
+
+The 40s that remains is the last heavy records finishing their one legitimate 45s sleep, which is
+the tail the scenario builds on purpose. The 13s extra above it in the eager arm, and the
+three-to-ten-fold worker occupancy, is the amplification. Whole-assignment revokes are the term
+that produces it.
+
+**Same-defect sweep, 2026-09-07: the two other recorded seeds show the same shape.** Both replayed
+once on the same tree with the 20s early dump, both green, and every dumped member across the two
+runs was a working member, not a stalled one:
+
+| Seed | Where it came from | Run | Peak instance stall | Dumps | Workers in the dwell at each dump |
+|---|---|---|---|---|---|
+| `1630088991107806597` | the CI-hunted seed that went red twice in three CI runs | 89s | 66s | 5 members | 10/10 on four of them; 8/10 on instance 5, with 2 parked between tasks and one incomplete offset |
+| `5650361238717170909` | the 2026-09-04 sighting on a pom-only PR | 341s | 84s | 11 dumps, 6 of them instance 0 | 10/10 on every one |
+
+The long run is the more instructive. Instance 0 was dumped six times over three minutes, each a
+separate frozen stretch, holding `incompleteOffsets` of 759, 550, 555, 431 and 230 on successive
+dumps with `recordsInShards` to match - hundreds of records queued in its shards behind ten workers
+asleep in the dwell, draining a little between stretches. That is what a member looks like when it
+keeps being handed whole partitions' backlogs under churn: the same mechanism, with a longer tail
+because there was more to re-ingest. The Class 2 lag bound also tripped once in that run (154s
+against 150s), which is the same tail seen from the offset side. Neither run fired the gating
+detector, and neither would have told anyone anything without the dump.
+
+Instance 5 on the first seed is the case that matters for the detector: a member holding work, count
+frozen, with two workers parked between tasks - spare hands and nothing to hand them, because the
+records it holds are on the eight busy ones. A rule that accuses on "a free worker beside held work"
+accuses it; the rule that lands with the stacked follow-up accuses only nobody-in-user-code.

@@ -93,10 +93,11 @@ noise is what gets a hook switched off.
 
 ## What was checked and ruled out
 
-- **`.github/workflows/pr-checklist.yml`** runs `git fetch --no-tags --depth=1 origin <base>` from a
-  JS step. It is a CI runner's own workspace, checked out shallow on purpose, with no worktrees
-  sharing it. Not an instance - and out of the hazard gate's corpus, which is `bin/` plus
-  `.claude/hooks/`.
+- **`.github/workflows/pr-checklist.yml`** (`git show 40f176aa3:.github/workflows/pr-checklist.yml` -
+  that job was folded into `repo: hygiene` and the file deleted) ran `git fetch --no-tags --depth=1
+  origin <base>` from a JS step. It was a CI runner's own workspace, checked out shallow on purpose,
+  with no worktrees sharing it. Not an instance - and out of the hazard gate's corpus, which is
+  `bin/` plus `.claude/hooks/`.
 - **`actions/checkout` with `fetch-depth: 1`** in several workflows: a fresh per-job clone, not a
   fetch into a shared one.
 - **`bin/ci-mutation-test.sh`** fetches its base ref with **no** `--depth`, so it writes no `shallow`
