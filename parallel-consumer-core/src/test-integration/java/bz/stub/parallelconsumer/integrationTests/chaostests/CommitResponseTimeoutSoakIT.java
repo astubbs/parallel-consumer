@@ -18,6 +18,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -398,7 +399,7 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
             for (ThreadInfo info : ManagementFactory.getThreadMXBean().dumpAllThreads(true, true)) {
                 sb.append(info);
             }
-            Files.write(path, sb.toString().getBytes("UTF-8"));
+            Files.write(path, sb.toString().getBytes(StandardCharsets.UTF_8));
             return path.toAbsolutePath().toString();
         } catch (IOException | RuntimeException e) {
             // Never let the evidence capture replace the finding it was capturing.
