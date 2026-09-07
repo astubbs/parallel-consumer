@@ -1,23 +1,23 @@
-1,0,bz.stub.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > test_methods_must_have_names_longer_than_one_character
-1,6,bz.stub.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > test_classes_must_be_named_so_surefire_collects_them
-1,120,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,aSingleItemPublisherStillCompletesItsRecord
-1,122,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,aMonoVoidFromARunnableCompletesItsRecord
-1,127,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,aMultiItemPublisherCompletesItsRecordExactlyOnce
-1,147,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,anEmptyMonoCompletesItsRecord
-1,625,bz.stub.parallelconsumer.reactor.ReactorPCTest,anEmptyPublisherStillRetiresTheRecord
-1,1204,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,anErroringPublisherFailsItsRecordAndIsRetried
-1,3037,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,anEmptyFluxCompletesItsRecord
-1,3633,bz.stub.parallelconsumer.reactor.ReactorMdcPropagationTest,callersContextReachesTheUserFunctionOnTheReactorScheduler
-5,1,bz.stub.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
-5,18,bz.stub.parallelconsumer.reactor.ReactorTest,publishOn
-5,213,bz.stub.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[1]
-5,433,bz.stub.parallelconsumer.reactor.ReactorTest,subscribeOn
-5,718,bz.stub.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[3]
-5,2672,bz.stub.parallelconsumer.reactor.ReactorPCTest,kickTires
-5,2823,bz.stub.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
-5,5389,bz.stub.parallelconsumer.reactor.ReactorBatchTest,averageBatchSizeTest
-5,5577,bz.stub.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[2]
-5,8106,bz.stub.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[3]
-5,8146,bz.stub.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[2]
-5,8153,bz.stub.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[1]
-5,10862,bz.stub.parallelconsumer.reactor.ReactorPCTest,concurrencyTest
+2,0,bz.stub.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > test_methods_must_have_names_longer_than_one_character
+2,5,bz.stub.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > test_classes_must_be_named_so_surefire_collects_them
+2,129,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,aMultiItemPublisherCompletesItsRecordExactlyOnce
+2,134,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,aMonoVoidFromARunnableCompletesItsRecord
+2,137,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,aSingleItemPublisherStillCompletesItsRecord
+2,144,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,anEmptyMonoCompletesItsRecord
+2,644,bz.stub.parallelconsumer.reactor.ReactorPCTest,anEmptyPublisherStillRetiresTheRecord
+2,1115,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,anErroringPublisherFailsItsRecordAndIsRetried
+2,3725,bz.stub.parallelconsumer.reactor.ReactorMdcPropagationTest,callersContextReachesTheUserFunctionOnTheReactorScheduler
+2,4497,bz.stub.parallelconsumer.reactor.ReactorEmptyPublisherTest,anEmptyFluxCompletesItsRecord
+6,2,bz.stub.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
+6,6,bz.stub.parallelconsumer.reactor.ReactorTest,publishOn
+6,213,bz.stub.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[1]
+6,337,bz.stub.parallelconsumer.reactor.ReactorTest,subscribeOn
+6,722,bz.stub.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[3]
+6,3574,bz.stub.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
+6,4337,bz.stub.parallelconsumer.reactor.ReactorPCTest,kickTires
+6,5593,bz.stub.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[2]
+6,8633,bz.stub.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[3]
+6,8637,bz.stub.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[1]
+6,8646,bz.stub.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[2]
+6,10066,bz.stub.parallelconsumer.reactor.ReactorPCTest,concurrencyTest
+6,10935,bz.stub.parallelconsumer.reactor.ReactorBatchTest,averageBatchSizeTest
