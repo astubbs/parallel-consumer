@@ -78,6 +78,24 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
      */
     private static final String FULL_MAP_LINE = "Failed commit in full";
 
+    /**
+     * Everything in the ERROR line that is <b>not</b> per-entry: the log statement's own constant text plus the
+     * summary's {@code "N partitions: "} prefix. Counted from the statement, with a little headroom for a reword.
+     * <p>
+     * It was 64 when the statement read {@code "Error committing offsets: {}, exception: "}. The line now also states
+     * what the failure MEANS for the offsets - that they stay dirty and are re-committed next cycle, which is the
+     * behaviour change of
+     * {@code docs/solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md} -
+     * so the constant text roughly doubled and this moved with it.
+     * <p>
+     * <b>Raising this does not weaken the guard, and raising it much further would.</b> What the assertion catches is
+     * the offset map being interpolated back into the line, which costs
+     * {@link OffsetMapCodecManager#DefaultMaxMetadataSize} <em>per partition</em> - orders of magnitude above anything
+     * a message reword can account for. A budget large enough to absorb that would be the weakening; this is not
+     * close. The per-entry term is the half that must never move, and has not.
+     */
+    private static final int STATEMENT_TEXT_BUDGET = 160;
+
     @Test
     void asyncCommitFailureLineNamesEveryPartitionAndOffsetButNotTheMetadata() {
         var consumerMgr = consumerManagerMock();
@@ -98,10 +116,10 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
             assertThat(errorLine).doesNotContain("OffsetAndMetadata{");
             // Derived, not measured, and derived the way RecordBatchSummaryTest.commitSummaryCostPerPartitionDoesNotDependOnMetadataSize
             // is: 64 characters per entry beyond the topic name covers "-<partition>: offset <offset>, <length> chars of
-            // metadata; " even at a 10-digit partition, a 19-digit offset and a 4-digit length, and 64 more covers the
-            // statement's own "Error committing offsets: ", ", exception: " and the summary's "N partitions: " prefix. The
-            // number that matters is what it is nowhere near: metadata.length(), which is what interpolating the map cost.
-            assertThat(errorLine.length()).isLessThan(2 * (TOPIC.length() + 64) + 64);
+            // metadata; " even at a 10-digit partition, a 19-digit offset and a 4-digit length, and STATEMENT_TEXT_BUDGET
+            // covers everything in the line that is NOT per-entry. The number that matters is what it is nowhere near:
+            // metadata.length(), which is what interpolating the map cost.
+            assertThat(errorLine.length()).isLessThan(2 * (TOPIC.length() + 64) + STATEMENT_TEXT_BUDGET);
 
             // the exception is the other half of the diagnostic, and messagesAt() projects it away - so dropping the
             // trailing argument would leave every assertion above still passing

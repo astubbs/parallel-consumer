@@ -140,7 +140,10 @@ and lifecycles, so they are no longer recorded here: this dossier is deleted onc
 closes, which would have taken four still-open findings with it, and a paragraph inside another note
 cannot be found by anyone listing this directory.
 
-- [`bug-async-commit-marked-successful-before-broker-ack.md`](bug-async-commit-marked-successful-before-broker-ack.md)
+- The async commit recorded on send rather than on the broker's acknowledgement - **closed**, and the
+  note carrying it retired with the fix. The mechanism, the control arms and how it composes with the
+  commit-failure seam are in
+  [`../solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md`](../solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md).
 - The unsynchronised cross-thread counter maps - **closed**, and the note carrying them retired with
   the fix. All four are now concurrent, and what the hunt's sighting did and did not establish is in
   [`../solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md`](../solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md).
