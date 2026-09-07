@@ -40,9 +40,10 @@ them. A second release gets a smaller launch, but the roadmap announcement is wh
 shipping since the 26 August date passed; the previous version of this note said the failure mode
 was never shipping, and that is the failure mode that occurred.
 
-**Prior art this supersedes, and what it still gets right.** A merge-order note from 2026-08-08
-lives only on branch `docs/v6-merge-order` (`bin/inflight.mjs docs show
-docs/inflight/release-v6-merge-order.md`) and was never merged. It ordered a far larger v6: the
+**Prior art this supersedes, and what it still gets right.** A merge-order note from 2026-08-08,
+`release-v6-merge-order.md`, sat on the never-pushed branch `docs/v6-merge-order`; that branch was
+merged into this note's PR and the file removed in the same PR, so the note is in history
+(`git log --all --oneline -- docs/inflight/release-v6-merge-order.md`) and nowhere live. It ordered a far larger v6: the
 transactional-atomicity trio first, then the loss and confluentinc#857 fixes, then **new surface**
 (the health check, MDC, the mock consumer in the main jar), then **new opt-in modules** (the
 dashboard, the Streams and Connect proofs of concept) and the examples rewrite, on the argument that
@@ -53,7 +54,7 @@ announcement plan carries the "maintained, and past where upstream stopped" clai
 its points survive unchanged and are in tier 3 below: astubbs#199 is the one item that cannot be
 applied after the tag, and astubbs#197's body reads as more blocked than it is. Its open question
 of which modules v6 publishes is moot under this decision, since no module PR is in the queue.
-<!-- file-refs: N/A - the merge-order note is branch-only, cited by its branch and the command that shows it -->
+<!-- file-refs: N/A - the merge-order note was merged and removed in this PR; the path is cited as history -->
 
 **"Draft" on a fork PR means "needs the owner to review and merge", not "unfinished".** Every PR in
 the queue below is implemented, tested and green on everything except the human-LGTM gate and, where
