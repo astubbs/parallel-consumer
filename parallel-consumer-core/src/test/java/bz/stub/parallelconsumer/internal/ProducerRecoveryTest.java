@@ -344,7 +344,7 @@ class ProducerRecoveryTest {
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> ManagedTruth.assertThat(producerManager()).hasNoProduceLockHolders());
         await().atMost(Duration.ofSeconds(10)).until(() -> !producerManager().isTransactionCommittingInProgress());
         var holdReplacement = new CountDownLatch(1);
-        holdFactoryUntil = Optional.of(holdReplacement);
+        holdBuildUntil = Optional.of(holdReplacement);
         fenceArmed.set(true);
 
         long start = System.currentTimeMillis();
