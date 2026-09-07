@@ -25,8 +25,8 @@ import static org.awaitility.Awaitility.await;
 /**
  * The close path fires the rebalance callbacks on the control thread itself ({@code maybeCloseConsumer}), and a
  * thread cannot wait on itself - so in transactional mode a revocation that arrives ON the control thread must take
- * the inline branch of {@code commitOnRevokeViaTheControlThread}: drain, then a tryLock commit, and back without
- * posting a request it would then wait on. The hand-driven harness never starts a control thread, so this runs a
+ * the inline branch of {@code commitOnRevokeViaTheControlThread}: a tryLock commit of what the close has already
+ * drained, and back without posting a request it would then wait on. The hand-driven harness never starts a control thread, so this runs a
  * real one and fires the revocation from inside a loop-end hook, which the control thread runs.
  * <p>
  * The log line is the witness that the inline branch ran rather than the request path: both return promptly on an
@@ -36,7 +36,7 @@ class RevokeOnTheControlThreadTest extends ParallelEoSStreamProcessorTestBase {
 
     @Test
     @Timeout(60)
-    void aRevocationOnTheControlThreadItselfDrainsAndCommitsInlineWithoutWaiting() {
+    void aRevocationOnTheControlThreadItselfCommitsInlineWithoutWaiting() {
         setupParallelConsumerInstance(getDefaultOptions()
                 .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
                 .commitLockAcquisitionTimeout(ofSeconds(30))
@@ -62,7 +62,7 @@ class RevokeOnTheControlThreadTest extends ParallelEoSStreamProcessorTestBase {
                     .until(() -> revokeTook.get() != null);
 
             assertWithMessage("on the control thread the revocation must not wait for a pass that is itself - it "
-                    + "drains and commits inline; a wait here would be the callback waiting on its own thread")
+                    + "commits inline; a wait here would be the callback waiting on its own thread")
                     .that(revokeTook.get().compareTo(ofSeconds(5)) < 0)
                     .isTrue();
             assertWithMessage("the inline branch announced itself, so this was not the request path returning "

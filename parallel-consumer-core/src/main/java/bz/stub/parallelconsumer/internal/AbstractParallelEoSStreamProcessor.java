@@ -745,14 +745,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * <p>
      * <b>The close path reaches this on the control thread itself.</b> {@link #maybeCloseConsumer} closes the
      * consumer from the committing thread precisely so that the callbacks it fires can commit inline, and a thread
-     * cannot wait on itself - so there the drain runs directly, which is confinement kept rather than broken, and
-     * the commit goes through {@link #tryCommitOffsetsOnRevoke}'s tryLock: uncontended by construction (this thread
-     * is the only other taker of {@code commitLock} and is not holding it), and {@code ArchitectureTest}'s
-     * rebalance-callback rule forbids reaching a blocking {@code lock()} from here whichever thread it turns out
-     * to be on. No fence is needed on this branch, and its absence is deliberate: {@link #innerDoClose} shuts the
-     * worker pool down and awaits it before it closes the poll system and then the consumer, so by the time these
-     * callbacks fire no worker exists to resume with a record of a revoked partition - the gap the fence closes on
-     * the served pass cannot open here.
+     * cannot wait on itself. By then {@link #innerDoClose} has shut the worker pool down, awaited it, drained the
+     * mailbox and committed - so there is nothing left to drain, no worker exists to resume with a revoked
+     * partition's record (which is why no fence is needed here either), and the commit goes through
+     * {@link #tryCommitOffsetsOnRevoke}'s tryLock, uncontended by construction: this thread is the only other taker
+     * of {@code commitLock} and is not holding it. Draining here would not only be redundant, it would put the
+     * drain's controller-only reaches (the retry queue's {@code @ControllerThreadOnly} writes) inside a rebalance
+     * callback, which {@code ArchitectureTest}'s rule reports statically whichever thread runs it.
      * <p>
      * <b>A revocation that arrives while the instance is closing is served by the close, not by a pass.</b> Once the
      * control thread has entered {@link #innerDoClose} no further pass runs, so a request posted then would only
@@ -783,9 +782,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private void commitOnRevokeViaTheControlThread(Collection<TopicPartition> partitions) {
         if (Thread.currentThread() == blockableControlThread) {
-            log.info("Revocation of {} reached the control thread itself (the consumer is closing) - draining the " +
-                    "mailbox and committing inline.", partitions);
-            processWorkCompleteMailBox(Duration.ZERO);
+            log.info("Revocation of {} reached the control thread itself (the consumer is closing, its mailbox " +
+                    "already drained) - committing inline.", partitions);
             tryCommitOffsetsOnRevoke();
             return;
         }
@@ -912,7 +910,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     /**
      * Non-blocking attempt to commit offsets during partition revocation, <b>in the consumer-commit modes</b> -
      * transactional mode takes {@link #commitOnRevokeViaTheControlThread} instead, for the reasons given there, and
-     * comes back here only on the close path, on the control thread, after draining the mailbox itself.
+     * comes back here only on the close path, on the control thread, whose close has already drained the mailbox.
      * Uses tryLock semantics on the commitCommand monitor to avoid deadlocking with the control thread.
      * <p>
      * If the lock is already held (control thread is mid-commit), we skip the commit. This is
