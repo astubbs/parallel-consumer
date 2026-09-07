@@ -223,6 +223,46 @@ prevent. The `docs-views.mjs` split earned its place because docs is *several* f
 other command's single formatter still lives here, so moving `rank` alone makes it the odd one out.
 When the second one arrives, take `formatRank` with it and import the shared helpers one way.
 
+### The JDK-and-Maven-cache setup block exists six times in `maven.yml`, and no detector can see it
+
+`prepare-deps`, `test`, `test-kafka-compat`, `scan`, `static` and `build` each open with the same
+three steps: `actions/checkout`, `actions/setup-java` on Temurin 17, and an `actions/cache/restore`
+keyed `setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}` with the bare prefix as its
+`restore-keys` fallback. Two of the six arrived with the 2026-09-07 job folds, which gave `scan: repo`
+and `static: analysis` a build dependency they did not have before. `.github/actions/` does not exist,
+so there is no composite action to point them at.
+
+The cost is drift: the cache key and its fallback must agree in all six places, and the file's own
+header forbids `setup-java`'s built-in `cache: maven` because its immutable keys can freeze an
+incomplete cache. Six hand-maintained copies of a rule that must not vary is the shape that produces
+a silently wrong one.
+
+**Neither duplication engine will ever report this, and the reason is worth keeping.** `dups: clones`
+runs two engines over the whole repo. PMD CPD's language auto-detect is winner-take-all, Java wins on
+file count, and YAML is not CPD-mappable at all - so CPD never reads a workflow. jscpd *is*
+language-agnostic and does read them: pointed at `.github/workflows` it finds real clones, including
+`claude.yml` against `claude-code-review-dispatch.yml`, which is the single pair it reports at the
+job's own default of 50 minimum tokens. Pointed at `maven.yml` alone it finds **nothing, at any
+threshold down to 20 tokens**, because each copy of the block has *different explanatory comments
+interleaved between its steps*: strip the comments and the six are identical, leave them in and the
+token streams differ. The block is also only about 40 tokens, under the default 50.
+
+That is the capability half of
+[`docs/solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md`](solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md),
+which diagnosed both scope and capability. The scope half was fixed when the scan widened to the
+whole repo; this is the half that survived it.
+
+**A second instance of the same fix**, recorded together because one composite-action decision
+settles both: the five OSS Index audit steps now exist in `maven.yml` (the per-PR run) and in
+`dependency-audit.yml` (the schedule and dispatch), with a "change both, or neither" note in each
+header. That note is an admission that the mechanism is missing.
+
+**Deliberately not done in astubbs/parallel-consumer#457**, which introduced two of the copies. That
+PR already rewrites every workflow and owes ten ruleset edits at merge; its whole risk is a check
+quietly ceasing to run, and introducing a mechanism the repo has never used, in the files it is
+already rewriting, widens exactly that blast radius. The duplication is stable and commented, so it
+keeps.
+
 ### The portable-mtime probe exists three times
 
 `hook_file_mtime` in `.claude/hooks/lib/hook-common.sh`, `_mtime` in
