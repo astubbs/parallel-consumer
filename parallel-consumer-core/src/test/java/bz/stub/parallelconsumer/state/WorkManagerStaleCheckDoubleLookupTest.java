@@ -44,8 +44,13 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
  * KEY ordering removes empty shards), so the shard-present guard passes and the add goes through. Nothing can
  * ever remove it: {@code removeStaleContainers} only cleans retry-queue entries it finds via shard contents, and
  * the sweep already emptied the shard. The orphan permanently inflates the ready-to-retry count that feeds
- * {@code workIsWaitingToBeProcessed} and the poller gate - the same consequence family as the inline stale
- * eviction that leaked a retry-queue entry, reached by a different door. That one is fixed and its note
+ * {@code workIsWaitingToBeProcessed}, so a draining close never transitions and hangs to its timeout with no
+ * work in the system. <b>It is NOT the broker-poller load gate</b>, which an earlier version of this sentence
+ * named: measured, the orphan's contribution to {@code ShardManager#getWorkableRecords} nets to exactly zero
+ * once its retry delay passes, and reads the figure LOW while it does not - which fetches sooner rather than
+ * stalling. {@code RetryQueueRequeueWindowTest#aQueueOnlyOrphanCostsTheDrainFigureAndNotTheLoadGate} measures
+ * both halves so the wrong claim cannot be re-derived. Same consequence family as the inline stale eviction
+ * that leaked a retry-queue entry, reached by a different door. That one is fixed and its note
  * retired; the trace is at
  * {@code git show a80f2bbd1:docs/inflight/bug-retry-queue-orphaned-by-inline-stale-removal.md}.</li>
  * <li><b>Success path</b> (revoke + reassign in the gap): {@code pm.onSuccess} acts on the freshly assigned

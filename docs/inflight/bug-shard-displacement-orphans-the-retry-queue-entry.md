@@ -1,7 +1,7 @@
 # `addWorkContainer`'s displacement branch orphans the displaced container's retry-queue entry
 
 <!-- inflight-type: bug -->
-<!-- inflight-impact: stall -->
+<!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
 
 **Found by the defect-class sweep on the re-queue orphan window**, which is fixed and written up in
@@ -15,12 +15,31 @@ and not fixed by that work.
 `workMap.put` returns a displaced container it retires it from the population and gives back its
 selection claim - anchor `A real replacement after all` - but it does not remove it from the retry
 queue, and **it cannot**: `ProcessingShard` holds no reference to the `RetryQueue`. The queue is
-passed in as a parameter to `getWorkIfAvailable` and nowhere else.
+passed in as a parameter to `getWorkIfAvailable` and nowhere else - on
+astubbs/parallel-consumer#431's branch it is also handed to `removeStaleWorkContainersFromShard`,
+so that clause goes stale when astubbs#431 lands; astubbs#431 owns the rest of what that
+changes.
 
 So if the displaced container had previously failed and was parked for retry, its queue entry is left
-behind with the container resident in no shard - the same queue-only orphan, with the same
-consequence: nothing can ever remove it, and once its retry delay elapses
-`isRecordsAwaitingProcessing()` reads true forever, holding a draining close open to its timeout.
+behind with the container resident in no shard. That is the same pairing gap - but **NOT the same
+consequence, and the first version of this note said it was.**
+
+**The entry is not permanent.** `RetryQueue` keys by topic, partition and offset alone
+(`WorkContainerKey.of`), never by container identity, and `ShardManager.onSuccess` removes by that
+key **unconditionally**, before it touches any shard. The container that displaced the stale one
+carries the same three coordinates, so the replacement's own first terminal event clears the entry:
+success removes it; failure re-adds the same key, and `RetryQueue.add` replaces the existing entry
+rather than duplicating it, so what is left is an ordinary retry entry; a revoke or stale sweep that
+finds the replacement in the shard removes it by that key too. The window is bounded by the
+replacement's lifecycle, not by the instance's, so nothing here holds a draining close open.
+
+**What IS wrong inside that window is the figure.** The surviving entry carries the *displaced*
+container's retry-due time, so the ready-to-retry count and `RetryQueue.getLowestRetryTime` read one
+entry high until the replacement reaches that terminal event. A briefly wrong reading, not work that
+can never leave - which is why the impact tag above is `misdirection` rather than `stall`.
+
+This over-claim is the same shape as the one corrected at `WorkManager.onFailureResult` by the work
+that found this gap: a bounded, self-clearing cost written up as a permanent one.
 
 ## Evidence, and what it does not cover
 

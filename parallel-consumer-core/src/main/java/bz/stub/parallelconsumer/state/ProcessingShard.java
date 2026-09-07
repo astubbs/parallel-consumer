@@ -147,11 +147,23 @@ public class ProcessingShard<K, V> {
             //
             // KNOWN GAP, not fixed here: a container leaving a shard has to be taken out of the retry queue
             // too, and this branch cannot do it - the shard holds no reference to the RetryQueue, which is
-            // passed in per-call to getWorkIfAvailable and nowhere else. A displaced container that was parked
-            // for retry therefore leaves its queue entry behind, which nothing can ever remove. The pairing
-            // gap is demonstrated; whether production can reach this branch with a queue-resident container is
-            // the open question, and it is what decides whether this is worth a design change. Both are in
-            // docs/inflight/bug-shard-displacement-orphans-the-retry-queue-entry.md.
+            // passed in per-call to getWorkIfAvailable and nowhere else (on astubbs/parallel-consumer#431's
+            // branch also to removeStaleWorkContainersFromShard, so that clause goes stale when it lands). A
+            // displaced container that was parked for retry therefore leaves its queue entry behind.
+            //
+            // THAT ENTRY IS NOT PERMANENT, and an earlier version of this comment said it was. RetryQueue keys
+            // by topic, partition and offset alone (WorkContainerKey.of), never by container identity, and
+            // ShardManager.onSuccess removes by that key unconditionally - so the replacement admitted here,
+            // which carries the same coordinates, clears the entry at its own first terminal event: success
+            // removes it, failure re-adds the same key (add() replaces rather than duplicates), and a sweep
+            // that finds the replacement removes it by key. What is wrong meanwhile is the FIGURE - the
+            // surviving entry carries the DISPLACED container's retry-due time, so the ready-to-retry count
+            // and RetryQueue.getLowestRetryTime read one entry high until then. Bounded misdirection, not the
+            // stall this was first written up as.
+            //
+            // The pairing gap is demonstrated; whether production can reach this branch with a queue-resident
+            // container is the open question, and it is what decides whether this is worth a design change.
+            // Both are in docs/inflight/bug-shard-displacement-orphans-the-retry-queue-entry.md.
             population.onRetired();
             // The displaced container gives back its claim IF it still holds one. It does not when it was
             // already taken as work, and does when it was only ever queued - the compare-and-set tells those
