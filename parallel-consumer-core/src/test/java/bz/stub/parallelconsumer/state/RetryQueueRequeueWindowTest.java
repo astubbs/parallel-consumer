@@ -407,23 +407,16 @@ class RetryQueueRequeueWindowTest {
 
     /**
      * <b>The control for the arm below: the same queue-first ordering with the sweep's SECOND queue removal left
-     * out, which is what the declining sweep looked like before astubbs/parallel-consumer#437 landed.</b>
+     * out.</b> {@link ShardManager#onFailure} owns why one confirmation is not enough against that ordering;
+     * this arm is the demonstration of it.
      * <p>
-     * The sweeps ask the retry queue FIRST, declining rather than waiting, so that a refused lock abandons the
-     * paired shard removal and the pair never splits - that is how the broker-poll thread is kept out of a wait.
-     * A one-shot residency confirmation is not enough against that ordering on its own: the sweep's queue
-     * removal passes over an empty queue, the controller then adds and reads residency while the container is
-     * still in its shard, and the shard removal happens afterwards. Neither party removes the entry.
+     * <b>It asserts the orphan APPEARS, and it describes a shape production does not have.</b> Delete the
+     * repeated removal and this is what is left, which is the whole reason the repeat exists. Same magnitude,
+     * one term changed, against {@link #aQueueFirstSweepWithItsPairedSecondRemovalKeepsThePairWhole()}.
      * <p>
-     * <b>This asserts the orphan APPEARS, and it is a control rather than a description of production.</b>
-     * Production repeats the queue removal after the shard removal; delete that repeat and this is what is left,
-     * which is the whole reason the repeat exists. Same magnitude, one term changed, against
-     * {@link #aQueueFirstSweepWithItsPairedSecondRemovalKeepsThePairWhole()}.
-     * <p>
-     * <b>This arm cannot detect production changing under it, and saying it could was the over-claim review
-     * caught on astubbs/parallel-consumer#437.</b> It hand-builds the ordering, so nothing here moves when the
-     * sweep does. {@link #theProductionSweepTakesOutAnEntryTheControllerAddedInsideTheSweep()} is what goes red
-     * then; this arm is the explanation the reader needs once it does.
+     * <b>It cannot detect production changing under it, and saying it could was the over-claim review caught on
+     * astubbs/parallel-consumer#437.</b> It hand-builds the ordering, so nothing here moves when the sweep does.
+     * {@link #theProductionSweepTakesOutAnEntryTheControllerAddedInsideTheSweep()} is what goes red then.
      */
     @Test
     void aQueueFirstSweepWithoutItsPairedSecondRemovalWouldOrphanTheEntry() {
@@ -447,12 +440,8 @@ class RetryQueueRequeueWindowTest {
     /**
      * <b>Production's shape: queue-first, with the queue removal repeated after the shard removal.</b> The
      * inversion of the control above - one term changed, the second removal - and the half of
-     * {@link ShardManager#onFailure} the residency confirmation cannot reach.
-     * <p>
-     * The second removal is made once the container has left the shard, so it is the first party to look at the
-     * queue with the departure already visible: whatever the controller added inside the sweep is there to be
-     * found. The confirmation still owns the other half, where the add arrives after the sweep has finished -
-     * neither closes the other.
+     * {@link ShardManager#onFailure} its residency confirmation cannot reach. That method owns why the two
+     * halves are each necessary.
      */
     @Test
     void aQueueFirstSweepWithItsPairedSecondRemovalKeepsThePairWhole() {
@@ -472,12 +461,11 @@ class RetryQueueRequeueWindowTest {
 
     /**
      * The matched control for the ordering itself: the identical steps with only the sweep's internal order
-     * changed, and no second removal. Shard-first keeps the pair whole on the confirmation alone, because the
-     * residency read that follows the add observes a container that has already gone.
+     * changed, and no second removal. Shard-first keeps the pair whole on the confirmation alone - the ordering
+     * master had before astubbs/parallel-consumer#431.
      * <p>
-     * That is the ordering master had before astubbs/parallel-consumer#431, and it is why the confirmation was
-     * enough on its own then. Read with the two arms above, the pair of terms is complete: the ordering decides
-     * whether the confirmation can see the departure, and the second removal is what replaces it when it cannot.
+     * Read with the two arms above the pair of terms is complete: the ordering decides whether the confirmation
+     * can see the departure, and the second removal is what replaces it when it cannot.
      */
     @Test
     void aShardFirstSweepIsCaughtByTheConfirmation() {
@@ -558,14 +546,9 @@ class RetryQueueRequeueWindowTest {
      * <b>The other half, and the one no hand-built arm can reach: the controller's re-queue landing INSIDE the
      * production sweep, between its two queue removals.</b>
      * <p>
-     * {@link SeamShard} runs the controller's {@code sm.onFailure} at the one instruction where the interleaving
-     * matters - after the sweep's first queue removal has passed over an empty queue, and before its shard
-     * removal. The residency confirmation on {@link ShardManager#onFailure} cannot catch this: it reads a
-     * container that is still resident, so the add stands. Only the sweep's SECOND queue removal can, and this
-     * arm asserts it does.
-     * <p>
-     * <b>Red without the second removal</b>, which is how it was checked: the entry survives with the container
-     * in no shard, and the drain figure carries it for good.
+     * {@link SeamShard} runs {@code sm.onFailure} at the one instruction where that interleaving is decided.
+     * Only the sweep's SECOND queue removal can catch it, and this arm asserts it does - <b>red without that
+     * removal</b>, which is how it was checked.
      */
     @Test
     void theProductionSweepTakesOutAnEntryTheControllerAddedInsideTheSweep() {
@@ -607,20 +590,17 @@ class RetryQueueRequeueWindowTest {
     }
 
     /**
-     * <b>The refused second removal, which cannot abandon the way the first one can - the shard entry has
-     * already gone by then - so the shard puts the container back and the pair stays whole.</b>
+     * <b>The refused second removal, and the put-back that keeps the pair whole.</b>
      * <p>
-     * Same seam as the arm above, with one term added: the interference opens a live {@link RetryQueue}
-     * iterator and leaves it open, so the read lock is held when the sweep asks the second time and
-     * {@code tryLock()} refuses. A {@code ReentrantReadWriteLock} grants no upgrade, so a thread holding the
-     * read lock is refused the write lock even though it is the same thread - which is what makes this
-     * deterministic without a second thread. The controller's {@code add} is made BEFORE the iterator is opened,
-     * because it takes the write lock and would otherwise deadlock against the reader on this thread.
+     * Same seam as the arm above with one term added: the interference opens a live {@link RetryQueue} iterator
+     * and leaves it open, so the read lock is held when the sweep asks the second time and {@code tryLock()}
+     * refuses. A {@code ReentrantReadWriteLock} grants no upgrade, so a thread holding the read lock is refused
+     * the write lock even though it is the same thread - which is what makes this deterministic without a second
+     * thread. The {@code add} is made BEFORE the iterator is opened, because it takes the write lock and would
+     * otherwise deadlock against the reader on this thread.
      * <p>
-     * What is asserted is the whole pair, in all three of its parts: the container is resident again, the queue
-     * still holds its entry, and the shard's selection claim came back with it. <b>Red without the put-back</b>:
-     * the shard holds nothing and the entry stands alone, which is the orphan the second removal exists to
-     * prevent and would have created.
+     * All three parts of the pair are asserted: resident again, entry still there, selection claim back with it.
+     * <b>Red without the put-back</b>, which is how it was checked.
      */
     @Test
     void aRefusedSecondRemovalPutsTheContainerBackSoThePairStaysWhole() {

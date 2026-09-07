@@ -312,19 +312,12 @@ public class ProcessingShard<K, V> {
      * knowledge with one more chance to drop it; passing the paired action in keeps the whole reversal inside
      * the class that owns the state being reversed.
      * <p>
-     * <b>Both broker-poll-thread sweeps go through here</b> - {@link ShardManager#removeWorkFromShardFor} and
-     * {@link #removeStaleWorkContainersFromShard} - and in both the paired action is
-     * {@link RetryQueue#tryRemove(WorkContainer)}, which declines rather than waits. Each has ALREADY asked the
-     * queue once before removing anything, so a refusal here is the narrow case: the lock was free a moment ago
-     * and has been taken since. That is why the expensive half of this shape sits on the rare path - reversing
-     * the order so the queue is asked only once, after the shard removal, would put this undo on every swept
-     * record whenever the controller thread holds the read lock for a scan, which is exactly the contention the
-     * declining sweep exists to survive.
-     * <p>
      * <b>The paired action is handed the container that ACTUALLY left</b>, never the one the caller was looking
-     * at. Both sweeps remove by offset, and {@link #removeStaleWorkContainersFromShard} says why: a fresh
-     * container the controller admitted since the scan started is what leaves. Its queue entry is keyed by the
-     * same coordinates, so the removal is the same either way - but the caller no longer has to know that.
+     * at - {@link #removeStaleWorkContainersFromShard} says why that differs.
+     * <p>
+     * Both callers are broker-poll-thread sweeps and both pass {@link RetryQueue#tryRemove(WorkContainer)}.
+     * <b>{@link ShardManager#removeWorkFromShardFor} owns the rest</b> - why the pair may not split, why the
+     * leftovers are tolerable, and why the queue is asked before this rather than only after it. Read it there.
      *
      * @param pairedQueueRemoval the retry-queue removal this shard removal is one half of; true if it completed
      * @return the container that left this shard for good, or null when nothing was here or it was put back
@@ -342,18 +335,14 @@ public class ProcessingShard<K, V> {
             return removed;
         }
 
-        // REFUSED, and unlike the first ask this one cannot be abandoned - the container has already left. Put
-        // it back, so what is left behind is a WHOLE pair (a stale shard entry and, if the controller re-queued
-        // it, its retry-queue entry) rather than a queue-only orphan that nothing scans. Staleness is the state
-        // the engine tolerates and getWorkIfAvailable's last-resort branch retires both halves on the controller
-        // thread; an orphan is the state it does not.
+        // REFUSED, and this ask cannot be abandoned the way the caller's first one could - see the owner named
+        // above. Put the container back.
         population.onAdmitted();
         WorkContainer<K, V> tookTheOffsetMeanwhile = workMap.putIfAbsent(offset, removed);
         if (tookTheOffsetMeanwhile != null) {
             // Another container owns these coordinates now, so this one is gone for good and must not displace
-            // it - a put here would retire an admission the other container is still counting on. Its queue
-            // entry, if any, is cleared by the new occupant's own first terminal event, because RetryQueue keys
-            // by topic/partition/offset and never by container identity.
+            // it. Nothing is stranded: the new occupant's own first terminal event clears the entry, since
+            // WorkContainerKey is topic/partition/offset and never container identity.
             population.onRetired();
             log.debug("Retry queue declined the paired removal for {} and its offset has been taken by {} - " +
                     "leaving the new occupant in place; it owns the queue entry at these coordinates now.",
@@ -391,24 +380,17 @@ public class ProcessingShard<K, V> {
      * costs, why staleness is tolerable, how long the pair waits and what would reopen the hazard. Read it
      * there; the paragraph that used to be here was a second copy of it, which is how two of them drift apart.
      * <p>
-     * <b>THE RE-QUEUE WINDOW astubbs/parallel-consumer#437 CLOSED IS OPEN HERE TOO, and that was settled from
-     * the interleavings rather than by analogy with the revoke sweep</b> (2026-09-07). The three ingredients
-     * {@link ShardManager#onFailure} needs are all present on this path:
-     * <ul>
-     * <li>the controller can reach {@code sm.onFailure} for a container this sweep is about to take.
-     *     {@code WorkManager.onFailureResult} re-validates staleness against the LIVE partition map, and both
-     *     callers of {@link ShardManager#removeStaleContainers()} increment the assignment epoch BEFORE calling
-     *     it - so a container that answered "not stale" to the controller a moment ago is exactly what this
-     *     sweep then finds stale. That gap is the window, and it is the same one, not a similar one;</li>
-     * <li>{@code getShard} still answers present for it, because this sweep runs over shards that exist and only
-     *     empties them - under PARTITION or UNORDERED ordering an emptied shard object survives, and under KEY
-     *     ordering {@code removeShardIfEmpty} is not on this path at all;</li>
-     * <li>the residency read that follows the controller's add sees a resident container whenever it lands
-     *     before this method's {@code workMap} removal, so the add stands and nothing else removes it.</li>
-     * </ul>
-     * Only the trigger differs - a NEW assignment as well as a revocation - and that widens the window rather
-     * than narrowing it. So the same answer applies: the queue removal is repeated after the shard removal,
-     * through {@link #removeWorkAtOffsetPairedWith}.
+     * <b>THE RE-QUEUE WINDOW ON {@link ShardManager#onFailure} IS OPEN HERE TOO, settled from the interleavings
+     * rather than by analogy with the revoke sweep</b> (2026-09-07). Each of the three things that window needs
+     * holds on this path, and each was checked here rather than carried over. The controller can reach
+     * {@code sm.onFailure} for a container this sweep is about to take, because both callers of
+     * {@link ShardManager#removeStaleContainers()} increment the assignment epoch BEFORE calling it - so a
+     * container that answered "not stale" to the live check a moment ago is exactly what this sweep then finds
+     * stale. {@code getShard} answers present for it, because this sweep only empties shards and
+     * {@code removeShardIfEmpty} is not on its path. And the residency read that follows the add sees a
+     * resident whenever the add lands before this method's {@code workMap} removal. Only the trigger differs -
+     * a new assignment as well as a revocation - which widens the window rather than narrowing it, so the same
+     * answer applies: {@link #removeWorkAtOffsetPairedWith} repeats the queue removal after the shard removal.
      *
      * @param retryQueue the queue mirroring this shard's failed work, cleaned in step with it
      * @return the containers that actually left this shard
@@ -432,9 +414,7 @@ public class ProcessingShard<K, V> {
                             "on the poll thread; the controller thread's own sweep retires it.", entry.getValue(), this);
                     continue;
                 }
-                // ...and asked AGAIN after the shard removal, because the controller's re-queue can land between
-                // the two - see the re-queue window paragraph above. A refused second ask cannot skip anything,
-                // so removeWorkAtOffsetPairedWith puts the container back instead and answers null.
+                // ...and asked AGAIN after the shard removal - see the re-queue window paragraph above.
                 WorkContainer<K, V> removed = removeWorkAtOffsetPairedWith(entry.getKey(),
                         departed -> retryQueue.tryRemove(departed));
                 if (removed != null) {

@@ -332,25 +332,18 @@ public class ShardManager<K, V> {
      * {@link ProcessingShard#getWorkIfAvailable}'s last-resort stale sweep, which runs on the controller thread
      * where waiting for the queue lock is permitted.
      * <p>
-     * <b>THE QUEUE IS ASKED TWICE, and the second ask is what pairs this sweep with
-     * astubbs/parallel-consumer#437's residency confirmation</b> (2026-09-07). Asking first is what lets a
-     * refusal abandon; it is not enough on its own, because {@link #onFailure} can run the controller's re-queue
-     * in the gap between this method's two removals. Then the first ask passed over an empty queue, the
-     * controller's add landed, and its residency read still saw a resident container - so neither party removed
-     * the entry, and the queue-only orphan astubbs#437 closed is back. The second ask, made after the container has
-     * left the shard through {@link ProcessingShard#removeWorkAtOffsetPairedWith}, closes that half; the
-     * residency confirmation closes the half where the add arrives after this sweep has finished. Neither is
-     * redundant and neither closes the other.
+     * <b>THE QUEUE IS ASKED TWICE</b> (2026-09-07). Asking first is what lets a refusal abandon; it is not
+     * enough on its own, because {@link #onFailure} can run in the gap between this method's two removals -
+     * <b>that method owns the interleavings and which half each mechanism covers</b>. The second ask is made
+     * through {@link ProcessingShard#removeWorkAtOffsetPairedWith}, once the container has left.
      * <p>
-     * <b>A refused SECOND ask cannot abandon, so the shard puts the container back.</b> By then the shard entry
-     * has gone, and returning would leave exactly the orphan the first ask exists to avoid. Restoring it leaves
-     * a WHOLE pair - a stale shard entry, and the controller's queue entry if it made one - which is the state
-     * the paragraph above says the engine tolerates and the controller's own sweep retires. The undo lives in
-     * {@link ProcessingShard#removeWorkAtOffsetPairedWith}, which is also where the rejected alternative is
-     * recorded: asking the queue only ONCE, after the shard removal, restores master's shard-first ordering and
-     * needs no second ask, but then every refusal is an undo - and refusals are common exactly when the
-     * controller holds the read lock for a scan, which is the contention this whole method is shaped around.
-     * Asking first keeps the cheap answer on the common path and the undo on the rare one.
+     * <b>A refused SECOND ask cannot abandon, so the shard puts the container back.</b> Returning would leave
+     * exactly what the first ask exists to avoid; restoring leaves the tolerable state the paragraph above
+     * describes. <b>Rejected: asking ONCE, after the shard removal.</b> That restores the shard-first order
+     * astubbs/parallel-consumer#437 was written against and needs no second ask - but then every refusal is an
+     * undo, and refusals are common exactly when the controller holds the read lock for a scan, which is the
+     * contention this method is shaped around. Asking first keeps the cheap answer on the common path and the
+     * undo on the rare one.
      * <p>
      * <b>HOW LONG the delay is, measured 2026-09-03 rather than assumed.</b> "The next work request" is the
      * common case, not a bound. That sweep sits in the else-branch of the shard scan, past the break
