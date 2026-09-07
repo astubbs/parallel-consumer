@@ -118,18 +118,24 @@ refactors below, which are non-breaking and can land at any point in any line.
   runs; after this it fails at construction. Small blast radius, but "started yesterday, will not
   start today" is what a `=== Breaking` bullet exists for. Recorded here rather than only in the
   commit, because this section is what the release notes are assembled from.
-- **Give `WorkContainer` identity equality, and delete `ProcessingShard.Residency`.**
-  `WorkContainer.equals` is topic, partition and offset only, so two containers for the same record at
-  different epochs compare equal - and every value-conditional operation the JDK offers on a
-  collection of them (`Map.remove(key, value)`, `Map.replace`, `computeIfPresent`'s removal path,
-  `Set.remove`) therefore cannot say *which* container it means. The engine already treats identity as
-  the truth everywhere it matters (`ProcessingShard.isResident` and `includeInSelection` both compare
-  with `!=`), so the equality is worked around rather than used. Identity equality would delete the
-  `Residency` token that astubbs/parallel-consumer#468 added to get a conditional removal, and close the
-  `holdingDispatchPermit` defect in
-  [`docs/inflight/bug-dispatch-permit-set-cannot-tell-two-containers-at-one-offset-apart.md`](inflight/bug-dispatch-permit-set-cannot-tell-two-containers-at-one-offset-apart.md)
-  outright. It is **breaking** because `WorkContainer` is public and
-  `WorkContainer.compareTo` orders by offset, which would become inconsistent with equals.
+- **DONE, landing with astubbs/parallel-consumer#468: `WorkContainer` equality is identity, and
+  `RecordContext` equality changes with it.** `WorkContainer.equals` was topic, partition and offset
+  only, so two containers for the same record at different epochs compared equal - and every
+  value-conditional operation the JDK offers on a collection of them (`Map.remove(key, value)`,
+  `Map.replace`, `computeIfPresent`'s removal path, `Set.remove`) therefore could not say *which*
+  container it meant, which is the lost-record defect that PR fixes. The `equals`/`hashCode` pair is
+  deleted; `compareTo` still orders by topic, partition and offset and is now deliberately
+  inconsistent with equals, which `Comparable` only recommends and no `SortedSet`/`SortedMap` here
+  relies on (`RetryQueue` sorts and de-duplicates by its own key types).
+
+  **The user-visible break is `RecordContext`**, whose Lombok `@EqualsAndHashCode` covers the
+  container it wraps: two contexts built from different containers for one record no longer compare
+  equal, so a `Set`, a `Map` key or an `equals` check over record contexts that used to collapse them
+  now keeps both. Narrow in practice - `ConsumerRecord` does not override `equals` either, so two
+  contexts from two different polls were never equal; what changes is two contexts over the same
+  `ConsumerRecord` instance. `WorkContainer` itself is public only in modifier - it is not part of the
+  API a user is expected to hold - and `0.6.0.0` is the breaking release. Recorded here rather than
+  only in the commit, because this section is what the release notes are assembled from.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**

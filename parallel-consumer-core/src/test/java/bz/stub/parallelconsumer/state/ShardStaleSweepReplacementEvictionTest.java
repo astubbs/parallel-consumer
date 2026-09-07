@@ -19,8 +19,8 @@ import static org.mockito.Mockito.spy;
  * controller put at that offset while the sweep was deciding.
  * <p>
  * <b>It used to remove by KEY</b> ({@code removeWorkAtOffset(entry.getKey())}), so whatever occupied the offset
- * when the removal landed is what left the shard. The sweep now removes conditionally on the
- * {@code ProcessingShard.Residency} it inspected, in one atomic step.
+ * when the removal landed is what left the shard. The sweep now removes conditionally on the container it
+ * inspected, in one atomic step - which only means anything because {@link WorkContainer}'s equality is identity.
  * <p>
  * <b>The two sides are genuinely different threads.</b> {@link ProcessingShard#removeStaleWorkContainersFromShard}
  * is reached from {@code PartitionStateManager.onPartitionsRemoved} / {@code onPartitionsAssigned}, i.e. inside a
@@ -86,10 +86,11 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
                 + "to race with")
                 .that(fresh.getEpoch()).isEqualTo(laterEpoch);
 
-        // IDENTITY, never equality, in every assertion below. WorkContainer.equals is topic/partition/offset
-        // only, so the fresh container compares EQUAL to the stale one it replaced - which is the very reason
-        // this defect exists. Truth's hasValue and containsExactly both use equals, so written that way these
-        // assertions would pass on the defective behaviour and this test would assert nothing.
+        // IDENTITY, never equality, in every assertion below - spelled out rather than relying on
+        // WorkContainer's equality being identity today. The question here is WHICH OBJECT survived, and it must
+        // keep being asked that way whatever the equality contract does next: written with Truth's hasValue or
+        // containsExactly, these assertions would pass on the defective behaviour under the coordinate-based
+        // equals this class was written against, and this test would assert nothing.
         assertWithMessage("the fresh container is the only thing at this offset that is not stale, and the "
                 + "partition still carries its offset as incomplete - evicting it loses the record until the "
                 + "partition is re-polled")
@@ -146,66 +147,75 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
     }
 
     /**
-     * The premise the fix rests on, measured rather than assumed: <b>no value-conditional removal keyed on
-     * {@link WorkContainer} equality can express "remove the one I inspected"</b>, so the shard stores a
-     * {@link ProcessingShard.Residency} token whose equality is reference identity.
+     * The premise the fix rests on: <b>{@link WorkContainer}'s equality is IDENTITY, which is what lets
+     * {@code Map.remove(key, value)} express "remove the container I inspected"</b> rather than "remove whatever
+     * is at this offset".
      * <p>
-     * This is a characterisation of the primitive, not of the JDK for its own sake. Both forms below are the
-     * obvious fixes for the defect above, both read as correct, and both silently take the replacement -
-     * <b>including the identity check inside {@code computeIfPresent}</b>, because that method commits its
-     * removal through {@code doRemove(key, v)}, which re-reads the node value and gates on
-     * {@code v.equals(reRead)} before its compare-and-set. The identity test does not survive to the commit.
+     * A compare-and-remove decides "still mapped to the value I inspected" with {@code equals}, so what it means
+     * is a property of the value type and not of the map - no map API can rescue a value type whose equality
+     * cannot tell two occupants of one offset apart. The two halves below are therefore asserted together: the
+     * equality contract itself, then the map behaviour that follows from it.
      * <p>
-     * It is also the tripwire for the day {@link WorkContainer#equals(Object)} becomes identity-based: this test
-     * goes red, and the token can then be deleted.
+     * <b>This is the tripwire for a reintroduced coordinate-based {@code equals}/{@code hashCode}.</b> Restore
+     * the topic/partition/offset pair {@code WorkContainer} used to carry and every assertion here inverts:
+     * the two containers compare equal, the compare-and-remove asked about the departed one answers yes, and the
+     * replacement is destroyed. It also records the JDK measurement that ruled out the near-miss fix -
+     * {@code computeIfPresent} with an identity check in the remapping function - which was airtight-looking and
+     * closed nothing while equality was by coordinates, because that method commits through
+     * {@code doRemove(key, v)}, which re-reads the node value and gates on {@code v.equals(reRead)}. Under
+     * identity equality that gate now declines, which is the third form below.
      */
     @Test
-    // reference equality is the SUBJECT of this test, not an accident of it: the whole point is that the
-    // identity comparison below does not survive to the map's commit while equality does
+    // reference equality is the SUBJECT of this test, not an accident of it
     @SuppressWarnings("ReferenceEquality")
-    void noRemovalKeyedOnContainerEqualityCanExpressWhichContainerToRemove() {
+    void twoContainersAtOneOffsetMustNotBeInterchangeable() {
         var record = recordAt(CONTESTED_OFFSET);
         var stale = new WorkContainer<>(0L, record, module);
         var fresh = new WorkContainer<>(1L, record, module);
-        assertWithMessage("PRECONDITION: the two containers are different objects that compare EQUAL - "
-                + "WorkContainer.equals is topic/partition/offset only, which is the whole difficulty")
-                .that(stale).isEqualTo(fresh);
+
+        // THE CONTRACT. Two containers for one record at two epochs are two different flights, and nothing may
+        // treat one as a stand-in for the other.
         assertThat(stale).isNotSameInstanceAs(fresh);
+        assertWithMessage("WorkContainer equality is identity - a coordinate-based equals would make the stale "
+                + "container and its fresh replacement interchangeable in every value-conditional collection "
+                + "operation, which is the defect this class exists for")
+                .that(stale).isNotEqualTo(fresh);
+        assertWithMessage("hashCode is the identity hash, inherited rather than overridden - anything else is a "
+                + "coordinate-derived hashCode, which is half of the same defect")
+                .that(stale.hashCode()).isEqualTo(System.identityHashCode(stale));
+        assertThat(fresh.hashCode()).isEqualTo(System.identityHashCode(fresh));
+        assertWithMessage("and so the two hash to different buckets, instead of colliding by construction")
+                .that(stale.hashCode()).isNotEqualTo(fresh.hashCode());
 
-        // FORM 1: the JDK's compare-and-remove, asked about the stale container after the replacement landed
-        var byEquality = new ConcurrentSkipListMap<Long, WorkContainer<String, String>>();
-        byEquality.put(CONTESTED_OFFSET, fresh);
-        assertWithMessage("remove(key, value) compares with equals, so it answers YES about a container that is "
-                + "not there and takes the replacement instead")
-                .that(byEquality.remove(CONTESTED_OFFSET, stale)).isTrue();
-        assertThat(byEquality.get(CONTESTED_OFFSET)).isNull();
+        // FORM 1: the JDK's compare-and-remove, asked about the stale container after the replacement landed. It
+        // must DECLINE - this is the exact call the sweep makes, and the one that used to destroy the record.
+        var byIdentity = new ConcurrentSkipListMap<Long, WorkContainer<String, String>>();
+        byIdentity.put(CONTESTED_OFFSET, fresh);
+        assertWithMessage("remove(key, value) compares with equals, so identity equality is what makes it answer "
+                + "NO about a container that is no longer there")
+                .that(byIdentity.remove(CONTESTED_OFFSET, stale)).isFalse();
+        assertThat(byIdentity.get(CONTESTED_OFFSET)).isSameInstanceAs(fresh);
 
-        // FORM 2: computeIfPresent with an identity check in the function - the fix that looks airtight. The put
-        // inside the function stands in for the controller's replacement landing after the function has decided
-        // and before ConcurrentSkipListMap commits the removal; that gap is inside the JDK and cannot be reached
-        // from the production seam, which is why this arm exists at all.
+        // FORM 2: and it still removes the container it really was asked about, so the conditional form is not
+        // merely safe but useful - a removal that never removed anything would satisfy FORM 1 alone.
+        assertWithMessage("the same call names the container it means, and removes exactly that one")
+                .that(byIdentity.remove(CONTESTED_OFFSET, fresh)).isTrue();
+        assertThat(byIdentity.get(CONTESTED_OFFSET)).isNull();
+
+        // FORM 3: computeIfPresent with an identity check in the remapping function - the near-miss fix, kept
+        // because its failure mode was invisible at the production seam. The put inside the function stands in
+        // for the controller's replacement landing after the function has decided and before
+        // ConcurrentSkipListMap commits the removal; that gap is inside the JDK and cannot be reached from the
+        // product. Under coordinate equality the re-read gate passed and the replacement was destroyed; under
+        // identity equality it declines.
         var byIdentityInTheFunction = new ConcurrentSkipListMap<Long, WorkContainer<String, String>>();
         byIdentityInTheFunction.put(CONTESTED_OFFSET, stale);
         byIdentityInTheFunction.computeIfPresent(CONTESTED_OFFSET, (offset, resident) -> {
             byIdentityInTheFunction.put(offset, fresh);
             return resident == stale ? null : resident;
         });
-        assertWithMessage("the identity check in the remapping function does not survive to the commit: "
-                + "computeIfPresent removes through doRemove(key, v), which re-reads the value and gates on "
-                + "equals - so this narrows the window instead of closing it, and loses the record just the same")
-                .that(byIdentityInTheFunction.get(CONTESTED_OFFSET)).isNull();
-
-        // FORM 3: the token the shard actually stores
-        var byResidency = new ConcurrentSkipListMap<Long, ProcessingShard.Residency<String, String>>();
-        var staleResidency = new ProcessingShard.Residency<>(stale);
-        var freshResidency = new ProcessingShard.Residency<>(fresh);
-        byResidency.put(CONTESTED_OFFSET, staleResidency);
-        byResidency.put(CONTESTED_OFFSET, freshResidency);
-        assertWithMessage("Residency overrides neither equals nor hashCode, so the comparison the map performs "
-                + "is reference identity and the compare-and-remove declines")
-                .that(byResidency.remove(CONTESTED_OFFSET, staleResidency)).isFalse();
-        assertThat(byResidency.get(CONTESTED_OFFSET)).isSameInstanceAs(freshResidency);
-        assertWithMessage("and it still removes the residency it really was asked about")
-                .that(byResidency.remove(CONTESTED_OFFSET, freshResidency)).isTrue();
+        assertWithMessage("computeIfPresent commits through doRemove(key, v), which re-reads the value and gates "
+                + "on equals - so with identity equality the replacement survives the gap it used to be lost in")
+                .that(byIdentityInTheFunction.get(CONTESTED_OFFSET)).isSameInstanceAs(fresh);
     }
 }

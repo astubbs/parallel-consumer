@@ -57,6 +57,10 @@ evidence the right object left.
 
 ## What didn't work
 
+**Everything in this section is about the code as it was, with `WorkContainer.equals` still topic,
+partition and offset.** That is what the alternatives were judged against, and it is why the fix that
+landed changes the equality rather than the removal.
+
 **The obvious fix is `computeIfPresent` with an identity check in the remapping function, and it is
 wrong.** It reads as airtight - the function sees the current value and only asks for a removal if
 that value *is* the container the sweep inspected - and it would have shipped looking correct,
@@ -84,24 +88,51 @@ conclusion the 909 write-up reached about sweeping again.
 
 Two other shapes were rejected on the way:
 
-- **`workMap.remove(offset, container)`** - the JDK's compare-and-remove is *defined* by `equals`,
-  so with offset-only equality it answers "yes, that is the one" about a container that is not there.
-  No API can rescue this; the value type's equality **is** the contract.
+- **`workMap.remove(offset, container)` while equality was by coordinates** - the JDK's
+  compare-and-remove is *defined* by `equals`, so it answered "yes, that is the one" about a container
+  that was not there. No API can rescue this; the value type's equality **is** the contract - which is
+  the sentence the fix below acts on, since the same call becomes correct the moment the equality
+  does.
 - **A remove-then-put-back repair**, and **a claim the sweep takes before removing which the writer
   must then wait out** - both reintroduce a window, one in the map and one on the controller.
 
 ## Solution
 
-The map stores a `ProcessingShard.Residency` token rather than the container itself. It overrides
-neither `equals` nor `hashCode`, so its equality is reference identity, and
-`Map.remove(key, value)` - one atomic step, fully specified, no dependence on which side the
-implementation calls `equals` on - means exactly "remove this occupancy, or nothing".
+**`WorkContainer`'s equality is now reference identity** - the `equals` and `hashCode` overrides are
+deleted - so `Map.remove(key, value)` on the shard's map is a true compare-and-remove: one atomic
+step, fully specified, no dependence on which side the implementation calls `equals` on, meaning
+exactly "remove this container, or nothing".
 
 ```java
-private WorkContainer<K, V> evictIfStillResident(long offset, Residency<K, V> inspected) {
+private WorkContainer<K, V> evictIfStillResident(long offset, WorkContainer<K, V> inspected) {
     return workMap.remove(offset, inspected) ? retire(inspected) : null;
 }
 ```
+
+**The interim shape was a `ProcessingShard.Residency` token** - a wrapper stored as the map value,
+overriding neither `equals` nor `hashCode` so that the map's comparison was identity - because
+identity equality on the container itself is a breaking change and `WorkContainer` is public.
+It was replaced before astubbs#468 merged, on the maintainer's call: `0.6.0.0` is the breaking
+release being cut, `WorkContainer` is internal in all but its modifier, and a token per collection
+is one workaround per site for a defect the value type owns.
+
+The objections that had queued the change were checked and each fell:
+
+- **`compareTo` becomes inconsistent with `equals`.** `Comparable` only *recommends* that
+  consistency; it is *required* by `SortedSet` and `SortedMap`, and nothing in main code puts a raw
+  container in either - `RetryQueue` sorts by its own `WorkContainerSortKey` and de-duplicates by its
+  own `WorkContainerKey`. The ordering is for retry scheduling and display; identifying a container
+  is a different question, and the class now answers the two separately.
+- **Collections keyed on containers elsewhere silently change meaning.**
+  `ExternalEngine.holdingDispatchPermit` is the only one, and it is *already* an
+  `IdentityHashMap`-backed set with a javadoc saying why. Identity equality makes the container agree
+  with that code rather than changing it.
+- **The public break.** Real, and named in the release notes:
+  `RecordContext`'s Lombok `@EqualsAndHashCode` covers the container it wraps, so two contexts built
+  from different containers for one record no longer compare equal. Narrower than it sounds -
+  `ConsumerRecord` does not override `equals` either, so `RecordContext` equality was already partly
+  identity, and two contexts from two *polls* were never equal. What changes is two contexts over the
+  same `ConsumerRecord` instance and different containers.
 
 **Nothing evicted is a correct outcome, not a failure**: the replacement won the offset, so the call
 changed nothing, retires nothing, and reports nothing. That matters downstream -
@@ -121,10 +152,11 @@ The decision and the removal are the same operation. There is no interval for a 
 so there is no window to narrow. Every other candidate kept the two apart and argued about how small
 the gap was.
 
-The deeper version of the fix is to give `WorkContainer` identity equality, which would delete the
-token and make every value-conditional operation on a container correct at once. It is breaking -
-`WorkContainer` is public and its `compareTo` orders by offset, which would become inconsistent with
-equals - so it is queued in [`docs/refactoring.md`](../../refactoring.md) under the next major.
+And it is fixed once, in the value type, rather than once per collection. A token is a workaround a
+future site has to remember to repeat; identity equality makes every value-conditional operation on a
+container correct by default, which is why the token did not survive to the merge. The break it costs
+is recorded in
+[`docs/refactoring.md`](../../refactoring.md)'s breaking-change section for `0.6.0.0`.
 
 ## Prevention
 
@@ -133,11 +165,16 @@ equals - so it is queued in [`docs/refactoring.md`](../../refactoring.md) under 
   `PartitionStateManager.getPartitionState` that runs the other thread's action on the way past - so
   the replacement lands at an exact instruction inside the sweep rather than being raced for. Its
   control arm runs the same sweep with nothing racing it: same magnitude, different position. The
-  third arm is the **premise**, pinning that no removal keyed on container equality can express
-  which container it meant, `computeIfPresent` included - and it is the tripwire that goes red the
-  day `WorkContainer.equals` becomes identity-based, saying the token can then be deleted.
-- **Verified from the red side.** Restoring `removeWorkAtOffset(entry.getKey())` in the sweep and
-  changing nothing else sends exactly the defect arm red, with the other two green.
+  third arm, `twoContainersAtOneOffsetMustNotBeInterchangeable`, is the **premise**: it asserts the
+  equality contract directly (two containers at one offset are not equal, and each hash code is the
+  identity hash) and then the map behaviour that follows from it, `computeIfPresent`'s re-read gate
+  included. **It is the tripwire for a reintroduced coordinate-based `equals`** - restore that pair
+  and every assertion in it inverts.
+- **Verified from the red side, twice.** Restoring `removeWorkAtOffset(entry.getKey())` in the sweep
+  and changing nothing else sends exactly the defect arm red, with the other two green. Restoring the
+  old coordinate-based `equals`/`hashCode` on `WorkContainer` and changing nothing else sends the
+  defect arm *and* the premise arm red, with the control arm green - the control arm does not move,
+  because a sweep with nothing racing it never asks which of two containers it meant.
 - **Every assertion about WHICH container is resident uses reference identity**, never Truth's
   `hasValue` or `containsExactly`. Those compare with `equals`, so written that way the assertions
   pass on the defective behaviour and the test asserts nothing - the defect's own mechanism hiding
@@ -146,11 +183,14 @@ equals - so it is queued in [`docs/refactoring.md`](../../refactoring.md) under 
   slot is a check-then-act however atomic each individual access is. Name the *thing* you are
   removing, and make sure the collection can tell it apart from its replacement - which is a
   property of the value type's `equals`, not of the collection.
-- **The sibling instance found by the same-defect-class sweep and NOT fixed**:
-  `ExternalEngine.holdingDispatchPermit` is a `Set<WorkContainer>` whose permit accounting is
-  per-record while its membership is per-offset, so two containers at one offset leak a dispatch
-  permit. Open, with its reachability argument, in
-  [`docs/inflight/bug-dispatch-permit-set-cannot-tell-two-containers-at-one-offset-apart.md`](../../inflight/bug-dispatch-permit-set-cannot-tell-two-containers-at-one-offset-apart.md).
+- **The same-defect-class sweep's one apparent hit was a FALSE POSITIVE, and how it happened is the
+  lesson.** `ExternalEngine.holdingDispatchPermit` was written up as a `Set<WorkContainer>` leaking a
+  dispatch permit per offset collision. It is not: the field has been
+  `Collections.newSetFromMap(Collections.synchronizedMap(new IdentityHashMap<>()))` since
+  astubbs#342, with a javadoc saying it is by identity and why. The sweep matched the declared type
+  `Set<WorkContainer<K, V>>` and stopped there - **a collection's semantics live in its
+  initialiser, not its declaration**, so a search over declarations reports the safe sites and the
+  unsafe ones identically. Read the initialiser, or the search is a filter rather than a finding.
 
 ## Related issues
 

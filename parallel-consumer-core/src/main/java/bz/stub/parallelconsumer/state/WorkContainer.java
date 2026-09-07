@@ -21,7 +21,6 @@ import java.time.Instant;
 import java.time.temporal.Temporal;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -34,6 +33,33 @@ import static java.util.Optional.of;
 
 /**
  * Context object for a given {@link ConsumerRecord}, carrying completion status, various time stamps, retry data etc..
+ * <p>
+ * <b>Equality is IDENTITY - this class deliberately overrides neither {@code equals} nor {@code hashCode}.</b> Two
+ * containers can exist for one offset at the same time: a stale one left over from before a rebalance and the fresh
+ * replacement the controller admitted for the same record afterwards. They are different <em>flights</em> of the same
+ * record and every value-conditional collection operation the JDK offers - {@link java.util.Map#remove(Object, Object)},
+ * {@link java.util.Map#replace(Object, Object, Object)}, {@code computeIfPresent}'s removal path, {@code Set.remove} -
+ * has to be able to tell them apart. It cannot if equality is by coordinates, because the collection's idea of "the
+ * one I inspected" is exactly the value type's {@code equals}: with topic/partition/offset equality, a
+ * compare-and-remove asked about the stale container answers yes about the replacement and evicts it, losing the
+ * record. That was the shape of astubbs/parallel-consumer#468, and the engine had already worked around the equality
+ * everywhere it mattered ({@link ProcessingShard#isResident} compares with {@code !=};
+ * {@code ExternalEngine.holdingDispatchPermit} is an {@link java.util.IdentityHashMap}-backed set) rather than using
+ * it. See
+ * {@code docs/solutions/logic-errors/a-by-key-removal-cannot-say-which-container-it-meant-2026-09-07.md}.
+ * <p>
+ * <b>{@link #compareTo(WorkContainer)} orders by topic, partition and offset, and is therefore NOT consistent with
+ * equals - deliberately.</b> {@link Comparable} only <em>recommends</em> that consistency; it is required by the
+ * contracts of {@link java.util.SortedSet} and {@link java.util.SortedMap}, so a raw container may not be used as an
+ * element or key of one. Nothing does: {@link RetryQueue} sorts by its own {@code WorkContainerSortKey} and
+ * de-duplicates by its own {@code WorkContainerKey}, which is what makes the ordering safe to keep while equality
+ * becomes identity. Ordering exists to sort records for retry and for display; identifying a container is a different
+ * question and this class now answers the two separately.
+ * <p>
+ * <b>{@link bz.stub.parallelconsumer.RecordContext} equality changes with this</b>, because its Lombok
+ * {@code @EqualsAndHashCode} covers the container it wraps: two contexts built from different containers for the same
+ * record no longer compare equal. That is public API - see the {@code 0.6.0.0} breaking-change section of
+ * {@code docs/refactoring.md}.
  *
  * @author Antony Stubbs
  */
@@ -514,34 +540,20 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
                                 theirs)));
     }
 
+    /**
+     * Orders by topic, partition and offset - <b>not consistent with equals, which is identity</b>. See the class
+     * javadoc: the inconsistency is deliberate, and no {@link java.util.SortedSet} or {@link java.util.SortedMap}
+     * holds a raw container, which is the only place the JDK requires the two to agree.
+     * <p>
+     * There is deliberately no {@code equals}/{@code hashCode} pair below this any more. Reintroducing one keyed on
+     * coordinates re-opens astubbs/parallel-consumer#468 - a compare-and-remove could no longer say which of two
+     * containers at one offset it meant - and
+     * {@code ShardStaleSweepReplacementEvictionTest.twoContainersAtOneOffsetMustNotBeInterchangeable} is the tripwire
+     * that goes red if it comes back.
+     */
     @Override
     public int compareTo(WorkContainer o) {
         return comparator.compare(this, o);
-    }
-
-    @Override
-    public boolean equals(final Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        WorkContainer<?, ?> that = (WorkContainer<?, ?>) o;
-        String thisTopic = getTopicPartition().topic();
-        String thatTopic = that.getTopicPartition().topic();
-        if (!thisTopic.equals(thatTopic)) {
-            return false;
-        }
-        int thisPartition = getTopicPartition().partition();
-        int thatPartition = that.getTopicPartition().partition();
-        if (thisPartition != thatPartition) {
-            return false;
-        }
-        long thisOffset = getCr().offset();
-        long thatOffset = that.getCr().offset();
-        return thisOffset == thatOffset;
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(getTopicPartition().topic(), getTopicPartition().partition(), cr.offset());
     }
 
     public boolean isNotInFlight() {
