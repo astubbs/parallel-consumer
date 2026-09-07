@@ -1,4 +1,4 @@
-# Ruleset edits owed by the folds into `repo: hygiene` and `scan: repo`
+# Ruleset edits owed by the folds into `repo: hygiene`, `scan: repo` and `static: analysis`
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
@@ -9,14 +9,16 @@ Three standalone jobs were deleted because `repo: hygiene` already ran every gat
 `docs data: audit`. A fourth, `PR Checklist` (the whole of `.github/workflows/pr-checklist.yml`),
 was deleted because its steps could run as the tail of the same job - see "Why hygiene hosts the
 checklist" below. Three more, `maven.yml`'s no-build scanners `dups: clones`, `dups: similarity` and
-`deps: vulnerabilities`, became steps of one new job, `scan: repo` - see "The scanner fold" below.
-All seven old names are still **required status-check contexts in the master ruleset**, and the ruleset is repository settings, not tree state - no PR can change it
+`deps: vulnerabilities`, became steps of one new job, `scan: repo` - see "The scanner fold" below. Two more, `maven.yml`'s
+build-dependent static analysers `static: infer` and `static: spotbugs`, became steps of one new job,
+`static: analysis` - see "The static-analysis fold" below.
+All nine old names are still **required status-check contexts in the master ruleset**, and the ruleset is repository settings, not tree state - no PR can change it
 ([`docs/ci.md`](../ci.md), "The required list is repository settings, not tree state").
 <!-- file-refs: N/A - copyright.yml and pr-checklist.yml are named as the files this work deleted; the record of each is its deleting commit, `git log --diff-filter=D -- .github/workflows/copyright.yml .github/workflows/pr-checklist.yml` -->
 
 ## The edit
 
-Remove these seven contexts from the master ruleset's `required_status_checks`:
+Remove these nine contexts from the master ruleset's `required_status_checks`:
 
 - `Copyright header check`
 - `quarantine: audit`
@@ -25,14 +27,17 @@ Remove these seven contexts from the master ruleset's `required_status_checks`:
 - `dups: clones`
 - `dups: similarity`
 - `deps: vulnerabilities`
+- `static: infer`
+- `static: spotbugs`
 
-Add one:
+Add two:
 
 - `scan: repo`
+- `static: analysis`
 
 `repo: hygiene` needs no add - it is already in the required list (verified live 2026-09-07 with
 `gh api repos/astubbs/parallel-consumer/rules/branches/master`; that command is the answer, not this
-sentence). `scan: repo` is new, so it is not.
+sentence). `scan: repo` and `static: analysis` are new, so they are not.
 
 ## When: at the merge of the deleting PR, not before and not after
 
@@ -46,21 +51,23 @@ A required context nothing produces leaves every PR **pending** - it never fails
   required").
 
 So: edit the ruleset in the same sitting as the merge. Only one merge is exposed either way - the
-deleting PR's own checks list shows the seven contexts as expected-but-missing until the ruleset
+deleting PR's own checks list shows the nine contexts as expected-but-missing until the ruleset
 drops them, which is the intended tell that the edit is still owed, not a fault in that PR.
 
 **The add has the opposite ordering.** A new required context that no master run has produced
 leaves every PR pending ([`docs/ci.md`](../ci.md), "Which checks are required": a check is promoted
-only once the job that emits it is already on master). `scan: repo` is `pull_request`-only, so
-strictly it never runs *on* master; the condition that matters is that the job definition is on
-master, so every PR opened afterwards produces the context. Sequence at the merge, then:
+only once the job that emits it is already on master). Both `scan: repo` and `static: analysis` are
+`pull_request`-only, so strictly neither ever runs *on* master; the condition that matters is that
+the job definition is on master, so every PR opened afterwards produces the context. Sequence at the
+merge, then:
 
 1. Merge the deleting PR.
-2. In the same sitting, remove the seven old contexts.
-3. Add `scan: repo` only after the merge has landed and a PR run has produced the context - the
-   first PR to rebase onto the merged master shows `scan: repo` in its checks list; that is the
-   evidence. Until then the three scanners gate nothing, which is a window measured in one PR's
-   CI run, and is preferable to every PR pending on a context nothing yet produces.
+2. In the same sitting, remove the nine old contexts.
+3. Add `scan: repo` and `static: analysis` only after the merge has landed and a PR run has produced
+   each context - the first PR to rebase onto the merged master shows both in its checks list; that
+   is the evidence. Until then the three scanners and the two analysers gate nothing, which is a
+   window measured in one PR's CI run, and is preferable to every PR pending on a context nothing
+   yet produces.
 
 ## Why hygiene hosts the checklist, and not another job
 
@@ -125,6 +132,42 @@ and all three scanners need `pull-requests: write` to post. Keeping the write gr
 runs only pinned third-party actions is the same reviewer-isolation line `docs/ci.md` draws for
 `Check PR Dependencies`.
 
-This note tracks only the owed edits. Once the live ruleset lists `scan: repo` and none of the
-seven old contexts, nothing here is both true and unowned elsewhere - the reasoning is in
-[`docs/ci.md`](../ci.md), the `repo-hygiene.yml` header and the `scan: repo` job's own comments.
+## The static-analysis fold
+
+`static: infer` and `static: spotbugs` were the two build-dependent analysers: both `needs:
+prepare-deps`, both restored the same Maven cache with a byte-identical `actions/cache/restore` step,
+and between them they held two runner slots for work that fits comfortably inside one. They are now
+two steps of `static: analysis` in `maven.yml`, and the constraints the fold kept are stated as
+comments on the job itself: **Infer first** because it is the cheaper signal by a wide margin, so it
+lands in the log before SpotBugs' compile-and-analyse; `!cancelled()` on every analysis step - the
+Infer toolchain steps included, so a failed toolchain download cannot hide SpotBugs either - with no
+verdict step and no new `continue-on-error`, because the job's own conclusion aggregates the steps;
+**one** Maven cache restore where there were two, with the Infer toolchain cache left as its own
+steps ahead of the Infer run because it is keyed on the toolchain version, not the pom hash; and
+`timeout-minutes: 30` where the two jobs held 15 and 10, sized so the sum plus a toolchain download
+on a cache miss has headroom without a hung tool sitting for an hour.
+
+The sum still fits under the critical path: `Unit Tests` is the longest lane, and Infer plus SpotBugs
+comes in below it, so the batch does not become the job everything else waits on.
+
+Permissions are the union and nothing wider. Neither job declared job-level permissions, so both
+inherited maven.yml's workflow-wide grant; the merged job declares `contents: read`,
+`pull-requests: write` (the SpotBugs sticky comment) and `checks: write` (the SpotBugs annotation
+action), which drops the workflow's `actions: read` that neither analyser used. The
+`continue-on-error: true` on the SpotBugs summary-comment step is untouched - a comment write must
+not fail the lane, and that reasoning is recorded at the step.
+
+**The two old job names live on as the step names**, so a red step reads in the log the way the red
+check used to, and the prose in `docs/solutions/` and `docs/inflight/` that says what
+`static: spotbugs` found stays accurate - only the check name changed.
+
+**One out-of-scope repair is owed**: `bin/check-pr-analysis-surfaces.sh` filters check runs by name
+with `test("Mutation|spotbugs|racerd|CVE|Quarantine")`. That regex reads the CHECK name, not the step
+names, so once the ruleset carries `static: analysis` the script stops matching the analysis lane and
+silently reports one surface fewer. The fix is one alternation:
+`test("Mutation|spotbugs|racerd|static: analysis|CVE|Quarantine")`.
+
+This note tracks only the owed edits. Once the live ruleset lists `scan: repo` and
+`static: analysis` and none of the nine old contexts, nothing here is both true and unowned elsewhere
+- the reasoning is in [`docs/ci.md`](../ci.md), the `repo-hygiene.yml` header and the `scan: repo`
+and `static: analysis` jobs' own comments.

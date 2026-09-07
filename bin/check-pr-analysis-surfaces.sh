@@ -258,8 +258,13 @@ echo "==========================================================================
 echo "SURFACES THIS SCRIPT CANNOT READ - open these by hand"
 echo "================================================================================================"
 echo "  Job summaries (PIT survivor table, CVE tables) are not exposed by the REST API."
+# THIS MATCHES THE CHECK NAME, WHICH IS A JOB NAME, WHICH IS AN API. A job rename drops its surface
+# from this listing silently - nothing fails, the row simply stops appearing, and the reader cannot
+# tell "no summary to read" from "we stopped looking". `racerd` outlived the job that became
+# `static: infer` this way, and was dead here until the 2026-09-07 job folds forced a re-read.
+# Re-check this pattern whenever a job in .github/workflows/ is renamed or folded.
 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" \
-    --jq '.check_runs[] | select(.name | test("Mutation|spotbugs|racerd|CVE|Quarantine")) | "    \(.name): \(.html_url)"' \
+    --jq '.check_runs[] | select(.name | test("Mutation|static: analysis|scan: repo|CVE|Quarantine")) | "    \(.name): \(.html_url)"' \
     2>/dev/null | sort -u || true
 echo
 echo "  Console-only output: a tool that prints to the Maven log and does not annotate is invisible"

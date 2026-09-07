@@ -70,11 +70,12 @@ document. This section is the detail behind it.
   **gating**, like the job they replaced: a chaos RED is a real finding. The **`Integration
   Tests`** lane is likewise two gating shards since astubbs#442 - a named heavy set and a
   catch-all defined by subtraction; see
-  ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). Also carries SpotBugs, PR-scoped
-  mutation testing (PIT), and the `scan: repo` job - the two duplication scanners and dependency
-  vulnerability review as steps of one no-build job, each step keeping the name of the job it used
-  to be (`dups: clones`, `dups: similarity`, `deps: vulnerabilities`), so a red step still reads the
-  way the red check did. Push to
+  ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). Also carries PR-scoped
+  mutation testing (PIT) and two batched jobs: **`static: analysis`** - Infer then SpotBugs, the
+  cheaper signal first - and **`scan: repo`** - the two duplication scanners and dependency
+  vulnerability review, no build between them. In both, each step keeps the name of the job it used
+  to be (`static: infer`, `static: spotbugs`; `dups: clones`, `dups: similarity`,
+  `deps: vulnerabilities`), so a red step still reads the way the red check did. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
   job - never `setup-java cache: 'maven'`.
@@ -295,7 +296,9 @@ gh api repos/astubbs/parallel-consumer/rulesets/<id> \
 check is only promoted once the job that emits it is already on master. The same ordering governs a
 renamed job: the ruleset keeps the old name, which then blocks nothing visibly and passes never. That
 is how a bare `spotbugs` context outlived the job that became `static: spotbugs` and sat required with
-no producer until 2026-08-26. **A skip does not satisfy a required check either** - it waits - so a
+no producer until 2026-08-26. That job name has since gone the same way: `static: infer` and
+`static: spotbugs` are steps of `static: analysis` now, and both contexts are on the removal list in
+the note below. **A skip does not satisfy a required check either** - it waits - so a
 job that can legitimately have nothing in scope should report success rather than skip before anyone
 requires it. **Removals are the other half of the same ordering**: a job deleted from the tree leaves
 its context in the ruleset, required and never produced, so every PR pends until the ruleset drops
@@ -314,8 +317,8 @@ every other PR) and not after (nothing merges). The live instance of this is
 | `Analyze (actions)`, `Analyze (java-kotlin)`, `Analyze (python)` | The `CodeQL` aggregate above is already required and covers all three |
 
 This table is the durable half of a note that has been retired: the three ruleset edits it tracked -
-adding `Chaos Pain Suite` once it reached master, adding `static: infer`, and removing the orphaned
-`spotbugs` - were made on 2026-08-26. The reasoning survives it, because the failure it prevents is
+adding `Chaos Pain Suite` once it reached master, adding `static: infer` (since folded into
+`static: analysis`), and removing the orphaned `spotbugs` - were made on 2026-08-26. The reasoning survives it, because the failure it prevents is
 someone re-proposing one of the rows above and re-deriving why it does not work.
 
 **`Chaos Pain Suite` was promoted without waiting for a bake-in period**, deliberately and against

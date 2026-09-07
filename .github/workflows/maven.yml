@@ -770,38 +770,44 @@ jobs:
           compare_with_base: true
           max_increase: 10
 
-  # Meta's Infer, every Java checker it ships - not just RacerD. RacerD is the only detector here
-  # that finds races WITHOUT being told where to look: Error Prone's GuardedBy only fires where
-  # somebody wrote the annotation, and this codebase has none, so the racing-double seam tests can
-  # only re-prove seams already found by hand. RacerD infers which locks protect which state from
-  # how the code uses them, and it is still why this lane exists. Alongside it, bin/infer-test.sh
-  # also runs pulse (null derefs, resource leaks), starvation (deadlock via lock-order inversion),
-  # and the checkers enabled by --annotation-reachability --bufferoverrun --cost --loop-hoisting
-  # --scope-leakage - `--racerd-only` used to disable everything but RacerD, including two checkers
-  # that are on by default, which is why the flag is gone and the lane was renamed from RacerD to
-  # Infer to match what it actually runs.
+  # TWO STATIC ANALYSERS IN ONE JOB. They ran as `static: infer` and `static: spotbugs`: both waited
+  # on prepare-deps and both restored the same Maven cache with an identical step, so batching them
+  # restores it once and gives a runner slot back. Infer runs first - it is the cheaper signal by a
+  # wide margin - and the pair still finishes inside the unit-test lane that sets the critical path,
+  # so the batch does not become the longest job.
   #
-  # AN IDENTITY SET, not a count. config/infer-known-findings.txt records which findings are known,
-  # keyed on bug type plus class.method. A bare count ceiling could not distinguish "one finding
-  # fixed" from "one finding swapped for a different one" - both leave the total unchanged - which an
-  # independent cross-model review caught, and which is the same reports-green-while-it-changed class
-  # this lane exists to police. One line per known identity, checked in, so both directions are a
-  # visible diff.
+  # Fail at the end, report both: every analysis step is guarded with `!cancelled()`, so a red Infer
+  # never hides SpotBugs and the job conclusion aggregates them. No verdict step, and no new
+  # continue-on-error - the one on the SpotBugs summary comment below is deliberate and unchanged.
   #
-  # Fails BOTH ways: a new identity is a new finding, and a known one that stops firing means
-  # somebody fixed it without ratcheting the file.
-  infer:
+  # THE OLD JOB NAMES LIVE ON AS STEP NAMES, so the log reads the way the checks list used to and
+  # prose citing `static: infer` or `static: spotbugs` still names the thing that ran. What changed
+  # is the check: `static: analysis` is the required-check name in the making, and the two names it
+  # replaces are still in the master ruleset. docs/inflight/ci-fewer-jobs-ruleset-edits.md owns the
+  # swap and its ordering.
+  static:
     if: github.event_name == 'pull_request'
-    name: "static: infer"
+    name: "static: analysis"
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The two jobs held 15 and 10. The sum plus an Infer toolchain download on a cache miss needs
+    # headroom, without leaving a hung tool sitting for an hour.
+    timeout-minutes: 30
     needs: prepare-deps
+    # The union of what the two jobs held. Neither declared job-level permissions, so both inherited
+    # the workflow-wide grant: the SpotBugs annotation action needs checks: write, its sticky comment
+    # needs pull-requests: write, and Infer needs nothing beyond the checkout. Declaring the union
+    # here also drops the workflow's actions: read, which neither job used - nothing widens.
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
+      # ONE restore for both analysers - the two jobs each carried an identical copy of this step.
       - name: Restore Maven cache
         uses: actions/cache/restore@v4
         with:
@@ -810,11 +816,33 @@ jobs:
           restore-keys: |
             setup-java-Linux-x64-maven-
 
+      # Meta's Infer, every Java checker it ships - not just RacerD. RacerD is the only detector here
+      # that finds races WITHOUT being told where to look: Error Prone's GuardedBy only fires where
+      # somebody wrote the annotation, and this codebase has none, so the racing-double seam tests can
+      # only re-prove seams already found by hand. RacerD infers which locks protect which state from
+      # how the code uses them, and it is still why this lane exists. Alongside it, bin/infer-test.sh
+      # also runs pulse (null derefs, resource leaks), starvation (deadlock via lock-order inversion),
+      # and the checkers enabled by --annotation-reachability --bufferoverrun --cost --loop-hoisting
+      # --scope-leakage - `--racerd-only` used to disable everything but RacerD, including two checkers
+      # that are on by default, which is why the flag is gone and the lane was renamed from RacerD to
+      # Infer to match what it actually runs.
+      #
+      # AN IDENTITY SET, not a count. config/infer-known-findings.txt records which findings are known,
+      # keyed on bug type plus class.method. A bare count ceiling could not distinguish "one finding
+      # fixed" from "one finding swapped for a different one" - both leave the total unchanged - which an
+      # independent cross-model review caught, and which is the same reports-green-while-it-changed class
+      # this lane exists to police. One line per known identity, checked in, so both directions are a
+      # visible diff.
+      #
+      # Fails BOTH ways: a new identity is a new finding, and a known one that stops firing means
+      # somebody fixed it without ratcheting the file.
+
       # Keyed on the version alone - the toolchain changes only when we bump it, which makes this a
       # better cache key than the pom-hash ones above. Unpacked it is ~950 MB, so the TARBALL is what
       # gets cached and it is unpacked per run: the repo-wide cache budget is 10 GB and several jobs
       # already hold ~/.m2.
       - name: Restore the Infer toolchain
+        if: ${{ !cancelled() }}
         id: infer-cache
         uses: actions/cache@v4
         with:
@@ -822,7 +850,7 @@ jobs:
           key: infer-linux-x86_64-v1.3.0
 
       - name: Download Infer
-        if: steps.infer-cache.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.infer-cache.outputs.cache-hit != 'true' }}
         run: |
           mkdir -p ~/infer-dist
           curl -sSL --fail -o ~/infer-dist/infer.tar.xz \
@@ -840,50 +868,35 @@ jobs:
       # to force a clean download and see whether the digest returns; a genuine upstream re-cut of a
       # published tag is the rarer explanation and should be confirmed against the release page.
       - name: Verify the Infer archive against its pinned digest
+        if: ${{ !cancelled() }}
         run: |
           echo "02be62ba931cb43e2d42bbf7abf4bd9a410cf8464cce5453934e25c90a825850  $HOME/infer-dist/infer.tar.xz" \
             | sha256sum --check --strict -
 
       - name: Unpack and confirm it runs
+        if: ${{ !cancelled() }}
         run: |
           mkdir -p ~/infer
           tar -xJf ~/infer-dist/infer.tar.xz -C ~/infer --strip-components=1
           ~/infer/bin/infer --version
 
       # Asserts the ceiling in both directions. Analysis itself is ~11s over core's 73 files; the
-      # timeout is for the download on a cache miss.
+      # job timeout above is sized for the toolchain download on a cache miss, not for this.
       # INFER_BIN and INFER_JDK are set here rather than in an `env:` block on purpose. An earlier
       # version set all three in `env:` AND overrode two of them inline, so the env values were dead
       # - and worse, wrong: INFER_BIN pointed at the workspace, while the unpack step above puts the
       # toolchain in $HOME/infer. Deleting the inline prefix, which is exactly what a later tidy-up
       # would do, would have pointed the lane at nothing. `$HOME` and `$JAVA_HOME` are not available
       # to `env:` at all, which is what forced the inline form in the first place.
-      - name: Infer
+      - name: "static: infer"
+        if: ${{ !cancelled() }}
         run: INFER_BIN="$HOME/infer/bin/infer" INFER_JDK="$JAVA_HOME" bash bin/infer-test.sh
 
-  # SpotBugs static analysis - finds null derefs, concurrency issues, resource leaks.
-  # Whole reactor, main AND test code, with fb-contrib and find-sec-bugs detectors loaded.
-  # Suppression is by rule in config/spotbugs-exclude.xml; the registry that justifies every entry is
-  # docs/inflight/static-spotbugs-rule-registry.md.
-  spotbugs:
-    if: github.event_name == 'pull_request'
-    name: "static: spotbugs"
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: prepare-deps
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      - name: Restore Maven cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.m2/repository
-          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            setup-java-Linux-x64-maven-
+      # SpotBugs static analysis - finds null derefs, concurrency issues, resource leaks.
+      # Whole reactor, main AND test code, with fb-contrib and find-sec-bugs detectors loaded.
+      # Suppression is by rule in config/spotbugs-exclude.xml; the registry that justifies every entry is
+      # docs/inflight/static-spotbugs-rule-registry.md.
+      #
       # No baseline restore, and no baseline job: suppression is by RULE now, in the checked-in
       # config/spotbugs-exclude.xml the pom points at, with every entry justified in
       # docs/inflight/static-spotbugs-rule-registry.md. The job this replaces regenerated an exclude
@@ -911,16 +924,17 @@ jobs:
       # Not bound to a lifecycle phase on purpose: SpotBugs at effort=Max over the whole reactor is
       # minutes, and paying that on every local `mvn test` would get the plugin switched off. Run the
       # same two goals by hand when you want the list.
-      - name: Compile and run SpotBugs
+      - name: "static: spotbugs"
+        if: ${{ !cancelled() }}
         run: ./mvnw --batch-mode -Pci test-compile spotbugs:spotbugs spotbugs:check -Dspotbugs.failOnError=false
       - name: Post SpotBugs annotations on PR
-        if: always()
+        if: ${{ !cancelled() }}
         uses: jwgmeligmeyling/spotbugs-github-action@v1.2
         with:
           path: '**/target/spotbugsXml.xml'
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Post SpotBugs summary to PR
-        if: always()
+        if: ${{ !cancelled() }}
         # A COMMENT WRITE MUST NOT FAIL THE JOB - the same reasoning as the throughput step above, and
         # missing here for the same reason it was missing there. This step summarises analysis that has
         # already run and already posted its annotations, so a rate limit or a 500 while posting would
