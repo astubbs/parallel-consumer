@@ -64,6 +64,46 @@ against it is meaningless in both directions. It self-corrects on master's next 
 is why nothing was changed for it - but a red that clears by itself is exactly the kind that gets
 attributed to the PR that happened to be open.
 
+## Sighting, 2026-09-07: the two sides still count different FILE SETS
+
+<!-- post-merge: checked-begin -->
+Observed on astubbs/parallel-consumer#105, check `codecov/project/unit`. That PR is the cleanest
+possible probe for this, and the reason is worth stating before the numbers: **its diff contained no
+Java at all** when the sighting was taken - a build property, a shell-script line, some documents and
+some checked-in data files. So any difference the comparison reports is the comparison's, not the
+change's. (That PR has since been re-scoped to documentation only, which does not weaken the probe -
+it strengthens it.)
+
+Reproduce the shape from that PR's codecov comment; the figures are deliberately not copied here,
+because they move at every re-upload and a stale one reads as current:
+
+- The base codecov chose was **an ancestor of the PR head**, provable with
+  `git merge-base --is-ancestor <base> <head>`. Everything in the base is therefore in the head.
+- Codecov nonetheless reported the head as carrying **more files and more lines than that base** -
+  double-digit files, hundreds of lines. With no Java in the diff and the base contained in the
+  head, no diff can produce that. **The two sides are measuring different file sets**, which is the
+  same defect as the `default`-versus-suite-flags case above, surviving the flag split.
+- `codecov/patch` passed and the whole-repository `project` number **rose**. Only the flag-scoped
+  `unit` gate was red, and it was red on a PR that changed no code.
+- `integration`, `chaos` and `performance` each showed **no base value at all** - codecov renders
+  them `(?)` - so `unit` was the only flag with two sides to compare.
+
+**Which half of this note that supports.** The first open item - "the fix cannot be verified by the
+change that makes it", expecting red-or-no-data on the first PRs after the split lands. Master has
+since run and uploaded, because `unit` had a base to compare against; `integration` did not, so that
+item is **partly** discharged and partly still live. The prediction that it "clears once master has
+re-uploaded under the new flags" did not hold for `unit`: master re-uploaded, the flag compared, and
+it was still wrong.
+
+**Which half it does NOT test, and must not be read as testing.** The shared-upload-glob mechanism -
+`files:` globbing both jacoco patterns for every suite - remains **unverified**. A file-set
+mismatch is *consistent with* that glob putting files in a PR's `unit` flag that master's `unit`
+upload never carried, but this sighting inspected no uploaded report and identified no specific
+file. It does not establish which side is wrong, whether the glob is the cause, or whether some
+other asymmetry between `ci-unit-test.sh` and `ci-build.sh`'s surefire half explains it. Settling
+that still needs the per-suite `files` work described above, or a diff of the two flags' file lists.
+<!-- post-merge: checked-end -->
+
 <!-- post-merge: checked-begin - names astubbs/parallel-consumer#431 as the source of a recorded sighting, in the past
      tense; reads the same once that PR has landed -->
 ## 2026-09-07: master's own `unit` history falsifies "so a drop there is a real drop"
@@ -85,12 +125,12 @@ whose own text says a drop on it is real, going red on master against master, is
 **Not the same sighting as the two related ones already on file, and neither settles it.**
 astubbs/parallel-consumer#431's `ed6b8f461` documents a **verified, narrower** cause - a single base
 report short on files and lines because its upload was partial - which explains a one-off red on a
-PR compared against a specific truncated master commit. The `optimize/unit-gate` branch
-(astubbs/parallel-consumer#105) adds a sighting to this same file finding the PR and its base
-disagree on `unit`'s file set even though the base is a git ancestor of the head, and leaves the
-cause **explicitly unverified** - a candidate (the shared jacoco upload glob) named but not checked
+PR compared against a specific truncated master commit. The FILE SETS sighting above finds that a PR
+and its base disagree on `unit`'s file set even though the base is a git ancestor of the head, and
+leaves the cause **explicitly unverified** - a candidate (the shared jacoco upload glob) named but not checked
 against an actual file list. Neither is a same-commit-pair, master-vs-master comparison: both are a
-PR against one base at one point in time. A stable two-band oscillation across many consecutive
+PR against one base at one point in time.
+A stable two-band oscillation across many consecutive
 master pushes, with no relation to diff content, is a different shape from either, and this note
 records it rather than folding it into theirs.
 
@@ -108,7 +148,8 @@ comparison yet.
 of this blocks a merge. The cost is upstream of blocking: astubbs/parallel-consumer#444 is a PR
 whose diff added no files under `src/main/java` and still read a real `unit` drop while the
 project-wide total rose, purely because its base happened to sit in the other band from its head -
-the same shape as the PR the `optimize/unit-gate` sighting describes. A gate that flips on
+<!-- post-merge: checked -->
+the same shape as the PR the FILE SETS sighting above describes. A gate that flips on
 roughly every other master commit, independent of content, cannot be told apart from a genuine
 unit-coverage regression by looking at the number alone - the noise band is wide enough to hide a
 real drop of the same size. "So a drop there is a real drop" is no longer a safe reading of this

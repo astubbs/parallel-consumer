@@ -135,8 +135,8 @@ class RetryQueueRequeueWindowTest {
         private boolean raceFired;
 
         SeamShard(ShardKey key, ParallelConsumerOptions<?, ?> options, PartitionStateManager<String, String> pm,
-                  RecordPopulation population) {
-            super(key, options, pm, population);
+                  RecordPopulation population, DispatchScanMeter scanMeter) {
+            super(key, options, pm, population, scanMeter);
         }
 
         void arm(Runnable interference) {
@@ -175,7 +175,10 @@ class RetryQueueRequeueWindowTest {
 
         var anyRecordOnThatPartition = new ConsumerRecord<>(partition.topic(), partition.partition(), 0L, "k", "v");
         var key = ShardKey.of(anyRecordOnThatPartition, module.options().getOrdering());
-        var seamShard = new SeamShard(key, module.options(), wm.getPm(), wm.getSm().getRecordPopulation());
+        // the manager's OWN meter, not a fresh one: it is shared across every shard of one ShardManager, and a
+        // planted shard that counted into its own would silently drop what production examined through it
+        var seamShard = new SeamShard(key, module.options(), wm.getPm(), wm.getSm().getRecordPopulation(),
+                wm.getSm().getDispatchScanMeter());
         shards.put(key, seamShard);
         return seamShard;
     }

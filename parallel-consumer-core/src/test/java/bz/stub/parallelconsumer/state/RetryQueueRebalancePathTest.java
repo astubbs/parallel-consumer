@@ -294,7 +294,7 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
         var staleTailRecord = new ConsumerRecord<>(topic, tp.partition(), 20L, "a-key", "stale");
         var retryQueue = new RetryQueue();
         var shard = new ProcessingShard<>(ShardKey.of(freshHeadRecord, KEY),
-                keyOrdered.options(), orderedPm, new RecordPopulation());
+                keyOrdered.options(), orderedPm, new RecordPopulation(), new DispatchScanMeter());
 
         var staleTail = new WorkContainer<>(firstEpoch, staleTailRecord, keyOrdered);
         var freshHead = new WorkContainer<>(laterEpoch, freshHeadRecord, keyOrdered);
@@ -396,7 +396,7 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
         var record = new ConsumerRecord<>(topic, tp.partition(), 7L, "a-key", "a-value");
         var retryQueue = new RetryQueue();
         var shard = new ProcessingShard<>(ShardKey.of(record, module.options().getOrdering()),
-                module.options(), pm, new RecordPopulation());
+                module.options(), pm, new RecordPopulation(), new DispatchScanMeter());
 
         wm.onPartitionsAssigned(UniLists.of(tp));
         var container = new WorkContainer<>(pm.getEpochOfPartition(tp), record, module);
