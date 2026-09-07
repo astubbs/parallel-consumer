@@ -63,7 +63,7 @@ abstract class ShardSeamTestBase {
                                               RecordPopulation population,
                                               ConsumerRecord<String, String> record) {
         return new ProcessingShard<>(ShardKey.of(record, module.options().getOrdering()),
-                module.options(), pm, population);
+                module.options(), pm, population, new DispatchScanMeter());
     }
 
     ConsumerRecord<String, String> recordAt(long offset) {

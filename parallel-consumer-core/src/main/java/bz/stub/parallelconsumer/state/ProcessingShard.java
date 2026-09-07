@@ -124,6 +124,13 @@ public class ProcessingShard<K, V> {
      */
     private final RecordPopulation population;
 
+    /**
+     * Counts what the dispatch scan looks at, so a change that makes one shard shape quadratic is detectable.
+     * Shared across every shard of one {@link ShardManager} - see {@link DispatchScanMeter} for why it is not
+     * per-shard, and why it is a count rather than a timing.
+     */
+    private final DispatchScanMeter scanMeter;
+
     private final RateLimiter slowWarningRateLimit = new RateLimiter(5);
 
     /**
@@ -403,6 +410,7 @@ public class ProcessingShard<K, V> {
         while (workTaken.size() < workToGetDelta && iterator.hasNext()) {
             var residency = iterator.next().getValue();
             var workContainer = residency.container();
+            scanMeter.onEntryExamined();
 
             if (pm.couldBeTakenAsWork(workContainer)) {
                 // ONE call, deliberately. This used to read `isAvailableToTakeAsWork()` and then call
