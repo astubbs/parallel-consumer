@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-vetted: 2026-09-07 - all five items re-checked in the code and every one is still open: everyRecordedSentenceStillAppearsInItsSource still does a bare contains() on the normalised source, TransactionalPartialResultSetIT still carries no @ProvesClaim and still asserts isAnyOf(0, RESULTS_PER_INPUT) beside its BatchVisibility twin, BrokerIntegrationTest still has only the tolerant closeRegisteredTestClients with no registerExpectedToFailOnClose, TransactionalClaimCoverageTest still has no self-test (RunTagFilterTest remains the only one), and NOT_YET_COVERED still has no user outside its own declaration -->
 
 <!-- post-merge: checked-begin - names the PR, and puts the applied findings in the past tense so the
      note reads the same once the branch is gone -->

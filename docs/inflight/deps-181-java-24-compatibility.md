@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-vetted: 2026-09-07 - the tree still stands where the note says: kafka.version is 3.9.2, the two reflective sites are still there and still aimed at kafka-clients classes, every workflow still sets java-version 17 and maven.yml still carries test-kafka-compat behind `if: false`; astubbs#181 and astubbs#128 are both still open, so the maintainer call it asks for is unmade -->
 
 [astubbs#181](https://github.com/astubbs/parallel-consumer/issues/181), mirroring
 [confluentinc issue #862](https://github.com/confluentinc/parallel-consumer/issues/862). **Verified

@@ -1,6 +1,7 @@
 # Next candidates, ranked
 
 <!-- inflight-type: register -->
+<!-- inflight-vetted: 2026-09-07 - all eight ranked decisions are still open issues awaiting the same reply (astubbs#161, astubbs#181, astubbs#163, astubbs#189, astubbs#162, astubbs#241, astubbs#173, astubbs#178) and every note they name is present, so the ranking stands unchanged; four settled lines removed instead - the astubbs#155/astubbs#169/astubbs#170 scheduling sentence and the logging-verbosity pick (merged as astubbs#203 and astubbs#428), the astubbs#40 dedup pick (astubbs#206), and confluentinc#906 out of the contributor-friction pick (astubbs#194 closed) -->
 
 
 ## Decisions waiting on the maintainer, ranked
@@ -54,8 +55,7 @@ named on each line owns it.
 four-step definition of done in `core-139-public-api-thread-safety-contract.md` - real work, not a
 call. astubbs#175 has no decision left in it; its one live strand is the AB-BA wedge that
 <!-- post-merge: checked - names that PR as the work the strand belonged to, in the past tense, so it reads the same once it has landed -->
-astubbs/parallel-consumer#29 carried. astubbs#155, astubbs#169 and astubbs#170 have their fixes written and correctly linked -
-what they need is the three draft PRs de-conflicted and merged, which is scheduling.
+astubbs/parallel-consumer#29 carried.
 
 ## Ready picks
 
@@ -73,14 +73,10 @@ Collisions are in `pr-blockers-and-collisions.md`. The ranked backlog and full v
 - **Auto-scaling (astubbs#227)** - runtime-discovered per-instance concurrency; candidate killer
   feature alongside key ordering, priority raised 2026-08-18 (`core-auto-scaling.md`). Spec
   stage; two bitrotted prototypes to mine; async-timing metrics fix is the prerequisite.
-- **Logging-verbosity cleanup** - batch `confluentinc#629` / `#631` / `#640` into one PR
-  (`ConsumerOffsetCommitter`, `RemovedPartitionState`, `AbstractParallelEoSStreamProcessor`). Low
-  effort, high return.
-- **Contributor-friction build fixes** - `confluentinc#162` (mvn compile without test-jar),
-  `confluentinc#861` (`ManagedTruth` not found), `confluentinc#906` (pom version mismatch).
+- **Contributor-friction build fixes** - `confluentinc#162` (mvn compile without test-jar) and
+  `confluentinc#861` (`ManagedTruth` not found). The third, `confluentinc#906` (pom version
+  mismatch), is settled - astubbs#194 is closed.
 - **Security dependency bumps** - `confluentinc#851` (postgres), `confluentinc#913` (assertj); pom-only.
-- **[#40](https://github.com/astubbs/parallel-consumer/issues/40)** - dedup the `MockConsumer*` test
-  classes (test-only; the duplication bot keeps flagging them).
 - **`confluentinc#915` batch construction strategy** - cherry-pick, closes the 4-year-old
   `confluentinc#266`. Medium effort.
 - **Point ArchUnit at main code** (`static-archunit-main-code-rules.md`) - the harness is already

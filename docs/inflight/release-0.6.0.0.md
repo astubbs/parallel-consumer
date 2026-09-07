@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: release-gate -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: the release facts hold (pom is 0.6.0.0-SNAPSHOT, no v0.6.0.0 tag, no live bare @Disabled, ProgressBarTest gone) and the quarantine guard still blocks - but the registry now carries THREE entries, not the two named here (ProducerManagerTest.aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced joined them), and the 2026-08-20 mirror paragraph is stale: astubbs#155, astubbs#169, astubbs#170 and astubbs#177 are all closed, leaving only astubbs#161 and astubbs#181 awaiting a maintainer decision -->
 
 
 **Tracking issue: astubbs#197.** That issue is the linkable handle - from PRs, from mirrors, from upstream

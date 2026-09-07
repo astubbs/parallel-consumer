@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: release-gate -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: most of it holds (kafka.version is 3.9.2 so the two 3.9.1 examples are still correct-as-written, the staging rows and feature record are still staged, no copyOfContextMap anywhere so the MDC gap is real, and confluentinc#857 is still open via astubbs#44), but two facts moved: astubbs#444 has MERGED so the third-mechanism fix attempt is no longer open, and the release.yml empty-body claim was false since astubbs#72 - corrected in place here -->
 
 
 Scope: are the things 0.6.0.0 *publishes* (`CHANGELOG.adoc`, `README.adoc`) true on the day we cut it?
@@ -65,8 +66,10 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
 - **The rest of astubbs#197's triage list**, minus the ones that have since been picked up (an
   `OffsetEncoding` magic-byte hazard in astubbs#217, the "Max loading factor steps reached" WARN in
   astubbs#201). Still open: MDC context is not captured at submit time, so a caller's `trace_id` is
-  lost into the worker pool and the vert.x event loop; and `release.yml` publishes an empty GitHub
-  Release body, so the curated changelog never reaches the release page.
+  lost into the worker pool and the vert.x event loop. (The second item this bullet used to carry -
+  `release.yml` publishing an empty GitHub Release body - was already false when it was written:
+  astubbs#72 gave the workflow a `--notes-file` built from the `CHANGELOG.adoc` section on
+  2026-07-29, with `--generate-notes` only as a fallback. Corrected 2026-09-07.)
 <!-- post-merge: checked-end -->
 - **After it ships:** ~11 mirrored issues describe 0.6.0.0 in the future tense and need the real
   coordinate; astubbs#186, astubbs#188 and astubbs#195 close with a pointer to the release.
