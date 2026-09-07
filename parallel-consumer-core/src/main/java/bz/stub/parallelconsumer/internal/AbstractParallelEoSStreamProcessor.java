@@ -170,7 +170,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             this.partitionEpochsAtRequest = partitionEpochsAtRequest;
         }
 
-        Collection<TopicPartition> partitions() {
+        Set<TopicPartition> partitions() {
             return partitionEpochsAtRequest.keySet();
         }
     }
