@@ -81,6 +81,12 @@ import static org.openjdk.jcstress.annotations.Expect.FORBIDDEN;
  * Run 2026-09-07, {@code -m quick}, macOS 15 / arm64 (Apple silicon), JDK 17.0.18-tem, 10 CPUs.
  * {@link CalibrationProbes.PlainFieldStoreLoadReordering}'s positive control fired in the same run, so
  * the zeros below are interpretable rather than vacuous. Results are recorded on each arm.
+ *
+ * <h2>Why the arms below duplicate each other</h2>
+ *
+ * Each arm pair below is deliberately near-identical, differing only in the modifier under test - a
+ * jcstress arm must be a copy of its neighbour with that one term varied, or the comparison between
+ * arms stops isolating the thing being measured. Do not refactor the duplication away.
  */
 public class BackPressureFlagVisibilityProbes {
 
@@ -134,6 +140,9 @@ public class BackPressureFlagVisibilityProbes {
         public void brokerPollThread() {
             stateChangedSinceCommitStart = false;
             boolean ignoredEmpty = incompleteOffsets.isEmpty(); // tryToEncodeOffsets' first branch
+            // branch kept, not simplified to a single value: this arm models the over-threshold path,
+            // which production takes regardless of isEmpty() - this arm performs the same read
+            // production does, and lands on the same value either way
             blockedAtPayloadLength = ignoredEmpty || true;      // instrumentation payload
             allowedMoreRecords = false;                         // setAllowedMoreRecords(false)
         }
@@ -182,6 +191,9 @@ public class BackPressureFlagVisibilityProbes {
         public void brokerPollThread() {
             stateChangedSinceCommitStart = false;
             boolean ignoredEmpty = incompleteOffsets.isEmpty();
+            // branch kept, not simplified to a single value: this arm models the over-threshold path,
+            // which production takes regardless of isEmpty() - this arm performs the same read
+            // production does, and lands on the same value either way
             blockedAtPayloadLength = ignoredEmpty || true;
             allowedMoreRecords = false;
         }

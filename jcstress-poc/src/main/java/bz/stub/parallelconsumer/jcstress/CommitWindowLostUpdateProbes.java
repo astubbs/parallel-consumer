@@ -100,6 +100,12 @@ import static org.openjdk.jcstress.annotations.Expect.FORBIDDEN;
  * step, moves the anomaly by nothing at all. That is the measurement that rejects "one more volatile" as
  * the fix, and it is why this field got a protocol instead. The protocol arm is FORBIDDEN at 0 in
  * 121,707,028 samples.
+ *
+ * <h2>Why the plain and volatile arms below duplicate each other</h2>
+ *
+ * Each arm pair below is deliberately near-identical, differing only in the modifier under test - a
+ * jcstress arm must be a copy of its neighbour with that one term varied, or the comparison between
+ * arms stops isolating the thing being measured. Do not refactor the duplication away.
  */
 public class CommitWindowLostUpdateProbes {
 
@@ -157,6 +163,9 @@ public class CommitWindowLostUpdateProbes {
             if (dirty) {                                        // getCommitDataIfDirty
                 stateChangedSinceCommitStart = false;
                 boolean ignoredEmpty = incompleteOffsets.isEmpty();  // tryToEncodeOffsets
+                // branch kept, not simplified to a single value: tryToEncodeOffsets() branches on
+                // isEmpty() too, but offsetOfNextExpectedMessage is computed before that branch and
+                // returned unchanged by both its paths - this arm performs the same read production does
                 offsetThisCycleCommitted = ignoredEmpty ? offsetHighestSucceeded : offsetHighestSucceeded;
             }
             // ... commitOffsets() to the broker ...
@@ -216,6 +225,9 @@ public class CommitWindowLostUpdateProbes {
             if (dirty) {
                 stateChangedSinceCommitStart = false;
                 boolean ignoredEmpty = incompleteOffsets.isEmpty();
+                // branch kept, not simplified to a single value: tryToEncodeOffsets() branches on
+                // isEmpty() too, but offsetOfNextExpectedMessage is computed before that branch and
+                // returned unchanged by both its paths - this arm performs the same read production does
                 offsetThisCycleCommitted = ignoredEmpty ? offsetHighestSucceeded : offsetHighestSucceeded;
             }
             if (!stateChangedSinceCommitStart) {
@@ -287,6 +299,9 @@ public class CommitWindowLostUpdateProbes {
             if (collected != completionCountCommitted) {            // isDirty()
                 completionCountBeingCommitted = collected;
                 boolean ignoredEmpty = incompleteOffsets.isEmpty();
+                // branch kept, not simplified to a single value: tryToEncodeOffsets() branches on
+                // isEmpty() too, but offsetOfNextExpectedMessage is computed before that branch and
+                // returned unchanged by both its paths - this arm performs the same read production does
                 offsetThisCycleCommitted = ignoredEmpty ? offsetHighestSucceeded : offsetHighestSucceeded;
                 // ... commitOffsets() to the broker ...
                 completionCountCommitted = completionCountBeingCommitted;   // setClean()
