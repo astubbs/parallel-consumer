@@ -4,7 +4,7 @@
 <!-- inflight-impact: crash -->
 
 
-## In flight as a stack of three PRs (2026-09-03)
+## In flight as a stack of five rungs, one of them landed (2026-09-07)
 
 <!-- post-merge: checked-begin -->
 - astubbs/parallel-consumer#426 - `producerConfig`: PC builds its producer from configuration with the
