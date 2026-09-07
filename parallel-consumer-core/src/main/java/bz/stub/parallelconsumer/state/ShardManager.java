@@ -88,7 +88,7 @@ public class ShardManager<K, V> {
      *
      * @see DispatchScanMeter
      */
-    @Getter
+    @Getter(AccessLevel.PACKAGE) // visible for testing
     private final DispatchScanMeter dispatchScanMeter = new DispatchScanMeter();
 
     /**
