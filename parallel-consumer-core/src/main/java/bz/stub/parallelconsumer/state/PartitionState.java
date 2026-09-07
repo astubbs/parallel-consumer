@@ -195,6 +195,44 @@ public class PartitionState<K, V> {
      */
     @Getter(PACKAGE)
     private long lastCommittedOffset;
+
+    /**
+     * The offset this partition last OFFERED for commit - what {@link #getCommitDataIfDirty()} handed to the
+     * committer, and so the highest offset any commit request can be carrying for this partition.
+     * <p>
+     * <b>It is the whole of the clean-mark rule.</b> {@link #onOffsetCommitSuccess} records every acknowledgement,
+     * because an acknowledgement is true - the broker really did commit up to the offset it names - but it marks the
+     * partition CLEAN only when the offset acknowledged is this one. Under {@code PERIODIC_CONSUMER_ASYNCHRONOUS} two
+     * commits can be in flight at once, so an answer can arrive for an offer a later one has already passed; marking
+     * clean on that answer is what would leave nothing dirty to re-send the offsets in between if the later request
+     * then failed or was dropped - the very defect
+     * {@code docs/solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md}
+     * removed, re-entered through the door that fix opened. The committer needs to know none of this: the partition
+     * offered the offset, so the partition is what can recognise its own answer.
+     * <p>
+     * <b>Which thread writes and reads it.</b> Written in the commit path ({@code getCommitDataIfDirty}, reached from
+     * {@code collectCommitDataForDirtyPartitions}) and read back in {@code onOffsetCommitSuccess}, by the SAME thread
+     * in every commit mode. Under both consumer commit modes that is the broker-poll thread: it sends the request,
+     * and Kafka delivers a commit callback from the {@code poll()} that same thread drives. Under
+     * {@code PERIODIC_TRANSACTIONAL_PRODUCER} it is the control thread, where the commit blocks and the
+     * acknowledgement is recorded inline. The one hand-over is {@code Consumer#close()} flushing a pending callback
+     * on the closing thread, which happens only after the poll loop has finished - a hand-over with a happens-before
+     * edge, not an overlap. So this is a plain field, for the reason {@link #dirty} states for the {@code long}s
+     * here: that flag is the fence, and fencing these too buys nothing it does not already provide. It has the same
+     * lifecycle as {@link #stateChangedSinceCommitStart} - written where the commit window opens, read where it
+     * closes.
+     * <p>
+     * <b>Assigned, not raised to a maximum.</b> The offer rises with completed work, so the last offer IS the highest
+     * one in flight. A monotonic maximum would additionally survive the downward reset
+     * {@code maybeTruncateBelowOrAbove} performs on a bootstrap poll, after which the partition could never match its
+     * own offer again: dirty forever, committing nothing.
+     * <p>
+     * A partition state freshly built by a rebalance starts at {@link #KAFKA_OFFSET_ABSENCE}, so an acknowledgement
+     * for the assignment before it cannot mark it clean. That is a change for the better - the previous code marked
+     * clean unconditionally - and it costs at most one extra commit.
+     */
+    private long offsetLastOfferedForCommit = KAFKA_OFFSET_ABSENCE;
+
     private Gauge lastCommittedOffsetGauge;
     private Gauge highestSeenOffsetGauge;
     private Gauge highestCompletedOffsetGauge;
@@ -250,27 +288,27 @@ public class PartitionState<K, V> {
     }
 
     /**
-     * The broker acknowledged a commit carrying the <b>highest offset in flight</b> for this partition: record the
-     * offset, and mark the partition clean unless its state changed again while that commit was in flight.
+     * The broker acknowledged a commit for this partition: <b>record the offset always, mark the partition clean only
+     * if this is the answer to what the partition last offered.</b>
+     * <p>
+     * The two halves are separate because an acknowledgement carries two different things. Its offset is TRUE - the
+     * broker really did commit up to it - so it is recorded whether or not a later request has since passed it, and
+     * {@link #recordCommittedOffset} keeps the higher of the two if the answers arrive out of order. What it may not
+     * do, unless it is the answer to the latest offer, is end the story: see {@link #offsetLastOfferedForCommit},
+     * which owns the rule and the reasoning.
+     * <p>
+     * The clean mark is still subject to the existing protocol - {@link #setClean()} declines when the partition's
+     * state changed again while the commit was in flight.
      */
     public void onOffsetCommitSuccess(OffsetAndMetadata committed) { //NOSONAR
         recordCommittedOffset(committed);
-        setClean();
-    }
-
-    /**
-     * The broker acknowledged a commit whose offset for this partition a <b>later request, still unanswered, has
-     * already passed</b>: record the offset, and leave the partition dirty.
-     * <p>
-     * The acknowledgement is true - the broker really did commit up to that offset - so throwing it away would
-     * discard information the gauge is entitled to. What it cannot do is end the story: the offsets between it and
-     * the newer request are the ones nothing would ever re-commit if this marked clean and that newer request then
-     * failed or was dropped, which is the very defect
-     * {@code docs/solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md}
-     * removed. Whoever decides that a request is superseded is {@code ConsumerOffsetCommitter}, per partition.
-     */
-    public void onSupersededOffsetCommitSuccess(OffsetAndMetadata committed) {
-        recordCommittedOffset(committed);
+        if (committed.offset() == offsetLastOfferedForCommit) {
+            setClean();
+        } else {
+            log.debug("Acknowledged commit for {} carries offset {}, not the {} this partition last offered - the " +
+                            "offset is recorded, but the partition stays dirty until the newer offer is answered",
+                    tp, committed.offset(), offsetLastOfferedForCommit);
+        }
     }
 
     /**
@@ -577,7 +615,11 @@ public class PartitionState<K, V> {
             // setting the flag so that any subsequent offset completed while commit is being performed could mark state as dirty
             // and retain the dirty state on commit completion.
             stateChangedSinceCommitStart = false;
-            return of(createOffsetAndMetadata());
+            OffsetAndMetadata offered = createOffsetAndMetadata();
+            // remembering the offer is what lets onOffsetCommitSuccess recognise the answer to it, and decline to
+            // mark clean on the answer to an older one - see offsetLastOfferedForCommit
+            offsetLastOfferedForCommit = offered.offset();
+            return of(offered);
         }
         return empty();
     }

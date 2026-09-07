@@ -248,16 +248,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         pm.onOffsetCommitSuccess(committed);
     }
 
-    /**
-     * As {@link #onOffsetCommitSuccess}, for partitions where a later commit request carrying a HIGHER offset is
-     * still unanswered: the acknowledged offset is recorded, and the partition stays dirty.
-     *
-     * @see PartitionStateManager#onSupersededOffsetCommitSuccess(Map)
-     */
-    public void onSupersededOffsetCommitSuccess(Map<TopicPartition, OffsetAndMetadata> committed) {
-        pm.onSupersededOffsetCommitSuccess(committed);
-    }
-
     public void onFailureResult(WorkContainer<K, V> wc) {
         onFailureResult(wc, pm.getPartitionState(wc.getTopicPartition()));
     }

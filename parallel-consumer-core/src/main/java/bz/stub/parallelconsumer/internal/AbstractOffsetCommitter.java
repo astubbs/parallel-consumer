@@ -82,27 +82,18 @@ public abstract class AbstractOffsetCommitter<K, V> implements OffsetCommitter {
     }
 
     /**
-     * Records offsets the broker has acknowledged: the partition's last committed offset advances and, unless
-     * its state changed again while the commit was in flight, it is marked clean.
+     * Records offsets the broker has acknowledged: each partition's last committed offset advances, and the
+     * partition is marked clean if the offset acknowledged is the one it last offered for commit.
      * <p>
      * Protected rather than private so an asynchronous committer - one whose
      * {@link #commitOffsetsReturnsOnlyOnceAcknowledged()} is false - can call it at the moment the
-     * acknowledgement actually arrives.
+     * acknowledgement actually arrives. Such a committer can have two requests in flight at once, and needs to know
+     * nothing about that: each partition offered the offset, so each partition recognises the answer to its own
+     * latest offer and declines to clean on an older one. {@code PartitionState}'s
+     * {@code offsetLastOfferedForCommit} owns that rule.
      */
     protected void onOffsetCommitSuccess(final Map<TopicPartition, OffsetAndMetadata> committed) {
         wm.onOffsetCommitSuccess(committed);
-    }
-
-    /**
-     * Records offsets the broker has acknowledged for partitions where a <b>later commit request carrying a higher
-     * offset is still unanswered</b>: the partition's last committed offset advances, and it stays dirty so that
-     * newer request's answer is what decides it.
-     * <p>
-     * Only reachable from a committer whose {@link #commitOffsetsReturnsOnlyOnceAcknowledged()} is false, because
-     * only that committer can have two requests in flight at once.
-     */
-    protected void onSupersededOffsetCommitSuccess(final Map<TopicPartition, OffsetAndMetadata> committed) {
-        wm.onSupersededOffsetCommitSuccess(committed);
     }
 
     protected abstract void commitOffsets(final Map<TopicPartition, OffsetAndMetadata> offsetsToSend, final ConsumerGroupMetadata groupMetadata);

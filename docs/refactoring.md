@@ -467,6 +467,16 @@ cosmetic - see the last bullet.*
     could be, because the iterator holds a read lock only its opener can release.
     SpotBugs reads no confinement annotation and will keep reporting it; do not "fix" it
     with `volatile`, which would assert a sharing that does not exist.
+  - **`PartitionState`'s commit-window pair is confined by construction - do not "fix" either with
+    `volatile`.** `stateChangedSinceCommitStart` and `offsetLastOfferedForCommit` are both plain,
+    both written by `getCommitDataIfDirty` where a commit window opens and both read where it closes
+    (`setClean` and `onOffsetCommitSuccess`) - by the SAME thread in every commit mode: the
+    broker-poll thread under the consumer commit modes, the control thread under
+    `PERIODIC_TRANSACTIONAL_PRODUCER`. `dirty` is the fence for this class and the `long`s stay plain
+    deliberately, which its own javadoc argues from jcstress measurements. If anyone declares the
+    confinement with `@ThreadConfined` plus a runtime assertion (the `RetryQueue.closed` treatment
+    above), do the pair together - annotating one of two fields with the same lifecycle reads as a
+    claim about the other.
   - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
     on the astubbs#119 branch:**
     `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll

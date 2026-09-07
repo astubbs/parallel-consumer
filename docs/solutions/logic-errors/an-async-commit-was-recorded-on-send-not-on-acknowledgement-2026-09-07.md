@@ -89,29 +89,46 @@ javadoc argues for at length, arrived at from the other direction: there, deferr
 exception *causes* by aborting before the success marking; here it is what the absence of a success signal
 causes. Both are the same rule - **only an acknowledgement advances the state.**
 
-### The one hazard the fix itself creates, and the rule for it
+### The one hazard the fix itself creates, and the one rule for it
 
 Deferring the clean-marking is what makes **two async commits able to be in flight at once**; before, the
 first send marked the partition clean so there was never a second. An answer can therefore arrive for a
-request a later one has partly overtaken, and the rule that handles it separates the two things an
-acknowledgement carries:
+request a later one has partly overtaken, and the rule that handles it lives entirely in `PartitionState`:
 
-- **The offsets are always recorded.** The answer is true - the broker committed up to the offsets it
-  names, for every partition it names - so `PartitionState` stores them, monotonically. Ignoring a true
-  acknowledgement, which an earlier draft of this fix did by numbering the sends and dropping any answer
-  that was not the latest, throws away a fact the broker established for partitions nothing had
-  superseded.
-- **The clean mark waits.** A partition is marked clean only by the answer carrying the highest offset
-  `ConsumerOffsetCommitter` has in flight for *that partition* (`highestOffsetInFlight`, a map written on
-  send and cleared by the matching answer). Marking a superseded partition clean is what would leave
-  nothing dirty to re-send if the newer request then failed or was dropped - this defect, re-entered
-  through the door the fix opened.
+> **`getCommitDataIfDirty` remembers the offset it offers. `onOffsetCommitSuccess` records every
+> acknowledgement, and marks the partition clean only when the offset acknowledged is that offer.**
 
-The decision is per partition because a request is routinely the newest word on one partition and
-superseded on another: the commit carries every dirty partition, and only the ones that completed more
-work move. Leaving a partition dirty costs at most one extra commit and cannot under-report, so where the
-two answers differ the conservative one wins. `PartitionState.lastCommittedOffset` only ever rises, which
-is what makes an out-of-order answer safe to record rather than something the committer must filter.
+Both halves matter, and they are separate because an acknowledgement carries two different things. **The
+offset is always recorded** - the answer is true, the broker committed up to it, and
+`recordCommittedOffset` keeps the higher of the two when answers arrive out of order. **The clean mark
+waits**, because marking a partition clean at an offset a later offer has passed is what would leave
+nothing dirty to re-send the offsets in between if that later request then failed or was dropped - this
+defect, re-entered through the door the fix opened.
+
+**The committer keeps no record of what it has in flight, and that is the point.** It passes an
+acknowledgement straight through, whole. The partition offered the offset, so the partition is the thing
+that can recognise the answer to its own latest offer; a map in the committer would have been a second
+copy of what the partition already knew. Two earlier drafts of this fix put the decision there and were
+replaced on the maintainer's call: first an `asyncCommitSequence` that ignored any answer which was not
+the latest - throwing away a fact the broker had established, for every partition, including the ones
+nothing had superseded - and then a per-partition `highestOffsetInFlight` map, split acknowledgements and
+a second success method plumbed through four layers, to reach an outcome the partition produces on its
+own.
+
+The outcome still differs per partition, and it falls out rather than being implemented. A commit carries
+every dirty partition and only the ones that completed more work move, so a request is routinely the
+newest word on one partition and superseded on another - and in the second round the partition that stood
+still is re-offered at exactly the same offset, so the first round's answer *is* its latest offer and
+cleans it. A whole-request rule leaves that partition waiting for a re-commit of an offset the broker has
+already acknowledged, every cycle, for as long as one partition of an assignment outruns another.
+
+Leaving a partition dirty costs at most one extra commit and cannot under-report, which is why every
+edge lands on the dirty side: a partition state rebuilt by a rebalance starts with no offer recorded, so
+an acknowledgement addressed to the assignment before it cannot clean it either.
+
+**A failed async commit is one `WARN`.** Nothing was lost and nothing needs an operator tonight - the
+partitions were never marked clean, so they are still dirty and a later request carries the same offsets.
+The astubbs#168 (confluentinc#629) bound applies to it: the offsets are summarised, never interpolated.
 
 ## The experiment
 

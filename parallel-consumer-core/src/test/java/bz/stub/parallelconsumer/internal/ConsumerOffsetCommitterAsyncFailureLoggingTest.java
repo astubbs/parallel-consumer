@@ -34,12 +34,17 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 
 /**
- * The ERROR line for a failed asynchronous commit is a contract with the operator, so these tests read the line the
- * committer actually <em>emits</em> - not the format string, and not the summariser in isolation.
+ * The line a failed asynchronous commit emits is a contract with the operator, so these tests read what the committer
+ * actually <em>emits</em> - not the format string, and not the summariser in isolation.
  * <p>
- * What it must carry is every topic, partition and offset the commit attempted (astubbs#168 / confluentinc#629 asked
- * for exactly those). What it must not carry is each entry's {@code metadata}: PC's base64-encoded offset map, up to
- * {@link OffsetMapCodecManager#DefaultMaxMetadataSize} characters <em>per partition</em>, which grew the line to
+ * <b>One line, at WARN.</b> A request really did fail, which is worth seeing; what it is not is an ERROR, because
+ * nothing was lost and nothing needs anyone tonight - the partitions were never marked clean, so they are still dirty
+ * and a later request carries the same offsets. The level is asserted in both directions: an ERROR reappearing here
+ * would be a false alarm on a routine coordinator hiccup, and a second line would double every such alarm.
+ * <p>
+ * What the line must carry is every topic, partition and offset the commit attempted (astubbs#168 / confluentinc#629
+ * asked for exactly those). What it must not carry is each entry's {@code metadata}: PC's base64-encoded offset map,
+ * up to {@link OffsetMapCodecManager#DefaultMaxMetadataSize} characters <em>per partition</em>, which grew the line to
  * partitions x 4KB on the one occasion it most needs to survive log truncation. Interpolating the map again would
  * restore both properties' opposite and no ordinary assertion would notice - which is what
  * {@link LogCapture} is for.
@@ -75,12 +80,12 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
     private static final String FULL_MAP_LINE = "Failed commit in full";
 
     /**
-     * Everything in the ERROR line that is <b>not</b> per-entry: the log statement's own constant text plus the
+     * Everything in the failure line that is <b>not</b> per-entry: the log statement's own constant text plus the
      * summary's {@code "N partitions: "} prefix. Counted from the statement, with a little headroom for a reword.
      * <p>
      * It was 64 when the statement read {@code "Error committing offsets: {}, exception: "}. The line now also states
-     * what the failure MEANS for the offsets - that they stay dirty and are re-committed next cycle, which is the
-     * behaviour change of
+     * what the failure MEANS for the offsets - that they stay dirty and are committed when a later request is
+     * acknowledged, which is the behaviour change of
      * {@code docs/solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md} -
      * so the constant text roughly doubled and this moved with it.
      * <p>
@@ -105,21 +110,25 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
             completeCallbackWith(consumerMgr, offsets, new RebalanceInProgressException(
                     "Offset commit cannot be completed since the consumer is undergoing a rebalance (mocked)"));
 
-            String errorLine = logs.onlyMessageAt(Level.ERROR, TOPIC);
-            assertThat(errorLine).contains(TOPIC + "-0: offset 1000, " + metadata.length() + " chars of metadata");
-            assertThat(errorLine).contains(TOPIC + "-1: offset 5, no metadata");
-            assertThat(errorLine).doesNotContain(metadata);
-            assertThat(errorLine).doesNotContain("OffsetAndMetadata{");
+            assertWithMessage("a deferred commit is not an operator emergency - the offsets are still dirty and a "
+                    + "later request carries them")
+                    .that(logs.messagesAt(Level.ERROR, TOPIC))
+                    .isEmpty();
+            String failureLine = logs.onlyMessageAt(Level.WARN, TOPIC);
+            assertThat(failureLine).contains(TOPIC + "-0: offset 1000, " + metadata.length() + " chars of metadata");
+            assertThat(failureLine).contains(TOPIC + "-1: offset 5, no metadata");
+            assertThat(failureLine).doesNotContain(metadata);
+            assertThat(failureLine).doesNotContain("OffsetAndMetadata{");
             // Derived, not measured, and derived the way RecordBatchSummaryTest.commitSummaryCostPerPartitionDoesNotDependOnMetadataSize
             // is: 64 characters per entry beyond the topic name covers "-<partition>: offset <offset>, <length> chars of
             // metadata; " even at a 10-digit partition, a 19-digit offset and a 4-digit length, and STATEMENT_TEXT_BUDGET
             // covers everything in the line that is NOT per-entry. The number that matters is what it is nowhere near:
             // metadata.length(), which is what interpolating the map cost.
-            assertThat(errorLine.length()).isLessThan(2 * (TOPIC.length() + 64) + STATEMENT_TEXT_BUDGET);
+            assertThat(failureLine.length()).isLessThan(2 * (TOPIC.length() + 64) + STATEMENT_TEXT_BUDGET);
 
             // the exception is the other half of the diagnostic, and messagesAt() projects it away - so dropping the
             // trailing argument would leave every assertion above still passing
-            assertThat(throwableOfOnlyEventAt(logs, Level.ERROR))
+            assertThat(throwableOfOnlyEventAt(logs, Level.WARN))
                     .isEqualTo(RebalanceInProgressException.class.getName());
 
             // the unabridged map is still available, one level down, where it has to be asked for
@@ -137,7 +146,7 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
      * about - on the hot path of every SUCCESSFUL commit, while the test above still passed.
      */
     @Test
-    void asyncCommitSuccessLogsNothingAtErrorAndDumpsNoOffsetMap() {
+    void asyncCommitSuccessLogsNoFailureLineAndDumpsNoOffsetMap() {
         var consumerMgr = consumerManagerMock();
         var committer = committerFor(consumerMgr);
         Map<TopicPartition, OffsetAndMetadata> offsets = twoPartitionCommit(largestOffsetMapPcWillWrite());
@@ -148,13 +157,15 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
             completeCallbackWith(consumerMgr, offsets, null);
 
             assertThat(logs.messagesAt(Level.ERROR, TOPIC)).isEmpty();
+            assertThat(logs.messagesAt(Level.WARN, TOPIC)).isEmpty();
             assertThat(logs.messagesAt(Level.DEBUG, FULL_MAP_LINE)).isEmpty();
         }
     }
 
     /**
-     * The success marking is nobody's business here, so the {@code WorkManager} is a bare mock - what happens past
-     * it is {@link ConsumerOffsetCommitterOverlappingAsyncCommitTest}'s subject.
+     * The success marking is nobody's business here, so the {@code WorkManager} is a bare mock - what an
+     * acknowledgement then does to a partition is {@link ConsumerOffsetCommitterOverlappingAsyncCommitTest}'s
+     * subject.
      */
     private static ConsumerOffsetCommitter<String, String> committerFor(ConsumerManager<String, String> consumerMgr) {
         return AsyncCommitterFixture.asyncCommitter(consumerMgr, AsyncCommitterFixture.workManagerMock());
