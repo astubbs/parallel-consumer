@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - the 2026-08-26 data has measurably drifted: astubbs#120, astubbs#121, astubbs#155, astubbs#168, astubbs#169, astubbs#170 and astubbs#177 are all listed OPEN and are now closed, and issues numbered above astubbs#317 (astubbs#422, astubbs#423) are missing entirely. NOT regenerated here on purpose - bin/issue-index.shs HEADER template does not contain the hand-added "the inverse failure is real too" post-merge block this file now carries, so a regeneration would silently delete it; fold that paragraph into the script before running it -->
 <!-- issue-refs: exempt-file - every row IS a bare fork issue number; that is what the file is. The
      header states the numbers are this fork's, which is the qualification the gate wants, once. -->
 
