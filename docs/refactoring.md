@@ -223,19 +223,20 @@ prevent. The `docs-views.mjs` split earned its place because docs is *several* f
 other command's single formatter still lives here, so moving `rank` alone makes it the odd one out.
 When the second one arrives, take `formatRank` with it and import the shared helpers one way.
 
-### The JDK-and-Maven-cache setup block exists six times in `maven.yml`, and no detector can see it
+### The JDK-and-Maven-cache setup block is repeated across `maven.yml`, and no detector can see it
 
-`prepare-deps`, `test`, `test-kafka-compat`, `scan`, `static` and `build` each open with the same
-three steps: `actions/checkout`, `actions/setup-java` on Temurin 17, and an `actions/cache/restore`
-keyed `setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}` with the bare prefix as its
-`restore-keys` fallback. Two of the six arrived with the 2026-09-07 job folds, which gave `scan: repo`
-and `static: analysis` a build dependency they did not have before. `.github/actions/` does not exist,
+`prepare-deps`, `test`, `test-kafka-compat`, `scan`, `mutation`, `static` and `build` each open with
+the same three steps: `actions/checkout`, `actions/setup-java` on Temurin 17, and an
+`actions/cache/restore` keyed `setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}` with the
+bare prefix as its `restore-keys` fallback. Two arrived with the 2026-09-07 job folds, which gave
+`scan: repo` and `static: analysis` a build dependency they did not have before, and `mutation`
+carries its own again since astubbs#463 un-folded the PIT lane. `.github/actions/` does not exist,
 so there is no composite action to point them at.
 
-The cost is drift: the cache key and its fallback must agree in all six places, and the file's own
+The cost is drift: the cache key and its fallback must agree in every one of them, and the file's own
 header forbids `setup-java`'s built-in `cache: maven` because its immutable keys can freeze an
-incomplete cache. Six hand-maintained copies of a rule that must not vary is the shape that produces
-a silently wrong one.
+incomplete cache. A hand-maintained copy per job of a rule that must not vary is the shape that
+produces a silently wrong one.
 
 **Neither duplication engine will ever report this, and the reason is worth keeping.** `dups: clones`
 runs two engines over the whole repo. PMD CPD's language auto-detect is winner-take-all, Java wins on

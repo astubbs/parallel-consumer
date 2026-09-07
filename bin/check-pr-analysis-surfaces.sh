@@ -263,9 +263,14 @@ echo "  Job summaries (PIT survivor table, CVE tables) are not exposed by the RE
 # tell "no summary to read" from "we stopped looking". `racerd` outlived the job that became
 # `static: infer` this way, and was dead here until the 2026-09-07 job folds forced a re-read.
 # Re-check this pattern whenever a job in .github/workflows/ is renamed or folded. The PIT survivor
-# table now hangs off `scan: repo`, which is why no `Mutation` alternative is needed here.
+# table hangs off the `mutation` job, `Mutation Tests (PIT, PR-scoped)` - the `Mutation` alternative
+# was dropped when astubbs#457 folded that lane into `scan: repo`, and was needed again the moment
+# astubbs#463 un-folded it, which is `racerd` for the third time.
+# NO LONGER ONLY A COMMENT: bin/test-check-pr-analysis-surfaces.sh reads the `scan`, `mutation` and
+# `static` job names out of .github/workflows/maven.yml and fails when one of them stops matching
+# this pattern, so a rename or an un-fold now goes red instead of silently dropping a row.
 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" \
-    --jq '.check_runs[] | select(.name | test("static: analysis|scan: repo|CVE|Quarantine")) | "    \(.name): \(.html_url)"' \
+    --jq '.check_runs[] | select(.name | test("Mutation|static: analysis|scan: repo|CVE|Quarantine")) | "    \(.name): \(.html_url)"' \
     2>/dev/null | sort -u || true
 echo
 echo "  Console-only output: a tool that prints to the Maven log and does not annotate is invisible"
