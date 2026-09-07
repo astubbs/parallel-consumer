@@ -137,3 +137,16 @@ Proceeding past the wait is separately unsafe until producer fencing is recovera
 `next-recoverable-producer-fencing.md` and astubbs#225.
 
 Branch `fix/bound-revoke-transaction-wait` exists with no code on it.
+
+## Adjacent, and NOT this: the revoke commit that does not drain the mailbox
+
+The same method this note bounds - `tryCommitOffsetsOnRevoke` - has a second, independent defect
+recorded in
+[`core-revoke-commit-skips-the-work-mailbox-drain.md`](core-revoke-commit-skips-the-work-mailbox-drain.md):
+when it does commit, it commits without first draining the work mailbox, so a revoke-time
+transaction can omit the offset of a record it already produced. That is a correctness hole in the
+*uncontended* commit; this note is about the *wait* when the lock is contended. astubbs#408's
+decline fires only under contention and its amended test accepts "committed inline if the dwell had
+already ended" as resolved - so it neither narrows nor widens the drain defect, and the two fixes
+will meet on this one method. Whichever lands second resolves that collision; the other note records
+the recommended fix and the question that decides its correctness.
