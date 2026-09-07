@@ -1,0 +1,35 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Client-side work queue
+category: processing
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: The initial repository baseline and first tagged release contain the client-side queue on top of the Kafka consumer.
+readme_anchor: features-list
+summary: Hold fetched records as bounded client-side work, then dispatch them according to the selected ordering mode and available processing capacity.
+use_this_when:
+  - Your application needs queue-like work scheduling without replacing Kafka as the source of records and offsets.
+  - Processing latency varies and records need to wait safely while other eligible work continues.
+setup:
+  configure:
+    - Set ParallelConsumerOptions.maxConcurrency for the processing capacity your application can sustain.
+    - Tune ParallelConsumerOptions.messageBufferSize or load-factor options for the amount of queued work.
+  choose:
+    - Select an ordering mode before relying on which queued records can run concurrently.
+opt_in:
+  mechanism: Use a Parallel Consumer processing API instead of managing the Kafka poll loop and work queue directly.
+  isolated_from_stable_modules: false
+boundaries:
+  - This is not an independent durable queue: Kafka remains the record source and committed offsets remain the recovery boundary.
+  - Buffering more records does not increase useful concurrency when the selected ordering mode or downstream dependency is saturated.
+references:
+  - label: Motivation and queue semantics
+    path: README.adoc#motivation

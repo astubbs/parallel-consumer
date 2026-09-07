@@ -1,0 +1,37 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Micrometer metrics
+category: observability
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.5.2.6
+  evidence:
+    tag: 0.5.2.6
+    path: CHANGELOG.adoc
+    basis: Added Micrometer metrics for Parallel Consumer operation.
+  milestones:
+    - release: 0.5.2.7
+      basis: Reworked metric ownership so multiple Parallel Consumer instances in one JVM keep separate meters.
+readme_anchor: metrics
+summary: Publish Parallel Consumer counters, gauges and timers to a supplied Micrometer MeterRegistry.
+use_this_when:
+  - Operations need to observe paused partitions, in-flight and waiting work, throughput, failures or processing time.
+  - Multiple instances in one JVM need their metrics separated by an instance tag.
+setup:
+  options:
+    - ParallelConsumerOptions.meterRegistry
+    - ParallelConsumerOptions.pcInstanceTag
+    - ParallelConsumerOptions.metricsTags
+opt_in:
+  mechanism: Supply a Micrometer MeterRegistry in ParallelConsumerOptions.
+  isolated_from_stable_modules: false
+boundaries:
+  - With no registry, the default CompositeMeterRegistry is a no-op.
+  - Meter names and tags are an observability interface; verify the exact set for the release you deploy.
+references:
+  - label: Metric definitions
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/metrics/PCMetricsDef.java

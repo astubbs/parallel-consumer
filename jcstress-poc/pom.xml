@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright (C) 2026 Antony Stubbs and contributors
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      DELIBERATELY STANDALONE.
+
+      This module has NO <parent> and is NOT listed in the root pom's <modules>. It is an on-demand
+      experiment harness, not part of the product:
+
+        * jcstress generates its own runner (annotation processor) and executes it as an uberjar
+          under its own forked JVMs. It is not a surefire test and must never run in the normal
+          build or in CI's unit lane - a full run is measured in hours.
+        * The product build cross-compiles Java 17 source to Java 8 bytecode with Jabel. jcstress
+          probes never ship, so they target JDK 17 bytecode directly; inheriting the parent would
+          drag Jabel, the copyright exec plugin and the whole dependency tree in for no benefit.
+
+      Build and run, from the repo root, with a JDK 17 in JAVA_HOME (however this machine
+      provides one - the plan doc records the JDK the published numbers were taken on).
+      Both commands name the same path explicitly: a JAVA_HOME= prefix on a simple command
+      does NOT affect $JAVA_HOME's expansion within that same command.
+        JAVA_HOME=/path/to/jdk-17 ./mvnw -f jcstress-poc/pom.xml clean package
+        /path/to/jdk-17/bin/java -jar jcstress-poc/target/jcstress.jar -m quick \
+            -r jcstress-poc/target/results
+
+      READ THE CALIBRATION BEFORE BELIEVING ANY ZERO. jcstress grades an ACCEPTABLE_INTERESTING
+      outcome with ZERO observations as PASSED, so a run whose actors never actually raced is
+      indistinguishable, test-by-test, from a run that looked and found nothing. Check that
+      CalibrationProbes.PlainFieldStoreLoadReordering's "0, 0" bucket is non-zero FIRST; if it is
+      zero, every other zero in that run is uninterpretable and none of the arms below mean
+      anything. That is what the positive control is for, and nothing enforces reading it.
+    -->
+
+    <groupId>bz.stub.parallelconsumer</groupId>
+    <artifactId>jcstress-poc</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>Parallel Consumer :: jcstress PoC</name>
+    <description>
+        Concurrency probes for PartitionState's plain-field publication: the non-volatile longs
+        offsetHighestSeen and offsetHighestSucceeded, and the plain dirty flag that publishes them
+        to the commit path. Standalone - not part of the reactor build, never run in CI.
+    </description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <jcstress.version>0.16</jcstress.version>
+        <!-- name of the uberjar the runner is executed from -->
+        <uberjar.name>jcstress</uberjar.name>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.openjdk.jcstress</groupId>
+            <artifactId>jcstress-core</artifactId>
+            <version>${jcstress.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <!-- 17, not the product build's Jabel-downlevelled 8: probes never ship -->
+                    <release>17</release>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.openjdk.jcstress</groupId>
+                            <artifactId>jcstress-core</artifactId>
+                            <version>${jcstress.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.3</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <finalName>${uberjar.name}</finalName>
+                            <!-- nothing installs or deploys this module, so the reduced pom has no
+                                 consumer - off at the source beats git-ignoring what it writes -->
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <transformer
+                                        implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>org.openjdk.jcstress.Main</mainClass>
+                                </transformer>
+                                <transformer
+                                        implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>**/module-info.class</exclude>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

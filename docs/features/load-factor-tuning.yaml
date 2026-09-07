@@ -1,0 +1,41 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Dynamic load-factor tuning
+category: operability
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.5.2.8
+  evidence:
+    tag: 0.5.2.8
+    path: CHANGELOG.adoc
+    basis: The release that made the message buffer configurable added the two load-factor options in the same change.
+readme_anchor: ordering-guarantees
+summary: Set the starting and maximum multiple of the in-flight target that Parallel Consumer keeps buffered ahead of the worker pool.
+use_this_when:
+  - PARTITION ordering starves worker threads because the default buffer, sized from low concurrency, holds records from too few partitions.
+  - You want the buffer to remain proportional to concurrency and batch size rather than pinned to an absolute record count.
+setup:
+  options:
+    - ParallelConsumerOptions.initialLoadFactor - the factor the system starts at; default DynamicLoadFactor.DEFAULT_INITIAL_LOADING_FACTOR (2).
+    - ParallelConsumerOptions.maximumLoadFactor - the ceiling the factor may step up to; default DynamicLoadFactor.DEFAULT_MAX_LOADING_FACTOR (100).
+  derived_buffer: maxConcurrency * batchSize * loadFactor, as stated in the README's Ordering Guarantees section.
+  adjustment: DynamicLoadFactor steps the current factor up towards the maximum, gated by its warm-up and cool-down conditions.
+opt_in:
+  mechanism: Set either option when building ParallelConsumerOptions.
+  isolated_from_stable_modules: false
+boundaries:
+  - Both options are ignored when messageBufferSize is set, because that path derives a single static factor; see message-buffer-configuration.yaml.
+  - The factor only ever steps up, so treat maximumLoadFactor as a memory and replay ceiling rather than a target.
+  - A higher factor buffers more records and therefore leaves more offsets beyond the highest committable offset; the DynamicLoadFactor Javadoc states the replay consequence.
+  - Buffer sizing is not a throughput control on its own; the README section referenced below pairs it with Consumer-side fetch tuning.
+references:
+  - label: Load-factor options
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
+  - label: PARTITION-order buffer tuning guidance
+    path: README.adoc#ordering-guarantees
+  - label: Step-up policy and default factors
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/DynamicLoadFactor.java

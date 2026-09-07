@@ -1,0 +1,33 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Concurrent processing beyond partition count
+category: processing
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: The initial repository baseline and first tagged release contain concurrent processing beyond the partition count.
+readme_anchor: features-list
+summary: Process records concurrently in one Kafka consumer without adding consumers or topic partitions.
+use_this_when:
+  - Your processing can safely run concurrently but partition count constrains ordinary consumer parallelism.
+  - You need higher concurrency without adding consumer-group or broker overhead.
+setup:
+  configure:
+    - Set ParallelConsumerOptions.maxConcurrency to the work your application and dependencies can sustain.
+    - Select an ordering mode that matches the data contract before starting processing.
+opt_in:
+  mechanism: Use a Parallel Consumer processor instead of driving the Kafka consumer processing loop yourself.
+  isolated_from_stable_modules: false
+boundaries:
+  - More concurrency does not make a non-thread-safe downstream dependency safe.
+  - The chosen ordering mode, not maxConcurrency alone, sets the achievable concurrency for a workload.
+references:
+  - label: README feature list
+    path: README.adoc#features-list

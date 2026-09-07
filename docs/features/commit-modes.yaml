@@ -1,0 +1,36 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Commit mode selection
+category: delivery
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.2.0.0
+  evidence:
+    tag: 0.2.0.0
+    path: CHANGELOG.adoc
+    basis: Added asynchronous, synchronous and producer-transactional commit modes, with an optional producer.
+readme_anchor: commit-mode
+summary: Choose periodic asynchronous, periodic synchronous or producer-transactional offset commits to match the required delivery boundary.
+use_this_when:
+  - You need to make the latency, failure and atomicity trade-off of offset commits explicit.
+  - You produce output records and need their visibility to align with committing the input offsets.
+setup:
+  option: ParallelConsumerOptions.commitMode
+  values:
+    - PERIODIC_CONSUMER_ASYNCHRONOUS is the default and avoids blocking the control loop on each commit.
+    - PERIODIC_CONSUMER_SYNC waits for the Kafka offset commit response.
+    - PERIODIC_TRANSACTIONAL_PRODUCER atomically commits produced Kafka records and input offsets.
+  requirement: Supply a producer only for produce flows or transactional producer mode.
+opt_in:
+  mechanism: Set commitMode when building ParallelConsumerOptions.
+  isolated_from_stable_modules: false
+boundaries:
+  - Kafka's exactly-once boundary does not extend to external side effects. See bulk-kafka-transactions.yaml.
+  - Synchronous and transactional modes change latency and failure behaviour; choose them deliberately rather than as a retry shortcut.
+references:
+  - label: CommitMode implementation
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java

@@ -65,12 +65,17 @@ public class BrokerCommitAsserter {
     }
 
     /**
-     * Checks only once, with an assertion delay of 5 second
+     * Checks only once, after the given delay.
+     * <p>
+     * The delay is the window in which the records must NOT appear, so it belongs to the caller: it has to
+     * be sized against whatever is holding them back, and must expire while that thing is still holding.
+     * A delay that outlives the block turns this into an assertion about nothing - which is how
+     * {@code TransactionTimeoutsTest#produceTimeout} flaked, when this method's own flat 5s raced the 5s
+     * block it was checking.
      */
-    public void assertConsumedAtMostOffset(String topic, int atMost) {
+    public void assertConsumedAtMostOffset(String topic, int atMost, Duration delay) {
         setup(topic, atMost);
 
-        Duration delay = ofSeconds(5);
         log.debug("Delaying by {} to check consumption from topic {} by at most {}", delay, topic, atMost);
         await()
                 .pollDelay(delay)

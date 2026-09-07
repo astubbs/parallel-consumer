@@ -163,7 +163,7 @@ These address real bugs observed in production and should be the highest priorit
 
 == Part 2: astubbs Closed-Unmerged PRs (Revival Candidates)
 
-A GitHub search of `confluentinc/parallel-consumer` for `author:astubbs is:closed is:unmerged` returns *53 PRs*. A striking pattern: *~40 of them were closed on the same day, 2023-06-15*, which looks like an administrative sweep (coinciding with astubbs leaving Confluent) rather than a substantive rejection of the ideas. The PRs represent a trove of unfinished but intentional design work.
+A GitHub search of `confluentinc/parallel-consumer` for `author:astubbs is:closed is:unmerged` returns *53 PRs*. A striking pattern: *~40 of them were closed on the same day, 2023-06-15*, which the 2026-08 audit confirmed was an administrative sweep (eddyv, comment "Closing - Stale.", coinciding with astubbs leaving Confluent) rather than a substantive rejection of the ideas -- see the `THE 2023 ADMINISTRATIVE SWEEPS` section of `upstream-map.yaml`. The PRs represent a trove of unfinished but intentional design work.
 
 === Group A -- Major features (top revival candidates)
 
@@ -300,7 +300,7 @@ Reviving these pays dividends on every other revival in Groups A-C.
 
 == Part 3: Upstream Issues Analysis
 
-`confluentinc/parallel-consumer` has *~61 open issues* (dating back to Nov 2020) and *8 issues formally closed as "Not Planned"*. The issues were NOT bulk-closed in the Jun 2023 sweep -- only the PRs were. Most feature requests and bug reports are still sitting open with no maintainer triage since mid-2023.
+`confluentinc/parallel-consumer` has *~61 open issues* (dating back to Nov 2020) and *8 issues formally closed as "Not Planned"*. An earlier revision of this paragraph claimed the issues were never bulk-closed -- that was wrong: a second administrative sweep on *2023-07-07* (johnbyrnejb, comment "Closing Issue") closed *28 issues*, every one marked COMPLETED rather than "not planned", which is why they read as resolved for three years. That cohort is mapped as the `sweep-2023-*` entries in `upstream-map.yaml` and mirrored as astubbs#227-254 under label `upstream-admin-closed`. Most remaining feature requests and bug reports are still sitting open with no maintainer triage since mid-2023.
 
 Issue #907 ("Is the project still actively maintained?") filed Jan 2026 summarises the community frustration.
 
@@ -322,7 +322,17 @@ Production-blocking issues reported by multiple users. Highest urgency.
 |#825 |checkAutoCommitIsDisabled fails with kafka-clients < 3.7.0 |ddqof |2024-08 |-- |--
 |===
 
-*Verdict:* #803 is the only "verified bug" in the entire tracker. Start here. #809 and #833 are likely related -- investigate together.
+*Verdict:* #803 is the only "verified bug" in the entire tracker. Start here.
+
+#809 and #833 are related, but *not the same defect* - the 2026-08-20 triage separated them.
+confluentinc#833 *exits*; confluentinc#809's headline stack is the close path and it *fails to
+exit*, leaving the instance RUNNING with dead control threads and nothing for a liveness probe to
+read. That half was fixed upstream by confluentinc#818 and is already carried here. astubbs#204
+(merged) covers the reporting and the retry budget for both; the remaining strand is the AB-BA
+wedge, astubbs#29. Detail: `docs/inflight/upstream-175-sporadic-commit-timeouts.md`.
+
+confluentinc#402 now has a fix in astubbs#201 (log noise only; the stall half was a separate
+defect, already fixed).
 
 [[part3-cat2-correctness]]
 === Category 2: Rebalance / offset correctness (data loss risk)
@@ -331,12 +341,28 @@ Production-blocking issues reported by multiple users. Highest urgency.
 |===
 |Issue |Title |Author |Date |Cross-ref PRs
 
-|#777 |Partition revocation leads to duplicate event processing |ajax-levashov-m |2024-05 |PR #893 (offset reset), PR #909 (stale container)
-|#843 |Record picked up by multiple threads simultaneously |singhsaurabh2409 |2024-12 |PR #909 likely root cause
+|#777 |Partition revocation leads to duplicate event processing |ajax-levashov-m |2024-05 |NOT confluentinc#893/#909 - see verdict
+|#843 |Record picked up by multiple threads simultaneously |singhsaurabh2409 |2024-12 |NOT confluentinc#909 - see verdict
 |#326 |Error in onPartitionsAssigned |milansanjeev |2022-07 |labeled not-a-bug, but related to rebalance
 |===
 
-*Verdict:* Merging PR #893 and PR #909 likely resolves #777 and #843. Verify after cherry-pick.
+*Verdict:* *REFUTED 2026-08-20.* This previously read "merging PR #893 and PR #909 likely
+resolves #777 and #843". Neither holds, and the correction matters because it would otherwise
+cause a wrong close.
+
+* *confluentinc#777 is not fixed by either.* confluentinc#909 is already merged here as
+  astubbs#31 and the behaviour is unchanged: `WorkManager.handleFutureResult` still drops a result
+  whose partition moved, which is the reporter's step 3 verbatim. confluentinc#893 fixes a commit
+  running *ahead* of completion; this is the opposite shape. Upstream's own maintainer answered in
+  2024-05, before either PR existed, that in-flight reprocessing at revocation is expected
+  at-least-once behaviour. *Do not close confluentinc#777 when the confluentinc#893 cherry-pick merges* (astubbs#337, split out of astubbs#57 on 2026-08-24).
+* *confluentinc#843 is not caused by confluentinc#909.* That defect *drops* the fresh container
+  and wedges the offset - loss and stall, not duplication - and astubbs#322's reproduction counts
+  lost records and no duplicates. It also requires a rebalance the reporter explicitly denies.
+  One rebalance-gated route to the reported symptom does exist and is live at HEAD; see
+  `docs/inflight/core-178-key-order-across-a-rebalance.md`.
+
+Detail: `docs/inflight/upstream-173-revocation-duplicate-processing.md`.
 
 [[part3-cat3-observability]]
 === Category 3: Observability & health (most requested feature gap)
@@ -380,10 +406,19 @@ Production-blocking issues reported by multiple users. Highest urgency.
 |#192 |Unique thread names for PC instances |nioertel |2022-02 |-- |--
 |#299 |Loom integration POC |astubbs |2022-05 |-- |PR #300 (closed), PR #908 (open)
 |#520 |Safe user API exposure of ALL Consumer APIs |astubbs |2022-12 |-- |PR #346 (closed)
-|#862 |PC cannot run on Java 24 |jvissers |2025-04 |-- |PR #908 may help
+|#862 |PC cannot run on Java 24 |jvissers |2025-04 |-- |NOT confluentinc#908 (refuted); fixed by kafka-clients 3.9.1
 |===
 
-*Verdict:* #186 is labeled *blocker for 1.0*. #862 (Java 24 compat) is time-critical. PR #908 ReentrantLock migration may resolve #862.
+*Verdict:* #186 is labeled *blocker for 1.0*, and it stays one - but as written it names no
+method, no thread and no check, so nothing can clear it. The audit and definition of done are in
+`docs/inflight/core-139-public-api-thread-safety-contract.md`.
+
+*REFUTED 2026-08-20:* this previously said "PR #908 ReentrantLock migration may resolve #862".
+It cannot. confluentinc#908 removes virtual-thread pinning on `synchronized`, and JDK 24 removed
+pinning anyway. confluentinc#862 was a kafka-clients defect - its SASL callback handlers called
+`Subject.getSubject`, which the JDK withdrew - fixed in kafka-clients 3.9.1 by KAFKA-19024. This
+tree is on 3.9.2, so the issue is settled here, though no CI lane runs above Java 17 to prove it.
+Detail: `docs/inflight/deps-181-java-24-compatibility.md`.
 
 === Category 6: Batch processing
 
@@ -534,7 +569,7 @@ Production-blocking issues reported by multiple users. Highest urgency.
 |3 |#27 |Micrometer metrics |Observability |5+ years open; pairs with #71
 |4 |#310 |DLQ implementation |Error handling |Most demanded feature; PR #366 exists as design ref
 |5 |#186 |Thread-safe PC APIs (blocker) |Safety |Labeled *blocker for 1.0*
-|6 |#777 |Partition revocation leads to duplicates |Correctness |Fixed by merging PR #893 + #909
+|6 |#777 |Partition revocation leads to duplicates |Correctness |NOT fixed by confluentinc#893 + #909 (refuted); at-least-once by design
 |7 |#862 |PC cannot run on Java 24 |Compat |Time-critical; JDK moves fast
 |8 |#266 |Batch same-key-only option |Batch |PR #915 already implements this
 |9 |#809 |Sporadic commit timeouts |Stability |Multiple users report; likely related to #803
@@ -562,9 +597,9 @@ Production-blocking issues reported by multiple users. Highest urgency.
 |#130 (static state tests) |-- |#126, #405 |Revive #126
 |#394 (least-loaded broker) |-- |#473 (impl) |Revive #473
 |#196 (max retries) |-- |#291 (terminal exceptions) |Revive #291
-|#777 (rebalance dupes) |*#893* (offset fix) |-- |Merge #893
-|#843 (multi-thread pickup) |*#909* (stale container) |-- |Merge #909
-|#862 (Java 24 compat) |*#908* (ReentrantLock migration) |-- |Merge #908
+|#777 (rebalance dupes) |-- |-- |Refuted 2026-08-20: confluentinc#893 does not address it
+|#843 (multi-thread pickup) |-- |-- |Refuted 2026-08-20: confluentinc#909 causes loss, not dupes
+|#862 (Java 24 compat) |-- |-- |Refuted 2026-08-20: settled by kafka-clients 3.9.1, not confluentinc#908
 |===
 
 == Part 4: How to use this document

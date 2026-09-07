@@ -73,14 +73,29 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
 
     private Gauge numberOfPartitionsGauge;
     private Gauge totalIncompletesGauge;
-    private final Map<TopicPartition, Counter> slowWorkCounters = new HashMap<>();
+    /**
+     * NOTE: Must be concurrent because it can be set by one thread, but read by another - the same reason
+     * {@link #partitionsAssignmentEpochs} above says so. Written on the broker-poll thread by the rebalance
+     * callbacks, read on the control thread by {@link #incrementSlowWorkCounter} as work is retrieved.
+     */
+    private final Map<TopicPartition, Counter> slowWorkCounters = new ConcurrentHashMap<>();
 
     private final PCMetrics pcMetrics;
+
+    /**
+     * Cached instance — creating throwaway OffsetMapCodecManagers on every partition assignment
+     * leaked metrics (each instance registered duplicate timers/counters). See <a href="https://github.com/confluentinc/parallel-consumer/issues/859">confluentinc#859</a>, <a href="https://github.com/confluentinc/parallel-consumer/issues/233">confluentinc#233</a>.
+     */
+    // TODO(refactor): decode-only + single-threaded today, so sharing one instance is safe; NOT
+    // thread-safe if confluentinc#200 parallelises encoding. Broader confluentinc#233 (split encode/decode, de-static) remains: https://github.com/confluentinc/parallel-consumer/issues/233
+    // See docs/refactoring.md.
+    private final OffsetMapCodecManager<K, V> offsetMapCodecManager;
 
     public PartitionStateManager(PCModule<K, V> module, ShardManager<K, V> sm) {
         this.sm = sm;
         this.module = module;
         this.pcMetrics = module.pcMetrics();
+        this.offsetMapCodecManager = new OffsetMapCodecManager<>(module);
         initMetrics();
     }
 
@@ -103,6 +118,7 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
     @Override
     public void onPartitionsAssigned(Collection<TopicPartition> assignedPartitions) {
         log.debug("Partitions assigned: {}", assignedPartitions);
+        log.trace("Epoch map before assignment: {}", partitionsAssignmentEpochs);
 
         for (final TopicPartition partitionAssignment : assignedPartitions) {
             boolean isAlreadyAssigned = this.partitionStates.containsKey(partitionAssignment);
@@ -121,8 +137,7 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         incrementPartitionAssignmentEpoch(assignedPartitions);
 
         try {
-            OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(module); // todo remove throw away instance creation - #233
-            var partitionStates = om.loadPartitionStateForAssignment(assignedPartitions);
+            var partitionStates = offsetMapCodecManager.loadPartitionStateForAssignment(assignedPartitions);
             this.partitionStates.putAll(partitionStates);
             initPartitionCounters(assignedPartitions);
 
@@ -139,16 +154,29 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
 
     private void initPartitionCounters(Collection<TopicPartition> assignedPartitions) {
         assignedPartitions.forEach(topicPartition -> {
-            if (!slowWorkCounters.containsKey(topicPartition)) {
-                slowWorkCounters.put(topicPartition, pcMetrics
-                        .getCounterFromMetricDef(PCMetricsDef.SLOW_RECORDS,
-                                Tag.of("topic", topicPartition.topic()),
-                                Tag.of("partition", String.valueOf(topicPartition.partition())))
-                );
-            }
+            slowWorkCounters.computeIfAbsent(topicPartition, tp -> pcMetrics
+                    .getCounterFromMetricDef(PCMetricsDef.SLOW_RECORDS,
+                            Tag.of("topic", tp.topic()),
+                            Tag.of("partition", String.valueOf(tp.partition())))
+            );
         });
     }
 
+    /**
+     * Metrics de-registration for revoked partitions - and it must NEVER throw.
+     * <p>
+     * This runs inside {@code onPartitionsRevoked}, which runs on the broker-poll thread inside
+     * {@code poll()}. The meter registry is usually the USER'S, so this is third-party code on the
+     * rebalance path: an exception here escapes the callback and kills the poll thread, which is the
+     * only producer of commit responses, so every later commit blocks until it times out. That is the
+     * confluentinc#857 family's worst failure shape, reached from a reporting concern.
+     * <p>
+     * No try/catch here on purpose: {@link PCMetrics#removeMeter} carries the never-throws contract,
+     * guarded once at the source because this is one of eleven teardown call sites and a guard at each
+     * is a guard someone will miss. A second one here could never fire, and defensive code that cannot
+     * fire is worse than none - it implies the contract is doubted. Losing a meter is an acceptable
+     * outcome; losing the poll thread is not.
+     */
     private void deregisterPartitionCounters(Collection<TopicPartition> removedPartitions) {
         removedPartitions.forEach(topicPartition -> {
             Counter counter = slowWorkCounters.remove(topicPartition);
@@ -207,14 +235,25 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
     }
 
     /**
-     * Truncate our tracked offsets as a commit was successful, so the low water mark rises, and we dont' need to track
-     * as much anymore.
+     * Records that a commit succeeded, for each partition that was committed.
      * <p>
-     * When commits are made to broker, we can throw away all the individually tracked offsets before the committed
-     * offset.
+     * Per partition, this delegates to {@link PartitionState#onOffsetCommitSuccess}, which stores the newly committed
+     * offset as the partition's last committed offset and marks the partition clean (unless its state changed again
+     * while the commit was in flight, in which case it stays dirty and will be committed again).
+     * <p>
+     * <b>No offsets are discarded here.</b> Earlier versions of this javadoc described truncating tracked offsets below
+     * the committed offset once a commit landed. That does not happen, and cannot: {@link PartitionState} tracks only
+     * <em>incomplete</em> offsets, and the offset committed is the lowest incomplete one - so there is nothing below it
+     * left to throw away.
+     * <p>
+     * Truncation of tracked state does still exist, but it happens on the <b>bootstrap poll</b> rather than on commit -
+     * see {@link PartitionState}'s {@code maybeTruncateBelowOrAbove}, reached from its
+     * {@code maybeTruncateOrPruneTrackedOffsets}. That is where records removed by retention or compaction, or a
+     * committed offset raised externally, get reconciled against the offsets we track.
+     *
+     * @param committed the offsets just successfully committed to the broker, by partition
      */
     public void onOffsetCommitSuccess(Map<TopicPartition, OffsetAndMetadata> committed) {
-        // partitionOffsetHighWaterMarks this will get overwritten in due course
         committed.forEach((tp, meta) -> {
             var partition = getPartitionState(tp);
             partition.onOffsetCommitSuccess(meta);
@@ -258,9 +297,10 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
 
     private void incrementPartitionAssignmentEpoch(final Collection<TopicPartition> partitions) {
         for (final TopicPartition partition : partitions) {
-            Long epoch = partitionsAssignmentEpochs.getOrDefault(partition, PartitionState.KAFKA_OFFSET_ABSENCE);
-            epoch++;
-            partitionsAssignmentEpochs.put(partition, epoch);
+            Long oldEpoch = partitionsAssignmentEpochs.getOrDefault(partition, PartitionState.KAFKA_OFFSET_ABSENCE);
+            Long newEpoch = oldEpoch + 1;
+            partitionsAssignmentEpochs.put(partition, newEpoch);
+            log.trace("Epoch for {} incremented: {} -> {}", partition, oldEpoch, newEpoch);
         }
     }
 
@@ -299,13 +339,20 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         return getPartitionState(tp).getOffsetHighestSeen();
     }
 
-    public void onSuccess(WorkContainer<K, V> wc) {
-        PartitionState<K, V> partitionState = getPartitionState(wc.getTopicPartition());
+    /**
+     * Applies the completion to the given, ALREADY-RESOLVED state - the caller resolves the state once, checks
+     * staleness against it, and passes the same reference here, so the state a staleness check validated can
+     * never diverge from the state the completion then mutates. Resolving again here was half of the
+     * checkpoint-3 torn read (see {@code WorkManager#handleFutureResult}).
+     */
+    public void onSuccess(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         partitionState.onSuccess(wc.offset());
     }
 
-    public void onFailure(WorkContainer<K, V> wc) {
-        PartitionState<K, V> partitionState = getPartitionState(wc.getTopicPartition());
+    /**
+     * Same single-resolution contract as {@link #onSuccess(WorkContainer, PartitionState)}.
+     */
+    public void onFailure(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         partitionState.onFailure(wc);
     }
 

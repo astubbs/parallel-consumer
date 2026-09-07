@@ -5,10 +5,6 @@
  */
 package bz.stub.parallelconsumer.integrationTests.utils;
 
-/*-
- * Copyright (C) 2020-2022 Confluent, Inc.
- */
-
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
@@ -35,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.testcontainers.containers.KafkaContainer;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -44,6 +41,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
@@ -67,6 +65,14 @@ public class KafkaClientUtils implements AutoCloseable {
 
     public static final int MAX_POLL_RECORDS = 10_000;
     public static final String GROUP_ID_PREFIX = "group-1-";
+
+    /**
+     * Gives every PC built here a unique id so its threads ({@code pc-control-PCn}, {@code pc-broker-poll-PCn})
+     * and the {@code pcId} MDC are attributable to one instance in the logs. Without it, concurrent PC
+     * instances all log under the same generic thread names and are impossible to tell apart - which made
+     * the confluentinc#857 silent-stall investigation much harder than it needed to be.
+     */
+    private static final AtomicInteger PC_INSTANCE_COUNTER = new AtomicInteger();
 
     class PCVersion {
         public static final String V051 = "0.5.1";
@@ -230,10 +236,49 @@ public class KafkaClientUtils implements AutoCloseable {
     }
 
     /**
+     * The transaction timeout every transactional producer built here gets unless a test asks for another one.
+     * Short on purpose - a test that abandons a transaction should not wait out Kafka's 60s default before the
+     * broker reaps it.
+     */
+    public static final Duration DEFAULT_TRANSACTION_TIMEOUT = ofSeconds(10);
+
+    /**
      * Initialises the producer as well, so can't use with PC
      */
     public <K, V> KafkaProducer<K, V> createAndInitNewTransactionalProducer() {
-        KafkaProducer<K, V> txProd = createNewProducer(TRANSACTIONAL);
+        return createAndInitNewTransactionalProducer(DEFAULT_TRANSACTION_TIMEOUT);
+    }
+
+    /**
+     * As {@link #createAndInitNewTransactionalProducer()}, but with a chosen {@code transaction.timeout.ms}.
+     * <p>
+     * Two things need this. A test that deliberately blows the transaction timeout needs a timeout short enough
+     * to observe (the broker reaps a timed-out transaction on its own cleanup tick, so the wait is the timeout
+     * plus up to one tick). And a scenario whose user function dwells longer than the default 10s while holding
+     * the produce lock needs a timeout above that dwell, or every heavy record fences its own producer for
+     * reasons that have nothing to do with what the test is measuring.
+     *
+     * @param transactionTimeout the value for {@code transaction.timeout.ms}
+     */
+    public <K, V> KafkaProducer<K, V> createAndInitNewTransactionalProducer(Duration transactionTimeout) {
+        return createAndInitNewTransactionalProducer(transactionTimeout, empty());
+    }
+
+    /**
+     * As {@link #createAndInitNewTransactionalProducer(Duration)}, but with a caller-chosen, stable
+     * {@code transactional.id} instead of the random one.
+     * <p>
+     * A crash-and-replay test needs this: the replacement producer only <em>fences</em> the abandoned one when
+     * both carry the same transactional id. With the default random id the abandoned transaction is nobody's
+     * predecessor, so it pins the last stable offset until it times out, and an "is it visible?" assertion can
+     * pass for entirely the wrong reason.
+     *
+     * @param stableTransactionalId the transactional id to reuse across instances, or empty for the default
+     *                              random one
+     */
+    public <K, V> KafkaProducer<K, V> createAndInitNewTransactionalProducer(Duration transactionTimeout,
+                                                                           Optional<String> stableTransactionalId) {
+        KafkaProducer<K, V> txProd = createNewProducer(TRANSACTIONAL, transactionTimeout, stableTransactionalId);
         txProd.initTransactions();
         return txProd;
     }
@@ -251,21 +296,65 @@ public class KafkaClientUtils implements AutoCloseable {
         return createNewProducer(ProducerMode.matching(commitMode));
     }
 
+    /**
+     * As {@link #createNewProducer(CommitMode)}, but lets the caller pin producer config this helper would otherwise
+     * leave at the client default. A test whose behaviour depends on a specific value should pin it here rather than
+     * inherit it, so the dependency lives in the test instead of in a comment.
+     */
+    public KafkaProducer<String, String> createNewProducer(CommitMode commitMode, Properties overrides) {
+        return createNewProducer(ProducerMode.matching(commitMode), overrides);
+    }
+
     public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode) {
+        return createNewProducer(mode, new Properties());
+    }
+
+    public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode, Properties overrides) {
+        return createNewProducer(mode, DEFAULT_TRANSACTION_TIMEOUT, empty(), overrides);
+    }
+
+    /**
+     * @param transactionTimeout    {@code transaction.timeout.ms} for a {@link ProducerMode#TRANSACTIONAL}
+     *                              producer - see {@link #createAndInitNewTransactionalProducer(Duration)} for
+     *                              why a test would move it. Ignored for a non-transactional producer.
+     * @param stableTransactionalId a fixed {@code transactional.id}, or empty for the default random one - see
+     *                              {@link #createAndInitNewTransactionalProducer(Duration, Optional)}
+     */
+    public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode,
+                                                        Duration transactionTimeout,
+                                                        Optional<String> stableTransactionalId) {
+        return createNewProducer(mode, transactionTimeout, stableTransactionalId, new Properties());
+    }
+
+    /**
+     * The one builder the overloads above all reach: transaction settings the typed parameters name, then
+     * {@code overrides} last so a caller can pin anything this helper set.
+     */
+    private <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode,
+                                                         Duration transactionTimeout,
+                                                         Optional<String> stableTransactionalId,
+                                                         Properties overrides) {
         Properties properties = setupProducerProps();
 
         var txProps = new Properties();
         txProps.putAll(properties);
 
         if (mode.equals(TRANSACTIONAL)) {
-            // random number, so we get a unique producer tx session each time. Normally wouldn't do this in production,
-            // but sometimes running in the test suite our producers' step on each other between test runs and this causes
-            // Producer Fenced exceptions:
+            // random number by default, so we get a unique producer tx session each time. Normally wouldn't do this in
+            // production, but sometimes running in the test suite our producers' step on each other between test runs
+            // and this causes Producer Fenced exceptions:
             // Error looks like: Producer attempted an operation with an old epoch. Either there is a newer producer with
             // the same transactionalId, or the producer's transaction has been expired by the broker.
-            txProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, this.getClass().getSimpleName() + ":" + nextInt()); // required for tx
-            txProps.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, (int) ofSeconds(10).toMillis()); // speed things up
+            // A test that WANTS the fencing - one restarted instance taking over from an abandoned one - opts out by
+            // passing a stable id.
+            String transactionalId = stableTransactionalId
+                    .orElseGet(() -> this.getClass().getSimpleName() + ":" + nextInt());
+            txProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId); // required for tx
+            txProps.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, (int) transactionTimeout.toMillis());
         }
+
+        // last, so a caller can pin anything this helper set above
+        txProps.putAll(overrides);
 
         KafkaProducer<K, V> kvKafkaProducer = new KafkaProducer<>(txProps);
 
@@ -382,6 +471,48 @@ public class KafkaClientUtils implements AutoCloseable {
         return expectedKeys;
     }
 
+    /**
+     * Produces one record per broker offset in {@code [fromInclusive, toExclusive)}, keyed so the key NAMES the offset
+     * the record lands on: {@code "k-<offset>"}. A test tracking keys can then name the LOST offset from a missing
+     * key, which is what makes a "a record went missing" failure diagnosable instead of merely red.
+     * <p>
+     * Distinct from {@link #produceMessages(String, long, String, long)}, whose key sequence restarts at 0 on every
+     * call - so a second batch reuses the first batch's keys, and no prefix choice restores the offset
+     * correspondence once more than one batch has been produced to the same topic.
+     * <p>
+     * The correspondence is ASSERTED rather than assumed: every send's {@link RecordMetadata#offset()} must equal the
+     * offset its key names. That makes the caller's contract - a SINGLE-partition topic whose end offset is
+     * {@code fromInclusive} - fail here, loudly, rather than downstream as a confusing missing-record assertion.
+     *
+     * @return the keys produced, in offset order
+     */
+    public List<String> produceOffsetKeyedRange(String topicName, long fromInclusive, long toExclusive)
+            throws InterruptedException, ExecutionException {
+        log.info("Producing offsets [{}..{}) to {}", fromInclusive, toExclusive, topicName);
+        final List<String> keys = new ArrayList<>();
+        List<Future<RecordMetadata>> sends = new ArrayList<>();
+        try (Producer<String, String> kafkaProducer = createNewProducer(NOT_TRANSACTIONAL)) {
+            for (long offset = fromInclusive; offset < toExclusive; offset++) {
+                String key = "k-" + offset;
+                keys.add(key);
+                sends.add(kafkaProducer.send(new ProducerRecord<>(topicName, key, "v-" + offset)));
+            }
+            log.debug("Finished sending offset-keyed test data");
+        }
+        // make sure we finish sending before the next stage, and that each record really landed where its key says
+        long expectedOffset = fromInclusive;
+        for (Future<RecordMetadata> send : sends) {
+            RecordMetadata metadata = send.get();
+            assertThat(metadata.offset())
+                    .describedAs("key k-%s must name the offset it landed on - offset-keyed produce needs a "
+                            + "single-partition topic whose end offset is the start of the requested range",
+                            expectedOffset)
+                    .isEqualTo(expectedOffset);
+            expectedOffset++;
+        }
+        return keys;
+    }
+
     public List<String> produceMessagesWithThrowHeader(String topicName, long numberToSend) throws InterruptedException, ExecutionException {
         log.debug("Producing {} messages to {}", numberToSend, topicName);
         final List<String> expectedKeys = new ArrayList<>();
@@ -440,6 +571,9 @@ public class KafkaClientUtils implements AutoCloseable {
                 .build());
 
         pc.setTimeBetweenCommits(ofSeconds(1));
+
+        // unique per-instance id so concurrent PCs are distinguishable in the logs (see PC_INSTANCE_COUNTER)
+        pc.setMyId(Optional.of("PC" + PC_INSTANCE_COUNTER.incrementAndGet()));
 
         // sanity
         return pc;

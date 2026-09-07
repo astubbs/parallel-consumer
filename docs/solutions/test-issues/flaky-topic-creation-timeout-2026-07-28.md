@@ -30,7 +30,7 @@ tags:
 
 ## Context
 
-The required `Integration Tests` CI check failed intermittently on PRs that changed **no production code** (e.g. docs-only PRs #56 and #61). The failure was always the same:
+The required `Integration Tests` CI check failed intermittently on PRs that changed **no production code** (e.g. docs-only PRs astubbs#56 and astubbs#61). The failure was always the same:
 
 ```
 java.lang.RuntimeException: java.util.concurrent.TimeoutException
@@ -67,6 +67,13 @@ The flake was not a broker/infra problem to paper over with retries — it was *
 
 ## Related
 
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/KafkaClientUtils.java` — `createTopic`, `createTopicsBlocking`, `createTopics`
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/BrokerIntegrationTest.java` — `ensureTopic` (now delegates)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/KafkaClientUtils.java` — `createTopic`, `createTopicsBlocking`, `createTopics`
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/BrokerIntegrationTest.java` — `ensureTopic` (now delegates)
 - `docs/inflight.md` — "CI reliability / gate issues" (this was the top-priority flaky *required* gate)
+  - Pointer repair: that single file became the directory [`docs/inflight/`](../../inflight/) on
+    2026-08-04 and was deleted in `0de96fc`. Read the section as it stood with `git show
+    0de96fc^:docs/inflight.md` and grep `CI reliability / gate issues`; the entry for this gate is
+    under that heading, greppable as `ensureTopic`. Nothing under `docs/inflight/` succeeds it: the
+    entry named the fix written up here as its resolution (astubbs#63, merged), and that directory
+    tracks only what is still open — see [`docs/inflight/AGENTS.md`](../../inflight/AGENTS.md). The
+    history is therefore the whole record of it.

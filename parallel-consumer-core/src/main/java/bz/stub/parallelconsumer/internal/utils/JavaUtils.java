@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.internal.utils;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import lombok.experimental.UtilityClass;
 
 import java.time.Duration;
@@ -32,7 +32,7 @@ public class JavaUtils {
     public static <T> Optional<T> getOnlyOne(final Map<String, T> stringMapMap) {
         if (stringMapMap.isEmpty()) return Optional.empty();
         Collection<T> values = stringMapMap.values();
-        if (values.size() > 1) throw new InternalRuntimeException("More than one element");
+        if (values.size() > 1) throw new PCInternalRuntimeException("More than one element");
         return Optional.of(values.iterator().next());
     }
 

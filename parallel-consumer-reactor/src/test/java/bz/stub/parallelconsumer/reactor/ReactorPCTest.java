@@ -71,6 +71,33 @@ class ReactorPCTest extends ReactorUnitTestBase {
                 });
     }
 
+    /**
+     * A user function may legitimately have nothing to emit - {@code Mono.empty()}, or a {@code null} the wrapper
+     * turns into an empty sequence - and the record still has to retire.
+     * <p>
+     * It did not. {@code onComplete} was wired as the subscriber's ON NEXT consumer, so an empty sequence fired
+     * neither it nor {@code onError}: the record never reached the mailbox, its offset was never committed, its
+     * in-flight accounting leaked, and once {@link bz.stub.parallelconsumer.internal.ExternalEngine} gained a
+     * dispatch ceiling, its permit leaked too - which turns a stuck record into a wedged engine.
+     * <p>
+     * More records than {@code maxConcurrency} is the whole point of the quantity here: a per-record leak only
+     * becomes a stall once it has consumed every permit, so a handful of records would pass against the defect.
+     */
+    @SneakyThrows
+    @Test
+    void anEmptyPublisherStillRetiresTheRecord() {
+        var quantity = MAX_CONCURRENCY + (MAX_CONCURRENCY / 2);
+        ktu.send(consumerSpy, ktu.generateRecords(quantity - 1)); // -1 coz already has 1 record primed (all tests do)
+
+        reactorPC.react(recordContext -> Mono.empty());
+
+        await()
+                .atMost(defaultTimeout)
+                .untilAsserted(() -> assertThat(consumerSpy)
+                        .hasCommittedToPartition(topicPartition)
+                        .atLeastOffset(quantity));
+    }
+
     @SneakyThrows
     @Test
     void concurrencyTest() {

@@ -30,7 +30,7 @@ import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.equalTo;
 
 /**
- * Originally created to investigate issue report #184
+ * Originally created to investigate issue report confluentinc#184
  *
  * @author Antony Stubbs
  */

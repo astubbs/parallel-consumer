@@ -25,7 +25,7 @@ half-built `prepare-release.yml` is removed.
 
 ## The incident (what we're fixing)
 
-The `publish.yml` shipped in #58 detects the release commit by **scanning `git log -30` for the
+The `publish.yml` shipped in astubbs#58 detects the release commit by **scanning `git log -30` for the
 `[maven-release-plugin] prepare release <X>` commit subject**, then deploys that SHA. On its maiden run
 it reached the **original upstream `io.confluent...:0.5.3.3` commit** (subject text matched; that commit
 still lives in our history) and tried to **re-release it**. It only failed safely because we don't own

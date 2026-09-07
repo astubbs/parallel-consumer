@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.model.CommitHistory;
+import bz.stub.parallelconsumer.internal.UnmailboxableRecordException;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import bz.stub.parallelconsumer.state.WorkManager;
 import bz.stub.parallelconsumer.truth.CommitHistorySubject;
@@ -49,6 +50,8 @@ import static org.awaitility.Awaitility.await;
 import static org.awaitility.Awaitility.waitAtMost;
 import static org.mockito.Mockito.*;
 import static pl.tlinkowski.unij.api.UniLists.of;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * @author Antony Stubbs
@@ -144,8 +147,72 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
                 .ordering(UNORDERED);
     }
 
+    /**
+     * Fails the test if PC terminated because a record could not be returned to the mailbox.
+     * <p>
+     * <b>Operator requirement: if this ever happens, it happens HERE and it is loud.</b> The defect it reports is
+     * invisible by construction - the record is neither retried nor reported, no exception reaches the user, and the
+     * committed offsets look correct - so a run that hit it and stayed green would be the worst outcome available.
+     * The existing teardown only logs {@code "PC has error - test failed"} and closes, which does not fail anything.
+     * <p>
+     * Matched on TYPE rather than on the log banner, because a harness that matched the text would be one reword
+     * away from silently never firing again. Checked as a cause chain, since the escalation wraps what
+     * {@code addToMailbox} threw and a caller may wrap it again.
+     */
+    private void failLoudlyIfARecordCouldNotBeMailboxed() {
+        // BOUNDED BY IDENTITY AND BY DEPTH, and the first version of this was neither - it broke the suite.
+        //
+        // It had `if (t.getCause() == t) break;`, a self-reference check, which is exactly the check
+        // controlLoopSurvivesACyclicCauseChain's own javadoc says is defeated: initCause refuses A -> A, so the
+        // only cycle you can build is A -> B -> A, and a self-reference test walks it forever. That test builds
+        // one deliberately, so every run of this suite hung in teardown after it and the CI job died at its
+        // 15-minute cap - a hang, which is the one failure mode a stack trace after the fact cannot explain.
+        //
+        // ThrowableUtils owns this problem in main code and guards both ways for the same reason; this is test
+        // code and cannot reach its private walk, so the guard is repeated here rather than shared. Kept
+        // deliberately small, because a drifted copy of a cause walk is its own hazard.
+        var seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<Throwable, Boolean>());
+        Throwable t = parentParallelConsumer.getFailureCause();
+        for (int depth = 0; t != null && depth < 100 && seen.add(t); depth++) {
+            if (t instanceof UnmailboxableRecordException) {
+                fail("PC TERMINATED: a record could not be returned to the mailbox, which is a bug in PC's own "
+                        + "bookkeeping and means a record was neither retried nor reported. Read the terminal "
+                        + "error in this test's log. Cause: " + t);
+            }
+            try {
+                t = t.getCause();
+            } catch (Throwable readingTheChainThrew) {
+                // THIRD GUARD, and it is not paranoia - it is what this suite deliberately builds.
+                // aFailureThatCannotBeLoggedIsStillReportedAsItself installs a throwable whose getCause() throws,
+                // so WALKING the chain runs the thrower's code. Unguarded, that exception escapes @AfterEach and
+                // fails a test that had already passed, blaming the wrong thing.
+                //
+                // Stopping is the correct answer rather than a concession: everything up to here has been checked,
+                // and a chain that cannot be read cannot be classified. The tests that build these throwables are
+                // asserting PC survives them, so teardown must survive them too.
+                //
+                // LOGGED, because a silent break makes this check quietly PARTIAL. Expected in the handful of
+                // tests that build a hostile throwable on purpose; anywhere else it means the chain stopped being
+                // readable for a reason nobody predicted, and that this guard may have walked past a real
+                // UnmailboxableRecordException deeper down. A guard whose whole point is to be loud must not exit
+                // quietly - that is the shape of the defect this suite exists to catch.
+                //
+                // describeWithRootCause rather than passing the throwable to the logger: handing it over would
+                // render it, which runs the getCause that just threw. That helper's contract is that it never
+                // throws, and it is the reason it exists.
+                log.warn("Could not finish reading the failure cause chain at depth {}, so the unmailboxable-record "
+                                + "check is incomplete for this test. Expected only where a test builds a hostile "
+                                + "throwable deliberately. Cause: {}",
+                        depth, describeWithRootCause(readingTheChainThrew));
+                break;
+            }
+        }
+    }
+
     @AfterEach
     public void close() {
+        failLoudlyIfARecordCouldNotBeMailboxed();
+
         // Reset Awaitility's global thread-local timeout state so per-test overrides
         // (e.g. setDefaultTimeout) don't leak into other tests under non-deterministic
         // test order (PIT baseline/mutations surface this; surefire's default ordering
@@ -166,7 +233,7 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
     }
 
     protected void injectWorkSuccessListener(WorkManager<String, String> wm, List<WorkContainer<String, String>> customSuccessfulWork) {
-        wm.getSuccessfulWorkListeners().add((work) -> {
+        wm.addSuccessfulWorkListener((work) -> {
             log.debug("Test work listener heard some successful work: {}", work);
             synchronized (customSuccessfulWork) {
                 customSuccessfulWork.add(work);
@@ -320,6 +387,24 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
                 .untilAsserted(() -> assertCommitsContains(of(offset)));
     }
 
+    /**
+     * Waits until the commit history holds at least this many committed offsets, regardless of which offsets
+     * they carry.
+     * <p>
+     * Use when the point being waited for is a commit <em>cycle</em> rather than a particular offset - notably
+     * when a repeat commit of an already-committed base offset is expected, which
+     * {@link #awaitForCommit(int)} cannot distinguish from the commit that came before it.
+     * <p>
+     * The count is of flattened per-partition entries, not of commit rounds: a round that commits two
+     * partitions contributes two. Snapshot the count and wait for a delta rather than passing an absolute
+     * figure, so the genesis commit ({@link KafkaTestUtils#trimAllGenesisOffset(List)}) cannot shift it.
+     */
+    protected void awaitForCommittedOffsetCount(int count) {
+        log.debug("Waiting for {} committed offsets to have been emitted", count);
+        await().timeout(defaultTimeout)
+                .untilAsserted(() -> assertThat(getCommitHistoryFlattened()).hasSizeGreaterThanOrEqualTo(count));
+    }
+
     protected void awaitForCommitExact(int offset) {
         log.debug("Waiting for EXACTLY commit offset {}", offset);
         await().timeout(defaultTimeout)
@@ -328,18 +413,6 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
                     return offsets.size() > 1 && !offsets.contains(offset);
                 })
                 .untilAsserted(() -> assertCommits(of(offset)));
-    }
-
-    protected void awaitForCommitExact(int partition, int offset) {
-        log.debug("Waiting for EXACTLY commit offset {} on partition {}", offset, partition);
-        var expectedOffset = new OffsetAndMetadata(offset, "");
-        TopicPartition partitionNumber = new TopicPartition(INPUT_TOPIC, partition);
-        var expectedOffsetMap = UniMaps.of(partitionNumber, expectedOffset);
-        verify(producerSpy, timeout(defaultTimeoutMs)
-                .times(1))
-                .sendOffsetsToTransaction(
-                        argThat((offsetMap) -> offsetMap.equals(expectedOffsetMap)),
-                        any(ConsumerGroupMetadata.class));
     }
 
     public void assertCommitsContains(List<Integer> offsets) {
@@ -376,7 +449,10 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
         } else {
             List<Integer> collect = extractAllPartitionsOffsetsSequentially(trimGenesis);
 
-            // duplicates are ok
+            // Repeat commits of the same base offset are expected - see KafkaTestUtils#collapseRepeatedCommits
+            // for why - and this set-wise comparison already tolerates them. It is also order-insensitive,
+            // which the producer-side branch is not, so unlike that branch it does NOT detect a committed
+            // offset going backwards. See KafkaTestUtils#assertCommits for the difference and its cause.
             // is there a nicer optional way?
             // {@link Optional#ifPresentOrElse} only @since 9
             if (description.isPresent()) {
