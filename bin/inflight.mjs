@@ -61,9 +61,10 @@ import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/note
 import { DOC_AREAS, NOTES_DIR } from './lib/repo.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
 import { loadCandidates, refactorWindow } from './lib/refactor-window.mjs'
+import { RANKED_GROUPS, rank, registerBlob, runFailure } from './lib/rank.mjs'
 import {
     formatBranch, formatCache, formatCoverage, formatDrift, formatFind, formatFlakes, formatRefactorWindow, formatSlowest,
-    formatStranded, formatTimeline, formatWarnings,
+    formatRank, formatStranded, formatTimeline, formatWarnings,
 } from './lib/views.mjs'
 import {
     docsForBranch, docsSummary, docsUsage, forBranchSummary, forBranchUsage, headerSummary, headerUsage, indexDocs,
@@ -494,6 +495,78 @@ about notes. For the whole corpus - plans and solutions too - prior-art searches
             if (!index.ok) return { ok: false, reason: `stranded: ${index.reason}` }
             emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
             emit(formatStranded(stranded(index), index))
+            return { ok: true }
+        },
+    },
+    {
+        name: 'rank',
+        summary: 'open notes across every ref by impact, and where that disagrees with the standing ranking',
+        when: 'before re-ranking the backlog, or when deciding what to pick up next',
+        usage: `Usage: bin/inflight.mjs rank                    the register delta, and the groups with open work
+       bin/inflight.mjs rank --impact <group>   one group's rows, annotated
+
+THE GATHER STEP IS NOT NEW AND THIS DOES NOT REBUILD IT. \`docs list inflight <impact>\` already reads
+every ref, keeps open notes, groups them by impact and marks an off-baseline note with the branch it
+was read from. What this adds is the carrying branch's pull request, the live-versus-archival split,
+the number in the filename, an accounting of the open notes no impact bucket claimed, and the delta
+against docs/inflight/process-candidate-ranking.md - which is the deliverable, because it turns the
+next ranking pass from "read every note" into "look at these disagreements".
+
+IT NEVER SAYS A BRANCH FIXES A NOTE. A note travels on the branch that produced it, so carriage is
+cheap to know and ownership is not available at all - the worked case is a data-loss note carried by
+one branch whose own text says the bug predates that branch's pull request. Rows say CARRIES.
+
+The register is read from the baseline's blob, never your working tree, and is never written: its
+value is the reasoning attached to the order, which no computed scheme carries.
+
+  bin/inflight.mjs rank
+  bin/inflight.mjs rank --impact data-loss`,
+        run: (args, emit) => {
+            const at = args.indexOf('--impact')
+            const known = new Set(['--impact'])
+            const unknown = args.filter((a) => a.startsWith('--') && !known.has(a))
+            if (unknown.length) return { ok: false, reason: `rank: unknown option(s): ${unknown.join(', ')} - known: --impact <group>` }
+            if (at >= 0 && (args[at + 1] === undefined || args[at + 1].startsWith('--'))) {
+                return { ok: false, reason: 'rank: --impact needs a group after it' }
+            }
+            // A REPEATED FLAG IS AMBIGUOUS, refused rather than silently resolved - the same guard
+            // `cvOpts` above makes for `--branch`, and for the same reason: taking the first and
+            // dropping the rest answers a different question than the one that was typed.
+            if (args.filter((a) => a === '--impact').length > 1) {
+                return { ok: false, reason: 'rank: --impact given more than once - which one did you mean?' }
+            }
+            // AND THIS COMMAND TAKES NO POSITIONALS, so anything not consumed as the `--impact` value
+            // is refused rather than dropped. Filtering on `startsWith('--')` alone let `rank stall`
+            // and `rank --impact stall extra` run the UNSCOPED and the partially-scoped query
+            // respectively - answering a different question than the one that was typed, with
+            // nothing in the output to reveal it. Last of the three guards, so the more specific
+            // messages above win when they apply.
+            const stray = args.filter((a, i) => a !== '--impact' && !(at >= 0 && i === at + 1))
+            if (stray.length) {
+                return { ok: false, reason: `rank: takes no positional argument(s): ${stray.join(', ')} - did you mean --impact ${stray[0]}?` }
+            }
+            const group = at >= 0 ? args[at + 1] : null
+            // AN UNKNOWN GROUP IS NOT AN ERROR, it is a question answered with the valid names -
+            // the shape `docs list` already uses, so a typo prints the command that would have
+            // worked rather than a usage wall.
+            if (group !== null && !RANKED_GROUPS.includes(group)) {
+                emit(`no group '${group}'. The groups that carry work to rank:\n`)
+                for (const g of RANKED_GROUPS) emit(`  bin/inflight.mjs rank --impact ${g}`)
+                return { ok: true }
+            }
+            const index = corpusIndex({ areas: NOTES_AREA })
+            if (!index.ok) return { ok: false, reason: `rank: ${index.reason}` }
+            emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
+            const prs = prsByBranch()
+            const r = rank(index, { prs, register: registerBlob(index), group })
+            if (!r.ok) return { ok: false, reason: `rank: ${r.reason}` }
+            emit(formatRank(r))
+            // EVERYTHING THAT DID RUN IS ALREADY EMITTED, and only then does the run report that it
+            // failed - the shape `refactor-window` uses for a candidate it could not measure. "The
+            // delta was empty" and "the delta never ran" are different answers, and so are "no note
+            // was dropped" and "a ref was never listed". `runFailure` owns which is which.
+            const failed = runFailure(r)
+            if (failed) return { ok: false, reason: `rank: ${failed}` }
             return { ok: true }
         },
     },

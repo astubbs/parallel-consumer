@@ -82,10 +82,16 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-The one entry below is an unreliable failure rather than a deterministic one, so it carries
-`flapping = true`: a pass proves nothing and the lane reports it without demanding action. It was never
-hidden by the surefire retry astubbs#224 removed, because the test did not run in a gating lane until
-the PR that quarantines it.
+The entries below are of two opposite kinds, and the checklist is the inventory - not this paragraph.
+`RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`
+and `MultiInstanceRebalanceTest.largeNumberOfInstances` are **unreliable failures**, so both carry
+`flapping = true`: a pass proves nothing and the lane reports it without demanding action.
+`MultiInstanceRebalanceTest` was never hidden by the surefire retry astubbs#224 removed, because the
+test did not run in a gating lane until the PR that quarantines it.
+`ProducerManagerTest.aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced` is the other
+kind - **deterministic**, so it is left at the annotation's default `flapping = false` and a PASS is
+strict-xfail: the lane will open a merge-blocking thread demanding the annotation and this entry be
+deleted, which is correct, because the only way it passes is the defect being fixed.
 
 **The other entry that stood here has gone, and not by a lapse.**
 `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is astubbs#262's rule-3
@@ -94,17 +100,38 @@ deletes the annotation and its entry together.
 (`OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` went
 earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it had itself frozen.)
 
-- [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is
-  measured but not explained. The progress detector returns `FLAT` - the record count *stops* rather
-  than slowing, which is the discriminator it exists to report - and the `AMBIENT PROBE AUTOPSY`
-  block names `ZOMBIE_MEMBER/REBALANCE_BLOCKED`: the group dwells in `PreparingRebalance` because a
-  member stopped answering, with the whole assignment frozen at comparable lag rather than one shard
-  wedged. Measured at one failure in ten consecutive runs on an idle Linux box, plus repeated CI
-  failures, always that signature. It reproduces on the tree carrying this branch's log-argument
-  fix, so it is neither the confluentinc#857 revoke deadlock nor the SLF4J argument-evaluation
-  defect but a third, open mechanism. Sighting ledger, including what would settle the attribution:
+- [ ] `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`
+  - times out on its own SETUP GUARD, so a failure proves nothing about the defect it reproduces. The
+  awaited condition is the control thread reaching the mid-loop pause point (offset 25) that saturates
+  the pipeline, not the confluentinc#909 signature assertion the test exists to make. Every recorded
+  failure carries that identical message and sits at the 30s timeout, against passes that complete in
+  about 10s - the shape of a precondition the test cannot force under load rather than a wrong answer.
+  `flapping = true`: it passes most runs, so a pass is report-only.
+
+  Master-state on a recorded ledger rather than on a diagnosis, which rule 1 allows.
+  `node bin/inflight.mjs codecov test RegistrationRaceStaleResidentIT` is that ledger and outlives any
+  CI log: failures land on unrelated branches minutes apart while sibling branches pass in the same
+  window, including branches touching core. It has failed on heads whose only content was a dependency
+  bump and on heads whose only content was documentation, which is what rules out PR-state. The
+  standing prose ledger is
+  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
+
+  Unowned - no fix PR exists, because no diagnosis does. What would produce one: the guard waits for a
+  pause point driven through `PausableInsertShardManager`, so the question is whether the control
+  thread never reaches offset 25 under contention or reaches it after the wait expired. Separate those
+  before touching any timeout - the rule that governs the load-tightness family governs this one too,
+  and a test failing under load may be exposing a real product bug.
+
+- [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is now
+  **measured**: the Kafka consumer group protocol under this profile's churn rate, not a PC defect. The
+  chaos monkey restarts members faster than a join phase completes, a LeaveGroup sent mid-join is
+  answered only when the phase completes, and one phase was observed open for 17s during which
+  `consumer.poll()` returns nothing to any member - the `FLAT` count. In every failing run no
+  coordinator request was slow. Every PC-side candidate was refuted by measurement. 4 in 60 on the Linux
+  runner, 0 in 22 on an M2 desktop. Full chain, instruments and the refuted hypotheses:
   [`docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md`](inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md).
-  Unowned - no fix PR exists, because no diagnosis does.
+  Stays quarantined because a test whose failures are the protocol's cannot gate merges; where it
+  should live instead is `docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md`.
 
   **Rule 2 is satisfied prospectively rather than retrospectively, and that is worth stating plainly
   rather than letting a later reader find it.** The ledger was measured while this test was
@@ -114,3 +141,27 @@ earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it
   check that fails about one run in ten. The quarantine lands in the same change as the enablement,
   so the test never spends a day blocking merges on an unexplained stall. If the enablement were
   ever reverted, this entry should go with it.
+
+- [ ] `ProducerManagerTest.aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced` - a
+  **diagnosed, deterministic** exactly-once defect on the revoke path, red 5/5 with no broker, no
+  load and no timing involved. The revoke-time commit
+  (`AbstractParallelEoSStreamProcessor#tryCommitOffsetsOnRevoke`) collects offsets without first
+  draining the controller's work mailbox, and `PartitionState#onSuccess` - the only thing that marks
+  a partition dirty on a success - is reachable from `processWorkCompleteMailBox` and nowhere else in
+  main. So the commit publishes a transaction containing a record whose source offset it omits:
+  output committed, input not, and the next owner reprocesses it. Observed: it sends offset 1 where 2
+  is required. Its sibling `#aRevokeTimeCommitIncludesThatOffsetWhenTheMailboxIsDrainedFirst` is the
+  control arm - identical but for a `processWorkCompleteMailBox` call inserted before the revoke -
+  and passes, so the drain is the responsible term. Master-state and older than the branch that found
+  it: `onPartitionsRevoked` has never drained. Diagnosis, the disproved unreachability argument, and
+  the candidate fixes:
+  [`docs/inflight/core-revoke-commit-skips-the-work-mailbox-drain.md`](inflight/core-revoke-commit-skips-the-work-mailbox-drain.md).
+  Unowned - no fix PR exists, deliberately.
+
+  **Why this is quarantined rather than fixed, which is unusual for a defect this well understood.**
+  The obvious one-line fix - drain from `onPartitionsRevoked` - runs on the broker-poll thread and
+  mutates control-thread-confined `WorkManager` state. That is the same shape of change that
+  corrupted `numberRecordsOutForProcessing` in astubbs#29, measured at `-8, -16, -20, -20, -20`
+  against a truth of 0. The fix is a thread-ownership decision at the commit seam, wanting its own
+  change and its own reviewer; the note lists the candidates and what each one costs. Quarantine
+  keeps the proof executing in the meantime, which `@Disabled` would not.

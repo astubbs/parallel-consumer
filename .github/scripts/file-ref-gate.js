@@ -236,7 +236,16 @@ function citationsIn(line) {
   // count in the failure headline stops matching what a reader can see.
   const out = new Set();
   for (const m of clean.matchAll(TOKEN)) {
-    const token = m[0];
+    // A LEADING `@` is Claude Code's import prefix, not part of the path. `@` is in TOKEN's
+    // character class, so `@../../../docs/x.md` in a nested CLAUDE.md bridge arrives here with the
+    // prefix attached - and resolves() then normalises `<dir>/@../../..`, where `@..` is an
+    // ordinary segment that eats one of the `..` pops. The citation lands inside the module instead
+    // of at the repo root and a real, resolving path is reported dangling.
+    //
+    // It stayed invisible while every bridge was a same-directory `@AGENTS.md`: TOKEN needs two
+    // segments, so a single-segment import was never a citation at all. The first bridge to import
+    // ACROSS directories exposed it, in every module test tree at once.
+    const token = m[0].startsWith("@") ? m[0].slice(1) : m[0];
     if (NOT_A_PATH.test(token) || isPlaceholder(token)) continue;
     if (m.index > 0 && TAIL_OF_SOMETHING_ELSE.test(clean[m.index - 1])) continue;
     if (GIT_REVISION.test(clean.slice(0, m.index))) continue;
@@ -259,7 +268,7 @@ function citationsIn(line) {
 
 /**
  * The oracle resolves() reads, built from `git ls-files`. It lives here because BOTH callers need
- * one - the CI job in pr-checklist.yml and bin/check-file-refs.sh - and two hand-copied versions are
+ * one - the CI gate in repo-hygiene.yml and bin/check-file-refs.sh - and two hand-copied versions are
  * how they would come to disagree about what exists, which is the single thing they cannot differ
  * on. Same reasoning that puts formatFailure here rather than at each call site.
  *
@@ -474,7 +483,7 @@ function newFindings(current, base) {
 
 /**
  * The single copy of what an author is told when either rule fires - rendered by both callers, the
- * CI job in pr-checklist.yml and the local bin/check-file-refs.sh, so the two cannot tell different
+ * CI gate in repo-hygiene.yml and the local bin/check-file-refs.sh, so the two cannot tell different
  * stories. Its sibling gate learned that the hard way: hand-written copies of one message disagreed
  * in both directions within hours of the second being written.
  */

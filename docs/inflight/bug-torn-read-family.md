@@ -141,7 +141,9 @@ closes, which would have taken four still-open findings with it, and a paragraph
 cannot be found by anyone listing this directory.
 
 - [`bug-async-commit-marked-successful-before-broker-ack.md`](bug-async-commit-marked-successful-before-broker-ack.md)
-- [`bug-unsynchronised-cross-thread-counter-maps.md`](bug-unsynchronised-cross-thread-counter-maps.md)
+- The unsynchronised cross-thread counter maps - **closed**, and the note carrying them retired with
+  the fix. All four are now concurrent, and what the hunt's sighting did and did not establish is in
+  [`../solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md`](../solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md).
 - [`bug-reset-offset-map-npe-on-partial-assignment.md`](bug-reset-offset-map-npe-on-partial-assignment.md)
 - [`bug-brokerpollsystem-pause-api-is-racy-and-uncalled.md`](bug-brokerpollsystem-pause-api-is-racy-and-uncalled.md)
 
@@ -196,8 +198,10 @@ not derivable from this note alone:
   `bug-pcmetrics-registered-meters-is-a-plain-arraylist.md`, is deleted in that PR, as its own last
   section instructed. Discharged, and not simply dropped: the reproduction moved into
   `PCMetrics859Test`'s class javadoc as the reason `metersLock` exists, and the half astubbs#57 does
-  not fix - the plain `HashMap` counter maps in `WorkManager` and `PartitionStateManager` - has its
-  own note, [`bug-metrics-counter-maps-are-plain-hashmaps.md`](bug-metrics-counter-maps-are-plain-hashmaps.md).
+  not fix - the plain `HashMap` counter maps in `WorkManager` and `PartitionStateManager` - had its
+  own note until those three and the fourth on the encode path were all made concurrent. Closed;
+  the record is
+  [`../solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md`](../solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md).
 <!-- post-merge: checked-end -->
 
 ## Closing this note
