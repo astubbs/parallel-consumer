@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: astubbs#175 is still OPEN and still carries no confirmed attribution, so that half stands; astubbs#177 was CLOSED as completed on 2026-09-01 at the moment astubbs#399 merged, with no comment naming both candidates - the outcome this note says must not happen on the present evidence. The astubbs#177 half now describes a closed issue and wants either removal or a record of how it was closed. astubbs#204, cited as the future-facing fix, is MERGED -->
 
 Both of these were attributed to a landed fix by reading the reporter's evidence, and neither was
 verified against the environment that produced it. They are recorded here because "very likely fixed"

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED closed: the headline "Live on master" is no longer true - both named defects are fixed at HEAD. `PCMetrics.registeredMeters` is now a final `LinkedHashSet` with every add, walk and remove under `@Synchronized("metersLock")`, and `close()` walks it with the never-throwing `removeQuietly` (758744b30, astubbs#120 / astubbs#57), so the `ConcurrentModificationException` that skipped `state = CLOSED` cannot arise. `RemovedPartitionState.READ_ONLY_EMPTY_SET` is now `Collections.emptySortedSet()` rather than a shared mutable `TreeSet` (6aae29989, astubbs#267). Branch `fix/concurrent-collection-sweep` still exists on origin with no PR but is 223 commits behind master with 3 of its own, last touched 2026-08-14, so its remaining four sites want re-deriving against HEAD rather than merging - that is the only live question, and it is a `branch-` note if it is worth one -->
 
 
 **Live on master.** `PCMetrics` keeps `private List<Meter.Id> registeredMeters = new ArrayList<>()`,

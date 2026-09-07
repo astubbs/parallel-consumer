@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - `submitWorkToPoolInner` still parks `outputRecordFuture` on every container via `workContainer.setFuture(...)`, and `WorkContainer#future` still has no reader anywhere in any modules `src/main` - a grep for `getFuture` across core, vertx, reactor and mutiny main returns nothing. The two supervised futures the note contrasts it with are both still supervised: `BrokerPollSystem.pollControlThreadFuture` and `AbstractParallelEoSStreamProcessor.controlThreadFuture` -->
 
 `AbstractParallelEoSStreamProcessor.submitWorkToPoolInner` submits each batch to the worker pool and
 parks the result on the work container:

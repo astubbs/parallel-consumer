@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: stall -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: the register itself is still live and still earning its place - astubbs#119 is OPEN, and the fourth (protocol-invisible `PERIODIC_CONSUMER_SYNC` stall) and fifth (`MultiInstanceRebalanceTest.largeNumberOfInstances` `ZOMBIE_MEMBER`) items are unexplained. Three parts are now stale against the tree. (1) astubbs#29 is MERGED and its fix is in `AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke` (`commitLock.tryLock()`), so by this files own retirement criterion that mechanisms section may go. (2) "astubbs#29s own reproducer cannot currently settle anything" is superseded: `RebalanceEoSDeadlockTest` was rewritten to assert coordinator-visible outcomes instead of the `commitOffsetsThatAreReady()` latch, its mode choice is now deliberate and documented, and `Rebalance857CommitSyncDeadlockProbeIT` - the sibling at `PERIODIC_CONSUMER_SYNC` this file asks for - exists. (3) The fifth items claim that `ProgressTracker.withDiagnostic(...)` has never been wired is false: `MultiInstanceRebalanceTest` now passes it a `describeFleet` supplier. Separately, at 2530 lines this note is far past what the session index can carry -->
 <!-- post-merge: checked-begin - every astubbs#29 mention below states what its fix DOES (the AB-BA pair it replaces, the modes its cycle can close in, what its reproducer cannot settle), not that it is open; the three state claims that were here have been rewritten -->
 
 

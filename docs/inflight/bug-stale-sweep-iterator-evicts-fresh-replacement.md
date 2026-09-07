@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: data-loss -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: the primary defect is live and the code says so - `removeStaleWorkContainersFromShard` still removes by KEY, so a fresh container the controller put at that offset since `next()` returned is what leaves. But the mechanism sentence and the secondary-harm block are both stale. The sweep no longer calls `iterator.remove()`; since astubbs#336 (3e668a448) it calls `removeWorkAtOffset(entry.getKey())` and accounts for the object actually evicted, so the "counter one high, permanently, `drain()` never reaches `transitionToClosing()`" claim in the astubbs#373 block is closed - as the notes own final paragraph already says, contradicting its own middle. Shrink to the lost-record half and drop the counter half -->
 
 `ProcessingShard.removeStaleWorkContainersFromShard` walks `entries` with an entry-set iterator and
 calls `iterator.remove()` on each stale occupant. **`ConcurrentSkipListMap`'s iterator removes by

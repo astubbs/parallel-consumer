@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: the astubbs#175 half stands - still OPEN, still unreproduced, and a grep of `docs/plans/` and `docs/solutions/` still finds nothing targeting it. Two things are stale. (1) astubbs#177 itself was CLOSED as completed on 2026-09-01 alongside astubbs#399, with no closing comment naming either candidate mechanism - the outcome this notes "Do not" section forbids, so the note now describes a closed issue in its own title. (2) Candidate 3 is closed: astubbs#29 and astubbs#57 are both MERGED, and `PCMetrics.removeQuietly` now catches every exception from `meterRegistry.remove` under a stated never-throws teardown contract, so "neither has merged, so master still carries the exposure" is false. Shrink to astubbs#175 plus the astubbs#204 discriminator -->
 
 **This file exists because the work had no home.** `bug-857-mirror-attributions-unconfirmed.md`
 correctly says the honest options are "reproduce and diagnose, or close on their own merits" - but it

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: data-loss -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: every candidate this dossier tracks is now fixed and verified in the tree - candidate 2s single-read `getShard(shardKey)` is in `ShardManager.removeWorkFromShardFor` with the tear named in its comment; candidate 3s single resolution of the partition state is in `WorkManager.handleFutureResult`; the counter maps are `ConcurrentHashMap` in `WorkManager`; `PCMetrics859Test`s javadoc carries the `metersLock` reproduction; and `bug-pcmetrics-registered-meters-is-a-plain-arraylist.md` is gone, exactly as the note says it should be. All six cited fork numbers are MERGED. What is genuinely still open is only the racing-double unification (`RacingCommitCycleState` and `RacingEncodeWindowState` both still exist, unmerged), the next hunt iteration, and the two out-of-family pointers. Shrink to those three; the candidate sections are now a FIXED narrative, which "track only what is currently OPEN" forbids -->
 
 **The family, stated precisely:** multiple reads of moving shared state within one logical operation,
 combined as though they were one consistent snapshot. Confirmed instances so far, both silent-loss

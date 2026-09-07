@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: the defect is intact - `RetryQueue.remove(WorkContainer)` still takes `lock.writeLock().lock()` unbounded, the lock is still `new ReentrantReadWriteLock(true)` (fair), `RetryQueueIterator` still hands the read lock to the caller, and `ArchitectureTest.KNOWN_BLOCKING_VIOLATIONS` still carries the rebalance-callback entries. But "Fixing it: not started, and no design agreed" is false: astubbs#431, OPEN, is titled "the rebalance callbacks decline the retry queue write lock instead of waiting for it", and `RetryQueue.remove`s own javadoc and `ControllerThreadOnly`s already name it as the `tryLock()` path in flight. The unmeasured worst case is still unmeasured -->
 
 <!-- post-merge: checked - the sentence below dates the find rather than describing an open PR, so it
      reads the same once that work has landed -->
