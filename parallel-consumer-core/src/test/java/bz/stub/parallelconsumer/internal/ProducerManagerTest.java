@@ -1184,10 +1184,20 @@ class ProducerManagerTest {
                             + "commit at all and both arms are vacuous")
                     .that(pc.getWm().isDirty())
                     .isTrue();
-            Truth.assertWithMessage("no produce lock may still be held - otherwise the revoke's write-lock "
-                            + "acquisition, not the missing drain, is what the arms would be measuring")
-                    .that(producerManager.getProducerTransactionLock().getReadLockCount())
-                    .isEqualTo(0);
+            // AWAITED, not sampled, and the mailbox await above is not a substitute for it: the ordering is
+            // addToMailbox and THEN cleanUpContext - runUserFunction's finally, and the single produce-lock
+            // release point - so a worker can sit preempted between the two while the mailbox already reads 1.
+            // Sampling the count here would therefore go red intermittently against correct production, in the
+            // control arm as well as the quarantined one, and the control arm is not quarantined. This is a
+            // PRECONDITION of the experiment rather than its result, so waiting for it costs the proof nothing:
+            // the assertion still fails loudly, with the same message, if the lock is never returned.
+            await("every produce lock has been returned")
+                    .atMost(ofSeconds(20))
+                    .untilAsserted(() -> Truth.assertWithMessage("no produce lock may still be held - otherwise the "
+                                    + "revoke's write-lock acquisition, not the missing drain, is what the arms "
+                                    + "would be measuring")
+                            .that(producerManager.getProducerTransactionLock().getReadLockCount())
+                            .isEqualTo(0));
 
             if (drainTheMailboxFirst) {
                 pc.processWorkCompleteMailBox(Duration.ZERO);
