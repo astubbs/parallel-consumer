@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.common.TopicPartition;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
 import org.junit.jupiter.api.Test;
@@ -66,5 +67,24 @@ class PartitionStateRevocationFenceTest {
                 + "new work, not the commit it precedes")
                 .that(wm.collectCommitDataForDirtyPartitions())
                 .containsKey(mu.getPartition());
+    }
+
+    /**
+     * A revocation can name a partition that has no state - one whose assignment failed after its epoch was recorded
+     * (astubbs#451) - and the served pass runs on the control thread, where a throw ends the instance. Nothing was
+     * ever dispatched for such a partition, so there is nothing to fence and the call is a no-op, like the sweep.
+     */
+    @Test
+    void fencingAPartitionWithNoStateIsANoOp() {
+        var module = new PCModuleTestEnv();
+        var mu = new ModelUtils(module);
+        var wm = module.workManager();
+        var neverAssigned = new TopicPartition(mu.getTopic(), 7);
+
+        wm.fenceForRevocation(UniLists.of(neverAssigned));
+
+        assertWithMessage("the fence tolerated the missing state rather than throwing on the control thread")
+                .that(wm.getPm().getPartitionState(neverAssigned))
+                .isNull();
     }
 }

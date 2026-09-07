@@ -217,7 +217,14 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
      */
     public void fenceForRevocation(Collection<TopicPartition> partitions) {
         for (TopicPartition partition : partitions) {
-            getPartitionState(partition).fenceForRevocation();
+            var state = getPartitionState(partition);
+            if (state == null) {
+                // An epoch with no state: a failed assignment left it that way (astubbs#451), and the revoke sweep
+                // that follows tolerates the same gap. Nothing was ever dispatched for it, so there is nothing to fence.
+                log.debug("No state to fence for {} - never assigned, or its assignment failed", partition);
+                continue;
+            }
+            state.fenceForRevocation();
         }
     }
 
