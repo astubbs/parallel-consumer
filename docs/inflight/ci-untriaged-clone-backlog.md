@@ -22,7 +22,8 @@ Five clones appeared purely from looking somewhere new. They are **not** introdu
 ## What is not known
 
 **Where they are.** The PR comment reports totals only. Enumerating them means running the engines
-locally; the CI job's own configuration in `.github/workflows/maven.yml` (the `dups: clones` job)
+locally; the CI step's own configuration in `.github/workflows/maven.yml` (the `dups: clones` step
+of the `scan: repo` job)
 is the source of truth for how to invoke them, and the action it uses installs both.
 
 That is deliberately not written down here - it is a command's answer, and it will be stale within a

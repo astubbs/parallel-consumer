@@ -32,7 +32,8 @@ was **eight days older** than the clone it was supposed to describe.
 
 ## Why nobody noticed
 
-A red `dups: clones` with no comment is indistinguishable, at a glance, from the other red ticks a
+A red `dups: clones` (since the `scan: repo` fold, a red step inside that check) with no comment is
+indistinguishable, at a glance, from the other red ticks a
 long-running PR accumulates. The finding is one line inside a job log nobody has a reason to open,
 because the tool's contract is that it comments.
 

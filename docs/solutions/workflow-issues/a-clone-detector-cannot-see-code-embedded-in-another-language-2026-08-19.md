@@ -49,8 +49,10 @@ Not scope this time - `bin/` and `.github/` were in scope by then. **Format.**
 - **PMD CPD parses per language.** It was analysing Java. A `.yml` file is not Java, and a `.sh`
   file is not Java, so neither side of the clone was ever tokenised.
 - **jscpd keys format off the file extension** and compares within a format. One side lived in
-  `.github/workflows/pr-checklist.yml`, the other in `bin/check-file-refs.sh`. A YAML file and a
-  shell file are different formats, so their contents are never compared with each other.
+  `.github/workflows/pr-checklist.yml` (`git show 40f176aa3:.github/workflows/pr-checklist.yml` -
+  that job was folded into `repo: hygiene` and the file deleted), the other in
+  `bin/check-file-refs.sh`. A YAML file and a shell file are different formats, so their contents
+  are never compared with each other.
 
 The duplicated text was JavaScript **in both places** - embedded in a YAML string on one side and a
 shell heredoc on the other. Neither engine has a notion of "the language inside this string", and
