@@ -3,9 +3,11 @@
 <!-- inflight-type: feature -->
 <!-- inflight-impact: reliability -->
 
+<!-- post-merge: checked-begin - names the producer half by its PR; true as a record once it has landed -->
 astubbs/parallel-consumer#420 makes PC build its **producer** from configuration through a factory it
 enforces, instead of taking a finished instance. The same argument applies to the **consumer**, it was
 drafted in 2022, and nothing tracks it.
+<!-- post-merge: checked-end -->
 
 ## The consumer half already has a draft
 
@@ -23,8 +25,10 @@ hands it one.
 
 The two halves answer the same question - *who owns the client PC uses* - and answering it for the
 producer alone leaves the API asymmetric: configuration in for one, instance in for the other.
+<!-- post-merge: checked-begin -->
 astubbs#420's own reasoning (a producer PC built belongs to PC, and is closed rather than leaked when
 construction fails) transfers directly.
+<!-- post-merge: checked-end -->
 
 ## What it costs
 
@@ -37,3 +41,4 @@ apply - it predates the ownership lifecycle it would now be built on.
 
 Unowned. Recorded 2026-09-03 while reading every pre-fork branch, because the idea had no tracker at
 all: astubbs#420 reaches it only through a line in `docs/refactoring.md`'s idea bank.
+<!-- post-merge: checked - how the idea was found, a record -->

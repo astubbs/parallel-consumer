@@ -506,11 +506,13 @@ both would mislead the next reader.
 
 ## Sighting, 2026-09-03 - recorded late, and its seed recovered from a CANCELLED run
 
+<!-- post-merge: checked-begin - a dated sighting, the branch named as it was -->
 `node bin/inflight.mjs codecov test ChaosChurnStormIT` records a **failure at `f75f4ee`**
 (`feat/225-pc-built-producer`, 2026-09-03 05:20, 324.7s), which no ledger held. The failure text is
 the outer wait rather than a gating detector - *"Condition with alias 'all messages consumed under
 churn' didn't complete within 5 minutes"* - which is cycle 16's shape, not the `INSTANCE_STALL` one
 above.
+<!-- post-merge: checked-end -->
 
 **Replay seed `166202700392495171`** (`CHAOS W1 churn storm: seed=166202700392495171`).
 
