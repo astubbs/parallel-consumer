@@ -215,13 +215,23 @@ class ArchitectureTest {
      * {@code docs/inflight/bug-857-transactional-revoke-wait.md};
      * remove this entry when that lands.
      *
-     * <p><b>The six {@code ReentrantReadWriteLock$WriteLock.lock()} entries that sat here are gone,
-     * on merit rather than by exemption</b> - the rebalance callbacks now decline that lock through
-     * {@code RetryQueue.tryRemove} instead of waiting for it. {@code tryLock()} is deliberately NOT in
-     * {@link #BLOCKING_CALLS}: it returns immediately whether or not it succeeds, which is the whole
-     * point of it. Adding it there temporarily is how the fix was checked - the rule then reports all
-     * nine reaches, so a green run here is "no callback reaches a WAITING acquire", not "the rule
-     * cannot see the retry queue any more".
+     * <p><b>The eighteen entries for the retry queue's write lock that sat here are gone, on merit
+     * rather than by exemption</b> - the rebalance callbacks now decline that lock through
+     * {@code RetryQueue.tryRemove} instead of waiting for it. Nine were
+     * {@code ReentrantReadWriteLock$WriteLock.lock()} keys and nine were reaches into
+     * {@code RetryQueue.remove} through its {@link ControllerThreadOnly} declaration, on all three callbacks
+     * of all three classes; six of the lock keys predate the widened walk and the other twelve were recorded
+     * by astubbs/parallel-consumer#465 naming this change as the owner that deletes them.
+     * <p>
+     * <b>The deletion is checked, once per kind of reach the widening added.</b> Routing
+     * {@code ShardManager.removeWorkFromShardFor} back onto {@code RetryQueue.remove} takes this rule from
+     * green to twelve violations, reported by CALL on the revoke and lost roots; restoring
+     * {@code .map(retryQueue::remove)} in {@code ShardManager.removeStaleContainers} takes it to eighteen,
+     * reported by METHOD REFERENCE and adding the assigned roots - which is exactly the list that used to be
+     * here. Both were reverted to an empty diff. {@code tryLock()} is deliberately NOT in
+     * {@link #BLOCKING_CALLS}: it returns immediately whether or not it succeeds, which is the whole point of
+     * it - so a green run here is "no callback reaches a WAITING acquire", not "the rule cannot see the retry
+     * queue any more".
      */
     private static final Set<String> KNOWN_BLOCKING_VIOLATIONS = new HashSet<>(Arrays.asList(
             "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked"

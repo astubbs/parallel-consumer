@@ -96,7 +96,9 @@ removed the resident and the empty shard with it. A sweep that DECLINES leaves t
 so the next add takes the branch.
 
 Fixed as a fixture - the harness now assigns its partition, which is what its own constructor claims
-to model - so this note's policy question is untouched.
+to model - so this note's policy question is untouched. That fixture fix was extracted and landed
+ahead of the sweep, as astubbs/parallel-consumer#467, where the harness was re-measured GREEN without
+it - the branch needs the declining sweep to be reachable at all.
 
 **It is evidence for "test shortcut", not for "real production shape"** - the second bullet under
 "The decision needed" - and the distinction matters both ways round. What the product now creates is

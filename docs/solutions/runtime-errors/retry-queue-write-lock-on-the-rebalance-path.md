@@ -68,11 +68,19 @@ It is reachable **twice**, and the second reach was invisible:
    the swept containers, and is reached from `onPartitionsAssigned` as well as from the two above.
 
 ArchUnit models a method reference as a `JavaMethodReference`, which the rule's walk
-(`getMethodCallsFromSelf()`) does not return. Measured: with every exemption deleted, the unfixed
+(`getMethodCallsFromSelf()`) did not return. Measured: with every exemption deleted, the unfixed
 tree reported **six** violations - all through reach 1, none on `onPartitionsAssigned` - and after
 the fix rewrote that method reference as a lambda over a direct call, the same probe (temporarily
 adding `WriteLock.tryLock()` to the deny list) reported **nine**. An exemption list that looks
 complete is evidence about what the walk can see, never about what the callback reaches.
+
+Widening the walk was extracted from this work and landed first, as
+astubbs/parallel-consumer#465: `getMethodReferencesFromSelf()` is followed beside the calls, a
+`@ControllerThreadOnly` marker makes the thread contract a declaration the rule reads, and
+`RebalanceCallbackRuleControlTest` is the standing control for both. It shipped RED rather than
+green - the twelve `root => target` keys the widening exposed went into `KNOWN_BLOCKING_VIOLATIONS`
+with this fix named as their owner - so the gate that catches the class was in place, and measured,
+before the instance was fixed.
 
 ## Why "decline and move on" was not enough
 
@@ -185,5 +193,10 @@ red against the unfixed tree and they fail differently, which is why all three a
 out on the write lock, and `aDeclinedRevokeLeavesTheShardAndTheRetryQueueInStep` observes the split
 state directly, because the unfixed order was shard-first.
 
-The six `ReentrantReadWriteLock$WriteLock.lock()` entries were then deleted from
-`KNOWN_BLOCKING_VIOLATIONS`, and the rule is green on merit.
+All eighteen `KNOWN_BLOCKING_VIOLATIONS` entries for this defect were then deleted - the six
+`ReentrantReadWriteLock$WriteLock.lock()` ones that predated the widened walk and the twelve
+astubbs/parallel-consumer#465 recorded - leaving only the confluentinc#857 transactional-revoke
+`Thread.sleep`. The rule is green on merit, checked once per kind of reach the widening added:
+routing `ShardManager.removeWorkFromShardFor` back onto `retryQueue.remove` turns it red by CALL,
+restoring `.map(retryQueue::remove)` in `ShardManager.removeStaleContainers` turns it red by METHOD
+REFERENCE, and both were reverted to an empty diff.

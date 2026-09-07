@@ -67,9 +67,13 @@ that is already taking a lock.
 
 - **What "fail loudly" means on the poll thread**, which is the binding one. The call is inside
   `consumer.poll()`, so a thrown exception leaves a Kafka rebalance callback abnormally and its blast radius
+<!-- post-merge: checked-begin -->
   is the group, not the caller; "log an error and decline the removal" is the alternative, and it is the
   behaviour the queue-first sweep already treats as safe. Throwing is the better signal in a test and the
-  worse one in production, which is the trade to settle.
+  worse one in production, which is the trade to settle - and astubbs/parallel-consumer#431 settled the same
+  trade for the static half by declining rather than throwing, which is the precedent to weigh rather than a
+  decision already taken here.
+<!-- post-merge: checked-end -->
 - **Claim and release across a restart.** `ConsumerOffsetCommitter.claim()` is called once and never released.
   A controller that stops and starts again, or a second `ParallelEoSStreamProcessor` in the same JVM, needs a
   decision on whether a claim can be replaced, refused, or dropped at close - and on what an assertion does in

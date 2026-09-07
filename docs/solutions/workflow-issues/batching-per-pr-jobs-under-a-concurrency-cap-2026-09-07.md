@@ -13,6 +13,7 @@ applies_when:
   - Proposing to merge, split, rename or delete a GitHub Actions job
   - Deciding whether a required status check may be added or removed
   - Reading a green duplication or coverage report as evidence about a change
+  - Scoring a CI change on an average or median step duration
 symptoms:
   - Big sharded suites sit queued while one-minute jobs run
   - A PR push launches more jobs than the account's concurrent-job ceiling
@@ -24,6 +25,7 @@ tags:
   - job-batching
   - measurement
   - refuted-hypotheses
+  - bimodal-durations
 ---
 
 # Batching per-PR jobs under a concurrency cap
@@ -72,6 +74,33 @@ about a third. The pattern that made each one cheap:
 - **Guard every folded step with `if: ${{ !cancelled() }}`.** A red first step then never hides
   the ones behind it, and the job conclusion aggregates them. No verdict step is needed; the
   platform already does that job.
+
+## The fold that did not work: a median hid a bimodal worst case
+
+One of the four rounds put the PR-scoped PIT mutation lane in as the last steps of `scan: repo`,
+a **required** check. That was wrong, and astubbs/parallel-consumer#463 extracted it back into its
+own job. The other folds in this run were fine and remain fine.
+
+**The methodological half is the valuable one: the harness scored each candidate fold on MEDIAN
+step duration, and PIT's distribution is bimodal.** It takes about 11 seconds when no in-scope class
+changed - the common case, and therefore the median - or up to about 19-20 minutes when it actually
+mutates. Nothing lands in between. A median made a 20-minute worst case look like a rounding error.
+For any step whose duration is bimodal, or long-tailed, the median is the wrong statistic: score the
+fold on the tail it can actually produce.
+
+**The design half:** batching is safe for work that is fast, bounded and gating. A slow, bimodal,
+deliberately non-gating lane is the one shape that must not be folded into a required job, because
+**a job emits one check run and that check does not report until the whole job finishes**. The
+mutation lane is `continue-on-error` precisely so its outcome cannot block a merge - folding it into
+a required check let it block the merge with its runtime instead, which the flag does nothing about.
+Measured on job `101622402881`: every other step of `scan: repo` was finished 3m29s in, and PIT held
+the required context for the remaining ~17 minutes.
+
+**The comment written above the folded block claimed "Every check above has already reported by the
+time this starts."** It was false, and its falseness is the mistake in one line: the *steps* had
+finished and the duplication tools had posted their own PR comments, so the lane looked reported -
+but the *check* had not reported and structurally could not. A step completing and a check reporting
+are different events. Do not reason about check latency from what the log shows finishing.
 
 ## The pairing test, learned by getting it wrong
 

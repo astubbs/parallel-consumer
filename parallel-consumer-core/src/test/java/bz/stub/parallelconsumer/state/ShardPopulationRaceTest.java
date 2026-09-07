@@ -260,5 +260,4 @@ class ShardPopulationRaceTest {
     private ConsumerRecord<String, String> recordAt(long offset) {
         return new ConsumerRecord<>(TOPIC, 0, offset, "a-key", "value-" + offset);
     }
-
 }
