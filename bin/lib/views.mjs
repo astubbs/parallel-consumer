@@ -580,6 +580,15 @@ export function formatRank(r) {
             + `${r.excluded.map((e) => `${e.count} ${e.key}`).join(', ')}`)
     }
     out.push(`\n  ${scopeLine(r)}`)
+    // SAID ONCE PER RUN, NOT ONCE PER ROW. A row read off the baseline carries a pull-request suffix
+    // when one exists and `[PR state UNKNOWN]` when the lookup could not answer - so the remaining
+    // case, no suffix at all, is the one a reader cannot tell apart from nobody having asked. Codex
+    // asked for an explicit per-row absence marker (astubbs/parallel-consumer#438); it was declined
+    // because most carrying refs have no pull request, so that marker would land on the majority of
+    // rows and crowd out the informative suffix on the minority that carry one. Stating it here
+    // removes the ambiguity at no per-row cost. Operator ruling, 2026-09-06.
+    out.push('  A row with no pull-request suffix means the lookup answered and found none; a lookup')
+    out.push('  that could not answer prints [PR state UNKNOWN] instead.')
     out.push('  An empty group means nothing on any ref carries one, not that your checkout has none.')
     return out.join('\n')
 }

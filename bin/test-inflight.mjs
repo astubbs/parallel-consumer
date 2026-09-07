@@ -3409,6 +3409,24 @@ const CHECKS = [
             'out.push(`          bin/inflight.mjs docs show ${row.path}`)', 'out.push(\'\')'),
     },
     {
+        id: 'rank-says-once-what-a-missing-pull-request-suffix-means',
+        why: "a row read off the baseline prints its pull request when one exists and `[PR state UNKNOWN]` when the lookup could not answer, so the third case - no suffix at all - was the one a reader could not tell apart from nobody having asked. Codex asked for a per-row absence marker; that was declined because most carrying refs have no pull request, so the marker would land on the majority of rows and crowd out the informative suffix on the minority that carry one. The operator's ruling was to say it once in the scope header instead. That is a rendered-text contract, and this file's own lesson is that a view no check renders is unenforced",
+        run: async (binDir) => {
+            const { formatRank } = await views(binDir)
+            return inRankFixture(async () => {
+                const scoped = await rankIndex(binDir, 'stall')
+                if (!scoped.ok) return false
+                const shown = formatRank(scoped)
+                // Both halves, because the distinction is the whole point: silence means asked-and-none,
+                // and the UNKNOWN spelling is what an unanswered lookup prints instead.
+                return /no pull-request suffix means the lookup answered and found none/.test(shown)
+                    && /\[PR state UNKNOWN\]/.test(shown)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            "out.push('  A row with no pull-request suffix means the lookup answered and found none; a lookup')", "out.push('')"),
+    },
+    {
         id: 'rank-reads-the-register-by-entry-not-by-scanning-the-whole-document',
         why: "scanning the document for `astubbs#<n>` turned prose, cross-references and the register's own \"What is NOT on this list\" paragraph into ranked entries, and any hyphenated .md token into a phantom one. Both directions were wrong on the real register: every number reported as resolving to nothing was a false positive, two of them were entries whose filename the same run resolved, and a live note was suppressed from the unranked half by the sentence \"fixing astubbs#177 does not close it\"",
         run: async (binDir) => {
