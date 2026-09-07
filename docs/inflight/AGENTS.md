@@ -366,6 +366,10 @@ against the tree at the baseline - not against a memory of it:
 5. **No longer true** - `git rm`, or `closed - <why>` when the reasoning is worth a later reader
    finding.
 
+**This section is the per-note contract; [`docs/grooming.md`](../grooming.md) owns the sweep around
+it** - when to run one, how it is split between agents, the dispatch prompt, and where the results
+are consolidated. Follow that document each time rather than re-deriving the sweep.
+
 **The worklist is `bin/inflight.mjs vet`.** Every open note on the baseline, unvetted first, in the
 index's group order and then **oldest first** by the date the note was first added on any ref -
 each annotated with the cheap signals a script can see: every fork number it cites is merged or

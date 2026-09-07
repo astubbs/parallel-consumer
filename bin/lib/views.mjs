@@ -666,7 +666,7 @@ export function formatVet(v) {
     out.push('')
     out.push('  Order: the index\'s group order (registers, then the impact scale), then OLDEST FIRST by the date')
     out.push('  the note was first added on any ref. A signal is a reason to open the note, never a verdict;')
-    out.push('  docs/inflight/AGENTS.md -> "Vetting a note" names the five outcomes.')
+    out.push('  docs/inflight/AGENTS.md -> "Vetting a note" names the five outcomes; docs/grooming.md is the sweep.')
     out.push('')
 
     const vettedRows = []

@@ -588,7 +588,8 @@ is settled, a cited path or symbol no longer resolves on the baseline, a delete-
 
 A SIGNAL IS A REASON TO OPEN THE NOTE, NEVER A VERDICT. A note cites a merged pull request because
 that is where the problem was found; a symbol is missing because the note proposes it. Nothing here
-closes a note. docs/inflight/AGENTS.md -> "Vetting a note" names the five outcomes and the marker.
+closes a note. docs/inflight/AGENTS.md -> "Vetting a note" names the five outcomes and the marker;
+docs/grooming.md is the procedure for a whole sweep - follow it rather than re-deriving one.
 
 Reads the baseline's blobs, never the working tree, and only the baseline: a note that exists only
 on a branch is vetted by that branch's merge. \`rank\` is the every-ref view.
