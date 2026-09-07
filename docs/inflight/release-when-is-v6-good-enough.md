@@ -40,6 +40,21 @@ them. A second release gets a smaller launch, but the roadmap announcement is wh
 shipping since the 26 August date passed; the previous version of this note said the failure mode
 was never shipping, and that is the failure mode that occurred.
 
+**Prior art this supersedes, and what it still gets right.** A merge-order note from 2026-08-08
+lives only on branch `docs/v6-merge-order` (`bin/inflight.mjs docs show
+docs/inflight/release-v6-merge-order.md`) and was never merged. It ordered a far larger v6: the
+transactional-atomicity trio first, then the loss and confluentinc#857 fixes, then **new surface**
+(the health check, MDC, the mock consumer in the main jar), then **new opt-in modules** (the
+dashboard, the Streams and Connect proofs of concept) and the examples rewrite, on the argument that
+a first release whose job is to make "actively maintained" credible should ship the surface. Its
+first two tiers have all merged. **The 2026-09-08 decision overrides its tiers three, seven and
+eight**: new surface and new modules are not defects, so they do not gate a bug release, and the
+announcement plan carries the "maintained, and past where upstream stopped" claim instead. Two of
+its points survive unchanged and are in tier 3 below: astubbs#199 is the one item that cannot be
+applied after the tag, and astubbs#197's body reads as more blocked than it is. Its open question
+of which modules v6 publishes is moot under this decision, since no module PR is in the queue.
+<!-- file-refs: N/A - the merge-order note is branch-only, cited by its branch and the command that shows it -->
+
 **"Draft" on a fork PR means "needs the owner to review and merge", not "unfinished".** Every PR in
 the queue below is implemented, tested and green on everything except the human-LGTM gate and, where
 it stacks, the dependency gate. `gh pr list -R astubbs/parallel-consumer` shows near enough every
