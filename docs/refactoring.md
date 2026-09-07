@@ -468,13 +468,6 @@ cosmetic - see the last bullet.*
   `todo refactor this loop into the encoders`: move the per-offset loop into the encoder subtypes.
   `inline this into the partition iteration loop`: inline into the WorkManager partition loop.
   `COMPRESSION_FORCED_RESOURCE_LOCK`: static state for test serialisation (see cross-cutting).
-- **Equal-sized encodings are chosen by set iteration order, so the winner is not deterministic.** The
-  encoders are held in a `ConcurrentHashMap` key set and fed into a `TreeSet` ordered by encoded size
-  alone, so when two candidates tie the survivor depends on identity hash order and varies from call to
-  call. Breaking the tie by magic byte would make the choice deterministic and byte-identity assertions
-  against a separately built baseline possible. Sighting and the measurement (the same three-offset state
-  encoding as two different magic bytes of equal length across two calls) are in `RiderSupplierGuardTest`'s
-  javadoc, anchor `Why this is not a byte-for-byte comparison against a separately built baseline`.
 
 ### offsets/BitSetEncoder.java & OffsetBitSet.java
 - Unify the V1/V2 init paths (BitSetEncoder `TODO refactor inivtV2 and V1 together`);

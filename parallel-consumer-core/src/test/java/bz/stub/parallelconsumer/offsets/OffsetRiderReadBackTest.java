@@ -4,32 +4,30 @@ package bz.stub.parallelconsumer.offsets;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import lombok.extern.slf4j.Slf4j;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
-import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope.Rider;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope.RiderState;
 import bz.stub.parallelconsumer.state.PartitionState;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.SneakyThrows;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.MockConsumer;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import pl.tlinkowski.unij.api.UniLists;
 import java.util.Arrays;
-import java.util.Optional;
 import java.util.TreeSet;
 
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.moduleWithNoSupplier;
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.stateOver;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE;
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * The read-back seam an embedder that does <b>not</b> own Parallel Consumer's consumer uses:
@@ -73,19 +71,9 @@ class OffsetRiderReadBackTest {
 
     @BeforeEach
     void setup() {
-        incompleteOffsets = new TreeSet<>();
-        incompleteOffsets.add(100L);
-        incompleteOffsets.add(102L);
-        incompleteOffsets.add(103L);
-
-        var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST);
-        var options = ParallelConsumerOptions.<String, String>builder()
-                .consumer(mockConsumer)
-                .meterRegistry(new SimpleMeterRegistry())
-                .build();
-        module = new PCModuleTestEnv(options);
-        state = new PartitionState<>(0, module, TP,
-                new HighestOffsetAndIncompletes(Optional.of(HIGHEST_SUCCEEDED), incompleteOffsets));
+        incompleteOffsets = new TreeSet<>(UniLists.of(100L, 102L, 103L));
+        module = moduleWithNoSupplier();
+        state = stateOver(module, TP, HIGHEST_SUCCEEDED, incompleteOffsets);
         codec = new OffsetMapCodecManager<>(module);
     }
 
@@ -99,8 +87,8 @@ class OffsetRiderReadBackTest {
     void todaysPayloadReadsBackAsNoRider() {
         String payload = codec.makeOffsetMetadataPayload(COMMITTED_OFFSET, state);
 
-        assertThat(OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, payload, FAIL).getState())
-                .as("a payload with no envelope says no rider was configured when it was committed")
+        assertWithMessage("a payload with no envelope says no rider was configured when it was committed")
+                .that(OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, payload, FAIL).getState())
                 .isEqualTo(RiderState.NONE);
     }
 
@@ -115,11 +103,11 @@ class OffsetRiderReadBackTest {
         byte[] inner = codec.encodeOffsetsToInnerBytes(COMMITTED_OFFSET, state);
         String thirdRung = codec.assembleMetadataPayload(inner, Rider.none());
 
-        assertThat(thirdRung)
-                .as("shedding the envelope leaves exactly the payload a build with no rider would have written")
+        assertWithMessage("shedding the envelope leaves exactly the payload a build with no rider would have written")
+                .that(thirdRung)
                 .isEqualTo(codec.makeOffsetMetadataPayload(COMMITTED_OFFSET, state));
-        assertThat(OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, thirdRung, FAIL).getState())
-                .as("R6: once the envelope itself is shed, the payload reads as never configured")
+        assertWithMessage("R6: once the envelope itself is shed, the payload reads as never configured")
+                .that(OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, thirdRung, FAIL).getState())
                 .isEqualTo(RiderState.NONE);
     }
 
@@ -132,13 +120,14 @@ class OffsetRiderReadBackTest {
         Rider rider = OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, payload, FAIL);
 
         assertThat(rider.getState()).isEqualTo(RiderState.PRESENT);
-        assertThat(rider.getBytes())
-                .as("the rider must come back exactly as it was supplied")
+        assertWithMessage("the rider must come back exactly as it was supplied")
+                .that(rider.getBytes())
                 .isEqualTo(RIDER_BYTES);
-        assertThat(OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(COMMITTED_OFFSET, payload)
-                .getIncompleteOffsets())
-                .as("reading the rider must not cost the caller the hole map - the same string still decodes to it")
-                .containsExactlyElementsOf(incompleteOffsets);
+        assertWithMessage("reading the rider must not cost the caller the hole map - the same string still decodes to it")
+                .that(OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(COMMITTED_OFFSET, payload)
+                        .getIncompleteOffsets())
+                .containsExactlyElementsIn(incompleteOffsets)
+                .inOrder();
     }
 
     /**
@@ -163,12 +152,11 @@ class OffsetRiderReadBackTest {
 
         Rider rider = OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, payload, FAIL);
 
-        assertThat(rider.getState())
-                .as("a rider shed for size must not read as one that was never configured")
+        assertWithMessage("a rider shed for size must not read as one that was never configured")
+                .that(rider.getState())
                 .isEqualTo(RiderState.DROPPED);
-        assertThatThrownBy(rider::getBytes)
-                .as("a dropped rider has no bytes to hand back")
-                .isInstanceOf(IllegalStateException.class);
+        assertThrows(IllegalStateException.class, rider::getBytes,
+                "a dropped rider has no bytes to hand back");
     }
 
     /**
@@ -198,9 +186,9 @@ class OffsetRiderReadBackTest {
      */
     @Test
     void garbageUnderFailThrowsTheTypedExceptionRatherThanAnOffsetDecodingError() {
-        assertThatThrownBy(() -> OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, "not-valid-base64!!", FAIL))
-                .isInstanceOf(CorruptOffsetMetadataException.class)
-                .isNotInstanceOf(OffsetDecodingError.class);
+        var thrown = assertThrows(CorruptOffsetMetadataException.class,
+                () -> OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, "not-valid-base64!!", FAIL));
+        assertThat(thrown).isNotInstanceOf(OffsetDecodingError.class);
     }
 
     /**
@@ -214,8 +202,8 @@ class OffsetRiderReadBackTest {
 
         Rider rider = OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, payload, IGNORE);
 
-        assertThat(rider.getState())
-                .as("losing the body must not lose the rider - AE7")
+        assertWithMessage("losing the body must not lose the rider - AE7")
+                .that(rider.getState())
                 .isEqualTo(RiderState.PRESENT);
         assertThat(rider.getBytes()).isEqualTo(RIDER_BYTES);
     }
@@ -224,9 +212,9 @@ class OffsetRiderReadBackTest {
     void anIntactEnvelopeWithATruncatedInnerBodyThrowsUnderFail() {
         String payload = codec.assembleMetadataPayload(truncatedInnerBody(), Rider.present(RIDER_BYTES));
 
-        assertThatThrownBy(() -> OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, payload, FAIL))
-                .isInstanceOf(CorruptOffsetMetadataException.class)
-                .isNotInstanceOf(OffsetDecodingError.class);
+        var thrown = assertThrows(CorruptOffsetMetadataException.class,
+                () -> OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, payload, FAIL));
+        assertThat(thrown).isNotInstanceOf(OffsetDecodingError.class);
     }
 
     /**
@@ -249,20 +237,20 @@ class OffsetRiderReadBackTest {
         byte[] first = OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, payload, FAIL).getBytes();
         Arrays.fill(first, (byte) 0);
 
-        assertThat(OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, payload, FAIL).getBytes())
-                .as("no array the read path allocated may be shared with an embedder")
+        assertWithMessage("no array the read path allocated may be shared with an embedder")
+                .that(OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, payload, FAIL).getBytes())
                 .isEqualTo(RIDER_BYTES);
 
         Rider rider = OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, payload, FAIL);
         byte[] once = rider.getBytes();
         Arrays.fill(once, (byte) 0);
-        assertThat(rider.getBytes())
-                .as("nor may two reads of the same Rider share one")
+        assertWithMessage("nor may two reads of the same Rider share one")
+                .that(rider.getBytes())
                 .isEqualTo(RIDER_BYTES);
     }
 
     /**
-     * The half of R14 that {@code assertThatThrownBy} cannot pin. Its callable is declared {@code throws Throwable},
+     * The half of R14 that {@code assertThrows} cannot pin. Its callable is declared {@code throws Throwable},
      * so the compiler never asks whether the checked types the javadoc promises are actually <em>declared</em> - and
      * a checked type that is thrown but not declared cannot be caught by name: javac rejects the {@code catch} as
      * unreachable. This test is the caller the javadoc describes, written the way an embedder would write it, and
@@ -282,7 +270,8 @@ class OffsetRiderReadBackTest {
         } catch (UnknownOffsetMetadataMagicException e) {
             caughtForCorrupt = "unknown magic";
         }
-        assertThat(caughtForCorrupt).as("the corrupt payload lands in the catch the javadoc names for it")
+        assertWithMessage("the corrupt payload lands in the catch the javadoc names for it")
+                .that(caughtForCorrupt)
                 .isEqualTo("corrupt");
 
         String caughtForUnknownMagic = "nothing";
@@ -293,7 +282,8 @@ class OffsetRiderReadBackTest {
         } catch (UnknownOffsetMetadataMagicException e) {
             caughtForUnknownMagic = "unknown magic";
         }
-        assertThat(caughtForUnknownMagic).as("the unknown magic byte lands in ITS catch, not the corrupt one")
+        assertWithMessage("the unknown magic byte lands in ITS catch, not the corrupt one")
+                .that(caughtForUnknownMagic)
                 .isEqualTo("unknown magic");
     }
 
@@ -308,17 +298,21 @@ class OffsetRiderReadBackTest {
                 InvalidOffsetMetadataHandlingPolicy.class);
 
         assertThat(Modifier.isPublic(decodeRider.getModifiers())).isTrue();
-        assertThat(Modifier.isStatic(decodeRider.getModifiers()))
-                .as("an embedder reading a string it fetched itself has no codec instance to reach this through")
+        assertWithMessage("an embedder reading a string it fetched itself has no codec instance to reach this through")
+                .that(Modifier.isStatic(decodeRider.getModifiers()))
                 .isTrue();
-        assertThat(decodeRider.getParameterTypes()[0])
-                .as("the committed offset leads, like the deserialiseIncompleteOffsetMapFromBase64 family")
+        assertWithMessage("the committed offset leads, like the deserialiseIncompleteOffsetMapFromBase64 family")
+                .that(decodeRider.getParameterTypes()[0])
                 .isEqualTo(long.class);
         assertThat(decodeRider.getReturnType()).isEqualTo(Rider.class);
-        assertThat(decodeRider.getExceptionTypes())
-                .contains(OffsetDecodingError.class,
+        assertWithMessage("the checked FAIL outcomes are declared as a family, so a caller can catch the parent in one "
+                        + "clause or any member - unknown magic, Kafka Streams metadata, an undecodable enum "
+                        + "member - by its own type")
+                .that(decodeRider.getExceptionTypes())
+                .asList()
+                .containsAtLeast(OffsetDecodingError.class,
                         CorruptOffsetMetadataException.class,
-                        UnknownOffsetMetadataMagicException.class);
+                        EncodingNotSupportedException.class);
     }
 
     /**
@@ -330,11 +324,12 @@ class OffsetRiderReadBackTest {
      */
     @Test
     void thereIsNoOverloadOfTheEntryPointWithoutAPolicy() {
-        assertThat(Arrays.stream(OffsetMapCodecManager.class.getMethods())
-                .filter(m -> "decodeRider".equals(m.getName()))
-                .map(m -> Arrays.toString(m.getParameterTypes()))
-                .toArray())
-                .as("no overload of decodeRider may omit the policy - R14")
+        assertWithMessage("no overload of decodeRider may omit the policy - R14")
+                .that(Arrays.stream(OffsetMapCodecManager.class.getMethods())
+                        .filter(m -> "decodeRider".equals(m.getName()))
+                        .map(m -> Arrays.toString(m.getParameterTypes()))
+                        .toArray())
+                .asList()
                 .containsExactly(Arrays.toString(new Class<?>[]{long.class, String.class,
                         InvalidOffsetMetadataHandlingPolicy.class}));
     }

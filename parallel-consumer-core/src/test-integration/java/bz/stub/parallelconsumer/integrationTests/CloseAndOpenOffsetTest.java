@@ -22,6 +22,7 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -92,7 +93,9 @@ class CloseAndOpenOffsetTest extends BrokerIntegrationTest<String, String> {
     @EnumSource()
     @ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = READ)
     void offsetsOpenClose(OffsetEncoding encoding) {
-        var skip = UniLists.of(OffsetEncoding.ByteArray, OffsetEncoding.ByteArrayCompressed, OffsetEncoding.KafkaStreams, OffsetEncoding.KafkaStreamsV2);
+        // RiderEnvelope names no encoder: it is the wrapper the codec puts AROUND whichever of these wins, so
+        // forcing it as a codec is not a scenario (astubbs#255)
+        var skip = UniLists.of(OffsetEncoding.ByteArray, OffsetEncoding.ByteArrayCompressed, OffsetEncoding.KafkaStreams, OffsetEncoding.KafkaStreamsV2, OffsetEncoding.RiderEnvelope);
         assumeFalse(skip.contains(encoding));
 
         // todo remove - not even relevant to this test? smelly
@@ -215,6 +218,15 @@ class CloseAndOpenOffsetTest extends BrokerIntegrationTest<String, String> {
             }
         }
 
+    }
+
+    /**
+     * Reset the forced statics whether or not the arm passed: the reset used to sit at the end of
+     * {@link #offsetsOpenClose}, so a failing arm left {@code forcedCodec} set for every later test in the class -
+     * which is how one red parameter dragged {@link #largeNumberOfMessagesSmallOffsetBitmap} down with it.
+     */
+    @AfterEach
+    void clearForcedStatics() {
         OffsetMapCodecManager.forcedCodec = Optional.empty();
         OffsetSimultaneousEncoder.compressionForced = false;
     }

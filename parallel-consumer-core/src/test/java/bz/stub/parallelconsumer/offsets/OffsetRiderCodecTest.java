@@ -4,7 +4,9 @@ package bz.stub.parallelconsumer.offsets;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import lombok.extern.slf4j.Slf4j;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
@@ -13,27 +15,25 @@ import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIn
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope.Rider;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope.RiderState;
 import bz.stub.parallelconsumer.state.PartitionState;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.SneakyThrows;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.MockConsumer;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.parallel.ResourceAccessMode;
-import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.nio.ByteBuffer;
+import pl.tlinkowski.unij.api.UniSets;
+import pl.tlinkowski.unij.api.UniLists;
 import java.util.Optional;
-import java.util.SortedSet;
+import java.util.Set;
 import java.util.TreeSet;
 
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.moduleWithNoSupplier;
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.stateOver;
 import static bz.stub.parallelconsumer.offsets.OffsetEncoding.BitSet;
 import static bz.stub.parallelconsumer.offsets.OffsetEncoding.BitSetCompressed;
 import static bz.stub.parallelconsumer.offsets.OffsetEncoding.BitSetV2;
@@ -43,10 +43,10 @@ import static bz.stub.parallelconsumer.offsets.OffsetEncoding.RunLength;
 import static bz.stub.parallelconsumer.offsets.OffsetEncoding.RunLengthCompressed;
 import static bz.stub.parallelconsumer.offsets.OffsetEncoding.RunLengthV2;
 import static bz.stub.parallelconsumer.offsets.OffsetEncoding.RunLengthV2Compressed;
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assumptions.assumeThat;
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
  * The rider envelope wired into the codec: what PC writes when an embedder supplies a rider, what it reads back, and -
@@ -85,6 +85,14 @@ class OffsetRiderCodecTest {
 
     static final byte[] RIDER_BYTES = {1, 2, 3, 4, 5, 6, 7, 8};
 
+    /**
+     * The encodings the rider round trip does not parameterise over - encodings this codec does not currently
+     * produce, plus the envelope constant itself, which can never appear as an inner encoding.
+     */
+    static final Set<OffsetEncoding> ENCODINGS_NOT_APPLICABLE_TO_THE_RIDER_ROUND_TRIP = UniSets.of(
+            OffsetEncoding.ByteArray, OffsetEncoding.ByteArrayCompressed,
+            OffsetEncoding.KafkaStreams, OffsetEncoding.KafkaStreamsV2, RiderEnvelope);
+
     PCModuleTestEnv module;
 
     OffsetMapCodecManager<String, String> codec;
@@ -95,20 +103,9 @@ class OffsetRiderCodecTest {
 
     @BeforeEach
     void setup() {
-        incompleteOffsets = new TreeSet<>();
-        incompleteOffsets.add(0L);
-        incompleteOffsets.add(2L);
-        incompleteOffsets.add(3L);
-
-        var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST);
-        var options = ParallelConsumerOptions.<String, String>builder()
-                .consumer(mockConsumer)
-                // its own registry, so the encoder-runs-once assertion counts this test's encodes and nobody else's
-                .meterRegistry(new SimpleMeterRegistry())
-                .build();
-        module = new PCModuleTestEnv(options);
-        state = new PartitionState<>(0, module, TP,
-                new HighestOffsetAndIncompletes(Optional.of(HIGHEST_SUCCEEDED), incompleteOffsets));
+        incompleteOffsets = new TreeSet<>(UniLists.of(0L, 2L, 3L));
+        module = moduleWithNoSupplier();
+        state = stateOver(module, TP, HIGHEST_SUCCEEDED, incompleteOffsets);
         codec = new OffsetMapCodecManager<>(module);
     }
 
@@ -127,22 +124,20 @@ class OffsetRiderCodecTest {
     @ParameterizedTest
     @EnumSource(OffsetEncoding.class)
     void aPayloadWithNoRiderIsWhatPcWritesToday(OffsetEncoding encoding) {
-        assumeThat(encoding)
-                .as("Codec skipped, not applicable")
-                .isNotIn(OffsetEncoding.ByteArray, OffsetEncoding.ByteArrayCompressed,
-                        OffsetEncoding.KafkaStreams, OffsetEncoding.KafkaStreamsV2, RiderEnvelope);
+        assumeFalse(ENCODINGS_NOT_APPLICABLE_TO_THE_RIDER_ROUND_TRIP.contains(encoding),
+                "Codec skipped, not applicable");
 
         OffsetSimultaneousEncoder.compressionForced = true;
         OffsetMapCodecManager.forcedCodec = Optional.of(encoding);
 
         String expected = OffsetSimpleSerialisation.base64(codec.encodeOffsetsCompressed(COMMITTED_OFFSET, state));
 
-        assertThat(codec.makeOffsetMetadataPayload(COMMITTED_OFFSET, state))
-                .as("a commit with no rider must be byte-identical to what this build wrote before the rider existed")
+        assertWithMessage("a commit with no rider must be byte-identical to what this build wrote before the rider existed")
+                .that(codec.makeOffsetMetadataPayload(COMMITTED_OFFSET, state))
                 .isEqualTo(expected);
         byte[] innerBytes = codec.encodeOffsetsToInnerBytes(COMMITTED_OFFSET, state);
-        assertThat(codec.assembleMetadataPayload(innerBytes, Rider.none()))
-                .as("assembling with no rider must go round the envelope entirely")
+        assertWithMessage("assembling with no rider must go round the envelope entirely")
+                .that(codec.assembleMetadataPayload(innerBytes, Rider.none()))
                 .isEqualTo(expected);
     }
 
@@ -171,16 +166,16 @@ class OffsetRiderCodecTest {
         DecodedMetadata decoded = OffsetMapCodecManager.deserialiseMetadataFromBase64(committed, payload,
                 InvalidOffsetMetadataHandlingPolicy.FAIL, TP);
 
-        assertThat(decoded.getOffsets().getHighestSeenOffset())
-                .as("a rider-only payload must answer the same highest-seen offset as a payload with no map at all")
+        assertWithMessage("a rider-only payload must answer the same highest-seen offset as a payload with no map at all")
+                .that(decoded.getOffsets().getHighestSeenOffset())
                 .hasValue(committed - 1);
         assertThat(decoded.getOffsets().getIncompleteOffsets()).isEmpty();
         assertThat(decoded.getRider().getState()).isEqualTo(RiderState.PRESENT);
         assertThat(decoded.getRider().getBytes()).isEqualTo(RIDER_BYTES);
 
-        assertThat(OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(committed, payload)
-                .getHighestSeenOffset())
-                .as("the public overload must project down to the same answer")
+        assertWithMessage("the public overload must project down to the same answer")
+                .that(OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(committed, payload)
+                        .getHighestSeenOffset())
                 .hasValue(committed - 1);
     }
 
@@ -192,10 +187,8 @@ class OffsetRiderCodecTest {
     @ParameterizedTest
     @EnumSource(OffsetEncoding.class)
     void aRiderRoundTripsWithEveryInnerEncoding(OffsetEncoding encoding) {
-        assumeThat(encoding)
-                .as("Codec skipped, not applicable")
-                .isNotIn(OffsetEncoding.ByteArray, OffsetEncoding.ByteArrayCompressed,
-                        OffsetEncoding.KafkaStreams, OffsetEncoding.KafkaStreamsV2, RiderEnvelope);
+        assumeFalse(ENCODINGS_NOT_APPLICABLE_TO_THE_RIDER_ROUND_TRIP.contains(encoding),
+                "Codec skipped, not applicable");
 
         OffsetSimultaneousEncoder.compressionForced = true;
         OffsetMapCodecManager.forcedCodec = Optional.of(encoding);
@@ -220,11 +213,12 @@ class OffsetRiderCodecTest {
         DecodedMetadata decoded = OffsetMapCodecManager.deserialiseMetadataFromBase64(COMMITTED_OFFSET, payload,
                 InvalidOffsetMetadataHandlingPolicy.FAIL, TP);
 
-        assertThat(decoded.getOffsets().getIncompleteOffsets())
-                .as("the holes must survive being wrapped in an envelope")
-                .containsExactlyElementsOf(incompleteOffsets);
-        assertThat(decoded.getRider().getBytes())
-                .as("the rider must come back exactly as it was supplied")
+        assertWithMessage("the holes must survive being wrapped in an envelope")
+                .that(decoded.getOffsets().getIncompleteOffsets())
+                .containsExactlyElementsIn(incompleteOffsets)
+                .inOrder();
+        assertWithMessage("the rider must come back exactly as it was supplied")
+                .that(decoded.getRider().getBytes())
                 .isEqualTo(RIDER_BYTES);
     }
 
@@ -241,9 +235,9 @@ class OffsetRiderCodecTest {
         DecodedMetadata decoded = OffsetMapCodecManager.deserialiseMetadataFromBase64(COMMITTED_OFFSET, payload,
                 InvalidOffsetMetadataHandlingPolicy.FAIL, TP);
 
-        assertThat(decoded.getOffsets().getIncompleteOffsets()).containsExactlyElementsOf(incompleteOffsets);
-        assertThat(decoded.getRider().getState())
-                .as("a dropped rider must not read as one that was never configured")
+        assertThat(decoded.getOffsets().getIncompleteOffsets()).containsExactlyElementsIn(incompleteOffsets).inOrder();
+        assertWithMessage("a dropped rider must not read as one that was never configured")
+                .that(decoded.getRider().getState())
                 .isEqualTo(RiderState.DROPPED);
     }
 
@@ -264,8 +258,8 @@ class OffsetRiderCodecTest {
 
         assertThat(decoded.getOffsets().getHighestSeenOffset()).hasValue(COMMITTED_OFFSET - 1);
         assertThat(decoded.getOffsets().getIncompleteOffsets()).isEmpty();
-        assertThat(decoded.getRider().getState())
-                .as("the rider and the hole map are structurally independent - losing the body must not lose the rider")
+        assertWithMessage("the rider and the hole map are structurally independent - losing the body must not lose the rider")
+                .that(decoded.getRider().getState())
                 .isEqualTo(RiderState.PRESENT);
         assertThat(decoded.getRider().getBytes()).isEqualTo(RIDER_BYTES);
     }
@@ -296,7 +290,7 @@ class OffsetRiderCodecTest {
                 InvalidOffsetMetadataHandlingPolicy.FAIL, TP);
 
         assertThat(decoded.getRider().getState()).isEqualTo(RiderState.NONE);
-        assertThat(decoded.getOffsets().getIncompleteOffsets()).containsExactlyElementsOf(incompleteOffsets);
+        assertThat(decoded.getOffsets().getIncompleteOffsets()).containsExactlyElementsIn(incompleteOffsets).inOrder();
     }
 
     /**
@@ -310,11 +304,11 @@ class OffsetRiderCodecTest {
         byte[] withHoles = OffsetRiderEnvelope.wrap(inner, Rider.present(RIDER_BYTES));
         byte[] riderOnly = OffsetRiderEnvelope.wrap(new byte[0], Rider.present(RIDER_BYTES));
 
-        assertThat(EncodedOffsetPair.unwrap(withHoles).getDecodedString())
-                .as("an envelope around an offset map renders the map it carries")
+        assertWithMessage("an envelope around an offset map renders the map it carries")
+                .that(EncodedOffsetPair.unwrap(withHoles).getDecodedString())
                 .isNotEmpty();
-        assertThat(EncodedOffsetPair.unwrap(riderOnly).getDecodedString())
-                .as("a rider-only payload has no inner encoding to render, so it renders the rider's length")
+        assertWithMessage("a rider-only payload has no inner encoding to render, so it renders the rider's length")
+                .that(EncodedOffsetPair.unwrap(riderOnly).getDecodedString())
                 .contains(String.valueOf(RIDER_BYTES.length));
     }
 
@@ -329,9 +323,9 @@ class OffsetRiderCodecTest {
         byte unknown = OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet();
         byte[] payload = OffsetRiderEnvelope.wrap(new byte[]{unknown, 1, 2, 3}, Rider.present(RIDER_BYTES));
 
-        assertThat(EncodedOffsetPair.unwrap(payload).getDecodedString())
-                .contains("does not know")
-                .contains(String.valueOf(unknown));
+        String decodedString = EncodedOffsetPair.unwrap(payload).getDecodedString();
+        assertThat(decodedString).contains("does not know");
+        assertThat(decodedString).contains(String.valueOf(unknown));
     }
 
     /**
@@ -348,10 +342,10 @@ class OffsetRiderCodecTest {
         assertThat(ignored.getHighestSeenOffset()).hasValue(COMMITTED_OFFSET - 1);
         assertThat(ignored.getIncompleteOffsets()).isEmpty();
 
-        assertThatThrownBy(() -> new EncodedOffsetPair(RiderEnvelope, ByteBuffer.wrap(envelopeBody))
-                .getDecodedIncompletes(COMMITTED_OFFSET, InvalidOffsetMetadataHandlingPolicy.FAIL, TP))
-                .as("FAIL must see a typed corruption, not an internal error")
-                .isInstanceOf(CorruptOffsetMetadataException.class);
+        assertThrows(CorruptOffsetMetadataException.class,
+                () -> new EncodedOffsetPair(RiderEnvelope, ByteBuffer.wrap(envelopeBody))
+                        .getDecodedIncompletes(COMMITTED_OFFSET, InvalidOffsetMetadataHandlingPolicy.FAIL, TP),
+                "FAIL must see a typed corruption, not an internal error");
     }
 
     /**
@@ -368,8 +362,8 @@ class OffsetRiderCodecTest {
                         InvalidOffsetMetadataHandlingPolicy.class),
                 codecClass.getMethod("deserialiseIncompleteOffsetMapFromBase64", long.class, String.class,
                         InvalidOffsetMetadataHandlingPolicy.class, TopicPartition.class)}) {
-            assertThat(m.getReturnType())
-                    .as("%s must keep returning HighestOffsetAndIncompletes", m)
+            assertWithMessage("%s must keep returning HighestOffsetAndIncompletes", m)
+                    .that(m.getReturnType())
                     .isEqualTo(HighestOffsetAndIncompletes.class);
         }
 
@@ -379,8 +373,8 @@ class OffsetRiderCodecTest {
 
         Method riderFamily = codecClass.getDeclaredMethod("decodeCompressedMetadata", long.class, byte[].class,
                 InvalidOffsetMetadataHandlingPolicy.class, TopicPartition.class);
-        assertThat(Modifier.isPublic(riderFamily.getModifiers()))
-                .as("the rider-carrying decode family is package-private - it is not public API")
+        assertWithMessage("the rider-carrying decode family is package-private - it is not public API")
+                .that(Modifier.isPublic(riderFamily.getModifiers()))
                 .isFalse();
         assertThat(riderFamily.getReturnType()).isEqualTo(DecodedMetadata.class);
     }
@@ -397,36 +391,41 @@ class OffsetRiderCodecTest {
 
         var ignoredPayload = codec.makeOffsetMetadataPayload(COMMITTED_OFFSET, state); // the value is asserted above
 
-        assertThat(timer.count() - before)
-                .as("makeOffsetMetadataPayload must run the encoder competition exactly once")
-                .isEqualTo(1);
+        assertWithMessage("makeOffsetMetadataPayload must run the encoder competition exactly once")
+                .that(timer.count() - before)
+                .isEqualTo(1L);
 
         byte[] inner = codec.encodeOffsetsToInnerBytes(COMMITTED_OFFSET, state);
         long afterInnerBytes = timer.count();
         var ignoredAssembled = codec.assembleMetadataPayload(inner, Rider.present(RIDER_BYTES)); // asserted above
 
-        assertThat(timer.count())
-                .as("assembling a payload must not encode anything - the ladder repacks the same inner bytes")
+        assertWithMessage("assembling a payload must not encode anything - the ladder repacks the same inner bytes")
+                .that(timer.count())
                 .isEqualTo(afterInnerBytes);
     }
 
     /**
-     * The caught-up case: no incomplete offsets at all, so there is no inner encoding to carry and the rider rides
-     * alone. {@code tryToEncodeOffsets} makes the same call on the same condition.
+     * The caught-up decision is the caller's, made once on the read it commits against; this step never re-reads
+     * emptiness. So a map with nothing incomplete but succeeded work above the base - the shape a partition has
+     * when the last completion lands between {@code tryToEncodeOffsets}' decision and the encode - comes out as a
+     * <b>complete</b> map, not as no map: a reader resumes at the base and skips through what succeeded, rather
+     * than replaying it. An earlier draft answered "nothing to encode" here, which committed the older offset with
+     * no metadata and replayed records this build had recorded as complete (Codex review on astubbs#460).
      */
     @SneakyThrows
     @Test
-    void aCaughtUpPartitionEncodesNoInnerBytes() {
-        SortedSet<Long> noIncompletes = new TreeSet<>();
-        var caughtUp = new PartitionState<String, String>(0, module, TP,
-                new HighestOffsetAndIncompletes(Optional.of(HIGHEST_SUCCEEDED), noIncompletes));
+    void aMapThatEmptiedUnderTheCallerEncodesAsCompleteRatherThanAsNothing() {
+        var emptiedUnderTheCaller = stateOver(module, TP, HIGHEST_SUCCEEDED, new TreeSet<>());
 
-        assertThat(codec.encodeOffsetsToInnerBytes(COMMITTED_OFFSET, caughtUp))
-                .as("a partition with nothing incomplete has no offset map to write")
-                .isEmpty();
+        byte[] inner = codec.encodeOffsetsToInnerBytes(COMMITTED_OFFSET, emptiedUnderTheCaller);
 
-        String payload = codec.assembleMetadataPayload(new byte[0], Rider.present(RIDER_BYTES));
-        assertThat(payload).isNotEmpty();
+        assertWithMessage("succeeded work above the base is described, not dropped").that(inner).isNotEmpty();
+        var readBack = OffsetMapCodecManager.deserialiseMetadataFromBase64(COMMITTED_OFFSET,
+                codec.assembleMetadataPayload(inner, Rider.none()), InvalidOffsetMetadataHandlingPolicy.FAIL, TP);
+        assertThat(readBack.getOffsets().getIncompleteOffsets()).isEmpty();
+        assertWithMessage("the map says everything through the high-water mark succeeded")
+                .that(readBack.getOffsets().getHighestSeenOffset())
+                .hasValue(HIGHEST_SUCCEEDED);
     }
 
     /**
@@ -435,12 +434,11 @@ class OffsetRiderCodecTest {
      */
     @Test
     void assemblingWithAReadSideRiderStateIsRejected() {
-        assertThatCode(() -> codec.assembleMetadataPayload(new byte[0], Rider.none()))
-                .as("NONE is legal: it means write the inner bytes unchanged")
-                .doesNotThrowAnyException();
+        // NONE is legal: it means write the inner bytes unchanged - this call must not throw
+        codec.assembleMetadataPayload(new byte[0], Rider.none());
 
-        assertThatThrownBy(() -> codec.assembleMetadataPayload(new byte[0], Rider.unreadable()))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThrows(IllegalArgumentException.class,
+                () -> codec.assembleMetadataPayload(new byte[0], Rider.unreadable()));
     }
 
     /**
@@ -451,8 +449,8 @@ class OffsetRiderCodecTest {
     void theEnvelopeConstantClaimsTheEnvelopesMagicByte() {
         assertThat(RiderEnvelope.getMagicByte()).isEqualTo(OffsetRiderEnvelope.MAGIC_BYTE);
         assertThat(OffsetEncoding.maybeDecode(OffsetRiderEnvelope.MAGIC_BYTE)).hasValue(RiderEnvelope);
-        assertThat(OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet())
-                .as("the unknown-magic-byte fixture must still name a byte no encoding claims")
+        assertWithMessage("the unknown-magic-byte fixture must still name a byte no encoding claims")
+                .that(OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet())
                 .isNotEqualTo(OffsetRiderEnvelope.MAGIC_BYTE);
     }
 
@@ -467,9 +465,9 @@ class OffsetRiderCodecTest {
         var encoder = new OffsetSimultaneousEncoder(COMMITTED_OFFSET, HIGHEST_SUCCEEDED, incompleteOffsets);
         encoder.invoke();
 
-        assertThat(encoder.getEncodingMap().keySet())
-                .as("the round-trip parameterisation is only worth anything for encodings this build produces")
-                .contains(BitSet, BitSetCompressed, BitSetV2, BitSetV2Compressed,
+        assertWithMessage("the round-trip parameterisation is only worth anything for encodings this build produces")
+                .that(encoder.getEncodingMap().keySet())
+                .containsAtLeast(BitSet, BitSetCompressed, BitSetV2, BitSetV2Compressed,
                         RunLength, RunLengthCompressed, RunLengthV2, RunLengthV2Compressed);
     }
 }

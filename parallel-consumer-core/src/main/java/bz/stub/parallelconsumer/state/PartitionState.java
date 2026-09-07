@@ -1009,9 +1009,8 @@ public class PartitionState<K, V> {
      * Its own limiter rather than the broken-supplier one: a supplier that returns too much and a supplier that
      * throws are different faults with different fixes, and sharing a limiter would let whichever happened first
      * silence the other for its whole window.
-     */
-    /**
-     * The one warning for an over-cap rider has to describe two different outcomes, because {@link #riderFromSupplier}
+     * <p>
+     * The one warning has to describe two different outcomes, because {@link #riderFromSupplier}
      * produces two: beside an offset map the rider becomes the dropped marker, and a reader sees
      * {@link OffsetRiderEnvelope.RiderState#DROPPED}; on a caught-up partition there is no map for the marker to
      * sit beside, no metadata is written at all, and a reader sees {@link OffsetRiderEnvelope.RiderState#NONE}. A

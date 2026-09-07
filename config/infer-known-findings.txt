@@ -53,3 +53,12 @@
 1 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.close
 1 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.hasNext
 2 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.next
+# BUFFER_OVERRUN_L1 on the rider envelope, three sightings of one shape. OffsetRiderEnvelope.wrap reads
+# inner[0] behind an explicit `inner.length > 0 &&` guard to refuse a nested envelope; Infer's interval
+# domain reports "Offset: 0 Size: 0" against the guarded read and then propagates it to the two callers
+# that hand it an empty array on purpose (a caught-up partition has no offset map to wrap). Verified by
+# the guard itself and by OffsetRiderEnvelopeTest's empty-inner arms; recorded here so the identity set
+# stays honest rather than the guard growing a second, redundant check to appease the checker.
+1 BUFFER_OVERRUN_L1 OffsetMapCodecManager.makeOffsetMetadataPayload
+1 BUFFER_OVERRUN_L1 OffsetRiderEnvelope.wrap
+1 BUFFER_OVERRUN_L1 PartitionState.tryToEncodeOffsets

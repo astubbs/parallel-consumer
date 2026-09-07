@@ -162,6 +162,13 @@ class OffsetRiderOverheadTest {
     private static final int NEVER_ENGAGES = -1;
 
     /**
+     * How many evenly spaced points {@link #firstEngagedGridPoint} measures before believing the top of the domain:
+     * 64 over 30,000 is a step of 468 ranges, which is wide enough to keep the fallback cheap and narrow enough
+     * that a compressed length has to rise and fall again inside one step to hide from it.
+     */
+    private static final int NEVER_ENGAGES_GRID_STEPS = 64;
+
+    /**
      * The corpus shapes, in the form {@code OffsetEncodingDensityBenchmarkTest} uses on
      * astubbs/parallel-consumer#306 so that the two describe the same world: uniform-random incompletes at a
      * couple of densities, bursts of a few slow keys, and nothing succeeded at all.
@@ -504,18 +511,31 @@ class OffsetRiderOverheadTest {
      * other the right. So the rider's engagement point is never above the no-rider one, however the encoded length
      * behaves in between.
      *
-     * @return {@link #NEVER_ENGAGES} when the predicate is false across the whole domain
+     * <b>What the top of the domain cannot tell you.</b> The predicate being false at {@link #MAX_RANGE} does not
+     * mean it is false everywhere below: a compressed length can rise over an interior range and fall again by the
+     * top, and inferring "never engages" from the endpoint alone would skip every boundary assertion for exactly
+     * the shape this test exists to measure. So when the top says no, the search walks a fixed grid of
+     * {@link #NEVER_ENGAGES_GRID_STEPS} points across the domain first; the first grid point where the predicate
+     * holds becomes the upper end of the search, and only a grid with no engaged point at all answers
+     * {@link #NEVER_ENGAGES}. The residual is a transition narrower than one grid step that reverses before the
+     * next point - bounded and named, rather than the whole interior being unobserved (Codex review on
+     * astubbs#460).
+     *
+     * @return {@link #NEVER_ENGAGES} when the predicate is false at the top of the domain and at every grid point
      */
     private int engagementRangeFor(OffsetEncoding encoding, String shape, IntPredicate engaged) {
+        int atOrAbove = MAX_RANGE;
         if (!engaged.test(innerEncodingLength(encoding, shape, MAX_RANGE))) {
-            return NEVER_ENGAGES;
+            atOrAbove = firstEngagedGridPoint(encoding, shape, engaged);
+            if (atOrAbove == NEVER_ENGAGES) {
+                return NEVER_ENGAGES;
+            }
         }
         if (engaged.test(innerEncodingLength(encoding, shape, MIN_RANGE))) {
             return MIN_RANGE;
         }
 
         int below = MIN_RANGE;
-        int atOrAbove = MAX_RANGE;
         while (atOrAbove - below > 1) {
             int middle = below + (atOrAbove - below) / 2;
             if (engaged.test(innerEncodingLength(encoding, shape, middle))) {
@@ -536,18 +556,38 @@ class OffsetRiderOverheadTest {
     }
 
     /**
+     * The grid {@link #engagementRangeFor} falls back to when the top of the domain is not engaged: evenly spaced
+     * range sizes from {@link #MIN_RANGE} up to but excluding {@link #MAX_RANGE} (already measured by the caller),
+     * walked upward so the answer is the lowest engaged point and the binary search that follows has a true
+     * boundary below it.
+     *
+     * @return the first grid point at which {@code engaged} holds, or {@link #NEVER_ENGAGES}
+     */
+    private int firstEngagedGridPoint(OffsetEncoding encoding, String shape, IntPredicate engaged) {
+        int step = Math.max(1, (MAX_RANGE - MIN_RANGE) / NEVER_ENGAGES_GRID_STEPS);
+        for (int point = MIN_RANGE; point < MAX_RANGE; point += step) {
+            if (engaged.test(innerEncodingLength(encoding, shape, point))) {
+                return point;
+            }
+        }
+        return NEVER_ENGAGES;
+    }
+
+    /**
      * The corpus points worth committing for real: each located engagement point and the range immediately below
      * it, plus the bottom of the domain as a control arm well under every limit. Deduplicated and ordered, and
      * points the search never reached are simply absent.
      */
     private static Set<Integer> neighbourhoodOf(int... engagementPoints) {
         var points = new LinkedHashSet<Integer>();
-        points.add(MIN_RANGE);
+        // the set is the deduplication: two searches converging on the same range, or a point next to the control
+        // arm, are one commit to make, so an add that finds its point already there is the expected case
+        boolean ignoredControlArmWasNew = points.add(MIN_RANGE);
         for (int point : engagementPoints) {
             if (point != NEVER_ENGAGES) {
-                points.add(point);
+                boolean ignoredPointWasNew = points.add(point);
                 if (point - 1 >= MIN_RANGE) {
-                    points.add(point - 1);
+                    boolean ignoredNeighbourWasNew = points.add(point - 1);
                 }
             }
         }
@@ -580,7 +620,7 @@ class OffsetRiderOverheadTest {
         if (SHAPE_ALL_INCOMPLETE.equals(shape)) {
             // nothing succeeded yet - the cheapest possible run-length encoding and the most expensive bitset
             for (int offset = 0; offset < MAX_RANGE; offset++) {
-                out.add((long) offset);
+                boolean ignoredWasNew = out.add((long) offset); // a counting loop never repeats an offset
             }
         } else if (SHAPE_CLUSTERED_BURSTS.equals(shape)) {
             // bursts of ten to a hundred: a few slow keys, or a poison-pill cluster
@@ -589,7 +629,7 @@ class OffsetRiderOverheadTest {
                 int length = 10 + random.nextInt(91); // 10..100 inclusive
                 int start = random.nextInt(MAX_RANGE);
                 for (int offset = start; offset < Math.min(start + length, MAX_RANGE); offset++) {
-                    out.add((long) offset);
+                    boolean ignoredWasNew = out.add((long) offset); // bursts may overlap: an offset in two is one hole
                 }
             }
         } else {
@@ -598,10 +638,12 @@ class OffsetRiderOverheadTest {
             double density = SHAPE_UNIFORM_TWENTY_PERCENT.equals(shape) ? 0.20d : 0.01d;
             int target = Math.max(1, (int) Math.round(MAX_RANGE * density));
             while (out.size() < target) {
-                out.add((long) random.nextInt(MAX_RANGE));
+                // the loop condition is the size, so a repeat draw simply costs another draw
+                boolean ignoredWasNew = out.add((long) random.nextInt(MAX_RANGE));
             }
         }
-        out.add(0L);
+        // every shape keeps offset zero incomplete, and the all-incomplete and scatter shapes may have put it there
+        boolean ignoredZeroWasNew = out.add(0L);
         return out;
     }
 
@@ -681,7 +723,8 @@ class OffsetRiderOverheadTest {
             int length = new OffsetMapCodecManager<String, String>(module)
                     .encodeOffsetsToInnerBytes(0, state)
                     .length;
-            perRange.put(rangeSize, length);
+            Integer ignoredPreviousLength = perRange.put(rangeSize, length); // a re-measurement of one point is the
+            // same encode of the same corpus, so the previous value is the same value
             return length;
         } catch (NoEncodingPossibleException notExpressible) {
             // MAX_RANGE is deliberately under Short.MAX_VALUE so that no incumbent deregisters itself over this

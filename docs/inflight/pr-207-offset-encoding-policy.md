@@ -189,15 +189,8 @@ principle.
   anchor `riderSupplier`), and once at `INFO` when a supplier is configured. Deliberately no
   in-product remediation mode: the external route needs no permanent surface for a time-bounded
   hazard.
-- **The open release question, which is the reason this paragraph is here rather than only in the
-  plan.** Both this policy and the rider are unreleased, so 0.6.0.0 would be the first release with
-  either, and the rule above cannot be satisfied by any earlier version. The recommendation is to
-  **split** them - 0.6.0.0 ships the envelope decoder and the read-back, the `riderSupplier` option
-  ships in the following minor - so that a rollback from the release that first writes riders lands
-  on one that already reads them. The alternative is shipping both together and relying on the
-  opt-in, the `INFO` line and the recovery procedure. **The decision owner is the release, not the
-  implementation**; nothing in the rider's code changes either way. The reasoning and the cost of
-  each side are in that plan's `Open Questions`, and `docs/features/offset-metadata-rider.yaml`
-  carries `availability.target_release`, which is what has to move when the release decides.
+- **The open release question is tracked on its own** - whether the rider's write side ships with
+  its read side or one minor later is a release-owned decision, and this file is the record of a
+  merged PR, so it lives in `release-offset-rider-write-side-split.md` rather than here.
 
 <!-- post-merge: checked-end -->

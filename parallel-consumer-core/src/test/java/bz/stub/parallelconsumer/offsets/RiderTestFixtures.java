@@ -22,6 +22,7 @@ import org.apache.kafka.common.TopicPartition;
 import java.util.Base64;
 import java.util.Optional;
 import java.util.Random;
+import java.util.SortedSet;
 import java.util.function.Function;
 
 /**
@@ -79,6 +80,27 @@ public final class RiderTestFixtures {
      */
     public static PCModuleTestEnv moduleWith(Function<RiderContext, byte[]> supplier) {
         return moduleWith(supplier, new SimpleMeterRegistry());
+    }
+
+    /**
+     * A module with no supplier configured at all - the build that has never heard of riders, which is the
+     * baseline every codec and read-back test compares against. Its own registry, for the same reason as
+     * {@link #moduleWith}: an encodes-once assertion counts this test's encodes and nobody else's.
+     */
+    public static PCModuleTestEnv moduleWithNoSupplier() {
+        return moduleWith(null);
+    }
+
+    /**
+     * A partition state built directly from a decoded shape rather than by polling records: the highest succeeded
+     * offset and the incomplete set as a reader would hand them back.
+     */
+    public static PartitionState<String, String> stateOver(PCModuleTestEnv module,
+                                                           TopicPartition tp,
+                                                           long highestSucceeded,
+                                                           SortedSet<Long> incompleteOffsets) {
+        return new PartitionState<>(0, module, tp,
+                new HighestOffsetAndIncompletes(Optional.of(highestSucceeded), incompleteOffsets));
     }
 
     public static PCModuleTestEnv moduleWith(Function<RiderContext, byte[]> supplier, MeterRegistry meterRegistry) {

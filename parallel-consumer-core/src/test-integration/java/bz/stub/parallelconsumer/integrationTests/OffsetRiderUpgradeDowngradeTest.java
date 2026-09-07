@@ -31,9 +31,10 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMeta
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static bz.stub.parallelconsumer.offsets.OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet;
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -148,7 +149,9 @@ class OffsetRiderUpgradeDowngradeTest extends BrokerIntegrationTest<String, Stri
             if (NEVER_COMPLETE.contains(offset)) {
                 throw new FakeRuntimeException("offset " + offset + " never completes, so the commit carries holes");
             }
-            completedByTheCrashedInstance.add(offset);
+            // a retried batch or an overlap around the poll can redeliver an already-completed offset to this same
+            // instance; the set's dedup absorbs the repeat, so a false return here is expected, not a bug
+            boolean ignoredWasNew = completedByTheCrashedInstance.add(offset);
         });
 
         await().alias("a commit carrying both a hole map and a rider")
@@ -160,9 +163,9 @@ class OffsetRiderUpgradeDowngradeTest extends BrokerIntegrationTest<String, Stri
         assertHolesAndARiderAreCommitted(crashPayload);
 
         byte[] raw = Base64.getDecoder().decode(crashPayload.metadata());
-        assertThat(raw[0])
-                .as("the captured payload must really be an envelope - otherwise the byte rewritten below is not the "
+        assertWithMessage("the captured payload must really be an envelope - otherwise the byte rewritten below is not the "
                         + "envelope's, and this test proves nothing about the rider")
+                .that(raw[0])
                 .isEqualTo(OffsetRiderEnvelope.MAGIC_BYTE);
         raw[0] = magicByteOfAnEncodingThatDoesNotExistYet();
         downgradedMetadata = Base64.getEncoder().encodeToString(raw);
@@ -176,21 +179,21 @@ class OffsetRiderUpgradeDowngradeTest extends BrokerIntegrationTest<String, Stri
      * a hole the committed offset alone cannot express.
      */
     private void assertHolesAndARiderAreCommitted(OffsetAndMetadata committed) throws Exception {
-        assertThat(committed).as("nothing committed for %s yet", tp).isNotNull();
-        assertThat(committed.offset())
-                .as("the commit must stop at the lowest offset that never completes")
+        assertWithMessage("nothing committed for %s yet", tp).that(committed).isNotNull();
+        assertWithMessage("the commit must stop at the lowest offset that never completes")
+                .that(committed.offset())
                 .isEqualTo(BLOCKING_OFFSET);
 
         var rider = OffsetMapCodecManager.decodeRider(committed.offset(), committed.metadata(), IGNORE);
         assertThat(rider.getState()).isEqualTo(OffsetRiderEnvelope.RiderState.PRESENT);
-        assertThat(rider.getBytes())
-                .as("the rider must survive the round trip through the broker byte for byte")
+        assertWithMessage("the rider must survive the round trip through the broker byte for byte")
+                .that(rider.getBytes())
                 .isEqualTo(RIDER);
 
         var offsets = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(committed.offset(),
                 committed.metadata(), IGNORE);
-        assertThat(offsets.getIncompleteOffsets())
-                .as("holes AND a rider in the same payload - a drained shutdown would leave a rider-only envelope")
+        assertWithMessage("holes AND a rider in the same payload - a drained shutdown would leave a rider-only envelope")
+                .that(offsets.getIncompleteOffsets())
                 .contains(HOLE_ABOVE_THE_BASE);
     }
 
@@ -239,20 +242,24 @@ class OffsetRiderUpgradeDowngradeTest extends BrokerIntegrationTest<String, Stri
 
         var processedByTheReplacement = new ConcurrentSkipListSet<Long>();
         var replacement = takeOverTheGroup(IGNORE);
-        replacement.poll(pollContext -> processedByTheReplacement.add(pollContext.offset()));
+        replacement.poll(pollContext -> {
+            // IGNORE replays from the committed offset, so the replacement can see an offset more than once; the
+            // set's dedup absorbs the repeat and the no-loss assertion below only needs the distinct offsets
+            boolean ignoredWasNew = processedByTheReplacement.add(pollContext.offset());
+        });
 
         await().alias("the replacement replays everything from the committed offset up")
                 .atMost(ofSeconds(120))
                 .failFast("the replacement died - IGNORE must not stop", replacement::isClosedOrFailed)
                 .untilAsserted(() -> assertThat(processedByTheReplacement)
-                        .containsAll(offsetsFrom(crashPayload.offset())));
+                        .containsAtLeastElementsIn(offsetsFrom(crashPayload.offset())));
 
         var everythingProcessed = new TreeSet<Long>(completedByTheCrashedInstance);
         everythingProcessed.addAll(processedByTheReplacement);
-        assertThat(everythingProcessed)
-                .as("no record may be lost: what the crashed instance completed plus what the replacement replayed "
+        assertWithMessage("no record may be lost: what the crashed instance completed plus what the replacement replayed "
                         + "has to cover every offset produced")
-                .containsAll(offsetsFrom(0));
+                .that(everythingProcessed)
+                .containsAtLeastElementsIn(offsetsFrom(0));
     }
 
     /**
@@ -273,8 +280,8 @@ class OffsetRiderUpgradeDowngradeTest extends BrokerIntegrationTest<String, Stri
                 .atMost(ofSeconds(120))
                 .until(refusing::isClosedOrFailed);
 
-        assertThat(describeCauseChain(refusing.getFailureCause()))
-                .as("the operator has to be told which encoding was unreadable, not just that PC stopped")
+        assertWithMessage("the operator has to be told which encoding was unreadable, not just that PC stopped")
+                .that(describeCauseChain(refusing.getFailureCause()))
                 .contains(UnknownOffsetMetadataMagicException.class.getName());
     }
 
@@ -285,7 +292,9 @@ class OffsetRiderUpgradeDowngradeTest extends BrokerIntegrationTest<String, Stri
     private static SortedSet<Long> offsetsFrom(long fromInclusive) {
         var offsets = new TreeSet<Long>();
         for (long offset = fromInclusive; offset < RECORD_COUNT; offset++) {
-            offsets.add(offset);
+            // the loop offset strictly increases, so this can never be false; naming it keeps that invariant
+            // visible instead of leaving a discarded boolean that reads the same whether it was checked or not
+            boolean ignoredWasNew = offsets.add(offset);
         }
         return offsets;
     }

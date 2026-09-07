@@ -389,22 +389,29 @@ public class OffsetMapCodecManager<K, V> {
      *                                dropping it would be a source-incompatible change to a public signature for no
      *                                gain, and the outer string codec is where a future checked failure would arise
      * @throws CorruptOffsetMetadataException      under {@code FAIL}, when the payload is not readable metadata
-     * @throws UnknownOffsetMetadataMagicException under {@code FAIL}, when its magic byte belongs to no encoding this
-     *                                             build knows - deliberately NOT an {@link OffsetDecodingError}, so
-     *                                             it escapes the rebalance callback rather than being swallowed.
-     *                                             Both of these are checked, and both are <b>declared</b> here even
-     *                                             though they arrive through the same sneaky-throw path every other
-     *                                             entry point in this family uses ({@code EncodedOffsetPair}'s
-     *                                             policy handler): a checked type that is thrown but not declared
-     *                                             cannot be caught by name - javac rejects the {@code catch} as
-     *                                             unreachable - so without the declaration a {@code FAIL} caller
-     *                                             could not write the handling this javadoc describes
+     * @throws EncodingNotSupportedException      under {@code FAIL}, when the payload is readable but this build cannot
+     *                                             decode what it names: {@link UnknownOffsetMetadataMagicException}
+     *                                             for a magic byte belonging to no encoding this build knows,
+     *                                             {@link KafkaStreamsEncodingNotSupported} for Kafka Streams' own
+     *                                             metadata, and {@link UnsupportedOffsetEncodingException} for an
+     *                                             encoding in the enum that has no decoder ({@code ByteArray}). All
+     *                                             three are deliberately NOT an {@link OffsetDecodingError}, so they
+     *                                             escape the rebalance callback rather than being swallowed. They
+     *                                             are checked, and the family is <b>declared</b> here even though
+     *                                             they arrive through the same sneaky-throw path every other entry
+     *                                             point in this family uses ({@code EncodedOffsetPair}'s policy
+     *                                             handler): a checked type that is thrown but not declared cannot
+     *                                             be caught by name - javac rejects the {@code catch} as unreachable
+     *                                             - so without the declaration a {@code FAIL} caller could not
+     *                                             write the handling this javadoc describes. Declaring the parent
+     *                                             lets a caller catch the family in one clause or any member by
+     *                                             its own type
      * @see ParallelConsumerOptions#getRiderSupplier()
      */
     public static OffsetRiderEnvelope.Rider decodeRider(long committedOffset,
                                                         String metadata,
                                                         InvalidOffsetMetadataHandlingPolicy policy)
-            throws OffsetDecodingError, CorruptOffsetMetadataException, UnknownOffsetMetadataMagicException {
+            throws OffsetDecodingError, CorruptOffsetMetadataException, EncodingNotSupportedException {
         // Straight through the string-level entry point rather than round the outer codec: decodeCompressedMetadata
         // stays the single decode choke point, so this answers with whatever the assignment path would have seen for
         // the same string, including the policy's fallback. The Rider it returns copies its bytes out on every
@@ -436,18 +443,22 @@ public class OffsetMapCodecManager<K, V> {
      * ({@link PCMetricsDef#OFFSETS_ENCODING_USAGE}, {@link PCMetricsDef#OFFSETS_ENCODING_TIME}). A second pass would
      * snapshot a later offset map - the confluentinc#894 tear class - and double-count both.
      *
-     * @return the offset map, its magic byte first; <b>empty</b> when the partition has nothing incomplete, which is
-     *         the caught-up case: there is no map to write, and a rider (if there is one) rides alone. The condition
-     *         is {@link PartitionState#hasIncompleteOffsets()}, the same one {@code tryToEncodeOffsets} returns early
-     *         on, rather than "nothing incomplete BELOW the highest succeeded" - offsets in flight above the mark
-     *         still get the encoding this build has always written for them.
+     * <b>This method never asks whether there is anything to encode - the caller already did, once, on the read it
+     * commits against.</b> {@code tryToEncodeOffsets} decides the caught-up case from the same sample of the
+     * partition that fixes its commit offset, and a caught-up partition never reaches here. An earlier draft
+     * re-read emptiness at this point, and that second read was the confluentinc#893/894 tear class in a new
+     * coat: the control thread can complete the last incomplete record between the caller's decision and this
+     * call, and a re-check then answered "nothing to encode" for a commit already pinned to the older offset - so
+     * the commit carried no map and a crash before the next one replayed records this build had recorded as
+     * complete. Encoding whatever the partition holds at the encoder's own single sample is what the pre-rider
+     * path always did: a map that emptied in between encodes as a complete map, which resumes correctly.
+     *
+     * @return the offset map, its magic byte first. Offsets in flight above the high-water mark still get the
+     *         encoding this build has always written for them
      * @throws NoEncodingPossibleException as {@link #encodeOffsetsCompressed} does, and for the same reason
      */
     public byte[] encodeOffsetsToInnerBytes(long baseOffsetForPartition, PartitionState<K, V> state)
             throws NoEncodingPossibleException {
-        if (!state.hasIncompleteOffsets()) {
-            return NO_INNER_BYTES;
-        }
         return encodeOffsetsCompressed(baseOffsetForPartition, state);
     }
 
