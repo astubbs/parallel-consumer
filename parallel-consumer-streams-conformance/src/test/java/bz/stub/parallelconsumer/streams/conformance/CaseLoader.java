@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.google.common.collect.ImmutableSet;
 
 import java.io.IOException;
 import java.net.URL;
@@ -18,6 +19,7 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -71,8 +73,8 @@ import java.util.stream.Stream;
  *     an outcome case carries inputs and the twin (R8) and no fault.</li>
  * </ul>
  *
- * An empty directory yields an empty corpus and no refusal. Whether an empty corpus is itself a failure is U4's
- * call, at the gate, where "the run executed nothing and reported green" is actually decidable.
+ * An empty directory yields an empty corpus and no refusal. Whether an empty corpus is itself a failure is the
+ * corpus gate's call (U4), where "the run executed nothing and reported green" is actually decidable.
  */
 public final class CaseLoader {
 
@@ -83,8 +85,7 @@ public final class CaseLoader {
      * the alternation between a host function and an engine combine is something the wire invented and plain Kafka
      * Streams has no opinion about.
      */
-    private static final Set<String> COMBINE_VOCABULARY =
-            Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList("last-bytes", "append-bytes")));
+    private static final Set<String> COMBINE_VOCABULARY = ImmutableSet.of("last-bytes", "append-bytes");
 
     private CaseLoader() {
     }
@@ -138,7 +139,7 @@ public final class CaseLoader {
         if (!refusals.isEmpty()) {
             throw new CorpusRefusedException(refusals, namesOf(loaded));
         }
-        loaded.sort((left, right) -> left.name().compareTo(right.name()));
+        loaded.sort(Comparator.comparing(ConformanceCase::name));
         return Collections.unmodifiableList(loaded);
     }
 

@@ -3,6 +3,8 @@ package bz.stub.parallelconsumer.streams.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import com.google.common.collect.Iterators;
+
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
@@ -17,22 +19,20 @@ import org.apache.kafka.streams.state.Stores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.List;
 import java.util.Properties;
 
+import static bz.stub.parallelconsumer.streams.conformance.CorpusFixtures.caseNamed;
+import static bz.stub.parallelconsumer.streams.conformance.CorpusFixtures.loadOne;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * One test per U3 scenario, each asserting values <strong>derived by hand from Kafka Streams' documented
- * semantics</strong> - never a recording of what the oracle happened to produce. A recorded expectation would make
- * this suite a change detector: it would go green on whatever the oracle did, including doing it wrong.
+ * One test per live-oracle scenario (U3), each asserting values <strong>derived by hand from Kafka Streams'
+ * documented semantics</strong> - never a recording of what the oracle happened to produce. A recorded expectation
+ * would make this suite a change detector: it would go green on whatever the oracle did, including doing it wrong.
  * <p>
  * Cases are written as YAML strings and loaded through {@link CaseLoader}, so every one of them is a case the corpus
  * could hold - a test-only builder would let a test assert over a shape the loader refuses.
@@ -129,7 +129,7 @@ class OracleTest {
      */
     @Test
     void aCountByKeyCaseYieldsTheCountStoreAndTheLastSinkRecordPerKey(@TempDir Path directory) {
-        FinalState state = Oracle.run(loadOne(directory, "count-by-key", ""
+        FinalState state = Oracle.run(loadOne(directory, ""
                 + "name: count-by-key\n"
                 + "base-instant: " + BASE_INSTANT + "\n"
                 + "topology:\n"
@@ -168,7 +168,7 @@ class OracleTest {
      */
     @Test
     void aJoinYieldsTheJoinedValuePerMatchingKeyAndNothingForAnUnmatchedOne(@TempDir Path directory) {
-        FinalState state = Oracle.run(loadOne(directory, "join-stream-table", joinCase("join-stream-table",
+        FinalState state = Oracle.run(loadOne(directory, joinCase("join-stream-table",
                 // The table is built from the SECOND source, so the stream side runs first for every record.
                 "  - {id: u, map-values: {of: r, fn: upper}}\n"
                         + "  - {id: g, group-by-key: {of: u}}\n"
@@ -192,14 +192,14 @@ class OracleTest {
      */
     @Test
     void swappingWhichSideFeedsTheTableChangesTheJoinedOutcome(@TempDir Path directory) {
-        FinalState straight = Oracle.run(loadOne(directory.resolve("straight"), "join-stream-table",
+        FinalState straight = Oracle.run(loadOne(directory.resolve("straight"),
                 joinCase("join-stream-table",
                         "  - {id: u, map-values: {of: r, fn: upper}}\n"
                                 + "  - {id: g, group-by-key: {of: u}}\n"
                                 + "  - {id: t, reduce: {of: g, fn: last-wins, store: latest}}\n"
                                 + "  - {id: j, join: {stream: s, table: t, fn: concat-sides}}\n")));
 
-        FinalState swapped = Oracle.run(loadOne(directory.resolve("swapped"), "join-swapped",
+        FinalState swapped = Oracle.run(loadOne(directory.resolve("swapped"),
                 joinCase("join-swapped",
                         "  - {id: u, map-values: {of: s, fn: upper}}\n"
                                 + "  - {id: g, group-by-key: {of: u}}\n"
@@ -223,7 +223,7 @@ class OracleTest {
      */
     @Test
     void aWindowedCountYieldsOneStoreEntryPerWindowAndTheFullSinkList(@TempDir Path directory) {
-        FinalState state = Oracle.run(loadOne(directory, "tumbling-count-two-windows", ""
+        FinalState state = Oracle.run(loadOne(directory, ""
                 + "name: tumbling-count-two-windows\n"
                 + "base-instant: " + BASE_INSTANT + "\n"
                 + "topology:\n"
@@ -260,7 +260,7 @@ class OracleTest {
      */
     @Test
     void aCaseWithNoAgreementLevelComparesFinalStateOnly(@TempDir Path directory) {
-        ConformanceCase noLevel = loadOne(directory, "no-agreement-level", ""
+        ConformanceCase noLevel = loadOne(directory, ""
                 + "name: no-agreement-level\n"
                 + "base-instant: " + BASE_INSTANT + "\n"
                 + "topology:\n"
@@ -295,7 +295,7 @@ class OracleTest {
      */
     @Test
     void aPinnedEmitCaseSinksOnlyClosedWindows(@TempDir Path directory) {
-        FinalState state = Oracle.run(loadOne(directory, "pinned-emit-tumbling", ""
+        FinalState state = Oracle.run(loadOne(directory, ""
                 + "name: pinned-emit-tumbling\n"
                 + "base-instant: " + BASE_INSTANT + "\n"
                 + "topology:\n"
@@ -335,7 +335,7 @@ class OracleTest {
      */
     @Test
     void aHoppingFedSinkKeepsEveryRecordUnderOneInnerKey(@TempDir Path directory) {
-        FinalState state = Oracle.run(loadOne(directory, "hopping-full-list", ""
+        FinalState state = Oracle.run(loadOne(directory, ""
                 + "name: hopping-full-list\n"
                 + "base-instant: " + BASE_INSTANT + "\n"
                 + "topology:\n"
@@ -374,7 +374,7 @@ class OracleTest {
      */
     @Test
     void twoSinkRecordsUnderOneByteArrayKeyFoldToOneEntry(@TempDir Path directory) {
-        FinalState state = Oracle.run(loadOne(directory, "two-emissions-one-key", ""
+        FinalState state = Oracle.run(loadOne(directory, ""
                 + "name: two-emissions-one-key\n"
                 + "base-instant: " + BASE_INSTANT + "\n"
                 + "topology:\n"
@@ -403,7 +403,7 @@ class OracleTest {
      */
     @Test
     void inputsInOneWindowYieldOneWindowEntry(@TempDir Path directory) {
-        FinalState state = Oracle.run(loadOne(directory, "one-window", ""
+        FinalState state = Oracle.run(loadOne(directory, ""
                 + "name: one-window\n"
                 + "base-instant: " + BASE_INSTANT + "\n"
                 + "topology:\n"
@@ -437,7 +437,7 @@ class OracleTest {
      */
     @Test
     void aTopologyTheBuilderRejectsBecomesAnOracleExecutionFailureNamingTheCase(@TempDir Path directory) {
-        ConformanceCase ungrouped = loadOne(directory, "windowed-by-on-a-stream", ""
+        ConformanceCase ungrouped = loadOne(directory, ""
                 + "name: windowed-by-on-a-stream\n"
                 + "base-instant: " + BASE_INSTANT + "\n"
                 + "topology:\n"
@@ -469,7 +469,7 @@ class OracleTest {
      */
     @Test
     void aRefusalClassCaseIsRejectedRatherThanExecuted() {
-        ConformanceCase refusalClass = named(CaseLoader.loadClasspathDirectory("cases"),
+        ConformanceCase refusalClass = caseNamed(CaseLoader.loadClasspathDirectory("cases"),
                 "aggregate-names-function-and-combine");
         assertThat(refusalClass.refusalClass()).isTrue();
 
@@ -492,7 +492,7 @@ class OracleTest {
      */
     @Test
     void aWindowedAggregateCountsValueBytesAsDecimalAscii(@TempDir Path directory) {
-        FinalState state = Oracle.run(loadOne(directory, "windowed-aggregate-count-bytes", ""
+        FinalState state = Oracle.run(loadOne(directory, ""
                 + "name: windowed-aggregate-count-bytes\n"
                 + "base-instant: " + BASE_INSTANT + "\n"
                 + "topology:\n"
@@ -514,6 +514,29 @@ class OracleTest {
         assertThat(state.sinks().get("out")).containsExactly(
                 "\"k\" -> \"2\" @" + BASE_MS,
                 "\"k\" -> \"5\" @" + (BASE_MS + 60000)).inOrder();
+    }
+
+    // ----------------------------------------------------------------------------------------- the rendering
+
+    /**
+     * A non-printable payload falls back to lower-case {@code 0x}-prefixed hex, two digits per byte - the half of
+     * {@link FinalState}'s rendering contract no case above reaches, because every value the corpus carries is
+     * printable ASCII.
+     * <p>
+     * Asserted directly on {@link Oracle#render} rather than through a case: the case format has no escape for a raw
+     * control byte in a YAML value, deliberately, so there is no case that could carry one.
+     * <p>
+     * The high bytes are the point. Rendered through a signed {@code byte} without masking, {@code 0xff} comes out as
+     * {@code ffffffff} or {@code -1}; and the leading zero of {@code 0x07} is what keeps every byte two digits wide,
+     * without which two payloads could render identically.
+     */
+    @Test
+    void aNonPrintablePayloadRendersAsLowerCaseTwoDigitHex() {
+        assertThat(Oracle.render(new byte[]{0x00, 0x07, (byte) 0xa0, (byte) 0xff})).isEqualTo("0x0007a0ff");
+        // One non-printable byte sends the WHOLE payload down the hex path, so a rendering is never half quoted.
+        assertThat(Oracle.render(new byte[]{'a', 0x1f})).isEqualTo("0x611f");
+        // The control arm: the same shape with every byte printable stays quoted ASCII.
+        assertThat(Oracle.render(new byte[]{'a', 'b'})).isEqualTo("\"ab\"");
     }
 
     // ------------------------------------------------------------------------------------------------ fixtures
@@ -554,39 +577,14 @@ class OracleTest {
                 + "  - {key: b, value: z, at-ms: 2000, topic: right}\n";
     }
 
-    /** Writes one case file into its own directory and loads it, so every fixture is a case the loader accepts. */
-    private static ConformanceCase loadOne(Path directory, String fileName, String yaml) {
-        try {
-            Path created = Files.createDirectories(directory);
-            Path written = Files.write(created.resolve(fileName + ".yaml"), yaml.getBytes(StandardCharsets.UTF_8));
-            assertThat(Files.exists(written)).isTrue();
-        } catch (IOException e) {
-            throw new UncheckedIOException("cannot write the fixture " + fileName, e);
-        }
-        List<ConformanceCase> loaded = CaseLoader.load(directory);
-        assertThat(loaded).hasSize(1);
-        return loaded.get(0);
-    }
-
-    private static ConformanceCase named(List<ConformanceCase> corpus, String name) {
-        return corpus.stream()
-                .filter(candidate -> candidate.name().equals(name))
-                .findFirst()
-                .orElseThrow(() -> new AssertionError("no case named " + name + " in the corpus"));
-    }
-
     private static byte[] ascii(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
     }
 
     private static int countEntries(KeyValueStore<byte[], Long> store) {
-        int seen = 0;
         try (KeyValueIterator<byte[], Long> iterator = store.all()) {
-            while (iterator.hasNext()) {
-                Object ignoredEntry = iterator.next(); // counting, not reading - the values are asserted elsewhere
-                seen++;
-            }
+            // Counting, not reading - the values themselves are asserted elsewhere.
+            return Iterators.size(iterator);
         }
-        return seen;
     }
 }

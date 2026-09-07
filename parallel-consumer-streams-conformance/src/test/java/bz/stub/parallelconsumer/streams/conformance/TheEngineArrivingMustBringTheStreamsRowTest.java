@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -170,13 +171,6 @@ class TheEngineArrivingMustBringTheStreamsRowTest {
     }
 
     private static String names(List<BindingRows.Row> registry) {
-        StringBuilder rendered = new StringBuilder();
-        for (BindingRows.Row row : registry) {
-            if (rendered.length() > 0) {
-                rendered.append(", ");
-            }
-            rendered.append(row.name());
-        }
-        return "[" + rendered + "]";
+        return registry.stream().map(BindingRows.Row::name).collect(Collectors.joining(", ", "[", "]"));
     }
 }

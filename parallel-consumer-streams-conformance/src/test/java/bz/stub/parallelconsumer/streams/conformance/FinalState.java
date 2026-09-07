@@ -3,8 +3,9 @@ package bz.stub.parallelconsumer.streams.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import java.util.Collections;
-import java.util.LinkedHashMap;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -15,7 +16,7 @@ import java.util.Objects;
  * <p>
  * <b>Per observable, on purpose.</b> The two maps are keyed by store name and by sink topic, so a comparison can
  * name the store or the sink that diverged rather than reporting "the outcome differs" (R11). {@link Oracle} is the
- * only thing that builds one, and U4's differ is the only thing that compares two.
+ * only thing that builds one, and the differ (U4) is the only thing that compares two.
  * <p>
  * <b>Everything is already a value.</b> Each observable is a {@code List<String>} of rendered entries, and the
  * rendering happens in {@link Oracle} <em>before</em> any map or sort is built, because byte arrays compare by
@@ -148,17 +149,13 @@ public final class FinalState {
         }
     }
 
+    /**
+     * An immutable copy, entries and all. {@link ImmutableMap} keeps the source's iteration order, which is the
+     * order the topology declared its observables in and the order a red walks them in.
+     */
     private static Map<String, List<String>> deepUnmodifiableCopy(Map<String, List<String>> source) {
-        Map<String, List<String>> copy = new LinkedHashMap<>();
-        for (Map.Entry<String, List<String>> entry : source.entrySet()) {
-            List<String> previous = copy.put(entry.getKey(),
-                    Collections.unmodifiableList(new java.util.ArrayList<>(entry.getValue())));
-            // One entry per observable name, so there is never a previous - named rather than dropped, because a
-            // silent overwrite here would hide two stores sharing a name.
-            if (previous != null) {
-                throw new IllegalArgumentException("two observables named " + entry.getKey());
-            }
-        }
-        return Collections.unmodifiableMap(copy);
+        return source.entrySet().stream()
+                .collect(ImmutableMap.toImmutableMap(Map.Entry::getKey,
+                        entry -> ImmutableList.copyOf(entry.getValue())));
     }
 }

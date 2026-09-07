@@ -8,13 +8,10 @@ import bz.stub.parallelconsumer.streams.conformance.ConformanceCase.OperationKin
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
@@ -28,6 +25,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
+import static bz.stub.parallelconsumer.streams.conformance.CorpusFixtures.load;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -59,10 +57,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  *
  * {@link #UNCOVERED_TODAY} is <b>empty</b>, and {@link #theUncoveredOperationSetIsEmpty} asserts exactly that: every
  * one of the ten builder operations is credited by an outcome case in the committed corpus. It was not always - the
- * set was pinned to the four operations the corpus had no case for while U6 was writing them, and it reddened in
- * either direction while it was, so the gate could not drift quietly as the corpus grew. U6 emptied it, and the same
- * assertion now reads as the property rather than the leftover: an operation losing its credit reddens here, and so
- * does a new operation arriving on the surface without a case.
+ * set was pinned to the four operations the corpus had no case for while the corpus-authoring pass (U6) was writing
+ * them, and it reddened in either direction while it was, so the gate could not drift quietly as the corpus grew.
+ * That pass emptied it, and the same assertion now reads as the property rather than the leftover: an operation
+ * losing its credit reddens here, and so does a new operation arriving on the surface without a case.
  * <p>
  * {@link #DELIBERATELY_UNCOVERED} is <b>empty and must stay empty</b>: an exclusion means "this operation is
  * deliberately not covered", and padding the list to go green would convert a corpus gap into a decision nobody made.
@@ -92,9 +90,9 @@ class CorpusCoverageTest {
     private static final ImmutableMap<OperationKind, String> DELIBERATELY_UNCOVERED = ImmutableMap.of();
 
     /**
-     * The operations no outcome case in the committed corpus credits. <b>Empty since U6 filled the corpus</b>, and
-     * an entry appearing here again is a corpus gap to fill rather than a set to update: the assertion below is what
-     * makes that gap fail the build.
+     * The operations no outcome case in the committed corpus credits. <b>Empty since the corpus-authoring pass (U6)
+     * filled the corpus</b>, and an entry appearing here again is a corpus gap to fill rather than a set to update:
+     * the assertion below is what makes that gap fail the build.
      * <p>
      * Two things do not count towards a credit, and the corpus's own cases are where that is observed rather than
      * asserted in the abstract. A refusal-class case (R15) is never executed, so it credits nothing - which is why
@@ -104,21 +102,39 @@ class CorpusCoverageTest {
      */
     private static final ImmutableSet<OperationKind> UNCOVERED_TODAY = ImmutableSet.of();
 
+    /**
+     * The committed corpus, loaded once for the whole class, and the one coverage pass the four tests below read
+     * their own projection out of.
+     * <p>
+     * {@link #coverage} is a pure function of its three arguments and {@link Coverage} is immutable, so one pass
+     * answers all four - and the pass is not cheap: it runs the oracle over every outcome case in the corpus. No
+     * test here depends on another's outcome; each still asserts only its own projection, and the test that needs a
+     * recording oracle wrapper computes its own pass over this same loaded corpus.
+     */
+    private static List<ConformanceCase> realCorpus;
+
+    private static Coverage realCorpusCoverage;
+
+    @BeforeAll
+    static void loadTheRealCorpusAndCoverItOnce() {
+        realCorpus = CaseLoader.loadClasspathDirectory(CORPUS);
+        realCorpusCoverage = coverage(realCorpus, DELIBERATELY_UNCOVERED, Oracle::run);
+    }
+
     // ============================================================== the five assertions, on the real corpus
 
     /** Assertion 1: no operation this module knows ships without a case. */
     @Test
     void theUncoveredOperationSetIsEmpty() {
-        Coverage coverage = coverage(realCorpus(), DELIBERATELY_UNCOVERED, Oracle::run);
-
         assertWithMessage("the corpus covers %s of the %s builder operations, and the uncovered set must be EMPTY - "
-                        + "U6 emptied it, and an operation appearing in it again is a case to write. Do NOT make it "
-                        + "green by adding entries to DELIBERATELY_UNCOVERED - an exclusion means 'deliberately not "
-                        + "covered', which is a decision, not a gap. Remember what does NOT credit: a refusal-class "
-                        + "case is never executed and an emit-pinned case is oracle-only. What credits what: %s",
-                BuilderSurface.all().size() - coverage.uncovered().size(), BuilderSurface.all().size(),
+                        + "the corpus-authoring pass (U6) emptied it, and an operation appearing in it again is a "
+                        + "case to write. Do NOT make it green by adding entries to DELIBERATELY_UNCOVERED - an "
+                        + "exclusion means 'deliberately not covered', which is a decision, not a gap. Remember what "
+                        + "does NOT credit: a refusal-class case is never executed and an emit-pinned case is "
+                        + "oracle-only. What credits what: %s",
+                BuilderSurface.all().size() - realCorpusCoverage.uncovered().size(), BuilderSurface.all().size(),
                 BuilderSurface.table())
-                .that(coverage.uncovered()).containsExactlyElementsIn(UNCOVERED_TODAY);
+                .that(realCorpusCoverage.uncovered()).containsExactlyElementsIn(UNCOVERED_TODAY);
     }
 
     /** The exclusion list starts empty (KTD8), and nothing about filling the corpus is a reason to grow it. */
@@ -132,18 +148,16 @@ class CorpusCoverageTest {
     /** Assertion 2: structural, given the surface is derived from the enum the loader binds against. */
     @Test
     void everyCaseNamesOnlyOperationsTheSurfaceKnows() {
-        Coverage coverage = coverage(realCorpus(), DELIBERATELY_UNCOVERED, Oracle::run);
-
         assertWithMessage("a case naming an operation the surface does not know would be uncoverable by "
                 + "construction; the falsifiable half of this claim is the loader's refusal, tested below")
-                .that(coverage.unknownOperations()).isEmpty();
+                .that(realCorpusCoverage.unknownOperations()).isEmpty();
     }
 
     /** Assertion 3: no outcome case observes nothing, and refusal-class cases are counted, never executed. */
     @Test
     void everyOutcomeCaseIsNonVacuousAndNoRefusalCaseIsExecuted() {
         List<String> executed = new ArrayList<>();
-        Coverage coverage = coverage(realCorpus(), DELIBERATELY_UNCOVERED, conformanceCase -> {
+        Coverage coverage = coverage(realCorpus, DELIBERATELY_UNCOVERED, conformanceCase -> {
             executed.add(conformanceCase.name());
             return Oracle.run(conformanceCase);
         });
@@ -156,34 +170,30 @@ class CorpusCoverageTest {
                 + "leave every assertion here true over nothing")
                 .that(coverage.outcomeCases()).isGreaterThan(0);
         assertWithMessage("the corpus holds refusal-class cases at all, so the claim below is about something")
-                .that(refusalCaseNames(realCorpus())).isNotEmpty();
+                .that(refusalCaseNames(realCorpus)).isNotEmpty();
         assertWithMessage("every refusal-class case is counted separately - against the corpus's own flags rather "
                 + "than a number written here, which would need editing every time a case is added and would say "
                 + "nothing while it was right")
-                .that(coverage.refusalCases()).isEqualTo(refusalCaseNames(realCorpus()).size());
+                .that(coverage.refusalCases()).isEqualTo(refusalCaseNames(realCorpus).size());
         assertWithMessage("and is never executed: plain Kafka Streams never refuses what the wire invented, so "
                 + "there is no oracle row to compute for one (R15)")
-                .that(executed).containsNoneIn(refusalCaseNames(realCorpus()));
+                .that(executed).containsNoneIn(refusalCaseNames(realCorpus));
     }
 
     /** Assertion 4: an exclusion for an operation that has gained a case is stale and must fail. */
     @Test
     void noDeliberatelyUncoveredEntryHasGainedACase() {
-        Coverage coverage = coverage(realCorpus(), DELIBERATELY_UNCOVERED, Oracle::run);
-
         assertWithMessage("an exclusion whose operation is now covered is a stale claim, and a stale exclusion "
                 + "silently excuses an operation the corpus already exercises")
-                .that(coverage.staleExclusions()).isEmpty();
+                .that(realCorpusCoverage.staleExclusions()).isEmpty();
     }
 
     /** Assertion 5: every operation a case names is in the topology the oracle built for it (KTD8). */
     @Test
     void everyOperationACaseNamesIsInTheTopologyTheOracleBuilt() {
-        Coverage coverage = coverage(realCorpus(), DELIBERATELY_UNCOVERED, Oracle::run);
-
         assertWithMessage("coverage measures what the oracle BUILT, not what the YAML said - an operation named "
                 + "by a case and absent from its topology is an oracle that dropped it")
-                .that(coverage.namedButNotBuilt()).isEmpty();
+                .that(realCorpusCoverage.namedButNotBuilt()).isEmpty();
     }
 
     // ================================================================ the same function, on hand-built corpora
@@ -191,7 +201,7 @@ class CorpusCoverageTest {
     /** Happy path: three cases between them exercise all ten operations, and the gate passes with no exclusions. */
     @Test
     void aCorpusExercisingEveryOperationLeavesNothingUncovered(@TempDir Path directory) {
-        Coverage coverage = coverage(corpus(directory, COUNT_WITH_MAP_VALUES, WINDOWED_AGGREGATE, JOIN_OVER_A_REDUCE),
+        Coverage coverage = coverage(load(directory, COUNT_WITH_MAP_VALUES, WINDOWED_AGGREGATE, JOIN_OVER_A_REDUCE),
                 Collections.emptyMap(), Oracle::run);
 
         assertWithMessage("all ten operations are named and built; what credits what: %s", BuilderSurface.table())
@@ -205,7 +215,7 @@ class CorpusCoverageTest {
     /** Edge: an operation with only a refusal-class case is uncovered - a refusal case is never executed. */
     @Test
     void anOperationWithOnlyARefusalClassCaseCountsAsUncovered(@TempDir Path directory) {
-        Coverage coverage = coverage(corpus(directory, COUNT_WITH_MAP_VALUES, AGGREGATE_REFUSAL),
+        Coverage coverage = coverage(load(directory, COUNT_WITH_MAP_VALUES, AGGREGATE_REFUSAL),
                 Collections.emptyMap(), Oracle::run);
 
         assertWithMessage("the refusal case names aggregate, and it is still uncovered: a case that is never "
@@ -218,7 +228,7 @@ class CorpusCoverageTest {
     /** Edge (KTD5): the oracle-only pinned-emit case is counted, and credits nothing toward binding coverage. */
     @Test
     void theOracleOnlyPinnedEmitCaseCreditsNothing(@TempDir Path directory) {
-        Coverage coverage = coverage(corpus(directory, PINNED_EMIT_WINDOWED_COUNT), Collections.emptyMap(),
+        Coverage coverage = coverage(load(directory, PINNED_EMIT_WINDOWED_COUNT), Collections.emptyMap(),
                 Oracle::run);
 
         assertWithMessage("emit: on-window-close is outside the wrapper's builder grammar, so a binding cannot "
@@ -237,7 +247,7 @@ class CorpusCoverageTest {
         Map<OperationKind, String> stale = Collections.singletonMap(OperationKind.COUNT,
                 "no corpus case counts anything yet");
 
-        Coverage coverage = coverage(corpus(directory, COUNT_WITH_MAP_VALUES), stale, Oracle::run);
+        Coverage coverage = coverage(load(directory, COUNT_WITH_MAP_VALUES), stale, Oracle::run);
 
         assertWithMessage("count is credited by a case, so excusing it is a claim that is no longer true")
                 .that(coverage.staleExclusions()).containsExactly(OperationKind.COUNT);
@@ -252,7 +262,7 @@ class CorpusCoverageTest {
         Map<OperationKind, String> excused = Collections.singletonMap(OperationKind.JOIN,
                 "the join corpus lands with the driver rung");
 
-        Coverage coverage = coverage(corpus(directory, COUNT_WITH_MAP_VALUES), excused, Oracle::run);
+        Coverage coverage = coverage(load(directory, COUNT_WITH_MAP_VALUES), excused, Oracle::run);
 
         assertThat(coverage.uncovered()).doesNotContain(OperationKind.JOIN);
         assertThat(coverage.staleExclusions()).isEmpty();
@@ -268,7 +278,7 @@ class CorpusCoverageTest {
      */
     @Test
     void anOracleThatDropsAnOperationFailsNamingTheCaseAndTheOperation(@TempDir Path directory) {
-        List<ConformanceCase> loaded = corpus(directory, COUNT_WITH_MAP_VALUES);
+        List<ConformanceCase> loaded = load(directory, COUNT_WITH_MAP_VALUES);
 
         Coverage coverage = coverage(loaded, Collections.emptyMap(), withoutTheSink(Oracle::run));
 
@@ -285,7 +295,7 @@ class CorpusCoverageTest {
     /** A case whose final state holds nothing is vacuous, whatever its topology promised. */
     @Test
     void aCaseWhoseFinalStateIsEmptyIsVacuous(@TempDir Path directory) {
-        List<ConformanceCase> loaded = corpus(directory, COUNT_WITH_MAP_VALUES);
+        List<ConformanceCase> loaded = load(directory, COUNT_WITH_MAP_VALUES);
 
         Coverage coverage = coverage(loaded, Collections.emptyMap(),
                 conformanceCase -> new FinalState(emptyObservable("counts"), emptyObservable("out"),
@@ -329,7 +339,7 @@ class CorpusCoverageTest {
     @Test
     void anOperationSpellingTheSurfaceDoesNotKnowIsRefusedAtLoad(@TempDir Path directory) {
         CaseLoader.CorpusRefusedException thrown = assertThrows(CaseLoader.CorpusRefusedException.class,
-                () -> corpus(directory, ""
+                () -> load(directory, ""
                         + "name: flat-mapped\n"
                         + "base-instant: 1970-01-01T02:00:00Z\n"
                         + "topology:\n"
@@ -556,10 +566,6 @@ class CorpusCoverageTest {
                 && state.sinks().values().stream().allMatch(List::isEmpty);
     }
 
-    private static List<ConformanceCase> realCorpus() {
-        return CaseLoader.loadClasspathDirectory(CORPUS);
-    }
-
     private static List<String> refusalCaseNames(List<ConformanceCase> corpus) {
         List<String> names = new ArrayList<>();
         corpus.stream().filter(ConformanceCase::refusalClass).forEach(each -> names.add(each.name()));
@@ -583,21 +589,6 @@ class CorpusCoverageTest {
             }
             return new FinalState(real.stores(), real.sinks(), kept.toString());
         };
-    }
-
-    /** Writes each case into its own file under one directory and loads them, so every fixture is a real case. */
-    private static List<ConformanceCase> corpus(Path directory, String... yamls) {
-        try {
-            Path created = Files.createDirectories(directory);
-            for (int index = 0; index < yamls.length; index++) {
-                Path written = Files.write(created.resolve("case-" + index + ".yaml"),
-                        yamls[index].getBytes(StandardCharsets.UTF_8));
-                assertThat(Files.exists(written)).isTrue();
-            }
-        } catch (IOException e) {
-            throw new UncheckedIOException("cannot write the hand-built corpus into " + directory, e);
-        }
-        return CaseLoader.load(directory);
     }
 
     // -------------------------------------------------------------------------------------- the fixtures

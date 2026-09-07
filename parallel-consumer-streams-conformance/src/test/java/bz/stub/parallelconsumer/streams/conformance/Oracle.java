@@ -3,6 +3,10 @@ package bz.stub.parallelconsumer.streams.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import com.google.common.io.BaseEncoding;
+import com.google.common.io.MoreFiles;
+import com.google.common.io.RecursiveDeleteOption;
+
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KeyValue;
@@ -34,11 +38,8 @@ import org.apache.kafka.streams.test.TestRecord;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -730,11 +731,7 @@ public final class Oracle {
         if (printable) {
             return "\"" + new String(payload, StandardCharsets.US_ASCII) + "\"";
         }
-        StringBuilder hex = new StringBuilder("0x");
-        for (byte current : payload) {
-            hex.append(String.format("%02x", current));
-        }
-        return hex.toString();
+        return "0x" + BaseEncoding.base16().lowerCase().encode(payload);
     }
 
     // ---------------------------------------------------------------------------------------------- plumbing
@@ -809,20 +806,10 @@ public final class Oracle {
             return;
         }
         try {
-            Files.walkFileTree(directory, new SimpleFileVisitor<Path>() {
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
-                    Files.delete(file);
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult postVisitDirectory(Path visited, @Nullable IOException failure)
-                        throws IOException {
-                    Files.delete(visited);
-                    return FileVisitResult.CONTINUE;
-                }
-            });
+            // ALLOW_INSECURE because a filesystem without secure directory streams would otherwise throw
+            // InsecureRecursiveDeleteException; this is the oracle's own temp state directory, not a symlink-attack
+            // surface.
+            MoreFiles.deleteRecursively(directory, RecursiveDeleteOption.ALLOW_INSECURE);
         } catch (IOException e) {
             throw new UncheckedIOException("cannot clean up the oracle's temporary state directory " + directory, e);
         }

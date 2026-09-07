@@ -3,8 +3,9 @@ package bz.stub.parallelconsumer.streams.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import com.google.common.collect.Sets;
+
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -87,9 +88,9 @@ public final class Differ {
                                 Map<String, List<String>> left,
                                 Map<String, List<String>> right) {
         // Left first, so the reds come out in the order the topology declared its observables; a name only the
-        // right side has still gets one, appended after them.
-        Set<String> everyName = new LinkedHashSet<>(left.keySet());
-        boolean ignoredGrew = everyName.addAll(right.keySet());
+        // right side has still gets one, appended after them - which is exactly Sets.union's iteration order. It is
+        // a view, so it is only ever iterated.
+        Set<String> everyName = Sets.union(left.keySet(), right.keySet());
 
         for (String name : everyName) {
             List<String> leftEntries = left.get(name);

@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 
+import static bz.stub.parallelconsumer.streams.conformance.CorpusFixtures.caseNamed;
 import static com.google.common.truth.Truth.assertThat;
 import static java.util.Objects.requireNonNull;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -220,8 +221,9 @@ class CaseLoaderTest {
     }
 
     /**
-     * An empty corpus is not this loader's failure to raise. U4's gate treats an empty corpus as a red, because that
-     * is where "the run executed nothing and reported green" is actually decidable; here it is just an empty list.
+     * An empty corpus is not this loader's failure to raise. The corpus gate (U4) treats an empty corpus as a red,
+     * because that is where "the run executed nothing and reported green" is actually decidable; here it is just an
+     * empty list.
      */
     @Test
     void anEmptyDirectoryYieldsAnEmptyCorpus(@TempDir Path emptyDirectory) {
@@ -251,13 +253,6 @@ class CaseLoaderTest {
         } catch (CaseLoader.CorpusRefusedException expected) {
             return expected;
         }
-    }
-
-    private static ConformanceCase caseNamed(List<ConformanceCase> corpus, String name) {
-        return corpus.stream()
-                .filter(c -> name.equals(c.name()))
-                .findFirst()
-                .orElseThrow(() -> new AssertionError("no case named " + name + " in " + corpus));
     }
 
     private static List<ConformanceCase.OperationKind> kindsOf(ConformanceCase loaded) {
