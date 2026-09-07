@@ -322,19 +322,43 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
     }
 
     /**
-     * The current assignment epoch of the partition, or null if it has never been assigned.
+     * The current assignment epoch of the partition, or empty if the assignment callback has not fired for it yet.
      * <p>
-     * Null only ever means "never assigned": epochs are written by {@link #incrementPartitionAssignmentEpoch} on
-     * every assignment and every revocation, and nothing removes one. One reader consumes the null on purpose -
-     * {@link bz.stub.parallelconsumer.internal.EpochAndRecordsMap} skips a poll's records for a partition whose
-     * assignment callback has not fired yet - which is why the return type is not narrowed to {@code long}. The
-     * assignment path, which must never see the null, narrows it at its one consumer instead:
-     * {@code OffsetMapCodecManager.epochOfPartitionBeingAssigned}, whose javadoc carries the trace.
+     * Absence only ever means "not yet assigned": epochs are written by {@link #incrementPartitionAssignmentEpoch}
+     * on every assignment and every revocation, and nothing removes one. The two production readers consume an
+     * absent epoch in opposite ways, and the type makes each choose at the call site:
+     * <ul>
+     *   <li><b>Skip, on the poll path</b> - {@link bz.stub.parallelconsumer.internal.EpochAndRecordsMap} can be
+     *   handed a poll's records for a partition before its assignment callback fires (the eager-protocol race), and
+     *   it skips them: they are uncommitted, so Kafka re-delivers them once the callback has run.</li>
+     *   <li><b>Fail closed, on the assignment path</b> - {@code OffsetMapCodecManager.epochOfPartitionBeingAssigned}
+     *   builds {@link PartitionState} from this epoch and must never see it absent, because
+     *   {@link #onPartitionsAssigned} writes every epoch before it loads any state. It throws, naming that
+     *   ordering; its javadoc carries the trace.</li>
+     * </ul>
      *
-     * @return the current epoch of the partition, or null if not yet assigned
+     * @return the current epoch of the partition, or empty if the assignment callback has not fired for it
+     * @see #getEpochOfPartition the nullable form of the same lookup
+     */
+    public Optional<Long> epochOfPartitionIfAssigned(TopicPartition partition) {
+        return Optional.ofNullable(partitionsAssignmentEpochs.get(partition));
+    }
+
+    /**
+     * The legacy nullable form of {@link #epochOfPartitionIfAssigned}: the same lookup, with null carrying exactly the
+     * meaning empty carries there - the assignment callback has not fired for this partition yet.
+     * <p>
+     * New callers should prefer the {@link Optional} form, so that absence is handled at the call site rather than by
+     * an accidental unbox: this method's null was consumed by an auto-unbox into a primitive on the assignment path
+     * until {@code OffsetMapCodecManager.epochOfPartitionBeingAssigned} was made to fail closed, and a nullable
+     * boxed return reads identically whether the caller decided about the null or forgot it. The return type is not
+     * narrowed to {@code long} because absence is a legitimate outcome on the poll path (see the Optional form's
+     * javadoc). Existing callers - the test suite unboxes this in many places - can migrate when they touch the site.
+     *
+     * @return the current epoch of the partition, or null if the assignment callback has not fired for it
      */
     public Long getEpochOfPartition(TopicPartition partition) {
-        return partitionsAssignmentEpochs.get(partition);
+        return epochOfPartitionIfAssigned(partition).orElse(null);
     }
 
 

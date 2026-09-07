@@ -29,8 +29,8 @@ public class EpochAndRecordsMap<K, V> {
     public EpochAndRecordsMap(ConsumerRecords<K, V> poll, PartitionStateManager<K, V> pm) {
         poll.partitions().forEach(partition -> {
             var records = poll.records(partition);
-            Long epochOfPartition = pm.getEpochOfPartition(partition);
-            if (epochOfPartition == null) {
+            Optional<Long> epochOfPartition = pm.epochOfPartitionIfAssigned(partition);
+            if (!epochOfPartition.isPresent()) {
                 // Race: poll() returned records for a partition before onPartitionsAssigned()
                 // has fired. This is more likely with Kafka 2.x's eager rebalance protocol.
                 // Safe to skip - these records haven't been committed, so Kafka will re-deliver
@@ -39,8 +39,8 @@ public class EpochAndRecordsMap<K, V> {
                         "Records will be re-delivered on next poll after assignment completes.", records.size(), partition);
                 return;
             }
-            log.trace("Tagging {} records for {} with epoch {}", records.size(), partition, epochOfPartition);
-            RecordsAndEpoch entry = new RecordsAndEpoch(partition, epochOfPartition, records);
+            log.trace("Tagging {} records for {} with epoch {}", records.size(), partition, epochOfPartition.get());
+            RecordsAndEpoch entry = new RecordsAndEpoch(partition, epochOfPartition.get(), records);
             recordMap.put(partition, entry);
         });
     }

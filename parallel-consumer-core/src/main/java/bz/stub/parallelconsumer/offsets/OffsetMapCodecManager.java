@@ -69,7 +69,7 @@ public class OffsetMapCodecManager<K, V> {
 
     public static final Charset CHARSET_TO_USE = UTF_8;
 
-    private final PCModule module;
+    private final PCModule<K, V> module;
 
     private Timer offsetEncodingTimer;
     private final Map<OffsetEncoding, Counter> encodingCounters = new HashMap<>();
@@ -182,8 +182,9 @@ public class OffsetMapCodecManager<K, V> {
     }
 
     /**
-     * The epoch {@link PartitionState} is built with on assignment - and the one place the nullable
-     * {@link bz.stub.parallelconsumer.state.PartitionStateManager#getEpochOfPartition} is narrowed to a {@code long}.
+     * The epoch {@link PartitionState} is built with on assignment - and the one place
+     * {@link bz.stub.parallelconsumer.state.PartitionStateManager#epochOfPartitionIfAssigned} is narrowed to a
+     * {@code long} with a throw rather than a skip.
      * <p>
      * <b>Suspected (Infer, {@code NULLPTR_DEREFERENCE}, and the note that outlived the ratchet line): the epoch is
      * documented "or null if not yet assigned", and this class unboxed it into a primitive at two sites.</b> Cleared
@@ -199,18 +200,18 @@ public class OffsetMapCodecManager<K, V> {
      * a new caller of this class that skips the state manager. Neither is caught by a gate; both are caught by
      * this guard, at the site, naming the ordering - which is why the contract is narrowed here rather than made
      * lenient. Fail-open (default the epoch) would silently build state at an epoch the fencing does not know
-     * about, and the return type stays {@code Long} because {@code EpochAndRecordsMap} legitimately consumes the
-     * null: a poll can return records for a partition before its assignment callback fires, and that reader
-     * skips them.
+     * about, and the accessor returns an {@link Optional} because {@code EpochAndRecordsMap} legitimately consumes
+     * the absence: a poll can return records for a partition before its assignment callback fires, and that reader
+     * skips them. The type puts the skip-or-throw decision at each call site; this site throws.
      */
     private long epochOfPartitionBeingAssigned(TopicPartition tp) {
-        Long epoch = module.workManager().getPm().getEpochOfPartition(tp);
-        return Objects.requireNonNull(epoch, () -> msg("No assignment epoch recorded for partition {}: partition "
-                        + "state is only built inside PartitionStateManager.onPartitionsAssigned, after "
-                        + "incrementPartitionAssignmentEpoch has run for the same partitions. Reaching "
-                        + "OffsetMapCodecManager for a partition the state manager was never told about breaks "
-                        + "that ordering.",
-                tp));
+        return module.workManager().getPm().epochOfPartitionIfAssigned(tp)
+                .orElseThrow(() -> new NullPointerException(msg("No assignment epoch recorded for partition {}: "
+                                + "partition state is only built inside PartitionStateManager.onPartitionsAssigned, "
+                                + "after incrementPartitionAssignmentEpoch has run for the same partitions. Reaching "
+                                + "OffsetMapCodecManager for a partition the state manager was never told about "
+                                + "breaks that ordering.",
+                        tp)));
     }
 
     /**

@@ -18,9 +18,13 @@ import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * Pins the contract between {@code PartitionStateManager.getEpochOfPartition}, which is documented "or null if not
- * yet assigned", and the two places {@link OffsetMapCodecManager#loadPartitionStateForAssignment} unboxes that value
- * into {@link bz.stub.parallelconsumer.state.PartitionState}'s primitive {@code long} epoch.
+ * Pins the contract between {@code PartitionStateManager.epochOfPartitionIfAssigned}, whose empty means the
+ * assignment callback has not fired for the partition, and the two places
+ * {@link OffsetMapCodecManager#loadPartitionStateForAssignment} narrows that value into
+ * {@link bz.stub.parallelconsumer.state.PartitionState}'s primitive {@code long} epoch - both through
+ * {@code epochOfPartitionBeingAssigned}, which resolves the empty with {@code orElseThrow} rather than a skip.
+ * (The accessor was the nullable {@code getEpochOfPartition} when this test was written; the Optional form replaced
+ * it at this site so that the decision is visible in the type rather than in a null check.)
  * <p>
  * <b>Null is unreachable there from the production caller</b> - {@code PartitionStateManager.onPartitionsAssigned}
  * writes every partition's epoch, unconditionally and on the same thread, before it calls
