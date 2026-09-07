@@ -115,6 +115,9 @@ tooling branch, if there was one, merges first.
 
 - **`bin/check-inflight-tags.sh | tail -1 && git commit`** takes `tail`'s exit status. A gate failure
   landed in a commit that way on the first sweep. Run the gate on its own line.
+- **A `>` inside a marker.** Both the gate and `VETTED_RE` read the marker with `[^>]*`, so a
+  `PROPOSED closed: X -> Y` parses as empty - the gate refuses it by name, and `vet` would list the
+  note as never vetted. Write "to" rather than an arrow. Five markers hit this on the first sweep.
 - **A false anchor signal on a spelt-in-full name.** `vet` reports `IllegalStateException` missing
   when the source names it only in a comment as `java.lang.IllegalStateException`, and reports a
   prose word (`Lazy`, about Dagger) as a symbol. The agent reads the row as a reason to look, which

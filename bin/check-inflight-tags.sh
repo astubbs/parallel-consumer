@@ -148,7 +148,13 @@ for f in docs/inflight/*.md; do
     # name and failed the sweep's own working note for citing the command; the duplicate check above
     # already keys on the comment opener, and this follows it.
     vetted=$(sed -n 's/.*<!-- inflight-vetted:[[:space:]]*\([^>]*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
-    if grep -q '<!-- inflight-vetted:' "$f" && ! grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} - .+' <<<"$vetted"; then
+    # A '>' INSIDE THE MARKER IS THE SAME DEFECT THE STATE CHECK ABOVE GUARDS: VETTED_RE in
+    # bin/lib/inflight-tags.mjs is `[^>]*` too, so `fixed by X -> Y` parses as empty here and as
+    # "never vetted" there. Five markers hit this on the first sweep and were reported as "not
+    # YYYY-MM-DD", which sent the writer looking at the date. Name the actual cause.
+    if grep -q '<!-- inflight-vetted:' "$f" && [ -z "$vetted" ] && grep -q '<!-- inflight-vetted:.*>.*-->' "$f"; then
+        note "$f \"$(note_title "$f")\": inflight-vetted text contains '>' - VETTED_RE in bin/lib/inflight-tags.mjs cannot parse that marker and \`bin/inflight.mjs vet\` would list the note as never vetted. Reword without '>'"
+    elif grep -q '<!-- inflight-vetted:' "$f" && ! grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} - .+' <<<"$vetted"; then
         note "$f \"$(note_title "$f")\": inflight-vetted '$vetted' is not 'YYYY-MM-DD - <what was checked>'. docs/inflight/AGENTS.md -> \"Vetting a note\" owns the marker"
     fi
 done

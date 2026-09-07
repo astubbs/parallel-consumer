@@ -159,6 +159,7 @@ assert "a vetted marker with no reason is rejected"    fail '# T\n\n<!-- infligh
 # PROSE IS NOT A MARKER. A note that quotes `grep 'inflight-vetted:.*PROPOSED'` names the field
 # without carrying it; matching the bare name failed the sweep's own working note.
 assert "a prose mention of the field passes"          pass '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: coordination -->\nrun grep -l inflight-vetted:.*PROPOSED to list them\n'
+assert "a vetted marker containing '>' is rejected"  fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-vetted: 2026-09-07 - fixed by astubbs#451, revoke -> abort -->\n'
 assert "a second vetted marker is rejected"            fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-vetted: 2026-09-07 - a -->\n<!-- inflight-vetted: 2026-09-08 - b -->\n'
 
 echo
