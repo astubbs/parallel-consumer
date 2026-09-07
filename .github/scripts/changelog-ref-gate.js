@@ -1,9 +1,10 @@
 // Copyright (C) 2026 Antony Stubbs and contributors
 
 // Pure logic behind the "Verify new changelog entries cite an issue" step in
-// .github/workflows/pr-checklist.yml. It lives here rather than inline in the workflow YAML so it
-// can be unit tested - the same job runs changelog-ref-gate.test.js before the gate, so a
-// regression here fails the PR Checklist rather than silently misjudging changelogs.
+// .github/workflows/repo-hygiene.yml (the `repo: hygiene` job, where the former PR Checklist steps
+// now live). It lives here rather than inline in the workflow YAML so it can be unit tested - the
+// same job runs changelog-ref-gate.test.js before the gate, so a regression here fails the required
+// check rather than silently misjudging changelogs.
 //
 // This is a reminder for ourselves, not a defence against someone gaming it. Where being exactly
 // right would need real cleverness, it takes the simple option and says so: a check nobody can
