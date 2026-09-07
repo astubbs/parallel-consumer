@@ -864,13 +864,19 @@ Only the items needing a decision are listed here - do not restate the inventory
   `LoadTest` stays at 4,000: it is untagged, so it runs in the gating lane, and it is already a
   listed member of the load-tightness flake family at that volume.
 
-Not listed as work: `largeNumberOfInstances` is owned by open PR astubbs#29. The three
+Not listed as work: `largeNumberOfInstances` stays in `docs/quarantined-tests.md` as an unowned entry -
+astubbs#29 merged on 2026-09-02 fixing one confluentinc#857 mechanism without lifting this quarantine, so it
+is tracked by the registry, not here. The three
 `@Timeout(60000L)` annotations (`MockConsumerEarlyCloseTest`, `MockConsumerSaslAuthenticationTest`,
 `MockConsumerCommitTimeoutTest`) are owned by open PR astubbs#206, which replaces them with
 `@Timeout(120)` on a shared `MockConsumerTestBase` and adds the assertion
 `MockConsumerEarlyCloseTest` was missing - and **`@Timeout(60)` would have been wrong**, because two
 of those tests wait 45s and 50s internally, so it would have raced them rather than fixing them.
-`ProgressBarTest.width` is a deliberate manual check. Five of the ten deleted stubs (§4 of the audit)
+`ProgressBarTest.width` was a deliberate manual check, and has since been **deleted** - it was the
+last `@Disabled` test on master and the release gate made that the deciding factor (the
+"Release gate: no disabled tests" section of [`docs/inflight/release-0.6.0.0.md`](inflight/release-0.6.0.0.md)
+records why deletion won over the split that was proposed).
+Five of the ten deleted stubs (§4 of the audit)
 are already covered by named enabled tests, and `truncationOnCommit` is obsolete - on-commit
 truncation is structurally unreachable, and the truncation that does exist happens on the bootstrap
 poll and is covered by `PartitionStateCommittedOffsetTest`.
