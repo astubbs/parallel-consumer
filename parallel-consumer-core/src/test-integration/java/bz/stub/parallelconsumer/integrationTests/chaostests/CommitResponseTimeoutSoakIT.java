@@ -1,0 +1,416 @@
+package bz.stub.parallelconsumer.integrationTests.chaostests;
+
+/*-
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.RandomUtils;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+
+import static com.google.common.truth.Truth.assertWithMessage;
+
+/**
+ * <b>Soak, not a gate</b>: the first reproduction attempt for astubbs#177 (confluentinc#833) and
+ * astubbs#175 (confluentinc#809) - {@code Timeout waiting for commit response}. Two field reports had
+ * been open for months with no reproduction attempt at all;
+ * {@code docs/inflight/bug-177-commit-response-timeout-unreproduced.md} owns the question, the
+ * candidate mechanisms and the discriminator, and this class is the experiment it asks for. Read that
+ * note before changing anything here - in particular before "fixing" the parts of this workload that
+ * look pathological, because being pathological is the point.
+ *
+ * <h2>The shape, and why each term is the reporter's rather than ours</h2>
+ * astubbs#177's reporter posted their actual application code, which is unusually specific, so the
+ * workload here is a transcription rather than a guess:
+ * <ul>
+ *   <li>{@link ProcessingOrder#KEY} over {@link #KEY_SPACE} = 1000 distinct keys - their second
+ *   publisher keys records {@code 0..999}, and it is that consumer their metrics and their exception
+ *   came from.</li>
+ *   <li><b>Half the records fail, and fail on EVERY attempt.</b> Their user function throws whenever
+ *   a header flag is set, and the flag is set on {@code i % 2} of records - so a marked record is
+ *   <em>permanently</em> poisoned, not flaky. Under {@code KEY} ordering that head-of-line blocks its
+ *   key's shard for the rest of the run, and the partition's committed offset is pinned behind it.
+ *   That is what makes this an ACCUMULATION - the reporter's "runs for a while and then exits" -
+ *   rather than a startup race, and it is the single most load-bearing choice in the file. Modelling
+ *   it as "fails ~50% of the time, per attempt" would let every record eventually succeed, the
+ *   commit watermark would advance, and the accumulation being hunted would never happen.</li>
+ *   <li>{@link CommitMode#PERIODIC_CONSUMER_SYNC} - the only mode that blocks a non-owning thread on
+ *   {@code ConsumerOffsetCommitter}'s response queue, so the only mode in which this exception exists.
+ *   astubbs#175's reporter names it explicitly, with a 1s commit interval, which
+ *   {@code ManagedPCInstance} also sets.</li>
+ *   <li>{@code maxConcurrency} 14 and a ~100ms user function - both theirs.</li>
+ *   <li><b>One instance, and no churn.</b> Neither report involves a rebalance, so no
+ *   {@link ChaosConductor} is wired here. This is the deliberate difference from every other class in
+ *   this package: they hunt disturbance classes, this one hunts an accumulation under steady state.</li>
+ * </ul>
+ * The one thing deliberately NOT the reporter's is the clock. They produced 1000 records every two
+ * minutes; {@link #BURST_INTERVAL} compresses that so the accumulation is reached inside a soak
+ * rather than inside a working day.
+ *
+ * <h2>What it asserts - exactly one thing</h2>
+ * That no {@code Timeout waiting for commit response} occurs. Nothing about throughput, nothing about
+ * lag, and no {@link ProgressProbe}: this workload pins its own commit watermark BY DESIGN, so the
+ * Class 2 lag detector would observe continuously and say nothing about the question. A probe firing
+ * on the workload's intended behaviour is not evidence, and wiring one here would have manufactured
+ * exactly the kind of noise
+ * {@code docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md}
+ * describes.
+ *
+ * <h2>The discriminator, which is now in the product rather than in this test</h2>
+ * astubbs#204 split the two mechanisms that produce one trace, so a reproduction classifies itself:
+ * <ul>
+ *   <li>a failure whose message says <b>the broker poll thread has died</b>, carrying the poller's own
+ *   exception as its cause -> the poller DIED (astubbs#100's class, already fixed);</li>
+ *   <li>a bare <b>{@code Timeout waiting for commit response}</b> -> the poller is <b>wedged but
+ *   alive</b>, which is the uncharacterised defect nobody owns. Since astubbs#177's fix that message
+ *   also carries {@code POLL THREAD AT TIMEOUT:} - {@code PollThreadStallDiagnosis}'s verdict on
+ *   whether the poll thread is BLOCKED or merely SLOW, captured while it is still parked.</li>
+ * </ul>
+ * On top of that this scenario writes a <b>full JVM thread dump</b> to
+ * {@code target/soak-177-threaddump-<epoch>.txt} at the moment of detection - the product's diagnosis
+ * covers the poll thread, and the remaining question ("what is the control thread doing, and who holds
+ * what") needs every thread.
+ *
+ * <h2>Calibration status</h2>
+ * <b>2026-09-07, first run, and it is a SIGHTING-LEDGER ENTRY rather than a verdict.</b> Zero
+ * timeouts in one 30-minute run says the shape did not reproduce once; it does not say the shape
+ * cannot. Conditions, so the number is interpretable: 1 run x 30 min, single instance,
+ * {@code KEY}/{@code PERIODIC_CONSUMER_SYNC}, {@value #KEY_SPACE} keys over {@value #PARTITIONS}
+ * partitions, failureFraction 0.5 permanent, {@code maxConcurrency} 14, 100ms user function, 1000
+ * records produced every {@value #BURST_INTERVAL_SECONDS}s; broker = the suite's Testcontainers Kafka
+ * on Docker; machine = the maintainer's macOS arm64 workstation. The run's own numbers - steady-state
+ * shape, successes, failures, seed - are in the note named at the top of this javadoc, which owns the
+ * ledger. <b>Do not read a green run here as the reports being closable</b>; that note says what would
+ * be needed and this run is one line of it.
+ * <p>
+ * <b>Arms not run, in the order they are worth running.</b> Each changes ONE term, which is the point:
+ * <ol>
+ *   <li>{@code -Dsoak.failureFraction=0} - the CONTROL arm. It removes the poisoning and nothing else,
+ *   so a timeout appearing in it would say the failure traffic is not the mechanism.</li>
+ *   <li>Longer than 30 minutes. The reporter's application ran for hours, and at their produce rate
+ *   30 minutes of this soak is roughly three hours of theirs - but "accumulation" has no established
+ *   knee, so duration is the least-informed constant here.</li>
+ *   <li>Per-ATTEMPT failure instead of per-record, so the watermark advances and the pressure lands on
+ *   the retry path rather than on the offset encoding. A different mechanism, not a weaker version of
+ *   this one - which is why it is a separate arm and not a default.</li>
+ * </ol>
+ *
+ * <h2>Running it</h2>
+ * Tagged {@code @Tag("soak")}, which sits in {@code pom.xml}'s {@code excluded.groups} default, so it
+ * is in NO suite - not the default build, not the gating integration lane, and NOT the chaos shards
+ * (those select classes by name through {@code CHAOS_SCENARIOS}). It is opt-in only:
+ * <pre>{@code
+ * ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+ *     -Dincluded.groups=soak -Dexcluded.groups= -Dit.test=CommitResponseTimeoutSoakIT
+ * }</pre>
+ * {@code -Dsoak.duration=PT45M} sets the run length, {@code -Dsoak.failureFraction=<0..1>} the
+ * poisoned share, and {@code -Dchaos.seed=<long>} replays which records were poisoned - the seed is
+ * logged at the top of every run and lifted into the ambient autopsy by {@link ChaosSeed.Holder}.
+ */
+@Tag("soak")
+// Six hours, so a -Dsoak.duration far above the default is not silently killed by JUnit. The wait
+// below is bounded by the requested duration, not by this - see docs/testing.md on why a killed run
+// is uninterpretable rather than merely short.
+@Timeout(value = 6, unit = TimeUnit.HOURS)
+@Testcontainers
+@Slf4j
+class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
+
+    /** astubbs#177's reporter keys records {@code 0..999}; this is that key space. */
+    private static final int KEY_SPACE = 1_000;
+
+    /**
+     * Not the reporter's (they never said), so this is ours and chosen for one reason: enough
+     * partitions that the single instance holds many independent commit watermarks, since a workload
+     * that pins every one of them is a stronger version of the accumulation than one that pins a few.
+     */
+    private static final int PARTITIONS = 20;
+
+    /** Their {@code maxConcurrency(14)}, verbatim. */
+    private static final int MAX_CONCURRENCY = 14;
+
+    /** Their {@code Thread.sleep(100)} inside the user function, verbatim. */
+    private static final int POLL_DELAY_MS = 100;
+
+    static final int BURST_INTERVAL_SECONDS = 20;
+
+    /**
+     * The reporter's {@code @Scheduled(fixedRate = 2, MINUTES)} burst of 1000, compressed 6x. The
+     * compression is the ONE term here that is ours rather than theirs, and it is a compression of the
+     * clock only: the burst size and key space are unchanged, so what arrives is the same shape at a
+     * higher rate. It matters less than it looks - after the first two bursts essentially every key is
+     * head-of-line blocked, so the produce rate stops setting the pace and the retry traffic does.
+     */
+    private static final Duration BURST_INTERVAL = Duration.ofSeconds(BURST_INTERVAL_SECONDS);
+
+    private static final Duration DEFAULT_DURATION = Duration.ofMinutes(30);
+
+    /** How often the watcher looks for a failed PC. Small, because the evidence it captures is a
+     * thread dump and a parked thread is only interesting while it is still parked. */
+    private static final Duration WATCH_INTERVAL = Duration.ofSeconds(5);
+
+    private static final Duration PROGRESS_LOG_INTERVAL = Duration.ofSeconds(60);
+
+    /** The half of the timeout message that means the poller is WEDGED BUT ALIVE - the defect nobody owns. */
+    static final String COMMIT_RESPONSE_TIMEOUT = "Timeout waiting for commit response";
+
+    /** The half that means the poller DIED - astubbs#100's class, and self-identifying since astubbs#204. */
+    static final String POLLER_DIED = "The broker poll thread has died";
+
+    private final AtomicLong succeeded = new AtomicLong();
+    private final AtomicLong failed = new AtomicLong();
+    private final AtomicLong produced = new AtomicLong();
+
+    private volatile boolean producing = true;
+
+    @Test
+    void noCommitResponseTimeoutUnderSustainedUserFunctionFailure() throws Exception {
+        ChaosSeed seed = resolveSeed();
+        Duration duration = resolveDuration();
+        double failureFraction = resolveFailureFraction();
+        log.info("=== SOAK astubbs#177/astubbs#175 commit-response timeout: seed={} duration={} "
+                        + "failureFraction={} keys={} partitions={} (replay: {} -Dsoak.duration={}) ===",
+                seed.getValue(), duration, failureFraction, KEY_SPACE, PARTITIONS,
+                seed.replayCommand().replace("-Dincluded.groups=chaos", "-Dincluded.groups=soak"), duration);
+
+        String topic = getClass().getSimpleName() + "-" + RandomUtils.nextInt();
+        ensureTopic(topic, PARTITIONS);
+
+        ManagedPCInstance.Config config = ManagedPCInstance.Config.builder()
+                .commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)
+                .order(ProcessingOrder.KEY)
+                .inputTopic(topic)
+                .pollDelayMs(POLL_DELAY_MS)
+                .maxConcurrency(MAX_CONCURRENCY)
+                .build();
+
+        ManagedPCInstance instance = new ManagedPCInstance(config, getKcu(), (incarnationId, context) -> {
+            // Poisoned records throw on EVERY delivery - see the class javadoc on why per-record
+            // beats per-attempt here. Decided from the record's identity and the seed, so a replay
+            // poisons exactly the same records.
+            if (isPoisoned(context.value(), seed.getValue(), failureFraction)) {
+                failed.incrementAndGet();
+                throw new RuntimeException("THROW_EXCEPTION_FLAG_HAPPENED for " + context.value());
+            }
+            succeeded.incrementAndGet();
+        });
+
+        ExecutorService pcExecutor = Executors.newWorkStealingPool();
+        Thread producer = new Thread(() -> produceBursts(topic), "soak-177-producer");
+        List<String> findings = new ArrayList<>();
+        try {
+            producer.start();
+            instance.start(pcExecutor);
+            findings = watchUntil(instance, Instant.now().plus(duration));
+        } finally {
+            producing = false;
+            producer.join(30_000);
+            instance.stop();
+            pcExecutor.shutdownNow();
+            log.info("Soak summary: seed={} produced={} succeeded={} failed={} findings={}",
+                    seed.getValue(), produced.get(), succeeded.get(), failed.get(), findings);
+        }
+
+        assertWithMessage("astubbs#177/astubbs#175: no commit-response timeout, and no other terminal "
+                        + "failure that would end the soak before its time (seed %s, replay with "
+                        + "-Dchaos.seed=%s -Dsoak.duration=%s -Dsoak.failureFraction=%s). A finding here "
+                        + "is classified in its own text - a bare '%s' is the WEDGED-BUT-ALIVE defect, a "
+                        + "'%s' is astubbs#100's class",
+                seed.getValue(), seed.getValue(), duration, failureFraction,
+                COMMIT_RESPONSE_TIMEOUT, POLLER_DIED)
+                .that(findings).isEmpty();
+    }
+
+    /**
+     * Watch one instance until the soak's deadline, returning the findings - empty is the pass.
+     * <p>
+     * It returns rather than throwing on the first finding so the {@code finally} above still runs its
+     * teardown and prints the summary, and so a run that ends early is reported as ONE thing with its
+     * evidence attached rather than as whatever the teardown happened to throw next.
+     */
+    private List<String> watchUntil(ManagedPCInstance instance, Instant deadline) throws InterruptedException {
+        List<String> findings = new ArrayList<>();
+        Instant nextProgressLog = Instant.now().plus(PROGRESS_LOG_INTERVAL);
+        while (Instant.now().isBefore(deadline)) {
+            ParallelEoSStreamProcessor<String, String> pc = instance.getParallelConsumer();
+            if (pc != null) {
+                Exception cause = pc.getFailureCause();
+                if (cause != null) {
+                    findings.add(classify(cause));
+                    return findings;
+                }
+                if (pc.isClosedOrFailed()) {
+                    // Closed with no cause recorded is not the 177 symptom, but it does mean the soak
+                    // stopped soaking - reporting it as a finding stops a truncated run reading green.
+                    findings.add("PC reported closed-or-failed with NO failure cause - the soak ended "
+                            + "early for a reason this scenario cannot name, so it did not run its "
+                            + "duration and proves nothing about astubbs#177");
+                    return findings;
+                }
+            }
+            if (Instant.now().isAfter(nextProgressLog)) {
+                log.info("Soak progress: remaining={} produced={} succeeded={} failed={}",
+                        Duration.between(Instant.now(), deadline), produced.get(), succeeded.get(),
+                        failed.get());
+                nextProgressLog = Instant.now().plus(PROGRESS_LOG_INTERVAL);
+            }
+            Thread.sleep(WATCH_INTERVAL.toMillis());
+        }
+        return findings;
+    }
+
+    /**
+     * Turn a terminal failure into the finding text, and capture the evidence that stops being
+     * available a moment later. The classification is read out of the product's own message - see the
+     * class javadoc: astubbs#204 made the two mechanisms say which they are, so this method reports a
+     * verdict rather than reaching one.
+     */
+    private String classify(Exception cause) {
+        String rendered = renderCauseChain(cause);
+        String dump = captureThreadDump();
+        String classification;
+        if (rendered.contains(POLLER_DIED)) {
+            classification = "POLLER DIED (astubbs#100's class - the cause chain names what killed it)";
+        } else if (rendered.contains(COMMIT_RESPONSE_TIMEOUT)) {
+            classification = "POLLER WEDGED BUT ALIVE (the uncharacterised defect - read the "
+                    + "'POLL THREAD AT TIMEOUT' verdict in the message for blocked vs merely slow)";
+        } else {
+            classification = "NOT the astubbs#177 symptom - the soak ended early for another reason, "
+                    + "so this run proves nothing about the reports";
+        }
+        String finding = classification + "; thread dump: " + dump + "; failure: " + rendered;
+        log.error("=== SOAK FINDING === {}", finding);
+        return finding;
+    }
+
+    private static String renderCauseChain(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        for (Throwable current = t; current != null; current = current.getCause()) {
+            if (sb.length() > 0) {
+                sb.append(" <- caused by: ");
+            }
+            sb.append(current.getClass().getName()).append(": ").append(current.getMessage());
+            if (current.getCause() == current) {
+                break;
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * A full JVM thread dump, written beside the build output. {@code PollThreadStallDiagnosis}
+     * already reports the POLL thread inside the exception message; what it cannot report is the
+     * control thread, the worker pool and who holds what, which is the half needed to tell a
+     * lock-ordering defect from a broker that simply stopped answering.
+     *
+     * @return the path written, or a description of why nothing was
+     */
+    private static String captureThreadDump() {
+        try {
+            Path path = Paths.get("target", "soak-177-threaddump-" + Instant.now().toEpochMilli() + ".txt");
+            Files.createDirectories(path.getParent());
+            StringBuilder sb = new StringBuilder();
+            for (ThreadInfo info : ManagementFactory.getThreadMXBean().dumpAllThreads(true, true)) {
+                sb.append(info);
+            }
+            Files.write(path, sb.toString().getBytes("UTF-8"));
+            return path.toAbsolutePath().toString();
+        } catch (IOException | RuntimeException e) {
+            // Never let the evidence capture replace the finding it was capturing.
+            return "UNAVAILABLE (" + e.getClass().getSimpleName() + ": " + e.getMessage() + ")";
+        }
+    }
+
+    /**
+     * Whether this record is one of the reporter's flagged ones. Deterministic in the record identity
+     * and the seed, so {@code -Dchaos.seed} replays the same poisoning; the reporter's own selector was
+     * {@code i % 2}, which is this at {@code failureFraction} 0.5 with the alternation smoothed out so
+     * the poisoned set does not line up with any partitioning of the key space.
+     */
+    static boolean isPoisoned(String identity, long seed, double failureFraction) {
+        if (failureFraction <= 0) {
+            return false;
+        }
+        int index = Integer.parseInt(identity.substring(identity.indexOf('-') + 1));
+        // A cheap avalanche mix, so neighbouring indexes do not land in the same half.
+        long mixed = (index * 0x9E3779B97F4A7C15L) ^ seed;
+        mixed ^= mixed >>> 33;
+        mixed *= 0xFF51AFD7ED558CCDL;
+        mixed ^= mixed >>> 33;
+        return Math.floorMod(mixed, 1_000_000L) < (long) (failureFraction * 1_000_000L);
+    }
+
+    /**
+     * The reporter's publisher: a burst of {@link #KEY_SPACE} records over keys {@code 0..999}, once
+     * per {@link #BURST_INTERVAL}, for as long as the soak runs. Record VALUES carry the unique
+     * identity (the keys repeat, so they cannot), which is the same split
+     * {@link ChaosScenarioBase#identityFor} makes for {@code ChaosKeyOrderIT}.
+     */
+    private void produceBursts(String topic) {
+        // produceRange collects the identities it sent, for a coverage check this scenario does not
+        // make - it asserts one thing, and completeness is not it (half these records never complete
+        // by design). Kept only because it is produceRange's contract; the set is never read.
+        Set<String> unreadIdentities = new ConcurrentSkipListSet<>();
+        int burst = 0;
+        while (producing) {
+            int from = burst * KEY_SPACE;
+            produceRange(topic, from, from + KEY_SPACE, unreadIdentities);
+            produced.addAndGet(KEY_SPACE);
+            burst++;
+            try {
+                Thread.sleep(BURST_INTERVAL.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    /** Repeated keys over {@link #KEY_SPACE} - the shard, and so the unit KEY ordering serialises. */
+    @Override
+    protected String keyFor(int i) {
+        return "k-" + (i % KEY_SPACE);
+    }
+
+    /** The unique record identity, in the value - see {@link #produceBursts}. */
+    @Override
+    protected String identityFor(int i) {
+        return "v-" + i;
+    }
+
+    /** {@code -Dsoak.duration=PT45M}; ISO-8601, because a bare number would not say of what. */
+    private static Duration resolveDuration() {
+        String property = System.getProperty("soak.duration");
+        return property == null ? DEFAULT_DURATION : Duration.parse(property);
+    }
+
+    /** {@code -Dsoak.failureFraction=0} is the control arm - see the class javadoc's arm list. */
+    private static double resolveFailureFraction() {
+        String property = System.getProperty("soak.failureFraction");
+        return property == null ? 0.5d : Double.parseDouble(property);
+    }
+}

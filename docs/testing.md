@@ -333,6 +333,37 @@ is why the chaos job summary prints the peak rather than a verdict - read it as 
   javadoc carries the arithmetic, and `heavyRecordsMustNotAllShareOneKey` is the check - the pattern to
   copy is turning the conclusion into an assertion rather than a comment.
 
+## Soak lane (`@Tag("soak")`) - hours-long hunts for a named field report, in no suite at all
+
+A soak is a scenario that runs for **tens of minutes to hours** against one hypothesis, usually a
+field report nobody has reproduced. It shares the chaos suite's scaffolding (`ChaosScenarioBase`,
+`ManagedPCInstance`, `ChaosSeed`, the ambient probe) but not its job: the chaos scenarios are
+*calibrated detectors that gate every PR*, and a soak is an *experiment you run on purpose*. The tag
+is separate for exactly that reason - `soak` sits in `pom.xml`'s `excluded.groups` default, so a
+soak is in no default suite, no gating lane, and **not the chaos shards** (those select classes by
+name through `CHAOS_SCENARIOS`, so a new chaos-tagged class would be invisible to them anyway, but a
+30-minute class in the chaos tag would still be picked up by the local `-Dincluded.groups=chaos`
+recipe above).
+
+- **Run one** - always name the class, because a lane whose members run for half an hour each is not
+  something to select by tag alone:
+  `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=soak -Dexcluded.groups= -Dit.test=<Name>`
+- **CI**: none, deliberately. A soak's result is a *rate under conditions*, and a lane that runs one
+  repetition per PR would report a number nobody can read.
+- **The result goes in a ledger, not in a verdict.** "Zero findings in one 30-minute run" is a
+  sighting-ledger entry: it says the shape did not reproduce once, never that it cannot. Record the
+  runs, the duration, the load shape, the seed, the broker image and the machine, in the
+  `docs/inflight/` note that owns the question - and record the same summary in the scenario's own
+  `Calibration status` javadoc block, the same convention the chaos scenarios use.
+- **Name the arms you did not run.** A soak's value is mostly in what the *next* run should vary, so
+  its javadoc lists the alternative arms in priority order, each changing one term - including the
+  control arm that removes the term under suspicion and nothing else.
+
+Members today: `CommitResponseTimeoutSoakIT` - the reproduction attempt for astubbs#177 /
+astubbs#175 (`Timeout waiting for commit response`), whose question, candidate mechanisms and
+discriminator are owned by
+[`bug-177-commit-response-timeout-unreproduced.md`](inflight/bug-177-commit-response-timeout-unreproduced.md).
+
 ## Lincheck lane (`@Tag("lincheck")`) - scheduler-controlled concurrency testing, never gates
 
 Lincheck declares a class's operations and explores thread interleavings against a sequential
@@ -444,6 +475,7 @@ that work lands, and add the link then.
 - Replaying a known schedule to see a failure again -> `bin/chaos-test.sh` with `CHAOS_SEED`.
 - Running one scenario once while you change code -> the IT directly, or the chaos lane.
 - Asking how often, at what rate, or whether a number moves -> an experiment runner.
+- Hunting a field report nobody has reproduced, over tens of minutes -> the soak lane above.
 
 The distinction that matters is that a rate needs N runs. A single run gives a pass or a fail, which
 is not a rate, and no lane in this repo aggregates results across runs.

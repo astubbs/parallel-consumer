@@ -98,8 +98,10 @@
              -Dincluded.groups=chaos          (run only the Chaos Pain Suite - see integrationTests.chaostests)
              -Dincluded.groups=lincheck       (run only the Lincheck lane - use bin/lincheck-test.sh, which
                                                also activates -Plincheck for the JVM args it needs)
+             -Dincluded.groups=soak           (run only the soak lane - hours-long single-scenario hunts, see
+                                               docs/testing.md; always name the class with -Dit.test)
              -Dexcluded.groups=               (run everything incl. performance, chaos + quarantined)
-             -Dexcluded.groups=performance,chaos,quarantined,lincheck,transactions  (skip multiple groups)
+             -Dexcluded.groups=performance,chaos,quarantined,lincheck,soak,transactions  (skip multiple groups)
              NB excluding `transactions` deselects nearly every @ProvesClaim method, and
              TransactionalClaimCoverageTest FAILS rather than reporting coverage it did not exercise -
              that is the gate working. Exclude the group only when you accept losing that report.
