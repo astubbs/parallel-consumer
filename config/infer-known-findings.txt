@@ -48,12 +48,13 @@
 1 NULLPTR_DEREFERENCE ProcessingShard.isWorkContainerStale
 1 NULLPTR_DEREFERENCE WorkManager.checkIfWorkIsStale
 1 NULLPTR_DEREFERENCE WorkManager.handleFutureResult
-# BUFFER_OVERRUN_L1 on the rider envelope, three sightings of one shape. OffsetRiderEnvelope.wrap reads
+# BUFFER_OVERRUN_L1 on the rider envelope, two sightings of one shape. OffsetRiderEnvelope.wrap reads
 # inner[0] behind an explicit `inner.length > 0 &&` guard to refuse a nested envelope; Infer's interval
-# domain reports "Offset: 0 Size: 0" against the guarded read and then propagates it to the two callers
-# that hand it an empty array on purpose (a caught-up partition has no offset map to wrap). Verified by
+# domain reports "Offset: 0 Size: 0" against the guarded read and then propagates it to the one caller
+# that hands it an empty array on purpose (a caught-up partition has no offset map to wrap). Verified by
 # the guard itself and by OffsetRiderEnvelopeTest's empty-inner arms; recorded here so the identity set
-# stays honest rather than the guard growing a second, redundant check to appease the checker.
-1 BUFFER_OVERRUN_L1 OffsetMapCodecManager.makeOffsetMetadataPayload
+# stays honest rather than the guard growing a second, redundant check to appease the checker. A third
+# sighting on makeOffsetMetadataPayload went away when encodeOffsetsToInnerBytes stopped answering with
+# an empty array, and was deleted with it.
 1 BUFFER_OVERRUN_L1 OffsetRiderEnvelope.wrap
 1 BUFFER_OVERRUN_L1 PartitionState.tryToEncodeOffsets
