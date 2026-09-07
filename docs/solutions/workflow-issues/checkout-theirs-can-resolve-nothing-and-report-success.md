@@ -1,5 +1,5 @@
 ---
-title: "`git checkout --theirs` can resolve nothing at all and still report success"
+title: "A failed `git checkout --theirs` followed by a blind `git add` stages conflict markers"
 date: 2026-09-07
 category: workflow-issues
 module: tooling
@@ -16,8 +16,9 @@ applies_when:
   - Merging in a repo that holds a family of near-identical per-module files
 symptoms:
   - "`javac` reports `class, interface, enum, or record expected` at several low line numbers of one file"
-  - A conflict-marker sweep with `grep '<<<<<<< HEAD'` returns nothing while markers are present
-  - "`git checkout --theirs` exits without complaint and `git ls-files -u` still lists the path"
+  - "`git checkout --theirs` fails with `error: path '<p>' does not have their version`, and the `git add` after it exits 0 anyway"
+  - "One bad path aborts a whole batched `git checkout --theirs -- <many paths>`, leaving every path in it unresolved"
+  - "`git ls-files -u` reports the index clean after the `git add`, so the index check cannot catch this case"
   - A patch or `git apply` step fails after conflicts were apparently resolved
   - An ArchUnit test compiles and passes while pointing at another module's packages
 tags:
@@ -34,7 +35,7 @@ related_components:
   - testing_framework
 ---
 
-# `git checkout --theirs` can resolve nothing at all and still report success
+# A failed `git checkout --theirs` followed by a blind `git add` stages conflict markers
 
 ## Context
 
@@ -100,12 +101,18 @@ into the worktree and staged anyway" (the rename/rename instance). Neither is op
 two failure modes are disjoint - the rename/rename case leaves the index *clean* and the content
 broken.
 
-**Anchor the marker sweep on `^<<<<<<<` as a prefix.** Never on the word `HEAD`, never on exactly
-seven brackets, never with a trailing space. A rename/rename conflict writes eight brackets and a
-`:path` suffix; a directory-rename conflict writes seven brackets and a `:path` suffix. Both were
-reproduced for this write-up (see Examples). `grep '<<<<<<< HEAD'` matches neither. Sweeps used in
-prior sessions here were of the form `grep -n '^<<<<<<< \|^=======$\|^>>>>>>> '` - seven characters,
-one of them with a trailing space - and would have missed this too.
+**Anchor the marker sweep on `^<<<<<<<` as a prefix, and never pin the bracket count.** A
+rename/rename conflict writes eight brackets and a `:path` suffix; a directory-rename conflict writes
+seven brackets and a `:path` suffix. Both were reproduced for this write-up (see Examples), so neither
+the count nor the suffix discriminates.
+
+The sweeps used in prior sessions here were of the form `grep -n '^<<<<<<< \|^=======$\|^>>>>>>> '`.
+That misses the eight-bracket form, and the reason is only the **count** - the trailing space is
+irrelevant, and it matches all three markers of the seven-bracket `:path` form perfectly well. An
+unanchored `grep '<<<<<<< HEAD'` is a different trap: it *does* match both forms whenever the ours
+side is labelled `HEAD`, which is what an ordinary `git merge` writes - so it gives a false sense of
+coverage, and misses only when the label is something else (a rebase, or `merge-tree` with named
+sides). Prefix-anchor and count nothing.
 
 **Expect the eight-bracket form to be mistaken for a typo.** A 2026-08-26 session saw such a marker
 sequence, called it "malformed", and initially explained it away as prose quoting conflict markers.
@@ -134,7 +141,9 @@ missing, and move on.
 
 That is also what distinguishes this write-up from its neighbour,
 `docs/solutions/workflow-issues/theirs-took-the-whole-file-and-the-repair-stopped-at-the-tests-2026-08-18.md`.
-The two are not duplicates and should be read as a pair:
+They are not duplicates. With
+`docs/solutions/workflow-issues/keeping-both-sides-of-a-merge-conflict-resurrects-a-deleted-abstraction.md`
+they make a trio, each covering a different way a bulk resolution goes wrong:
 
 - **That doc: the flag resolved the conflict and took more than you asked for.** The damage is
   *deletion*, invisible in a diff-vs-base because a merge that takes the other side renders as
@@ -159,8 +168,8 @@ exact conflict class that motivated this document.
 <!-- file-refs: N/A - names the gate that note PROPOSES, which deliberately does not exist yet -->
 
 **A mis-paired file that compiles.** Caught by nothing at all. `TestConventionsArchTest` exists once
-per module, and the copies differ only in their `package` declaration and the value of
-`@AnalyzeClasses(packages = "...")` - verified by reading the reactor and examples-core copies, which
+per module, and the eight non-core copies differ only in their `package` declaration and the value
+of `@AnalyzeClasses(packages = "...")` (core's additionally differs in an import and a javadoc word) - verified by reading the reactor and examples-core copies, which
 are otherwise byte-identical down to the javadoc. Rename detection paired reactor's against
 examples-core's, and mutiny's against examples-vertx's. A file that survives that pairing still
 compiles, still runs, still goes green - while pointing ArchUnit at another module's packages. The
@@ -256,20 +265,38 @@ The index for that reproduced rename/rename conflict:
 <!-- file-refs: N/A - synthetic fixture paths from a throwaway repo used to reproduce the marker shape -->
 
 Stages 2 and 3 are recorded at **different paths**. `--theirs` means "write stage 3 of the path I
-named"; for `x/B.java` there is no stage 3 to write. Per this session's observation the command did
-not stop the pipeline, and the following `git add` staged the marker-laden worktree file, resolving
-the index around broken content. (The exact exit code was not measured at the time and this
-repository's history-rewrite hook blocks `git checkout` in a scratch repo, so that half was not
-re-derived here - the index shape above, which is the mechanism, was.)
+named"; for `x/B.java` there is no stage 3 to write, so the command **fails loudly**:
+<!-- file-refs: N/A - x/B.java is the throwaway-repo fixture from the listing above -->
+
+```
+$ git checkout --theirs -- x/B.java
+error: path 'x/B.java' does not have their version
+$ echo $?
+1
+```
+<!-- file-refs: N/A - the transcript above is from the throwaway repo, not this tree -->
+
+**So `--theirs` is not the silent step - the `git add` after it is.** That exits 0, stages whatever
+the merge left in the worktree (markers and all), and resolves the index around broken content.
+`git ls-files -u` is then clean, which is why the index check cannot catch this case.
+
+**And a batched invocation is worse than a single one.** `git checkout --theirs -- <many paths>`
+validates the whole pathspec before acting and aborts entirely on the first path without a stage 3 -
+so an ordinary content conflict sharing that command line, one that *did* have a stage 3, is left
+unresolved too. A bulk pass that ignores the exit code therefore stages markers into files that had
+nothing wrong with them. This is the strongest argument for resolving per path and checking the
+status of every command.
 <!-- file-refs: N/A - x/B.java is the throwaway-repo fixture named in the listing above -->
 
 ### The failing and working sweeps
 
 ```bash
-# WRONG - matches neither the seven- nor the eight-bracket path-labelled form
+# MISLEADING - unanchored, so it DOES match both forms while the ours label is 'HEAD',
+# and silently misses any marker labelled otherwise (rebase, merge-tree with named sides)
 grep -rn '<<<<<<< HEAD' .
 
-# WRONG - seven characters, and the trailing space rules out the ':path' forms
+# WRONG - pins seven brackets, so the eight-bracket rename/rename form slips past
+# (the trailing space is not the problem; it matches the seven-bracket ':path' form fine)
 grep -n '^<<<<<<< \|^=======$\|^>>>>>>> ' <file>
 
 # RIGHT - prefix-anchored, bracket-count agnostic
