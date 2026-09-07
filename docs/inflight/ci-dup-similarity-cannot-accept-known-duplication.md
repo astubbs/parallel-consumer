@@ -24,6 +24,25 @@ ArchUnit opts a module in **only** through its own two-line wrapper pointing `@A
 that module's packages, so every wrapper in the repo is near-identical by construction. There is no
 way to write one that is not. This recurs on **every new module**.
 
+### The same live baseline fails a branch for being BEHIND, on files it never touched (2026-09-07)
+
+<!-- post-merge: checked-begin -->
+A second consequence of the same root cause, and it does not need a new module. The check reported a
+`+11.5` increase between `JStreamParallelEoSStreamProcessor` and `JStreamParallelStreamProcessor` on
+astubbs/parallel-consumer#431, which changes neither file. Master had rewritten both under
+astubbs#122 and left them *less* alike; that branch still carried the pre-rewrite pair, so the same
+unchanged files read as an increase against a base that had moved under them. Merging master cleared
+it, and the diff of those files against master was empty either side of the merge.
+<!-- post-merge: checked-end -->
+
+**The tell is a flagged pair the PR's own diff does not contain** - `git diff origin/master...HEAD
+--name-only` naming neither file. Reach for a master merge before reading the report as a finding;
+the tool is comparing two trees, not two versions of your change.
+
+The full report's >80% rows are a separate thing and stay green: the per-module wrappers above sit at
+80-87% against each other on both sides, so base suppression covers them, and only the increase
+table fails a build.
+
 ## Why the obvious workarounds are all wrong
 
 <!-- post-merge: checked -->
