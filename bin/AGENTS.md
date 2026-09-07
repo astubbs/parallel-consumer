@@ -37,10 +37,10 @@ language where each of those is a paragraph. [`bin/lib/source-patterns.mjs`](lib
 holds the table and `check-source-patterns.mjs` is the one runner they share. A check that has to
 *think* - parse XML, call an API, compare numbers - is a real program and still gets its own file.
 
-**Node scripts are compile-checked by `pr-checklist.yml` and self-tested by `repo-hygiene.yml`**,
-which runs `bin/check-all.sh --with-tests` and so discovers `bin/test-*.mjs` by glob. They are two
-different workflows on purpose - naming only the first sends anyone repairing the test wiring to a
-job that never runs the tests. `node --check` is a
+**Node scripts are compile-checked and self-tested by the `repo: hygiene` job** (formerly two
+separate workflows - compile-checked by `pr-checklist.yml`, self-tested by `repo-hygiene.yml` -
+folded together), which runs `bin/check-all.sh --with-tests` and so discovers `bin/test-*.mjs` by
+glob. `node --check` is a
 compile, not static analysis; JavaScript is the one language CodeQL's default setup here does not
 scan, which is tracked separately.
 

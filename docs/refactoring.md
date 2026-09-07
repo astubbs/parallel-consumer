@@ -223,6 +223,47 @@ prevent. The `docs-views.mjs` split earned its place because docs is *several* f
 other command's single formatter still lives here, so moving `rank` alone makes it the odd one out.
 When the second one arrives, take `formatRank` with it and import the shared helpers one way.
 
+### The JDK-and-Maven-cache setup block is repeated across `maven.yml`, and no detector can see it
+
+`prepare-deps`, `test`, `test-kafka-compat`, `scan`, `mutation`, `static` and `build` each open with
+the same three steps: `actions/checkout`, `actions/setup-java` on Temurin 17, and an
+`actions/cache/restore` keyed `setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}` with the
+bare prefix as its `restore-keys` fallback. Two arrived with the 2026-09-07 job folds, which gave
+`scan: repo` and `static: analysis` a build dependency they did not have before, and `mutation`
+carries its own again since astubbs#463 un-folded the PIT lane. `.github/actions/` does not exist,
+so there is no composite action to point them at.
+
+The cost is drift: the cache key and its fallback must agree in every one of them, and the file's own
+header forbids `setup-java`'s built-in `cache: maven` because its immutable keys can freeze an
+incomplete cache. A hand-maintained copy per job of a rule that must not vary is the shape that
+produces a silently wrong one.
+
+**Neither duplication engine will ever report this, and the reason is worth keeping.** `dups: clones`
+runs two engines over the whole repo. PMD CPD's language auto-detect is winner-take-all, Java wins on
+file count, and YAML is not CPD-mappable at all - so CPD never reads a workflow. jscpd *is*
+language-agnostic and does read them: pointed at `.github/workflows` it finds real clones, including
+`claude.yml` against `claude-code-review-dispatch.yml`, which is the single pair it reports at the
+job's own default of 50 minimum tokens. Pointed at `maven.yml` alone it finds **nothing, at any
+threshold down to 20 tokens**, because each copy of the block has *different explanatory comments
+interleaved between its steps*: strip the comments and the six are identical, leave them in and the
+token streams differ. The block is also only about 40 tokens, under the default 50.
+
+That is the capability half of
+[`docs/solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md`](solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md),
+which diagnosed both scope and capability. The scope half was fixed when the scan widened to the
+whole repo; this is the half that survived it.
+
+**A second instance of the same fix**, recorded together because one composite-action decision
+settles both: the five OSS Index audit steps now exist in `maven.yml` (the per-PR run) and in
+`dependency-audit.yml` (the schedule and dispatch), with a "change both, or neither" note in each
+header. That note is an admission that the mechanism is missing.
+
+**Deliberately not done in astubbs/parallel-consumer#457**, which introduced two of the copies. That
+PR already rewrites every workflow and owes ten ruleset edits at merge; its whole risk is a check
+quietly ceasing to run, and introducing a mechanism the repo has never used, in the files it is
+already rewriting, widens exactly that blast radius. The duplication is stable and commented, so it
+keeps.
+
 ### The portable-mtime probe exists three times
 
 `hook_file_mtime` in `.claude/hooks/lib/hook-common.sh`, `_mtime` in
@@ -487,13 +528,16 @@ cosmetic - see the last bullet.*
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
   missing `max-uncommitted < Short.MAX` bound.
 
-- **Not thread-safe if encoding is ever parallelised (latent, tied to confluentinc#200).**
+- **The cached-and-shared instance is still only safe by the schedule, not by construction.**
   Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition
   `PartitionState.om` for encoding; one `PartitionStateManager.offsetMapCodecManager` for
-  decode). That is correct *today* only because encoding runs single-threaded on the control
-  thread: `encodingCounters` is a plain `HashMap` mutated in `getCounterMeterForEncoding` on
-  the encode path. If the confluentinc#200 thread-model refactor ever parallelises encoding it
-  races - make it concurrent, or confine it. Not a bug in the current single-threaded design.
+  decode). The `encodingCounters` cache - a final reference - is now a `ConcurrentHashMap`
+  populated with a single `computeIfAbsent`, so its check-then-act no longer depends on the
+  schedule, and the discriminator that made the class safe (`commitLock`, not the identity of any
+  one thread) is recorded on that field. The fields that still do depend on it are the non-final
+  ones: `offsetEncodingTimer`, and the two mutable statics `DefaultMaxMetadataSize` and
+  `forcedCodec` - the last of which the encode path reads on every commit. Re-audit those three if
+  confluentinc#200 parallelises encoding.
 
 ### offsets/OffsetSimultaneousEncoder.java
 - `TODO VERY large offset ranges is slow`: large offset ranges (→ `Integer.MAX_VALUE`) are slow -
@@ -546,6 +590,13 @@ cosmetic - see the last bullet.*
   control/poller threads share state - removed under shared-nothing (confluentinc#200).
   `todo refactor use of null shouldn't be needed`: `null` passed to the codec manager
   (confluentinc#233). `visible for legacy testing`: visibility widened for legacy tests.
+- **Draft astubbs#410 reintroduces the publish-then-register order astubbs#370 removed.** Its
+  `restoreCompletedButUncommittedWork` replay loop calls `getShardManager().addWorkContainer(...)`
+  before `addNewIncompleteRecord(record)`, the same order the register-then-publish swap in
+  `maybeRegisterNewPollBatchAsWork` took out - latent for the same reason (control thread, under the
+  producer write lock), and the same defect the moment there is a second selector. Swap the two lines
+  when that PR lands over astubbs#370; the invariant and why it holds are on
+  `maybeRegisterNewPollBatchAsWork`.
 
 ### state/PartitionStateManager.java
 - There was a throwaway `OffsetMapCodecManager` per assignment
@@ -703,6 +754,15 @@ but not this.*
   `ShardManagerTest` also builds a `PartitionState` and declares no `sm`/`pm`, so each needs its own small
   reconciliation (noticed on astubbs#373).
 
+- **The `ConsumerRecords` / `EpochAndRecordsMap` / `registerWork` idiom is hand-rolled per test** -
+  `git grep -l "new EpochAndRecordsMap" parallel-consumer-core/src/test` lists the state and internal
+  package classes doing it. `ModelUtils#registerOneRecordAndTakeIt` is not a drop-in: it builds its own
+  record and takes the work after `registerWork` returns, which a test whose subject is the ordering
+  *inside* registration cannot use. What is wanted is a `registerOneRecord`-shaped sibling that takes a
+  supplied record and stops at registration, with the take left to the caller. Pre-existing clone class,
+  not one any single branch introduced, which is why the astubbs#370 simplify pass left it here rather
+  than folding it into that PR.
+
 ### Test infrastructure - timing-based waits
 
 - **`ParallelEoSStreamProcessorTest` waits on loop cycles, not events** - four markers:
@@ -821,20 +881,26 @@ Only the items needing a decision are listed here - do not restate the inventory
   `LoadTest` stays at 4,000: it is untagged, so it runs in the gating lane, and it is already a
   listed member of the load-tightness flake family at that volume.
 
-Not listed as work: `largeNumberOfInstances` is owned by open PR astubbs#29. The three
+Not listed as work: `largeNumberOfInstances` stays in `docs/quarantined-tests.md` as an unowned entry -
+astubbs#29 merged on 2026-09-02 fixing one confluentinc#857 mechanism without lifting this quarantine, so it
+is tracked by the registry, not here. The three
 `@Timeout(60000L)` annotations (`MockConsumerEarlyCloseTest`, `MockConsumerSaslAuthenticationTest`,
 `MockConsumerCommitTimeoutTest`) are owned by open PR astubbs#206, which replaces them with
 `@Timeout(120)` on a shared `MockConsumerTestBase` and adds the assertion
 `MockConsumerEarlyCloseTest` was missing - and **`@Timeout(60)` would have been wrong**, because two
 of those tests wait 45s and 50s internally, so it would have raced them rather than fixing them.
-`ProgressBarTest.width` is a deliberate manual check. Five of the ten deleted stubs (§4 of the audit)
+`ProgressBarTest.width` was a deliberate manual check, and has since been **deleted** - it was the
+last `@Disabled` test on master and the release gate made that the deciding factor (the
+"Release gate: no disabled tests" section of [`docs/inflight/release-0.6.0.0.md`](inflight/release-0.6.0.0.md)
+records why deletion won over the split that was proposed).
+Five of the ten deleted stubs (§4 of the audit)
 are already covered by named enabled tests, and `truncationOnCommit` is obsolete - on-commit
 truncation is structurally unreachable, and the truncation that does exist happens on the bootstrap
 poll and is covered by `PartitionStateCommittedOffsetTest`.
 
 A generated `docs/INACTIVE_TESTS.md` with a `--check` gate (the `bin/todo-index.sh` shape) was
 considered and **deliberately not built**: the previous audit was lost to invisibility, not drift, and
-such a gate would fail the PR Checklist job on any open PR touching a test annotation. Worth
+such a gate would fail the `repo: hygiene` job on any open PR touching a test annotation. Worth
 revisiting once the audit has been in use.
 <!-- file-refs: N/A - names a generated file this entry records as NOT built -->
 

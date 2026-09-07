@@ -622,11 +622,27 @@ CI firing on record fits: instance 42, 14 and 0 were live members with work out 
 
 **What is still open, 2026-09-07.**
 
-- **The detector cannot tell workers-busy from workers-idle, and that is the gap to close.** A
-  member holding work with every worker running user code is saturated, not stalled; one holding
-  work with a free worker is PC's problem. The pool's active count, or the `-PC-<id>` worker
-  threads' states, is the discriminator - the dump reads it by hand today. Until it does, an
-  `INSTANCE_STALL` red on this scenario is not evidence of a PC defect.
+- **The detector could not tell workers-busy from workers-idle - closed the same day.** A member
+  holding work with any worker running user code is working, not stalled: one long function
+  freezes the count, and PC's backpressure counts records rather than workers, so a free worker
+  beside a busy one proves nothing. Only a member holding work with NO worker in user code has
+  results with nobody, and that is PC's. `ProgressProbe` now reads the `-PC-<id>` worker threads'
+  own stacks (a worker between tasks sits in `ThreadPoolExecutor.getTask`) and asks before it
+  counts: a working member re-arms the clock on every sample and is reported past the bound as a
+  non-gating `INSTANCE_BUSY_IN_USER_CODE` observation; the `INSTANCE_STALL` violation is reserved
+  for nobody-in-user-code. The first cut accused a member with any idle worker, and the seed
+  `1630088991107806597` replay shows why that is wrong: its instance 5 was dumped with eight
+  workers in the dwell, two parked between tasks, one incomplete offset, and its count frozen -
+  a working member with spare hands and nothing to hand them, which that rule would have accused
+  at the bound. (The commit that made the change cited nine-of-ten threads instead; that was a
+  miscount in the summarising script, and every dump in both replays shows ten. The correction
+  stands on instance 5.) `InstanceStallProbeIT` pins both halves and the count. So an `INSTANCE_STALL` red is
+  once again a claim about PC - and every sighting recorded above predates the rule, so read them
+  as busy members. One has been replayed under it: seed `6077035105695` drew its long tail - 198
+  diagnostic samples, the same count as the CLASSIFIED run, instance 0 frozen for six and a half
+  minutes with up to 88 records out - the run the old rule failed as a wedge. Under the rule it
+  stayed green, dumped instances 0, 10 and 12 at 20s with all ten workers in the dwell, and
+  reported instance 0 once as `INSTANCE_BUSY_IN_USER_CODE` past the bound.
 - **Whether the amplification is a product concern.** At-least-once plus eager rebalances plus
   records longer than the rebalance period multiplies load by design; PC already skips stale work at
   dispatch. The cooperative-sticky assignor is the standard answer, and the control arm below
