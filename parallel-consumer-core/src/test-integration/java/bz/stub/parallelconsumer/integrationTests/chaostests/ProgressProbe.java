@@ -248,6 +248,15 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         /** Records this instance currently has out for processing ({@code WorkManager}'s own count). */
         long outForProcessing();
 
+        /**
+         * One line of engine counters for a stall dump, read straight off the live {@code WorkManager}
+         * - what the instance holds and whether any of it is parked for retry, which the three
+         * progress counters above cannot say. Default empty so a scripted view need not fake it.
+         */
+        default String engineSnapshot() {
+            return "";
+        }
+
         /** Monotone count of work results returned - see {@code ManagedPCInstance#workResultsReturned}. */
         long workResultsReturned();
 
@@ -296,6 +305,21 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 public Object incarnationMarker() {
                     return pc.getParallelConsumer();
                 }
+
+                @Override
+                public String engineSnapshot() {
+                    var parallelConsumer = pc.getParallelConsumer();
+                    if (parallelConsumer == null) {
+                        return "no PC";
+                    }
+                    var wm = parallelConsumer.getWm();
+                    var sm = wm.getSm();
+                    return "closedOrFailed=" + parallelConsumer.isClosedOrFailed()
+                            + " incompleteOffsets=" + wm.getNumberOfIncompleteOffsets()
+                            + " recordsInShards=" + sm.getNumberOfRecordsInShards()
+                            + " parkedForRetry=" + sm.getNumberOfRecordsParkedForRetry()
+                            + " lowestRetryIn=" + wm.getLowestRetryTime().map(Duration::toString).orElse("none");
+                }
             };
         }
     }
@@ -312,8 +336,21 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     /** Fleet supplier for the instance-progress probe; null (ambient mode, or not wired) = inactive. */
     private volatile Supplier<List<InstanceProgressView>> instanceProgressSupplier;
     private final Map<Integer, InstanceProgressMark> instanceProgressMarks = new ConcurrentHashMap<>();
+    /** Instances already given an early stall dump in their CURRENT frozen stretch - one per stretch, not per sample. */
+    private final java.util.Set<Integer> stallDumpedThisStretch = ConcurrentHashMap.newKeySet();
     @Getter
     private volatile long peakInstanceStallMs = 0;
+
+    /**
+     * How long an instance may hold work and return nothing before its threads are dumped -
+     * {@code -Dchaos.instanceStallDumpAfterSeconds=<n>}, defaulting to the bound itself, so an
+     * unconfigured run dumps exactly once per firing and nowhere else. Lower it under
+     * {@code -Dchaos.diagnoseStallRecovery=true} to see inside a stretch the run outlives: the
+     * tokens from {@link #instanceProgressSnapshot} can show a member frozen for the whole tail of a
+     * run that still finishes under the bound, and then there is no firing to hang a dump on.
+     */
+    static final Duration INSTANCE_STALL_DUMP_AFTER = Duration.ofSeconds(
+            Long.getLong("chaos.instanceStallDumpAfterSeconds", INSTANCE_STALL_BOUND.getSeconds()));
 
     /** per-partition committed-offset watermarks for the Class 2 (lag stagnation) probe */
     private final Map<TopicPartition, Long> lastCommitted = new ConcurrentHashMap<>();
@@ -621,10 +658,20 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
             boolean holdsWork = queued > 0 || outForProcessing > 0;
             if (advanced || !holdsWork) {
                 instanceProgressMarks.put(id, new InstanceProgressMark(returned, incarnation, now));
+                stallDumpedThisStretch.remove(id);
                 continue;
             }
             long stalledMs = Duration.between(mark.getSince(), now).toMillis();
             if (stalledMs > peakInstanceStallMs) peakInstanceStallMs = stalledMs;
+            if (stalledMs > INSTANCE_STALL_DUMP_AFTER.toMillis() && stallDumpedThisStretch.add(id)) {
+                // Diagnostic only, and only when the property lowers it below the bound: a stretch that
+                // ends before the bound leaves no violation and no dump, so a wedge that clears when
+                // the run happens to finish first was invisible - which is how seed 6077035105695 read
+                // as clean on a tree where its instance 0 sat frozen for the whole tail of the run.
+                log.warn("INSTANCE_STALL early dump ({}s frozen, bound {}s) for instance {}: {}\n{}",
+                        stalledMs / 1000, INSTANCE_STALL_BOUND.getSeconds(), id, view.engineSnapshot(),
+                        instanceThreadDump(id));
+            }
             if (stalledMs > INSTANCE_STALL_BOUND.toMillis()) {
                 violate("INSTANCE_STALL/NO_WORK_COMPLETED: instance " + id + " holds work (queued="
                         + queued + ", outForProcessing=" + outForProcessing
@@ -632,8 +679,92 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                         + INSTANCE_STALL_BOUND.getSeconds() + "s) at " + returned
                         + " results returned - completions are counted on PC's control thread, so this "
                         + "instance's control loop is holding work and finishing nothing");
+                // The dump is taken HERE, inside the sample that fired, because the accused instance's
+                // threads are what the violation is a claim about, and nothing else captures them - a
+                // gating run aborts on this violation and a CI log outlives the JVM by nothing.
+                log.warn("INSTANCE_STALL thread dump for instance {} at the moment the detector fired: {}\n{}",
+                        id, view.engineSnapshot(), instanceThreadDump(id));
                 instanceProgressMarks.put(id, new InstanceProgressMark(returned, incarnation, now)); // re-arm
+                stallDumpedThisStretch.remove(id); // the re-armed stretch may earn its own early dump
             }
+        }
+    }
+
+    /** Enough frames to see past the executor plumbing to whatever a worker is actually parked in. */
+    private static final int STALL_DUMP_FRAMES = 40;
+
+    /**
+     * Every thread belonging to one fleet member, with its state, the lock it is waiting for and who
+     * holds it, and its top {@value #STALL_DUMP_FRAMES} frames - the discriminator an
+     * {@code INSTANCE_STALL/NO_WORK_COMPLETED} firing has never had.
+     * <p>
+     * <b>Why this exists.</b> The per-instance tokens in {@link #instanceProgressSnapshot} classified
+     * the churn storm's instance-stall line as a live member that keeps accepting work and returns
+     * nothing ({@code docs/inflight/test-857-churn-storm-async-stalls.md}, the {@code CLASSIFIED}
+     * section) - and then stopped, because a counter can say the workers return nothing but not
+     * what they are doing instead. Only their stacks say that, and a gating run destroys them at
+     * the moment of detection, so the dump has to be taken by the detector itself.
+     * <p>
+     * <b>Membership is by thread name, and it is exact.</b> PC names every thread it owns with the
+     * instance's {@code myId} as a suffix - the worker pool, the control thread and the broker-poll
+     * thread all end {@code -PC-<instanceId>}, which {@code ManagedPCInstance#start} sets. The match is
+     * {@code endsWith}, not {@code contains}: {@code -PC-1} is a suffix of nothing but instance 1,
+     * whereas a substring match would fold instance 14's threads into it.
+     * <p>
+     * <b>An empty result is reported as such, never as an empty string.</b> No matching threads means
+     * either the instance's threads have already exited or the naming does not match, and both are
+     * findings a reader must not mistake for "nothing was happening" -
+     * {@code docs/solutions/best-practices/silence-from-an-instrument-that-could-not-have-spoken-is-not-evidence.md}.
+     * For the same reason a bean that throws yields a marker rather than propagating: this runs on
+     * the sampler thread, and the violation it accompanies has already been recorded.
+     * <p>
+     * Package-private so {@code InstanceStallProbeIT} can pin the exact-suffix rule and the
+     * explicit-absence marker broker-free. The naming itself is PC's contract, not this file's:
+     * {@code CloseInterruptLivelockTest} finds a real PC's control thread by
+     * {@code "pc-control-" + myId}, so a rename there fails that test before it silently empties
+     * this dump.
+     */
+    static String instanceThreadDump(int instanceId) {
+        String suffix = "-PC-" + instanceId;
+        try {
+            long[] ids = Thread.getAllStackTraces().keySet().stream()
+                    .filter(t -> t.getName().endsWith(suffix))
+                    .mapToLong(Thread::getId)
+                    .toArray();
+            if (ids.length == 0) {
+                return "  (no threads named *" + suffix + " exist - the instance's threads have exited, or "
+                        + "the naming contract this dump relies on has changed)";
+            }
+            java.lang.management.ThreadMXBean bean = java.lang.management.ManagementFactory.getThreadMXBean();
+            StringBuilder out = new StringBuilder();
+            for (java.lang.management.ThreadInfo info : bean.getThreadInfo(ids, true, true)) {
+                if (info == null) continue; // exited between the name scan and the bean read
+                out.append("  \"").append(info.getThreadName()).append("\" ").append(info.getThreadState());
+                if (info.getLockName() != null) {
+                    out.append(" waiting on ").append(info.getLockName());
+                    if (info.getLockOwnerName() != null) {
+                        out.append(" held by \"").append(info.getLockOwnerName()).append("\"");
+                    }
+                }
+                out.append('\n');
+                StackTraceElement[] frames = info.getStackTrace();
+                int shown = Math.min(frames.length, STALL_DUMP_FRAMES);
+                for (int i = 0; i < shown; i++) {
+                    out.append("      at ").append(frames[i]).append('\n');
+                }
+                if (frames.length > shown) {
+                    out.append("      ... ").append(frames.length - shown).append(" more\n");
+                }
+                for (var monitor : info.getLockedMonitors()) {
+                    out.append("      holds monitor ").append(monitor).append('\n');
+                }
+                for (var sync : info.getLockedSynchronizers()) {
+                    out.append("      holds ").append(sync).append('\n');
+                }
+            }
+            return out.toString();
+        } catch (RuntimeException e) {
+            return "  (thread dump unreadable: " + e + ")";
         }
     }
 

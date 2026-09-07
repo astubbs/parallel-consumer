@@ -11,9 +11,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Non-vacuity regression for {@link ProgressProbe}'s instance-progress detector
@@ -289,5 +291,57 @@ class InstanceStallProbeIT {
         // it is called from inside the awaitility condition, so it must neither throw the wait off
         // course nor return "" - an empty string is indistinguishable from a fleet with no members
         assertThat(probe.instanceProgressSnapshot()).contains("unreadable");
+    }
+
+    /**
+     * The dump taken when {@code INSTANCE_STALL/NO_WORK_COMPLETED} fires selects threads by the
+     * {@code -PC-<id>} suffix PC puts on every thread it owns, and the match must be exact: instance
+     * 1's suffix is a substring of instance 14's, so a {@code contains} match would fold a healthy
+     * member's stacks into the accused one's dump and the reader would diagnose the wrong instance.
+     * Parked threads stand in for PC's own, since what is under test is the selection, not the naming
+     * - {@code CloseInterruptLivelockTest} pins the naming against a real PC.
+     */
+    @Test
+    void threadDumpSelectsTheExactInstanceSuffixOnly() throws InterruptedException {
+        CountDownLatch release = new CountDownLatch(1);
+        Thread mine = parked("pc-pool-3-thread-2-PC-1", release);
+        Thread lookalike = parked("pc-control-PC-14", release);
+        try {
+            String dump = ProgressProbe.instanceThreadDump(1);
+
+            assertWithMessage("the accused instance's own thread, with its state and a frame to read")
+                    .that(dump).contains("\"pc-pool-3-thread-2-PC-1\" WAITING");
+            assertThat(dump).contains("CountDownLatch");
+            assertWithMessage("-PC-1 is a substring of -PC-14; only a suffix match keeps instance 14 out")
+                    .that(dump).doesNotContain("PC-14");
+        } finally {
+            release.countDown();
+            mine.join(5_000);
+            lookalike.join(5_000);
+        }
+    }
+
+    /**
+     * No matching threads is a finding, not an empty dump: it means the instance's threads are gone
+     * or the naming contract moved, and an empty string would read as "nothing was running".
+     */
+    @Test
+    void threadDumpSaysSoWhenTheInstanceHasNoThreads() {
+        assertThat(ProgressProbe.instanceThreadDump(999_999)).contains("no threads named *-PC-999999");
+    }
+
+    private static Thread parked(String name, CountDownLatch until) {
+        Thread thread = new Thread(() -> {
+            try {
+                until.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, name);
+        thread.setDaemon(true);
+        thread.start();
+        // WAITING, not RUNNABLE: the dump's state column is asserted, so the thread must be parked first
+        await().atMost(Duration.ofSeconds(5)).until(() -> thread.getState() == Thread.State.WAITING);
+        return thread;
     }
 }

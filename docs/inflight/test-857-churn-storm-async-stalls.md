@@ -1,7 +1,7 @@
 # `ChaosChurnStormIT` stalls - three sightings no known defect explains
 
 <!-- inflight-type: bug -->
-<!-- inflight-impact: stall -->
+<!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
 
 **Commit mode: `PERIODIC_CONSUMER_ASYNCHRONOUS`** (`ChaosChurnStormIT`, verified in source). This is
@@ -550,3 +550,101 @@ the wedge rather than a second timing proxy.
 an unrelated branch nine minutes later and passes on three other branches in the same window, so it
 is master-state rather than either branch's doing. Noted here only because the two arriving together
 is what a reader of this run's checks will see.
+
+## DIAGNOSED, 2026-09-07: the instance-stall line is worker saturation by stale heavy dwells under eager rebalance churn - the control loop is healthy
+
+The thread dump the `## CLASSIFIED, 2026-09-03` section asked for has been taken, and it overturns
+that section's reading. The samples there were right; the sentence "a wedge that never recovers"
+was not. Nothing in PC is stuck. The accused member's ten workers are all inside the scenario's own
+45-second heavy dwell, most of them on records whose partition was revoked while they slept, and
+ordinary records queue in the executor behind them until they too go stale.
+
+**How the seed behaves on master `9999144b5`.** Seed `6077035105695` replayed three times under
+`-Dchaos.diagnoseStallRecovery=true`, on a 32-core box at load ~2 with nothing else running: green
+every time, ~105s each, `maxInstanceStall` 52.9s, 53.0s and 53.0s - the schedule is deterministic
+to the second. **The seed reproduces the frozen shape every time. It does not reproduce the
+firing**, because the run finishes about 46s into the freeze and the bound is 150s. The 2026-09-03
+replays fired only because their tail outlasted the bound; that run's own record says `done=true`,
+so it finished too. The only core change between the two trees is a `volatile` on
+`lastCommitTime` and a confinement assertion on the retry-queue iterator (astubbs#433), neither
+of which can shorten a tail.
+
+**The frozen window IS the tail.** In every replay the fleet's consumed count has already passed
+100,000 when instance 0's `res` freezes; the wait that remains is for the last few keys. In that
+window *every* member's `res` is frozen - there is nothing left to complete. Instance 0 is singled
+out by the detector only because it is the one member the conductor never stops (one `Starting
+instance 0`, no stop, in the whole timeline), so its stretch is the longest.
+
+**What the dump shows**, taken 20s into the freeze on instances 0, 10 and 12 by the new
+`-Dchaos.instanceStallDumpAfterSeconds=20` (a 150s default keeps a gating run's dump at the firing
+and nowhere else):
+
+- all ten `pc-pool-*-PC-<id>` workers `TIMED_WAITING` in `ChaosScenarioBase.newInstance`'s heavy
+  branch - the `Thread.sleep(Math.min(left, 1_000))` loop - on every one of the three instances;
+- `pc-control-PC-<id>` parked in `processWorkCompleteMailBox`, waiting for results that are not
+  coming; `pc-broker-poll-PC-<id>` in `Selector.select`. The control loop is idle and healthy.
+- instance 0's engine counters at the same instant: `incompleteOffsets=2 recordsInShards=2
+  parkedForRetry=0`, against `out=17` climbing to `22` two samples later. **At least fifteen of the
+  records it had out belonged to partitions it no longer owned.**
+
+**The mechanism, and it is arithmetic rather than chance.** The scenario uses the eager assignor
+(it never sets `useCooperativeAssignor`), so every rebalance revokes a member's whole assignment:
+instance 0 logged 28 `Partitions revoked` lines in the 50s window, one every ~2s. Each revoke bumps
+the epoch under every dwell in flight, so a heavy record's result is dropped as stale when its
+sleep ends and the record is redelivered to the partition's next owner - which starts a fresh 45s
+dwell while the old one keeps sleeping (the dwell is deliberately non-interruptible). A 45s dwell
+against a ~2-3s rebalance period spawns fifteen to twenty concurrent copies per heavy record; 25
+heavy records against 160 worker slots fleet-wide saturates them. Ordinary records are then
+dispatched into an executor queue behind sleeping workers (`out` reaching 30 on a 10-worker
+instance is that queue), and by the time a worker frees they are stale too: `out` drops 30 to 15
+in one sample with `res` unmoved, which is the skip path, not the success path. Progress happens
+only in rebalance lulls - the one 6s gap between revokes in the replay-2 tail is where 26 of its
+last 30 consumptions landed.
+
+**Ruled in and out, against the list the CLASSIFIED section left:**
+
+- `bug-worker-future-swallows-framework-exceptions.md` - **refuted here.** A swallowed framework
+  exception leaves a worker idle in the pool's `take()`; every worker in the dump is running user
+  code.
+- "a REDELIVERY CHAIN of heavy records" - **confirmed**, and it is the whole explanation. The
+  supply arithmetic that ruled out clustering (25 heavy records cannot occupy 160 workers) omitted
+  the multiplier.
+- the control-thread wedge, the phantom counter, the order recorder - stayed ruled out.
+
+**What this makes the detector.** `INSTANCE_STALL/NO_WORK_COMPLETED` names its prey as "this
+instance's control loop is holding work and finishing nothing". Here the control loop is finishing
+everything it is given; the workers are busy in user code. On this scenario the detector is
+therefore a timing proxy for the length of the tail - the same verdict this file reached for
+`NO_PROGRESS` - and it fires when churn keeps the heavy records stale for longer than 150s. Every
+CI firing on record fits: instance 42, 14 and 0 were live members with work out late in a run.
+
+**What is still open, 2026-09-07.**
+
+- **The detector cannot tell workers-busy from workers-idle, and that is the gap to close.** A
+  member holding work with every worker running user code is saturated, not stalled; one holding
+  work with a free worker is PC's problem. The pool's active count, or the `-PC-<id>` worker
+  threads' states, is the discriminator - the dump reads it by hand today. Until it does, an
+  `INSTANCE_STALL` red on this scenario is not evidence of a PC defect.
+- **Whether the amplification is a product concern.** At-least-once plus eager rebalances plus
+  records longer than the rebalance period multiplies load by design; PC already skips stale work at
+  dispatch. The cooperative-sticky assignor is the standard answer, and the control arm below
+  measures how much of the tail it removes on this seed.
+
+**Control arm, same seed, one term changed: the cooperative-sticky assignor.** A scratch edit
+setting `useCooperativeAssignor(true)` on the scenario's instance config, run once, then reverted -
+it is not a change this file proposes to the scenario, whose eager churn is deliberate. Under it a
+rebalance revokes only the partitions that move, so the prediction was fewer stale dwells, a smaller
+`out`, fewer duplicates, and a tail no longer than one honest heavy dwell. All four held:
+
+| | eager (replay 6) | cooperative (replay 7) |
+|---|---|---|
+| `Partitions revoked` on instance 0 in the tail | 28 | 3 |
+| workers in the heavy dwell at the 20s dump, instances 0 / 10 / 12 | 10 / 10 / 10 | 8 / 1 / 4 |
+| instance 0 `out` at the dump | 17, climbing to 22 | 8, climbing to 9 |
+| `maxInstanceStall` | 53.0s | 40.1s |
+| duplicates in the ledger | 286 | 210 |
+
+The 40s that remains is the last heavy records finishing their one legitimate 45s sleep, which is
+the tail the scenario builds on purpose. The 13s extra above it in the eager arm, and the
+three-to-ten-fold worker occupancy, is the amplification. Whole-assignment revokes are the term
+that produces it.
