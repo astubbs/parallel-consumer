@@ -54,6 +54,17 @@ Gotchas worth knowing:
 - A module with no stats file degrades gracefully to the unordered scan. A **newly added test class is
   unranked and sorts last** - which can displace the genuinely-slow class out of its good slot. Refresh
   the stats when adding slow tests (this bit us when a merge introduced `AmbientProbeExtensionTest`).
+- **The opposite direction is the one nothing warns you about: a ranked class that gets much FASTER,
+  or disappears, leaves an ordering built around a class that no longer sets the tail.** Adding a
+  class at least makes something appear on disk unranked; a class that shrinks changes nothing you
+  can see. `balanced` keeps sorting, by numbers that describe a suite which no longer exists, and the
+  packing decays toward the unordered scan it replaced - with no red build, because ordering is not
+  something any assertion can be wrong about. The live case is `RunLengthEncoderTest`, the last line
+  of core's file at roughly three times the next-slowest entry: astubbs#106 collapses it to a
+  fraction of that, after which the tail is set by whatever is next
+  (`ParallelEoSStreamProcessorTest.lessKeysThanThreads` today). **So refresh the stats after any
+  change that materially speeds up a class near the tail, not only after adding one** - a full
+  `bin/ci-unit-test.sh` run rewrites every module's file.
 - Forking cannot split a single class, so ordering can only pack *around* the slowest class; it can
   never get under it.
 
@@ -100,5 +111,11 @@ that axis. This also demotes fork oversubscription (`forkCount=3+`) for the same
 
 Scheduling levers are now exhausted; the box is CPU-bound. Further gains must **reduce CPU work**, not
 redistribute it - which points at the `OffsetSimultaneousEncoder.invoke()` full-range scan behind
-`RunLengthEncoderTest` (tracked separately), plus jacoco report generation on the critical path and
+`RunLengthEncoderTest` (astubbs#106), plus jacoco report generation on the critical path and
 ArchUnit classpath-scan cost.
+
+**Those two overlap rather than sum**, and it is worth being explicit about which. Packing removes the
+idle fork at the end of the run; astubbs#106 removes the work that made the fork long. Once the work is
+gone, the tail this packing was built to hide is a fraction of its size, so the packing keeps helping
+by proportionally less - the remaining tail is whatever class is next in line. Neither change makes
+the other pointless, but adding their measured gains together would double-count.
