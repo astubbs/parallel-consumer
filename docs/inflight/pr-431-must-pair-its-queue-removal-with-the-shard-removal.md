@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - astubbs#431 is still an OPEN DRAFT; master's `removeWorkFromShardFor` is still shard-first (`removeWorkAtOffset` then `retryQueue.remove`), and both `RetryQueueRequeueWindowTest.aQueueFirstSweepDefeatsTheOneShotConfirmation` and its control still exist, so the incompatibility and its detector are both intact -->
 
 **Cross-branch coordination between two changes that do not know about each other.** Neither PR is
 wrong on its own; they are incompatible at the point they meet, and nothing fails until both are on

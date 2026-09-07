@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED partly true, Blocker 2 needs rewriting: `setProcessingShards` no longer exists in main code. `ShardManager.processingShards` is installed once at construction and `ShardMapIsNeverReplacedArchTest`'s own javadoc now says so, so the "racing with the write in `setProcessingShards`" group cannot arise from that seam and the question this note says must be answered first is already answered. Everything else verified still true: no `@ThreadSafe` anywhere in main (only `@ThreadConfined` on `RetryQueue`), `bin/infer-test.sh` still does not pass `--disable-issue-type INTERFACE_NOT_THREAD_SAFE`, the engine `AGENTS.md` still owns "Which of Infer's annotations this repo uses", and `static-archunit-main-code-rules.md` still does not name the `MONITORENTER` blind spot. The `Nullsafe` anchor warning is a false positive - it names a checker family, not a symbol -->
 
 The infer lane (`bin/infer-test.sh`, register: [`static-infer-findings.md`](static-infer-findings.md))
 runs RacerD, pulse and starvation over core main code and gates on an identity ratchet. Every one of
