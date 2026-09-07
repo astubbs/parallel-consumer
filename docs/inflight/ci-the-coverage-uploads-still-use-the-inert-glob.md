@@ -91,10 +91,20 @@ job takes cancelled the previous push's run, and with merges landing in bursts t
 every other master commit - `gh run list -R astubbs/parallel-consumer --workflow maven.yml --event
 push --branch master` shows the shape, runs of consecutive `cancelled` broken by a lone `success`.
 Push runs are now keyed per SHA, so no master run is superseded and every master commit uploads; the
-`concurrency:` block's comment owns why per-SHA rather than `cancel-in-progress: false`. What is
-still open on this cause is the same shape as the glob's: a PR whose merge-base predates the change
-can still find its base without a report, so the files-count tell above stays in use until every
-open PR's merge-base is a master commit that ran to completion.
+`concurrency:` block's comment owns why per-SHA rather than `cancel-in-progress: false`.
+
+**The cancelled run did not leave Codecov with nothing - it uploaded a truncated base, which is the
+astubbs/parallel-consumer#431 sighting's "single truncated base upload" with its mechanism found.**
+The `build` job's collector ran on `always()`, so it found the reports of whichever modules had
+finished and uploaded them as that commit's base. Master `ce6f39a47` is the worked case: the run was
+cancelled in module 3 of 11, each flag's upload log says `Found 1 coverage files` and names core's
+report, and the pull request based on it - this fix's own, with no Java in its diff - compared a
+full-tree head against that base and read both per-flag gates red. Codecov's own comment carried the
+tell in words: "Report is N commits behind head on master". The collector now runs only on a
+successful build; a failing module truncates the tree the same way. What is still open on this cause
+is the same shape as the glob's: a PR whose merge-base predates the change can still find a short
+base, so the files-count tell above stays in use until every open PR's merge-base is a master commit
+that ran to completion.
 
 <!-- post-merge: checked-end -->
 ## A correction worth keeping

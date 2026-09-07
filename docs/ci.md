@@ -1116,9 +1116,14 @@ cancelled master's in-progress `build` whenever another push to master landed in
 that job takes, and `gh run list -R astubbs/parallel-consumer --workflow maven.yml --event push
 --branch master` showed that happening to roughly every other master commit. Push runs are now keyed
 per SHA, so no master run is ever superseded; the comment on the `concurrency:` block owns why that
-and not `cancel-in-progress: false`, which only ever holds one pending run and discards the rest. A
-base commit that predates that change can still lack a report, so the files-count tell stays useful
-until the merge-base of every open PR is a master commit that ran to completion.
+and not `cancel-in-progress: false`, which only ever holds one pending run and discards the rest. **And a cancelled run did not leave Codecov with NO report - it left a truncated one.** The `build`
+job's collector ran on `always()`, so whichever modules had finished before the cancellation were
+uploaded as that commit's base: master `ce6f39a47` was cancelled in module 3 of 11 and each flag
+received exactly one file, core's. The collector now runs only on a successful build, since the same
+truncation follows a failing module, and a base that is missing is replaced by the nearest whole one
+where a base that is short is compared against as if it were whole. A base commit that predates both
+changes can still be short, so the files-count tell stays useful until the merge-base of every open
+PR is a master commit that ran to completion.
 
 ### Reading it without a browser
 

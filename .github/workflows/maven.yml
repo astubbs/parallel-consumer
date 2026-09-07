@@ -1256,8 +1256,18 @@ jobs:
       #
       # The two halves are collected in one step rather than two because this is one job; keeping the
       # outputs separate is what preserves the per-flag split.
+      #
+      # NO `if: always()` HERE - ONLY A COMPLETE BUILD MAY BECOME A BASE. Maven stops at the first
+      # failing module and a cancellation stops it wherever it is, and either way the modules that
+      # finished have written their jacoco reports. With `always()` the collector found those and the
+      # upload ran, so Codecov received a report for that master commit that LOOKED complete and held
+      # a fraction of the tree. Measured on master `ce6f39a47`: cancelled in module 3 of 11, and each
+      # flag uploaded exactly one file, core's; the PR based on it then compared 95 files against 84
+      # on a diff with no Java in it, and both per-flag gates went red. A truncated base is worse than
+      # none - with none, Codecov compares against the nearest older master commit that has one, and
+      # that one is whole. The PR lane keeps its `always()`: a red PR's coverage is still the coverage
+      # of that head, and nothing is ever compared AGAINST a PR head.
       - name: Collect jacoco report files for Codecov
-        if: always()
         id: coverage
         run: |
           unit=$(find . -type f -path '*/target/site/jacoco/jacoco.xml' | paste -sd, -)
