@@ -90,6 +90,7 @@ public class RetryQueue {
     /**
      * Clear the set
      */
+    @ControllerThreadOnly
     public void clear() {
         lock.writeLock().lock();
         try {
@@ -118,6 +119,7 @@ public class RetryQueue {
      * @param workContainer to add
      * @return true if the element was not already present
      */
+    @ControllerThreadOnly
     public boolean add(final WorkContainer<?, ?> workContainer) {
         lock.writeLock().lock();
         try {
@@ -140,14 +142,14 @@ public class RetryQueue {
      * Remove a work container from the set, WAITING for the write lock. Method follows Set.remove() behaviour,
      * returning true if the element was present.
      * <p>
-     * <b>Only for threads that are allowed to wait</b> - which here means the controller thread. The broker-poll
-     * thread must use {@link #tryRemove(String, int, long)} instead; {@link #tryRemove} carries the reasoning and
-     * {@code ArchitectureTest.rebalanceCallbacksMustNotBlock} is the check that this method stays off the
-     * rebalance callbacks.
+     * {@link ControllerThreadOnly} states the contract and names its check; the broker-poll thread must use
+     * {@link #tryRemove(String, int, long)} instead, which carries the reasoning for why waiting here is a
+     * defect rather than a slow path.
      *
      * @param workContainer the container to remove
      * @return true if the element was present
      */
+    @ControllerThreadOnly
     public boolean remove(final WorkContainer<?, ?> workContainer) {
         lock.writeLock().lock();
         try {
@@ -232,6 +234,7 @@ public class RetryQueue {
      * @param toRemove collection of work containers to remove
      * @return true if the set was modified
      */
+    @ControllerThreadOnly
     public <K, V> boolean removeAll(List<WorkContainer<K, V>> toRemove) {
         // GUARD ON THE CALLER'S OWN LIST, never on `unique`. The original fast path read
         // `unique.isEmpty()` with no lock held while writers mutate it under the write lock, so the

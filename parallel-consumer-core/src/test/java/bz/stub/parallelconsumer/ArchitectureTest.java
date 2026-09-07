@@ -22,6 +22,7 @@ import java.util.Deque;
 import com.tngtech.archunit.lang.ConditionEvents;
 import com.tngtech.archunit.lang.SimpleConditionEvent;
 import bz.stub.parallelconsumer.internal.ConsumerManager;
+import bz.stub.parallelconsumer.state.ControllerThreadOnly;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 
@@ -114,8 +115,20 @@ class ArchitectureTest {
      * confluentinc#857</b>, whose defect was {@code synchronized (commitCommand)} inside
      * {@code onPartitionsRevoked}. It fires today only because the remaining violation happens to
      * use {@code Thread.sleep}. A green run therefore means "reaches none of the calls named in
-     * {@link #BLOCKING_CALLS}", never "nothing here blocks" - and reading it as the latter is
+     * {@link #BLOCKING_CALLS} and no method the codebase itself declares as waiting", never "nothing here
+     * blocks" - and reading it as the latter is
      * exactly the false green this rule exists to prevent elsewhere.
+     *
+     * <p><b>Since 2026-09-07 this rule enforces a CODEBASE-DECLARED contract as well as the JDK deny list.</b>
+     * A reach into a method annotated {@link ControllerThreadOnly} is reported exactly as a deny-listed call
+     * is - same {@code root => target} exemption key, same message shape, calls and method references alike.
+     * The deny list can only name waits it recognises by JDK signature, and that is a narrower question than
+     * the rule asks: {@code RetryQueue.tryRemove} takes the same lock as {@code RetryQueue.remove} through
+     * {@code tryLock()}, which is correctly absent from the list, so a method's own thread contract is the only
+     * thing that can distinguish them. Measured on 2026-09-07 rather than assumed - annotating {@code tryRemove}
+     * takes this rule from green to six violations naming the revoke and lost callbacks, through the annotation
+     * alone. {@code RebalanceCallbackRuleControlTest} holds the standing proof, on a fixture whose annotated
+     * method waits for nothing at all, so nothing in {@link #BLOCKING_CALLS} can match it.
      *
      * <p><b>A METHOD REFERENCE is not a method call either - walked since 2026-09-03, and it cost a path
      * before it was.</b> ArchUnit models {@code retryQueue::remove} as a method REFERENCE, which
@@ -277,8 +290,13 @@ class ArchitectureTest {
     }
 
     /**
-     * One reach, whatever kind of access produced it: check the target against the deny list, then walk into it
-     * if it is our own code.
+     * One reach, whatever kind of access produced it: check the target against the deny list, then - once it is
+     * resolved as our own code - against {@link ControllerThreadOnly} and the synchronized-method modifier,
+     * then walk into it.
+     * <p>
+     * The deny-list check runs on the target's NAME and needs no resolution, which is what lets it cover the JDK.
+     * The annotation check necessarily runs on the resolved member, so it can only ever fire on this codebase -
+     * which is the whole point of it: it is the half of the rule the JDK deny list cannot express.
      *
      * @param kind     how {@code target} was reached, for the violation message - a reader has to be able to
      *                 tell a {@code foo::bar} reach from a {@code foo.bar()} one, because the fix differs
@@ -304,6 +322,20 @@ class ArchitectureTest {
         // check - which is what BadInstanceof flagged.
         resolved.ifPresent(reached -> {
             if (reached.getOwner().getPackageName().startsWith("bz.stub.parallelconsumer")) {
+                // A method the codebase itself declares as "may wait", reported exactly like a deny-listed JDK
+                // call: same root => target exemption key, same message shape. The owner is checked too because
+                // the annotation targets TYPE as well as METHOD, and a class-level declaration that the walk
+                // ignored would be a silent gap rather than a narrower rule.
+                if ((reached.isAnnotatedWith(ControllerThreadOnly.class)
+                        || reached.getOwner().isAnnotatedWith(ControllerThreadOnly.class))
+                        && !KNOWN_BLOCKING_VIOLATIONS.contains(root.getFullName() + " => " + target)) {
+                    events.add(SimpleConditionEvent.violated(root,
+                            root.getFullName() + " reaches @ControllerThreadOnly " + kind + " " + target
+                                    + " via " + from.getFullName()
+                                    + " - that method declares that it may wait, and a rebalance callback runs "
+                                    + "inside poll() and must not wait. "
+                                    + "Decline instead (tryLock), or move the work off the poll thread."));
+                }
                 // A synchronized METHOD keeps its modifier in the class file, so unlike a synchronized block
                 // it is visible here. Entering one from a rebalance callback is an unbounded wait on whoever
                 // holds the monitor.

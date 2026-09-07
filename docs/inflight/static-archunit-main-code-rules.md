@@ -188,6 +188,29 @@ production tree, which takes the rule from green to a report naming all three ca
 and asserts the rule reports it, so the hop cannot be dropped again silently; it fails on the pre-2026-09-03
 walk, which is how it was checked.
 
+**Update 2026-09-07: the rule now enforces a contract the CODEBASE declares, not only a JDK deny list.**
+`@ControllerThreadOnly` (`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ControllerThreadOnly.java`)
+marks a method that may wait, and a reach into one is reported exactly as a deny-listed call is - same
+`root => target` exemption key, same message shape, calls and method references alike. This closes a gap the
+deny list cannot: `RetryQueue.tryRemove` takes the very same lock as `RetryQueue.remove`, through `tryLock()`,
+which is correctly absent from the list - so nothing but a declared contract can tell a waiting acquire from a
+declining one when the method itself is ours. Measured by annotating `tryRemove`: green to six violations,
+naming the revoke and lost callbacks, through the annotation alone.
+
+**It is deliberately NOT Infer's `@ThreadConfined`**, which arrived on master with
+astubbs/parallel-consumer#433 and is the subject of a rule in
+`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`. That one is CONSUMED by RacerD, so
+it must be paired with a runtime assertion or it silences a detector; this one is read by no analyser and
+silences nothing, so it is checked here and nowhere else. The runtime half - a named-thread `@ThreadConfined`
+plus an `assertOnOwningThread`, in the `RetryQueue.RetryQueueIterator` / `ThreadConfinedConsumer` shape - is
+tracked in
+[`core-retry-queue-needs-a-runtime-controller-ownership-guard.md`](core-retry-queue-needs-a-runtime-controller-ownership-guard.md).
+
+**The positive control gained a second case with it.** `RebalanceCallbackRuleControlTest` now also holds a
+fixture whose annotated method waits for nothing at all, so no entry in the deny list can match it and the
+annotation check is the only thing that can report it - red when that check is removed, which is how it was
+verified.
+
 **Constructor calls were the obvious next widening and were measured and rejected**, which is worth recording
 because it reads as free. Enqueuing `getConstructorCallsFromSelf()` turns every factory call into a reach into
 whatever the constructed object wires up: `PCModule.workManager()` contains `new WorkManager(..)`, whose

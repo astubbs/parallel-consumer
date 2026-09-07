@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer;
  */
 
 import bz.stub.parallelconsumer.archfixture.BlockingReachThroughAMethodReference;
+import bz.stub.parallelconsumer.archfixture.ControllerThreadOnlyReachFromARebalanceCallback;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import org.junit.jupiter.api.Test;
@@ -35,9 +36,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * permanently red. The control therefore imports the fixture package itself and hands those classes to
  * {@link ArchitectureTest#rebalanceCallbacksMustNotBlock}, the same rule object the build evaluates - not a
  * copy of it, because a copied rule controls for a copy.
+ * <p>
+ * <b>The second control covers the other half of the rule</b>, added when the walk started reporting a reach
+ * into a method the codebase declares {@link bz.stub.parallelconsumer.state.ControllerThreadOnly}. Its fixture
+ * waits for nothing, so no entry in the rule's JDK deny list can match it - if the annotation check is dropped
+ * or narrowed, that test is the only thing that goes red.
  *
  * @author Antony Stubbs
  * @see BlockingReachThroughAMethodReference
+ * @see ControllerThreadOnlyReachFromARebalanceCallback
  */
 class RebalanceCallbackRuleControlTest {
 
@@ -58,5 +65,29 @@ class RebalanceCallbackRuleControlTest {
                 .contains("java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()");
         assertThat(violation).hasMessageThat()
                 .contains("reaches blocking method reference");
+    }
+
+    @Test
+    void theRuleReportsAControllerThreadOnlyMethodReachedByCallAndByMethodReference() {
+        JavaClasses fixture = new ClassFileImporter()
+                .importPackagesOf(ControllerThreadOnlyReachFromARebalanceCallback.class);
+
+        AssertionError violation = assertThrows(AssertionError.class,
+                () -> ArchitectureTest.rebalanceCallbacksMustNotBlock.check(fixture),
+                "the rule saw a rebalance callback reach a method the codebase declares @ControllerThreadOnly "
+                        + "and reported nothing - the contract is then prose again, which is the state this "
+                        + "check was added to leave behind");
+
+        assertThat(violation).hasMessageThat()
+                .contains(ControllerThreadOnlyReachFromARebalanceCallback.class.getName()
+                        + ".onPartitionsAssigned");
+        // Both kinds of access, because the annotation has to hold for a stored reference as well as a call -
+        // asserting only one of them would leave the other free to be dropped silently.
+        assertThat(violation).hasMessageThat()
+                .contains("reaches @ControllerThreadOnly call");
+        assertThat(violation).hasMessageThat()
+                .contains("reaches @ControllerThreadOnly method reference");
+        assertThat(violation).hasMessageThat()
+                .contains("retireOnTheControllerThread");
     }
 }
