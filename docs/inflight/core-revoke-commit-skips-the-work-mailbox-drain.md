@@ -142,3 +142,33 @@ change and its own reviewer"* (astubbs/parallel-consumer#262's residuals commit)
   Revocation in Parallel-Consumer Leading to Duplicate Event Processing"*, which is open and reports
   this symptom from the field. This mechanism is a candidate cause; attribution needs its own
   experiment, and the two must not be conflated on the strength of matching symptoms.
+
+## Can the concurrency annotations express this? Not yet - and declaring it would make things worse
+
+Asked at merge prep, and worth answering in the record because the intuitive answer is wrong.
+
+**A confinement declaration here would be FALSE, and false is worse than absent.** RacerD reads
+`com.facebook.infer.annotation.ThreadConfined` and **consumes declarations without checking them** -
+so `@ThreadConfined(CONTROL_THREAD)` on the state the drain mutates would not expose this defect, it
+would silence the detector that might otherwise find it. `RetryQueue`'s own usage records the rule:
+an annotation nobody enforces is a comment that silences a detector.
+
+**astubbs/parallel-consumer#433 hit this exact seam from the other direction and backed off.** While
+putting the infer annotations on the compile classpath it evaluated two confinement candidates.
+`RetryQueueIterator` was confined and got the declaration plus an `assertOnOwningThread` guard.
+`lastCommitTime` looked equally confinable - every record of it said one control-thread method wrote
+it and another read it - until somebody grepped every writer and found `tryCommitOffsetsOnRevoke()`
+writes it too, from inside `onPartitionsRevoked`, which the broker poll thread runs. It is `volatile`
+instead, and the field's javadoc in `AbstractParallelEoSStreamProcessor` says so in terms.
+
+That is **independent corroboration of this note's central claim**, reached by a different route: one
+investigation started from the mailbox drain and one from a field's writers, and both landed on the
+revoke path running control-thread work on the poll thread. Neither knew about the other.
+
+**What the annotations are for here is the FIX, not the diagnosis.** `@GuardedBy` does not fit -
+this is confinement, not lock discipline, and the core `AGENTS.md` warns it silently checks nothing
+on a `ReadWriteLock` anyway. The shape that fits is the one `RetryQueueIterator` uses: once the
+thread-ownership decision at this seam is actually taken, declare the confinement **and** assert it
+on the owning thread in the same change, so the decision cannot quietly rot back. Until that decision
+exists there is nothing truthful to declare, which is precisely why this note is still open.
+
