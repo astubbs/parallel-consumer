@@ -12,8 +12,10 @@ exists.
 GitHub-hosted `mutation-testing` job - its body says so outright, "Removed the GitHub-hosted
 mutation-testing job entirely" - and with it the `Post PIT summary to PR` step that produced that
 exact string. A PR-scoped lane was reintroduced hours later in `6f7ce1893`, deliberately **without**
-comment-posting: today's `Mutation Tests (PIT, PR-scoped)` job in `.github/workflows/maven.yml` has
-two steps, neither of which calls `createComment` or `updateComment`. The verdict is the exit code
+comment-posting: today's `Mutation Tests (PIT, PR-scoped)` step in `.github/workflows/maven.yml`
+(the lane ran as the last two steps of `scan: repo` for part of 2026-09-07, and is its own
+`mutation` job again since astubbs#463) calls neither <!-- post-merge: checked -->
+`createComment` nor `updateComment`. The verdict is the exit code
 of `bin/ci-mutation-test.sh` (its header owns the contract, anchor `THE EXIT CODE IS THE VERDICT`)
 plus a `::notice::`, and that is the design.
 

@@ -150,7 +150,7 @@ it - and a human should re-apply it before freezing:
   PRs from one sequence. The file is in the issue-reference gate's `EXEMPT_PATHS` for this reason -
   everywhere else, [`docs/issue-references.md`](issue-references.md) applies.
 
-## The `PR Checklist` changelog gate is a different, narrower check
+## The `repo: hygiene` changelog gate is a different, narrower check
 
 `.github/scripts/changelog-ref-gate.js` fails a human PR that adds a `CHANGELOG.adoc` bullet under
 `Breaking`, `Improvements`, `Fixes` or `Examples` without an explicit `/issues/NN` link. **Do not

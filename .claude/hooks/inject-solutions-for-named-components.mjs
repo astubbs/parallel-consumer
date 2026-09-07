@@ -18,9 +18,8 @@
 // matched". That is the class `bin/AGENTS.md` cites for the Node-first ruling, met on the first try.
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import { readStdin, repoRoot, seenStore } from './lib/hook-common.mjs';
 import { match, render, isSelfReferential } from './lib/solutions-for-named-components.mjs';
 
 // A cap that does not parse, or is not positive, falls back to the default: `Number('abc')` is NaN,
@@ -28,67 +27,9 @@ import { match, render, isSelfReferential } from './lib/solutions-for-named-comp
 const requestedCap = Number.parseInt(process.env.PC_SOLUTIONS_HOOK_CAP ?? '', 10);
 const CAP = Number.isInteger(requestedCap) && requestedCap > 0 ? requestedCap : 4;
 
-function readStdin() {
-  try {
-    return fs.readFileSync(0, 'utf8');
-  } catch {
-    return '';
-  }
-}
-
-/** The nearest enclosing checkout: a `.git` entry marks it - a directory, or the file a worktree carries. */
-function treeContaining(dir) {
-  let d = path.resolve(dir);
-  for (;;) {
-    if (fs.existsSync(path.join(d, '.git'))) return d;
-    const parent = path.dirname(d);
-    if (parent === d) return null;
-    d = parent;
-  }
-}
-
-/**
- * The tree the write is going INTO, derived from the write itself - the way `pre-commit-gate.sh`
- * derives the commit's tree from its command rather than from the session. `$CLAUDE_PROJECT_DIR`
- * names the SESSION's root, and a session started in the main checkout that writes into a worktree
- * would otherwise be matched against master's corpus and silently miss what the branch added.
- * Reproduced before this ordering existed: the incident text, written into a worktree whose
- * session root was the main checkout, surfaced nothing. The variable is the last resort, not the
- * first answer.
- */
-function repoRoot(ev) {
-  const ti = ev.tool_input || {};
-  const cwd = typeof ev.cwd === 'string' && ev.cwd ? ev.cwd : process.cwd();
-  const candidates = [];
-  if (typeof ti.file_path === 'string' && ti.file_path) {
-    candidates.push(path.dirname(path.resolve(cwd, ti.file_path)));
-  }
-  candidates.push(cwd);
-  for (const c of candidates) {
-    try {
-      const found = treeContaining(c);
-      if (found) return found;
-    } catch {
-      /* an unreadable candidate is not the answer; keep looking */
-    }
-  }
-  return process.env.CLAUDE_PROJECT_DIR || null;
-}
-
-/**
- * Fire once per write-up per session: a plan naming a component twenty times must not reprint the
- * same warning twenty times. Keyed on the session, so a later session is told again.
- */
-function seenStore(sessionId) {
-  if (!sessionId) return null;
-  try {
-    const dir = path.join(os.tmpdir(), `pc-solutions-hook-${typeof process.getuid === 'function' ? process.getuid() : 'x'}`);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    return path.join(dir, crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 16));
-  } catch {
-    return null;
-  }
-}
+// `readStdin`, `repoRoot` (the tree the write is going INTO, derived from the write before the
+// session) and the per-session `seenStore` were born here and moved to ./lib/hook-common.mjs when
+// a second hook needed them; that file owns the reasoning behind each.
 
 function main() {
   const raw = readStdin();
@@ -118,30 +59,15 @@ function main() {
   const hits = match(text, root);
   if (hits.length === 0) return;
 
-  const store = seenStore(String(ev.session_id || ''));
-  let seen = new Set();
-  if (store && fs.existsSync(store)) {
-    try {
-      seen = new Set(fs.readFileSync(store, 'utf8').split('\n').filter(Boolean));
-    } catch {
-      /* a cache that cannot be read is a cache miss, never an error */
-    }
-  }
-
-  const fresh = hits.filter((h) => !seen.has(h.relPath));
+  const store = seenStore('solutions', String(ev.session_id || ''));
+  const fresh = hits.filter((h) => !(store && store.has(h.relPath)));
   if (fresh.length === 0) return;
 
   // Remember only what is about to be SHOWN. Recording the whole fresh set marked the write-ups the
   // cap hid as seen, so they were silenced for the rest of the session without ever being printed.
   // Hits are in a fixed order (category, then filename), so the next write that names a hidden
   // one's component surfaces it instead of repeating the first CAP.
-  if (store) {
-    try {
-      fs.appendFileSync(store, fresh.slice(0, CAP).map((h) => h.relPath).join('\n') + '\n');
-    } catch {
-      /* failing to remember costs a repeat, not correctness */
-    }
-  }
+  if (store) store.remember(fresh.slice(0, CAP).map((h) => h.relPath));
 
   process.stdout.write(
     JSON.stringify({

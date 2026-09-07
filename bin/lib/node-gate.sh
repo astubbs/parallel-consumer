@@ -30,7 +30,7 @@
 # THE PROBE LOADS THE GATE MODULE, it does not merely start node, so "node cannot start" and "the
 # module cannot be loaded or parsed" both land on 2 - "cannot run" - instead of the second
 # masquerading as a finding. A module that loads and then throws at runtime is still reported as a
-# finding; that residue is covered by the modules' own unit tests in the `PR Checklist` workflow.
+# finding; that residue is covered by the modules' own unit tests in the `repo: hygiene` gate.
 #
 # HOW TO LOAD THIS FILE, and why both callers do it the long way. Under `set -e` on bash 3.2 - the
 # system bash on every macOS host - a `source` of a file it cannot read is FATAL to the shell, so a
@@ -51,7 +51,7 @@ node_gate_require_node() {
     command -v node >/dev/null 2>&1 && return 0
 
     echo "ERROR: node not found - needed to reuse $1." >&2
-    echo "The authoritative gate is the 'PR Checklist' workflow; this is the local mirror of it." >&2
+    echo "The authoritative gate is the 'repo: hygiene' job; this is the local mirror of it." >&2
     return 2
 }
 
@@ -85,6 +85,6 @@ node_gate_verdict() {
         echo "       A stale --require in there - one naming a file that has since been deleted - kills" >&2
         echo "       node during preload, before any script runs. Clear it and run this again." >&2
     fi
-    echo "       The authoritative gate is the 'PR Checklist' workflow; this is the local mirror of it." >&2
+    echo "       The authoritative gate is the 'repo: hygiene' job; this is the local mirror of it." >&2
     return 2
 }

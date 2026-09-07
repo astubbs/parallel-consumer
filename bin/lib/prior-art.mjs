@@ -46,7 +46,7 @@
 
 import { baseline as baselineRef, exec, freshnessWarnings, lines, refTips } from './git.mjs'
 import { formatWarnings } from './views.mjs'
-import { REPO } from './repo.mjs'
+import { DOC_AREAS, REPO } from './repo.mjs'
 
 
 /**
@@ -149,17 +149,20 @@ export function priorArt(terms, opts = {}) {
     // refs carry a path is the finding, not decoration. `onBaseline` is the flag that matters - a
     // path absent from the baseline is prior art the working tree cannot show you.
     // ------------------------------------------------------------------------------------------------
-    // SECTION 4 EXCLUDES THE FIRST THREE EXPLICITLY. It was `docs/*.md`, which reads as "markdown
+    // THE LAST SECTION EXCLUDES THE AREAS EXPLICITLY. It was `docs/*.md`, which reads as "markdown
     // directly under docs/" and is not what git does: `*` in a pathspec crosses `/` under wildmatch,
     // so every plan, solution and note matched section 4 as well as its own, and the section headed
     // "Everything else" was in fact "everything, again". Found by running --by-ref against this very
     // file's history, where one note surfaced as two paths in a single cluster.
+    //
+    // DERIVED FROM `DOC_AREAS`, NOT LISTED HERE. The three areas were a private table in this file,
+    // and the context query, the docs shape and the session index all need the same three rows -
+    // the REPO defect, one row wider. The numbering and headings are byte-identical to the table
+    // this replaced; the self-test pins them, because a reader has learned to scan for them.
     const SECTIONS = [
-        ['1', 'Prior investigations - docs/plans/', ['docs/plans/']],
-        ['2', 'Solved problems - docs/solutions/', ['docs/solutions/']],
-        ['3', 'In-flight state - docs/inflight/', ['docs/inflight/']],
-        ['4', 'Everything else under docs/', [
-            'docs/', ':(exclude)docs/plans/', ':(exclude)docs/solutions/', ':(exclude)docs/inflight/']],
+        ...DOC_AREAS.map((a, i) => [String(i + 1), `${a.name} - ${a.dir}/`, [`${a.dir}/`]]),
+        [String(DOC_AREAS.length + 1), 'Everything else under docs/', [
+            'docs/', ...DOC_AREAS.map((a) => `:(exclude)${a.dir}/`)]],
     ]
     for (const [n, heading, pathspec] of SECTIONS) {
         // git grep exits 1 for "no match" and >1 for a real error; only the latter is a problem.

@@ -85,7 +85,8 @@ public enum TransactionalClaim {
      */
     OFFSET_AND_RECORDS_ATOMIC(Source.OPTIONS_JAVADOC,
             "A source offset, and it's produced records will be committed as an atomic set.",
-            Status.PROVED, "TransactionalCrashReplayIT#replayCommitsTheResultsAndTheirSourceOffsetTogether asserts "
+            Status.REFUTED, "REFUTED on the revoke path by the same run that refutes C9, and PROVED on the control-loop path by what follows. Leaving this PROVED while C9 reads REFUTED would make the register assert and deny one observation: both claims are about the same commit, and ProducerManagerTest#aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced shows a transaction carrying offset 1s output while committing offset 1 rather than 2 - the atomic set broken, observed rather than inferred. This claims own exemption below does NOT cover it: that exemption is about marker-delivery ordering WITHIN one commit, whereas here the offset is never committed by that transaction at all. Operator ruling, 2026-09-07; docs/inflight/core-revoke-commit-skips-the-work-mailbox-drain.md owns the diagnosis. THE CONTROL-LOOP PROOF STANDS UNCHANGED: "
+            + "TransactionalCrashReplayIT#replayCommitsTheResultsAndTheirSourceOffsetTogether asserts "
             + "both halves at both ends of a crash: before, no payload result visible AND the source offset still "
             + "on the priming record; after, the offset reaching its target is PAIRED with every result being "
             + "visible - sampled together on each poll rather than awaited one after the other, because two "
@@ -204,13 +205,34 @@ public enum TransactionalClaim {
     NO_PRODUCE_WITHOUT_ITS_OFFSET(Source.OPTIONS_JAVADOC,
             "The system must prevent records from being produced to the brokers whose source consumer record "
                     + "offsets has not been included in this transaction.",
-            Status.PROVED, "ProducerManagerTest#commitLockIsGrantedOnlyAfterTheProducedWorkReachesTheMailbox, with "
-            + "ProducerManagerTest#producedRecordsCantBeInTransactionWithoutItsOffsetDirect covering the outcome and "
-            + "the docs/plans/2026-08-03-001 §11 guard. Negative control observed (U3): releasing the produce lock "
+            Status.REFUTED, "PROVED on the control-loop commit path; REFUTED on the revoke path, which is why the "
+            + "status is REFUTED - the claim is written as a property of the system, and one reachable commit path "
+            + "breaks it. "
+            + "The control-loop half: ProducerManagerTest#commitLockIsGrantedOnlyAfterTheProducedWorkReachesTheMailbox, "
+            + "with ProducerManagerTest#producedRecordsCantBeInTransactionWithoutItsOffsetDirect covering the outcome "
+            + "and the docs/plans/2026-08-03-001 §11 guard. Negative control observed (U3): releasing the produce lock "
             + "before the mailbox handoff, with the 400ms window §11's experiment used, failed 3/3 with 'the work "
             + "reaches the controller's mailbox only after its record was sent' - the commit had completed while the "
             + "work was still not in the mailbox. Position control: the same 400ms spent inside the lock, before the "
-            + "handoff, passed 2/2, so it is the ordering and not the added latency"),
+            + "handoff, passed 2/2, so it is the ordering and not the added latency. "
+            + "The revoke half, 2026-09-03: ProducerManagerTest#aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced "
+            + "is RED 5/5, deterministically, and is quarantined rather than deleted. Holding the commit lock is only "
+            + "half the contract; the other half is DRAINING the mailbox before collecting offsets, because "
+            + "PartitionState#onSuccess - the only thing that marks a partition dirty on a success - is reachable from "
+            + "AbstractParallelEoSStreamProcessor#processWorkCompleteMailBox and nowhere else in main. The control loop "
+            + "does both, in that order. tryCommitOffsetsOnRevoke does the first and not the second, so it commits a "
+            + "transaction containing a record whose source offset it omits: output committed, input not, and the next "
+            + "owner reprocesses it. Control arm observed: "
+            + "#aRevokeTimeCommitIncludesThatOffsetWhenTheMailboxIsDrainedFirst is identical but for a "
+            + "processWorkCompleteMailBox call inserted before the revoke, and it passes - so the drain is the term, "
+            + "not added latency or anything else the revoke does. "
+            + "The lock discipline makes this MORE reachable, not less: cleanUpContext is the single release point and "
+            + "runs strictly after the batch is mailboxed, so a returned produce lock GUARANTEES the work is already "
+            + "queued, and a commit granted the write lock always has undrained work in front of it. "
+            + "Not fixed here deliberately - the revoke callback runs on the broker-poll thread and the drain mutates "
+            + "control-thread-confined WorkManager state, so the one-line fix is the cross-thread mutation that "
+            + "corrupted the out-for-processing counter in astubbs#29. "
+            + "docs/inflight/core-revoke-commit-skips-the-work-mailbox-drain.md"),
 
     /**
      * C10 - holding the commit lock stops processing for the duration of the commit.
@@ -303,7 +325,8 @@ public enum TransactionalClaim {
             + "astubbs#257 fixes it and is merged into this branch: that arm now passes, whole class 5/5 in 72s "
             + "where it previously took 178s to fail. The defect IS the negative control - it was found before the "
             + "fix landed, not injected afterwards. Write-up in "
-            + "docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md"),
+            + "docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md. "
+            + "SCOPE, 2026-09-07: a route to duplication exists and is NOT yet observed. The revoke-path defect refuting C9 and C4 omits a produced record's source offset, so the next owner redelivers that input and produces its output again - a duplicate in the output topic, which is exactly what this claim denies. Every step of that chain is sound, but no duplicate has been seen: field impact is unmeasured and no broker-level reproduction was attempted. This claim is therefore left PROVED DELIBERATELY rather than by oversight, because its RED and its GREEN were each OBSERVED, and refuting it on a reasoning chain would make it the register's first argued status - breaking the observed-versus-argued distinction that is the whole reason this register is worth more than prose. WHAT WOULD SETTLE IT: a broker-level rebalance reproduction showing a duplicated result in the output topic. Operator ruling, 2026-09-07."),
     /**
      * C15 - the recovery guarantee astubbs#225 added: where PC built the producer, a producer the broker reports
      * invalid is replaced rather than ending the instance, and the work its aborted transaction discarded runs again.

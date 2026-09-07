@@ -37,10 +37,10 @@ language where each of those is a paragraph. [`bin/lib/source-patterns.mjs`](lib
 holds the table and `check-source-patterns.mjs` is the one runner they share. A check that has to
 *think* - parse XML, call an API, compare numbers - is a real program and still gets its own file.
 
-**Node scripts are compile-checked by `pr-checklist.yml` and self-tested by `repo-hygiene.yml`**,
-which runs `bin/check-all.sh --with-tests` and so discovers `bin/test-*.mjs` by glob. They are two
-different workflows on purpose - naming only the first sends anyone repairing the test wiring to a
-job that never runs the tests. `node --check` is a
+**Node scripts are compile-checked and self-tested by the `repo: hygiene` job** (formerly two
+separate workflows - compile-checked by `pr-checklist.yml`, self-tested by `repo-hygiene.yml` -
+folded together), which runs `bin/check-all.sh --with-tests` and so discovers `bin/test-*.mjs` by
+glob. `node --check` is a
 compile, not static analysis; JavaScript is the one language CodeQL's default setup here does not
 scan, which is tracked separately.
 
@@ -59,6 +59,15 @@ grant leaves the reviewer quietly running fewer checks than the directory contai
 **So do not give that prefix to a script that writes, publishes, deploys, or reaches the network
 beyond `gh` reads.** The two prefixes were chosen to keep `deploy.sh`, `chaos-test.sh`,
 `soak-test.sh` and friends outside the grant, and a misnamed script defeats that silently.
+
+**If a gate genuinely needs a non-`gh` network read, make the read OPT-IN behind its own variable
+and keep the name** - `check-integration-shard-balance.mjs` is the worked example: it exits 3
+unless `SHARD_BALANCE_NETWORK=1`, and only the `Repo Hygiene` job sets it. The alternative,
+renaming out of `check-*`, drops the script from `check-all.sh`'s glob, which is the one thing that
+glob exists to prevent. **Do not gate on `CI`.** The reviewer holding the grant runs *inside*
+GitHub Actions, so `CI` disables the read on a laptop - where it is harmless - and leaves it
+enabled exactly where the auto-executing agent is. The variable has to be one only the workflow
+sets.
 
 Everything else about the allowlist - the two boundaries it sits between, what still needs a manual
 grant, and why a grant must land before the pull request that needs it - is in

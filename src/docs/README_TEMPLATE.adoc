@@ -558,12 +558,17 @@ You can also optionally provide a callback function to be run after the message(
 [source,java,indent=0]
 include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=exampleProduce]
 
+[[callbacks-vs-streams]]
 ==== Callbacks vs Streams
 
 You have the option to either use callbacks to be notified of events, or use the `Streaming` versions of the API, which use the `java.util.stream.Stream` system:
 
 * `JStreamParallelStreamProcessor`
 * `JStreamVertxParallelStreamProcessor`
+
+IMPORTANT: The returned stream is *live*. It yields each result as it is produced and waits in between, and it ends when you close the consumer -- after delivering whatever was already queued.
+So consume it on a thread that can stay with it, as the Vert.x example below does; consuming it is what keeps the result queue drained.
+A consumer that walks away early leaves nobody draining, which is what caused link:https://github.com/confluentinc/parallel-consumer/issues/912[confluentinc#912].
 
 In future versions, we plan to look at supporting other streaming systems like https://github.com/ReactiveX/RxJava[RxJava] via modules.
 
@@ -604,6 +609,8 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-ver
 ----
 
 <1> Simply return an object representing the request, the Vert.x HTTP engine will handle the rest, using it's non-blocking engine
+<2> The stream is live -- it waits for results and ends when the consumer is closed -- so it gets a thread of its own rather than blocking startup.
+Consuming it is what keeps the result queue drained; `close()` then joins this thread once the stream has ended.
 
 See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/bz/stub/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
 
@@ -923,10 +930,12 @@ The distinction between the two lists below is deliberate, because it is what th
 
 *Verified against a real broker:* an open transaction is invisible at `read_committed` while a `read_uncommitted` reader sees it; a `read_committed` consumer is blocked at the first still-open transaction rather than filtering around it; an aborted or timed-out transaction never becomes visible; a crash before commit leaves neither the results nor the source offset, and the replay commits them together with each result present exactly once; and if one `send` in a `pollAndProduceMany` result set fails terminally - for example a record over `max.request.size` - none of that result set becomes visible.
 
-*Verified in-process, against the lock and options machinery with a mocked producer:* all parallel workers share one bulk transaction; no record is produced whose source offset is excluded from the transaction being committed; processing is blocked for the duration of the commit lock; and the commit interval default changes when transactional mode is selected.
+*Verified in-process, against the lock and options machinery with a mocked producer:* all parallel workers share one bulk transaction; no record is produced whose source offset is excluded from the transaction being committed -- *on the periodic commit path, but see the exception below*; processing is blocked for the duration of the commit lock; and the commit interval default changes when transactional mode is selected.
 These are real proofs of PC's own logic, but no broker takes part in them - so read them as statements about what PC does, not about what a cluster observed.
 
 Each claim in both lists has a negative control that was observed to fail: the mechanism it guards was deliberately broken and the test went red for the stated reason.
+
+CAUTION: *Two guarantees are currently recorded as refuted, both on the same path.* "No record is produced whose source offset is excluded from the transaction being committed", and "a source offset and its produced records will be committed as an atomic set", both hold for the periodic commit made by the control loop, which drains its completed-work mailbox before collecting offsets. It does *not* hold for the commit made while partitions are being revoked, which does not drain first -- so a rebalance can commit a transaction whose offsets omit a record that transaction already produced. The output is committed and its input offset is not, and the next owner of the partition reprocesses that input and produces the output again: on that path you get *at-least-once*, not exactly-once. The failure is deterministic and is pinned by a quarantined test with a passing control arm. It is not yet fixed, because the correct fix is a thread-ownership change at the commit seam rather than a local one. If you rely on exactly-once across rebalances, make your output sink idempotent until this is closed. The front-page promise that results exist exactly once under failure is *not* recorded as refuted: the route from an omitted offset to a duplicated result is sound but has not been observed, and that register deliberately separates what was seen from what was argued.
 
 The terminally-failed-send case above used to leave a *partial* result set visible to a `read_committed` consumer, silently, because a producer callback threw and pre-empted the Kafka client's own transition of the transaction into an abortable state.
 It was found by these tests and fixed; the test that found it is now the regression test.

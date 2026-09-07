@@ -152,7 +152,7 @@ config key, a quoted literal; a long quotation is brittle the other way, breakin
 the grep before you commit the citation.
 
 **The path half is now enforced: `bin/check-file-refs.sh` fails a cited path that does not exist**,
-across the whole tree, and the `PR Checklist` workflow runs the same module - so deleting a file
+across the whole tree, and the `repo: hygiene` gate runs the same module - so deleting a file
 also fails the PR that leaves citations behind. The anchor half is still yours: a gate can only tell
 you the file is there, never that your quoted string is still in it.
 
@@ -198,6 +198,7 @@ and the traps that voided earlier experiments.
 | Check | Command |
 |---|---|
 | Plans, solutions and in-flight notes, **on every branch** | `node bin/inflight.mjs prior-art <mechanism> [<mechanism>...]` |
+| **The shape of the docs corpus, and one document's other versions** | `node bin/inflight.mjs docs` - every area, its groups and their counts across every ref, with the commands that drill in; `node bin/inflight.mjs docs header <path>` before acting on a document - the pull form of what the read-time hook shows, for a host without hooks |
 | Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` |
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
@@ -212,8 +213,11 @@ and the traps that voided earlier experiments.
   [`docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md`](docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md).
 - **The titles are already in your context**, injected at session start by
   `.claude/hooks/inject-recorded-knowledge.sh` - so "I did not know it existed" is not available as
-  an excuse. **That index is branch-scoped too**, and says so along with the count it cannot show
-  you; it narrows the search, it does not complete it.
+  an excuse. **That index is corpus-scoped**: it is `bin/inflight.mjs docs index`, rendered from
+  every live ref, with branch-only documents grouped under the branch set carrying them. What it
+  cannot show is a version preserved only in an archival ref (a tag, `refs/backup`) -
+  `bin/inflight.mjs stranded` names those - and it lists titles, not contents; it narrows the
+  search, it does not complete it.
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
 - **A test's own javadoc is prior art, and the commands above will not find it.** The chaos
@@ -414,7 +418,7 @@ Unit tests are surefire (`src/test/java/`); integration tests are failsafe and n
 
 **In a PR the changelog is never added to.** No new entries, and no `== Unreleased` section - a
 shipped section is finished, and the in-flight section belongs to the release-time generator. There
-is no window in which a PR contributes an entry, and **the `PR Checklist` gate does not enforce
+is no window in which a PR contributes an entry, and **the `repo: hygiene` gate does not enforce
 this** - it checks citations, so it will happily pass an entry the policy forbids.
 
 **The one edit a PR may make is correcting a factual error in text already there** (astubbs#198 is
@@ -532,7 +536,7 @@ Nothing lints commit messages, so all of this is on you.
 - **Open PRs from the template and complete its checklist honestly.**
   `.github/PULL_REQUEST_TEMPLATE.md` is NOT auto-applied when a PR is created non-interactively
   (e.g. `gh pr create -R astubbs/parallel-consumer --body-file`), so base the body on it and resolve
-  every box: check it `[x]`, or mark it `N/A - <reason>`. The `PR Checklist` gate fails a
+  every box: check it `[x]`, or mark it `N/A - <reason>`. The `repo: hygiene` gate fails a
   human-authored PR when the checklist is missing entirely *or* any box is left unchecked without an
   `N/A`, so dropping the template is not a bypass. Only real bot authors are exempt.
 - **Ask for the automated review when the PR is ready - it does not run on push.** Two routes, and

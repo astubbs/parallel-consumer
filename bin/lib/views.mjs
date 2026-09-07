@@ -8,12 +8,69 @@
 // `freshnessWarnings` has two consumers and they rendered it identically, down to the eleven-space
 // continuation indent and the one id that prints NOTE instead of WARNING. That was the second copy
 // of a shared primitive appearing on the same branch that wrote the rule against it.
+//
+// THE DOCS FAMILY RENDERS IN bin/lib/docs-views.mjs - the divergence header, the injected-block
+// frame, the corpus shape, the session index. It imports the three helpers below that both files
+// need (`plural`, `formatWarnings`, `addedSizeText`); nothing here imports it back.
 
-const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
+export const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
+
+/**
+ * WHAT WAS SEARCHED, in one sentence, for every command that answers across the refs.
+ *
+ * It lives here rather than beside either caller because it is the tool's core disclaimer - a
+ * complete search of a stale corpus reads exactly like a complete search of a current one - and a
+ * second copy of it would drift. `bin/lib/docs-views.mjs` owned it and `formatRank` restated it;
+ * both now read the same sentence. Takes anything carrying `refs: {total, live, archival}` and
+ * `baseline`, which is the shape `docsShape` and `rank` both return.
+ */
+export const refsText = (shape) => `${shape.refs.total} refs (${shape.refs.live} live, ${shape.refs.archival} archival); baseline ${shape.baseline}.`
+export const scopeLine = (shape) => `searched ${refsText(shape)} Read from the refs, never the working tree.`
 
 export function formatWarnings(warnings) {
     if (!warnings.length) return ''
     return `${warnings.map((w) => `  ${w.id === 'head-behind' ? 'NOTE' : 'WARNING'}: ${w.lines.join('\n           ')}`).join('\n')}\n`
+}
+
+/**
+ * THE FOUR-WAY `added` CLASSIFICATION, WORDED ONCE PER PLACE IT APPEARS. `addedSinceMergeBase`
+ * answers null (no merge-base to compare against), `{diffFailed}` (the diff command failed, which
+ * is not "no change"), `{newFile}` (the branch created the file after diverging) or `{added,
+ * removed}`; three renderers each carried their own ternary over those four cases, and a fifth
+ * case added to the query would have been classified in one and fallen through the others. The
+ * wording is a style row, so each caller's output is exactly what it was.
+ */
+const ADDED_SIZE_STYLES = {
+    // `formatDrift`'s cluster label.
+    drift: {
+        none: 'differs (no merge-base version to compare against)',
+        failed: 'size UNKNOWN - the diff command failed, which is not "no change"',
+        created: 'added on this branch, after it diverged',
+        delta: (a) => `+${a.added} -${a.removed} since its merge-base`,
+    },
+    // The parenthetical after the copy state in the divergence header: nothing when unknown.
+    copy: {
+        none: '',
+        failed: ' (size unknown - the diff failed)',
+        created: ' (created on this branch)',
+        delta: (a) => ` (+${a.added} -${a.removed} since its merge-base)`,
+    },
+    // The padded size column of the header's largest-versions rows.
+    header: {
+        none: 'size unknown (no merge-base)',
+        failed: 'size unknown (diff failed)',
+        created: 'created after diverging',
+        delta: (a) => `+${a.added} -${a.removed}`,
+    },
+}
+
+/** @param {'drift'|'copy'|'header'} style which caller's wording to use */
+export function addedSizeText(a, style) {
+    const s = ADDED_SIZE_STYLES[style]
+    if (!a) return s.none
+    if (a.diffFailed) return s.failed
+    if (a.newFile) return s.created
+    return s.delta(a)
 }
 
 export function formatFind(hits, query, index) {
@@ -63,15 +120,18 @@ export function formatDrift(d) {
             + `- on ${plural(d.divergent.reduce((n, c) => n + c.refs.length, 0), 'ref')}.`)
         out.push('  Sizes are against each branch\'s MERGE-BASE, so they say what the branch added, not how far')
         out.push(`  ${d.baseline} has moved since.\n`)
-        for (const c of d.divergent) {
-            const a = c.added
-            out.push(cluster(c, !a ? 'differs (no merge-base version to compare against)'
-                : a.diffFailed ? 'size UNKNOWN - the diff command failed, which is not "no change"'
-                    : a.newFile ? 'added on this branch, after it diverged'
-                        : `+${a.added} -${a.removed} since its merge-base`))
-        }
+        for (const c of d.divergent) out.push(cluster(c, addedSizeText(c.added, 'drift')))
     }
 
+    // A version held ONLY by a tag or a refs/backup ref was listed above as if it were a branch,
+    // with a merge-base size and a "branch name" nobody can check out. It is preserved on purpose,
+    // so it gets its own line - present, because the corpus looks everywhere, and labelled.
+    if ((d.preserved ?? []).length > 0) {
+        out.push(`  Preserved, not in flight: ${plural(d.preserved.length, 'version')} held only by archival refs `
+            + `(${[...new Set(d.preserved.flatMap((p) => p.kinds))].join(', ')}):`)
+        for (const p of d.preserved) out.push(`      ${p.blob.slice(0, 9)}  ${p.refs.join(', ')}`)
+        out.push('')
+    }
     if (d.behind.versions > 0) {
         out.push(`  Not shown: ${plural(d.behind.versions, 'version')} on ${plural(d.behind.refs, 'ref')} `
             + `that ${d.baseline} itself once held - those branches are simply behind, which is`)
@@ -401,4 +461,182 @@ export function formatSlowest(v) {
     out.push('\nWall-clock on a shared runner, NOT a benchmark - see bin/lib/codecov.mjs. Never feed')
     out.push('this to a throughput comparison; that is what bin/check-throughput-regression.mjs is for.')
     return out.join('\n') + truncNote(v)
+}
+
+/**
+ * The backlog view: groups of open notes, and the register delta.
+ *
+ * THE DELTA IS FIRST because it is the deliverable - the ranking pass wants the disagreements, not
+ * the corpus. The groups follow as a map with the command that scopes to each, which is the
+ * interface every level of this front door already uses.
+ *
+ * ASYMMETRIC ON PURPOSE. What the register ranks is a handful of entries, so each is listed with the
+ * reason it needs attention. What it does not name is nearly every open note in the repository, so
+ * that half is a count per group until a group scopes the call - listing it unscoped would be the
+ * whole-corpus dump this command exists to avoid, arriving under the name "delta".
+ */
+export function formatRank(r) {
+    const out = []
+    const cmd = (g) => `bin/inflight.mjs rank --impact ${g}`
+
+    if (r.unreadableRefs.length > 0) {
+        out.push(`  COULD NOT LIST the notes on ${plural(r.unreadableRefs.length, 'ref')}, so this answer does not cover them:`)
+        out.push(`      ${r.unreadableRefs.slice(0, 5).join(', ')}${r.unreadableRefs.length > 5 ? ', ...' : ''}`)
+        out.push('')
+    }
+    if (r.unreadable.length > 0) {
+        // EVERY LISTED VERSION, because a path with one version missing and one read still appears
+        // below as a row - built from what did read, and named here as incompletely read.
+        out.push(`  COULD NOT READ every listed version of ${plural(r.unreadable.length, 'note')} - this answer is INCOMPLETE:`)
+        for (const p of r.unreadable) out.push(`      ${p}`)
+        out.push('')
+    }
+    if (!r.prsOk) {
+        out.push(`  WARNING: ${r.prsReason} - pull-request state below is UNKNOWN, not absent.\n`)
+    }
+
+    const d = r.delta
+    if (!d.ok) {
+        out.push(`  THE DELTA DID NOT RUN: ${d.reason}`)
+        out.push('  Everything below is the grouping alone - not a statement that the register agrees with it.\n')
+    } else {
+        out.push(`the register (${'docs/inflight/process-candidate-ranking.md'}) against the corpus:\n`)
+        if (d.recognised === 0) {
+            // ZERO RECOGNISED ENTRIES IS NOT AGREEMENT. The parse reads list items citing a note
+            // filename or an `astubbs#<n>`; a register saying neither is out of its reach, and
+            // saying nothing here would render that as a register everything agrees with.
+            out.push('  the register was READ but the parse recognised no entry in it - so the delta below')
+            out.push('  is not a finding about the register, it is the parse not reaching it.')
+        } else if (d.stale.length === 0) {
+            out.push(`  ${coverage(d)}; nothing it recognises has stopped being open work.`)
+        } else {
+            out.push(`  ${coverage(d)}. Ranked, but no longer open work in an impact bucket:`)
+            for (const e of d.stale) out.push(`      ${e.cites.join(' / ').padEnd(52)}${e.reason}`)
+        }
+        if (d.unrankedCounts.length > 0) {
+            // "NOT NAMED BY THE REGISTER" IS A CLAIM THE PARSE CANNOT MAKE WHEN IT DID NOT READ THE
+            // WHOLE REGISTER. The same numerator-without-a-denominator defect `coverage` fixed for
+            // the recognised count, on the other half: a note named by one of the list items this
+            // parse does not reach was counted here as unranked, three lines under a sentence saying
+            // those items are outside the delta entirely. The counts stay - withholding them would
+            // lose the view - but they say which question they answer.
+            out.push('', d.items > d.recognised
+                ? '  open and not named by any entry this parse RECOGNISED - the unread items above may'
+                    + '\n  name some of these, so this is an upper bound:'
+                : '  open and NOT named by the register:')
+            for (const u of d.unrankedCounts) {
+                out.push(r.scoped === null
+                    ? `      ${u.key.padEnd(18)}${String(u.count).padStart(4)}    ${cmd(u.key)}`
+                    : `      ${plural(u.count, 'note')} in ${u.key}`)
+            }
+        }
+        out.push('')
+    }
+
+    for (const g of r.groups) {
+        out.push(`  ${g.label}`)
+        // Rows only when a group scopes the call - the bare call is the map, never the dump.
+        if (r.scoped === null) { out.push(`      ${plural(g.rows.length, 'open note')}    ${cmd(g.key)}`); continue }
+        for (const row of g.rows) {
+            out.push(`      ${row.name}`)
+            if (row.title) out.push(`          "${row.title}"`)
+            out.push(`          ${carriage(row, r)}`)
+            // Which side of the delta this row is on, on the row - not only as a count above.
+            if (row.ranked) out.push('          the register already names this one')
+            if (row.number) {
+                const which = { fork: 'this fork', upstream: 'confluentinc', unknown: 'NOT attributable from the filename - try both' }
+                out.push(`          number in the filename: ${row.number.value} (${which[row.number.attribution]})`)
+                for (const c of row.number.commands) out.push(`              ${c}`)
+            }
+            // NOT `d` - that is the delta, thirty lines up in this same function.
+            for (const dis of row.disagreement) {
+                // NAMING AN ARCHIVE AS IF IT WERE A BRANCH sends a reader to check out a tag. The
+                // rule is three lines up in this file's own carriage sentence; the line printing it
+                // did not follow it.
+                const where = dis.archival ? `${dis.ref} (an ARCHIVE)` : dis.ref
+                out.push(`          DISAGREEMENT: on ${where} this note reads as ${dis.group}, not ${row.group}`)
+            }
+            // EVERY LEVEL PRINTS THE NEXT LEVEL'S COMMAND - the front door's whole interface, and
+            // what `docs list inflight <impact>` already does for the same rows. Without it a reader
+            // who wants the note has to know `docs show` exists and retype the path.
+            out.push(`          bin/inflight.mjs docs show ${row.path}`)
+        }
+        out.push('')
+    }
+
+    if (r.groups.length === 0) {
+        // AN EMPTY RESULT IS AN ANSWER AND HAS TO LOOK LIKE ONE. Saying nothing here is
+        // indistinguishable from a section that was dropped, which is the silence this whole
+        // command is organised against.
+        out.push(r.scoped === null
+            ? '  no open note is in any impact bucket.'
+            : `  no open note is in ${r.scoped}. That is a result: nothing on any ref carries one.`)
+    }
+
+    if (r.excluded.length > 0) {
+        // ACROSS THE WHOLE CORPUS, and it says so - these counts are identical scoped or not, so
+        // sitting them unqualified among scope-limited lines read as if they described the group.
+        out.push(`  not work waiting to be ranked, across the whole corpus: `
+            + `${r.excluded.map((e) => `${e.count} ${e.key}`).join(', ')}`)
+    }
+    out.push(`\n  ${scopeLine(r)}`)
+    // SAID ONCE PER RUN, NOT ONCE PER ROW. A row read off the baseline carries a pull-request suffix
+    // when one exists and `[PR state UNKNOWN]` when the lookup could not answer - so the remaining
+    // case, no suffix at all, is the one a reader cannot tell apart from nobody having asked. Codex
+    // asked for an explicit per-row absence marker (astubbs/parallel-consumer#438); it was declined
+    // because most carrying refs have no pull request, so that marker would land on the majority of
+    // rows and crowd out the informative suffix on the minority that carry one. Stating it here
+    // removes the ambiguity at no per-row cost. Operator ruling, 2026-09-06.
+    out.push('  A row with no pull-request suffix means the lookup answered and found none; a lookup')
+    out.push('  that could not answer prints [PR state UNKNOWN] instead.')
+    out.push('  An empty group means nothing on any ref carries one, not that your checkout has none.')
+    return out.join('\n')
+}
+
+/**
+ * How much of the register the parse actually reached, never a bare numerator.
+ *
+ * "11 entries recognised" reads as a complete reading of the register and is not: the ready-picks
+ * half cites bare `#40` and `confluentinc#...` numbers this parse does not reach. Saying the
+ * denominator, and what the unreached items look like, is the difference between a coverage
+ * statement and a claim. (It also stops `plural` making "entrys", which it did.)
+ */
+function coverage(d) {
+    const entries = d.recognised === 1 ? '1 entry' : `${d.recognised} entries`
+    const outside = d.items - d.recognised
+    return `${entries} of ${d.items} list items recognised`
+        + (outside > 0
+            ? ` - the other ${outside} cite something this parse does not read (a bare number, or an upstream one), so they are outside the delta entirely`
+            : '')
+}
+
+/**
+ * The one sentence that must never read as ownership.
+ *
+ * On the baseline, carriage is evidence of nothing - every branch cut from it carries the note. Off
+ * it, the carrying branch is the most useful thing in the row, and its pull request is named as a
+ * fact about the BRANCH rather than about the note's subject.
+ */
+function carriage(row, r) {
+    // THE REF ACTUALLY READ, not the path's on-baseline fact. A note deferred on the baseline and
+    // open on a branch is read from that branch, and the every-branch-carries-it sentence would be a
+    // lie about the row whose whole point is that branch.
+    if (row.readFromBaseline) return `on ${r.baseline} - every branch cut from it carries this, so carriage names no owner`
+    // EVERY OFF-BASELINE READ GETS THE PULL-REQUEST SUFFIX, because the ref is the point of the row.
+    // This one returned before reaching it, so a note deferred on the baseline and open on a branch
+    // with an open pull request rendered with no pull request at all - the row where naming it
+    // matters most, since the branch is the only place the work is live.
+    const pr = row.pr ? `  [astubbs/parallel-consumer#${row.pr.number} ${row.pr.state}]` : (row.prKnown ? '' : '  [PR state UNKNOWN]')
+    if (row.onBaseline) {
+        return `read from ${row.readRef}, NOT ${r.baseline} - the baseline's copy is not open work, this ref's is${pr}`
+            + ` - CARRIES the note, which is not the same as fixing what it describes`
+    }
+    const where = row.preserved
+        ? `preserved only on ${row.readRef} - an archive, so nothing here will land it`
+        // READ FROM AN ARCHIVE WHILE SOMETHING LIVE CARRIES IT: every live copy is closed and the
+        // open one survives on a tag. Naming the tag without saying it is one reads as a branch
+        // somebody could go and work on.
+        : `carried by ${plural(row.carryingRefs.length, 'ref')}, read from ${row.readRef}`
+            + `${row.readRefArchival ? ' (an ARCHIVE - the live copies are closed)' : ''}${pr}`
+    return `${where} - CARRIES the note, which is not the same as fixing what it describes`
 }

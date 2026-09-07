@@ -74,10 +74,17 @@ adding a class with a narrow guess in it.
    lives.
 <!-- post-merge: checked-end -->
 
-   Same trigger, also worth a harness, and deliberately unfixed:
-   `bug-370-a-record-is-selectable-before-its-offset-is-registered.md` - registration order in
-   `PartitionState#maybeRegisterNewPollBatchAsWork` makes a record selectable before its offset is
-   registered, latent for the same single-selector reason.
+   The sibling that used to sit here - registration order in
+   `PartitionState#maybeRegisterNewPollBatchAsWork` making a record selectable before its offset was
+   registered, latent for the same single-selector reason - is no longer a harness target: astubbs#370
+   swapped the order so the offset is registered before the container is published, and
+   `PartitionStateRegistrationOrder370Test` plays the losing interleaving by hand. **On the
+   registration path** no schedule can now reach a container whose offset is absent, so there is
+   nothing left for a model checker to explore there. The claim is deliberately scoped to that path:
+   an absent offset under a live container is still reachable *after* completion, because
+   `WorkManager#onSuccessResult` removes the offset before the container leaves its shard, so a
+   scanner in that window sees exactly that pair. What refuses it there is the container's own
+   `SUCCEEDED` claim state (astubbs#335), not the offset - which is candidate 1 above, not this one.
 
    <!-- post-merge: checked-begin -->
    **`ProcessingShard.workAwaitingSelectionCount` (once `availableWorkContainerCnt`) is NOT a Lincheck
@@ -107,8 +114,10 @@ adding a class with a narrow guess in it.
    a `metersLock` monitor - so a harness here is a regression detector against that fix rather than
    a hunt for an open defect. The reproduction it produced is carried in `PCMetrics859Test`'s class
    javadoc; the sibling defect the same harness found, the plain `HashMap` counter maps in
-   `WorkManager` and `PartitionStateManager`, is still open in
-   [`bug-metrics-counter-maps-are-plain-hashmaps.md`](bug-metrics-counter-maps-are-plain-hashmaps.md).
+   `WorkManager` and `PartitionStateManager`, is closed too - astubbs#267 made those three
+   concurrent and the fourth, `OffsetMapCodecManager.encodingCounters`, followed. The evidence and
+   what the sighting did and did not establish are in
+   [`../solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md`](../solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md).
    <!-- post-merge: checked-end -->
 3. **`ProducerManager`'s produce/commit lock pair - a known defect in a *named* protocol.** The pair
    is project vocabulary (`CONCEPTS.md`), which means the invariant is already written down in
@@ -123,12 +132,14 @@ adding a class with a narrow guess in it.
    `partitionsAssignmentEpochs` are both `ConcurrentHashMap`s keyed by the same `TopicPartition` and
    must agree; each is individually safe and the pair is not. The identically-keyed-maps signature,
    verbatim.
-5. **The unsynchronised counter maps.** `PartitionStateManager.slowWorkCounters`,
-   `WorkManager.succeededRecordsCounters` and `failedRecordsCounters` are plain `HashMap`s mutated
-   from the rebalance callbacks and the completion path, and `RemovedPartitionState.READ_ONLY_EMPTY_SET`
-   is a mutable `TreeSet` shared by every PC instance in the JVM
-   (`bug-shared-collections-across-the-poll-boundary.md`). Cheap, and it becomes the regression
-   detector the moment the sweep on `fix/concurrent-collection-sweep` lands.
+5. **The counter maps, as a regression detector only.** Nothing here is open any more: astubbs#267
+   made `PartitionStateManager.slowWorkCounters`, `WorkManager.succeededRecordsCounters` and
+   `failedRecordsCounters` `ConcurrentHashMap`s and `RemovedPartitionState.READ_ONLY_EMPTY_SET` an
+   immutable `Collections.emptySortedSet()`, and `OffsetMapCodecManager.encodingCounters` followed
+   (item 2 names the write-up). A harness over them would be a regression detector against fixes
+   that have landed, the same standing as item 2 - and the fourth map already has a deterministic
+   one in `EncodingCounterRegistrationIsAtomicTest`. Rank it below everything that still has a live
+   defect behind it.
 6. **Close the encoder's range-top leg.** The one verdict in the calibration that is not clean:
    `OffsetMapCodecManager.encodeOffsetsCompressed` came back HALF-FOUND, because the *snapshot* leg
    was exhibited and the two-reads-return-different-values leg was not, and is not expressible in

@@ -76,6 +76,12 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
      * <p>
      * Make sure that you do any work immediately in a Publisher / Flux - do not block this thread.
      * <p>
+     * A record is marked successful when its publisher <b>completes</b>, and failed when it <b>errors</b> - the items
+     * it emits along the way are yours, and the engine neither counts nor inspects them. So a publisher that emits
+     * nothing at all ({@link Mono#empty()}, a {@code Mono<Void>} from {@link Mono#fromRunnable(Runnable)}, a
+     * {@link reactor.core.publisher.Flux} that filters everything away) is a perfectly ordinary success, and one
+     * that emits many items still completes its record exactly once.
+     * <p>
      *
      * @param reactorFunction user function that takes a single record, and returns some type of Publisher to process
      *                        their work.

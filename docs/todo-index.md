@@ -136,8 +136,6 @@ that line, leave it in the code - it will show up here.
 
 - TODO: optimisation - inline this into the partition iteration loop in {@link WorkManager}
 - TODO: optimisation - could double the run-length range from Short.MAX_VALUE (~33,000) to Short.MAX_VALUE * 2
-- TODO VERY large offset ranges is slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
-- todo refactor this loop into the encoders (or sequential vs non sequential encoders) as RunLength doesn't need
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionState.java`**
 
@@ -164,6 +162,10 @@ that line, leave it in the code - it will show up here.
 - TODO(refactor): rename to partitionManager - `pm` also abbreviates ProducerManager elsewhere in core
 - todo make private
 - TODO(refactor): rename to shardManager - see the note beside `pm`; both getters are public API
+
+**`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/AmbientProbeExtension.java`**
+
+- TODO(refactor): distinguish "never sampled a group" from "sampled and saw nothing" rather
 
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/BrokerIntegrationTest.java`**
 
