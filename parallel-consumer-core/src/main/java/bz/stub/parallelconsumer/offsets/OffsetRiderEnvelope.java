@@ -71,7 +71,7 @@ public class OffsetRiderEnvelope {
     public enum RiderState {
         /**
          * No envelope was written: no rider was configured when this payload was committed, or the budget ladder had
-         * to shed the envelope itself to fit the hole map in.
+         * to shed the envelope itself to fit the offset map in.
          */
         NONE,
         /**

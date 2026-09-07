@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.offsets;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import com.google.common.primitives.Bytes;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope.Rider;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope.RiderState;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope.UnwrappedEnvelope;
@@ -11,9 +12,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -40,7 +38,7 @@ class OffsetRiderEnvelopeTest {
     static final byte[] NO_INNER = new byte[0];
 
     /**
-     * Stands in for a real hole encoding: any first byte that is not the envelope's own is legal there.
+     * Stands in for a real offset map encoding: any first byte that is not the envelope's own is legal there.
      */
     static final byte[] INNER = {'l', 0x01, 0x02, 0x03};
 
@@ -87,28 +85,29 @@ class OffsetRiderEnvelopeTest {
 
     @ParameterizedTest
     @ValueSource(ints = {1, 255, 256, 3000, 65535})
-    void theLengthFieldIsBigEndianAndTheRiderFollowsItRaw(int riderLength) throws IOException {
+    void theLengthFieldIsBigEndianAndTheRiderFollowsItRaw(int riderLength) {
         byte[] rider = riderOfLength(riderLength);
 
         byte[] wrapped = OffsetRiderEnvelope.wrap(NO_INNER, Rider.present(rider));
 
-        assertThat(wrapped).isEqualTo(concat(new byte[]{'X', highByte(riderLength), lowByte(riderLength)}, rider));
+        assertThat(wrapped)
+                .isEqualTo(Bytes.concat(new byte[]{'X', highByte(riderLength), lowByte(riderLength)}, rider));
     }
 
     @ParameterizedTest
     @ValueSource(ints = {1, 255, 256, 3000, 65535})
-    void theInnerBytesFollowTheRiderUntouched(int riderLength) throws IOException {
+    void theInnerBytesFollowTheRiderUntouched(int riderLength) {
         byte[] rider = riderOfLength(riderLength);
 
         byte[] wrapped = OffsetRiderEnvelope.wrap(INNER, Rider.present(rider));
 
         assertThat(wrapped).isEqualTo(
-                concat(new byte[]{'X', highByte(riderLength), lowByte(riderLength)}, rider, INNER));
+                Bytes.concat(new byte[]{'X', highByte(riderLength), lowByte(riderLength)}, rider, INNER));
     }
 
     @ParameterizedTest
     @ValueSource(ints = {1, 255, 256, 3000, 65535})
-    void unwrapReadsBackExactlyWhatWrapWrote(int riderLength) throws IOException, CorruptOffsetMetadataException {
+    void unwrapReadsBackExactlyWhatWrapWrote(int riderLength) throws CorruptOffsetMetadataException {
         byte[] rider = riderOfLength(riderLength);
 
         UnwrappedEnvelope unwrapped = OffsetRiderEnvelope.unwrap(OffsetRiderEnvelope.wrap(INNER, Rider.present(rider)));
@@ -390,13 +389,5 @@ class OffsetRiderEnvelopeTest {
 
     static byte lowByte(int length) {
         return (byte) (length & 0xFF);
-    }
-
-    static byte[] concat(byte[]... parts) throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        for (byte[] part : parts) {
-            out.write(part);
-        }
-        return out.toByteArray();
     }
 }

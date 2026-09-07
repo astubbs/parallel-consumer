@@ -371,7 +371,7 @@ class OffsetRiderCodecTest {
 
     /**
      * KTD9: one encode per commit, whatever the ladder above later does with the bytes. A second competition would
-     * snapshot a later hole map and double-count both encoding meters.
+     * snapshot a later offset map and double-count both encoding meters.
      */
     @SneakyThrows
     @Test

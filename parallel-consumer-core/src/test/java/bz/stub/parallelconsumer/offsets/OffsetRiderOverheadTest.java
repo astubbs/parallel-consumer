@@ -5,7 +5,6 @@ package bz.stub.parallelconsumer.offsets;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.RiderContext;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
@@ -13,9 +12,7 @@ import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope.Rider;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope.RiderState;
 import bz.stub.parallelconsumer.state.PartitionState;
 import bz.stub.parallelconsumer.state.PartitionStateManager;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.AfterAll;
@@ -41,6 +38,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.IntPredicate;
 
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.base64Characters;
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.moduleWith;
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.riderStateOf;
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.unwrapOrFail;
 import static bz.stub.parallelconsumer.state.PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -63,7 +64,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * for the padding encoder {@link OffsetSimpleSerialisation#base64} uses. astubbs/parallel-consumer#306 adds a Z85
  * outer codec chosen per payload from a 22-byte floor upward, at which point the assembled length stops being one
  * closed form and becomes a step function of the assembled payload - so this table gains a column there rather
- * than being rewritten. R10 is unaffected either way: it is scoped to the hole encoding, which no outer codec can
+ * than being rewritten. R10 is unaffected either way: it is scoped to the offset map encoding, which no outer codec can
  * see.
  * <p>
  * <b>Why {@code PartitionStateRiderBudgetTest}'s exhaustive check is not enough.</b> That one walks 0 to 600 raw
@@ -80,7 +81,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * measurement: the same three-offset state encoded as two different magic bytes on consecutive calls, both five
  * bytes. A magic byte is therefore not a legal expectation and this class never asserts on one. What R10
  * promises, and what the whole budget arithmetic rests on, is the <b>size</b>, which is deterministic - so the
- * AE8 arms compare the hole encoding's byte length with and without a rider, both under a forced codec and under
+ * AE8 arms compare the encoded offset map's byte length with and without a rider, both under a forced codec and under
  * the free competition.
  * <p>
  * <b>Wall-clock floor.</b> States are built from {@link HighestOffsetAndIncompletes} - the shape the production
@@ -137,7 +138,7 @@ class OffsetRiderOverheadTest {
 
     /**
      * The most characters a rider of {@value #RIDER_BYTES} bytes can add to a payload: its whole envelope, encoded
-     * on its own. The real overhead is that or one Base64 quantum less, depending on where the hole encoding's
+     * on its own. The real overhead is that or one Base64 quantum less, depending on where the encoded offset map's
      * length sits modulo three, and this is the bound the cap-engagement arm asserts against.
      */
     private static final int RIDER_FOOTPRINT_CHARACTERS = base64Characters(HEADER + RIDER_BYTES);
@@ -211,20 +212,14 @@ class OffsetRiderOverheadTest {
     private final Map<OffsetEncoding, Map<String, Map<Integer, Integer>>> innerLengthCache =
             new EnumMap<>(OffsetEncoding.class);
 
-    private int realMaxMetadataSize;
+    private RiderTestFixtures.MetadataSizeStatics realSizeStatics;
 
-    private double realThresholdMultiplier;
-
-    private Optional<OffsetEncoding> realForcedCodec;
-
-    private boolean realCompressionForced;
+    private RiderTestFixtures.CodecForcingStatics realCodecStatics;
 
     @BeforeEach
     void rememberStatics() {
-        realMaxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
-        realThresholdMultiplier = PartitionStateManager.getUSED_PAYLOAD_THRESHOLD_MULTIPLIER();
-        realForcedCodec = OffsetMapCodecManager.forcedCodec;
-        realCompressionForced = OffsetSimultaneousEncoder.compressionForced;
+        realSizeStatics = RiderTestFixtures.MetadataSizeStatics.remember();
+        realCodecStatics = RiderTestFixtures.CodecForcingStatics.remember();
 
         OffsetMapCodecManager.DefaultMaxMetadataSize = CAP;
         PartitionStateManager.setUSED_PAYLOAD_THRESHOLD_MULTIPLIER(USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT);
@@ -232,10 +227,8 @@ class OffsetRiderOverheadTest {
 
     @AfterEach
     void restoreStatics() {
-        OffsetMapCodecManager.DefaultMaxMetadataSize = realMaxMetadataSize;
-        PartitionStateManager.setUSED_PAYLOAD_THRESHOLD_MULTIPLIER(realThresholdMultiplier);
-        OffsetMapCodecManager.forcedCodec = realForcedCodec;
-        OffsetSimultaneousEncoder.compressionForced = realCompressionForced;
+        realSizeStatics.restore();
+        realCodecStatics.restore();
     }
 
     @AfterAll
@@ -250,7 +243,7 @@ class OffsetRiderOverheadTest {
 
     /**
      * The overhead table, over the whole rider domain rather than a sample of it: for every rider length the
-     * derived cap allows, and for a spread of hole-encoding lengths including both ends, the length of the string
+     * derived cap allows, and for a spread of offset-map lengths including both ends, the length of the string
      * {@link OffsetMapCodecManager#assembleMetadataPayload} actually produces is
      * {@code 4*ceil((3 + rider + inner)/3)}.
      * <p>
@@ -272,9 +265,9 @@ class OffsetRiderOverheadTest {
                 .that(riderCap)
                 .isGreaterThan(0);
 
-        // the largest hole encoding that still leaves room for a single rider byte, from the same inversion of the
-        // closed form the production cap uses: n bytes cost 4*ceil(n/3) characters, so c characters hold
-        // 3*floor(c/4) bytes
+        // the largest offset map encoding that still leaves room for a single rider byte, from the same
+        // inversion of the closed form the production cap uses: n bytes cost 4*ceil(n/3) characters, so c
+        // characters hold 3*floor(c/4) bytes
         int capacityInBytes = (CAP / 4) * 3;
         int largestInnerWithRoomForOneRiderByte = capacityInBytes - HEADER - 1;
         int[] innerLengths = {0, 1, 2, 3, 4, 100, largestInnerWithRoomForOneRiderByte};
@@ -307,9 +300,9 @@ class OffsetRiderOverheadTest {
     // ---- (b) the engagement points ----------------------------------------------------------------------------
 
     /**
-     * The finding this unit exists for, over every incumbent encoding and a corpus of hole-map shapes: the
+     * The finding this unit exists for, over every incumbent encoding and a corpus of offset-map shapes: the
      * <b>back-pressure engagement point does not move at all</b> when a rider is configured (R7, KTD4 - back
-     * pressure is judged on the hole encoding alone, because rider bytes do not shrink as work completes and
+     * pressure is judged on the offset map encoding alone, because rider bytes do not shrink as work completes and
      * charging them there would be a floor the mechanism could never relieve), and the <b>cap engagement point
      * moves earlier by at most the rider's Base64 footprint</b>, never later.
      * <p>
@@ -320,8 +313,8 @@ class OffsetRiderOverheadTest {
      * <p>
      * <b>The bound is asserted in characters, not in incompletes.</b> A count is a property of the shape and the
      * encoding and would have to be re-derived whenever either moves; the character bound is the actual claim, and
-     * it is exact: at the range where a rider first fails to fit, the <em>bare</em> hole map is already within one
-     * rider footprint of the cap. Below that point the ladder sheds the rider rather than the hole map, which is
+     * it is exact: at the range where a rider first fails to fit, the <em>bare</em> offset map is already within one
+     * rider footprint of the cap. Below that point the ladder sheds the rider rather than the offset map, which is
      * R9 and {@code PartitionStateRiderBudgetTest}'s subject.
      */
     @Test
@@ -384,10 +377,10 @@ class OffsetRiderOverheadTest {
      * One corpus point, committed for real in both arms: with an {@value #RIDER_BYTES}-byte rider configured and
      * with no supplier at all.
      * <p>
-     * Three claims at once. <b>AE8/R10</b>: the hole encoding's byte length is identical, so rider bytes changed
+     * Three claims at once. <b>AE8/R10</b>: the encoded offset map's byte length is identical, so rider bytes changed
      * neither which encoding won nor whether it was compressed. <b>R7</b>: the partition's back-pressure state is
-     * identical, and is what the hole encoding's own length alone predicts. <b>R9</b>: whichever rung the ladder
-     * landed on, the string is the predicted length, and a payload is stripped only when the hole map alone was
+     * identical, and is what the encoded offset map's own length alone predicts. <b>R9</b>: whichever rung the ladder
+     * landed on, the string is the predicted length, and a payload is stripped only when the offset map alone was
      * already over the cap.
      */
     private void assertBothArmsAgreeAt(OffsetEncoding encoding, String shape, int rangeSize) {
@@ -448,7 +441,7 @@ class OffsetRiderOverheadTest {
     }
 
     /**
-     * Whether an {@value #RIDER_BYTES}-byte rider fails to reach the wire beside a hole encoding of this many
+     * Whether an {@value #RIDER_BYTES}-byte rider fails to reach the wire beside an offset map encoding of this many
      * bytes - which is the cap engaging on the rider, by either of the two mechanisms that can refuse it: the
      * write-time guard's derived budget, and the ladder's own arithmetic. The two answer at the same byte, which
      * is KTD4's claim that the guard's cap and the ladder's rungs are the same arithmetic seen from two sides.
@@ -496,7 +489,7 @@ class OffsetRiderOverheadTest {
     // ---- the engagement-point search --------------------------------------------------------------------------
 
     /**
-     * A range size at which {@code engaged} holds of the hole encoding's byte length and at which the range one
+     * A range size at which {@code engaged} holds of the encoded offset map's byte length and at which the range one
      * below does not - the engagement point - by binary search over {@link #MIN_RANGE}..{@link #MAX_RANGE}.
      * <p>
      * <b>It is a boundary by construction rather than by assuming the encoded length rises with the range.</b> The
@@ -506,7 +499,7 @@ class OffsetRiderOverheadTest {
      * be.
      * <p>
      * <b>Why comparing two of these answers is still sound.</b> The rider's predicate is a strict superset of the
-     * no-rider one (a hole map over the cap is over it with a rider on top too), and both searches walk the
+     * no-rider one (an offset map over the cap is over it with a rider on top too), and both searches walk the
      * identical probe sequence until they first disagree - at which point the rider's takes the left half and the
      * other the right. So the rider's engagement point is never above the no-rider one, however the encoded length
      * behaves in between.
@@ -650,7 +643,7 @@ class OffsetRiderOverheadTest {
     }
 
     /**
-     * The hole encoding's own byte length, read back out of a committed string - through the envelope when there
+     * The encoded offset map's own byte length, read back out of a committed string - through the envelope when there
      * is one.
      *
      * @return negative when nothing was committed, so there is no string to read it from
@@ -667,22 +660,7 @@ class OffsetRiderOverheadTest {
     }
 
     /**
-     * What the committed string says about the rider slot - {@link RiderState#NONE} when there is no envelope at
-     * all, which is both "never configured" and the ladder's bottom envelope rung.
-     */
-    private static RiderState riderStateOf(String metadata) {
-        if (metadata.isEmpty()) {
-            return RiderState.NONE;
-        }
-        byte[] raw = Base64.getDecoder().decode(metadata);
-        if (raw.length == 0 || raw[0] != OffsetRiderEnvelope.MAGIC_BYTE) {
-            return RiderState.NONE;
-        }
-        return unwrapOrFail(raw).getRider().getState();
-    }
-
-    /**
-     * The hole encoding's byte length for one corpus point, memoised - the three binary searches over a shape
+     * The encoded offset map's byte length for one corpus point, memoised - the three binary searches over a shape
      * revisit each other's probes, and an encode is the expensive thing this class does.
      */
     private int innerEncodingLength(OffsetEncoding encoding, String shape, int rangeSize) {
@@ -750,7 +728,7 @@ class OffsetRiderOverheadTest {
     }
 
     /**
-     * The rider budget a commit with a hole encoding of {@code innerLength} bytes offers its supplier, restated
+     * The rider budget a commit with an offset map encoding of {@code innerLength} bytes offers its supplier, restated
      * from KTD4's two limits - the quarter of the field back pressure never uses, and what is actually left once
      * the offset map and the envelope's header are accounted for.
      * <p>
@@ -790,7 +768,7 @@ class OffsetRiderOverheadTest {
     }
 
     /**
-     * The rider budget a caught-up commit offers, which is the derived cap with no hole encoding to share the
+     * The rider budget a caught-up commit offers, which is the derived cap with no offset map encoding to share the
      * field with - the top of the domain the overhead table walks. Read off a real {@link RiderContext} rather
      * than restated, so the table's domain is the budget an embedder is actually given.
      */
@@ -800,11 +778,9 @@ class OffsetRiderOverheadTest {
             offered.set(context.getMaxRiderBytes());
             return null;
         });
-        var state = new PartitionState<String, String>(0, module, TP, HighestOffsetAndIncompletes.of());
-        state.addNewIncompleteRecord(new ConsumerRecord<>(TP.topic(), TP.partition(), 0, "key", "value"));
-        state.onSuccess(0);
+        var state = RiderTestFixtures.caughtUpState(module, TP);
 
-        // a caught-up commit: no hole map to write, but the supplier still runs - that commit is the one a
+        // a caught-up commit: no offset map to write, but the supplier still runs - that commit is the one a
         // restart reads back
         var ignoredCommit = state.getCommitDataIfDirty();
         assertWithMessage("precondition: the supplier must have been asked, or there is no measured cap")
@@ -816,25 +792,12 @@ class OffsetRiderOverheadTest {
         return offered.get();
     }
 
-    private PCModuleTestEnv moduleWith(Function<RiderContext, byte[]> supplier) {
-        return new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
-                .riderSupplier(supplier)
-                // its own registry per module, so nothing here perturbs another suite's meters
-                .meterRegistry(new SimpleMeterRegistry())
-                .build());
-    }
-
-    /**
-     * Rider bytes that do not compress, so the arithmetic about their length survives the outer codec.
-     */
     private static byte[] riderOf(int length) {
-        byte[] bytes = new byte[length];
-        new Random(CORPUS_SEED + length).nextBytes(bytes);
-        return bytes;
+        return RiderTestFixtures.riderOf(CORPUS_SEED, length);
     }
 
     /**
-     * Synthetic hole-encoding bytes for the overhead table: the content is irrelevant, because Base64's length
+     * Synthetic offset-map bytes for the overhead table: the content is irrelevant, because Base64's length
      * depends only on the byte count - but the first byte may not be the envelope's own, which never nests.
      */
     private static byte[] innerBytesOf(int length) {
@@ -843,23 +806,6 @@ class OffsetRiderOverheadTest {
             inner[0] = OffsetEncoding.BitSetV2.magicByte;
         }
         return inner;
-    }
-
-    /**
-     * The Base64 closed form, written out here rather than borrowed from {@code RiderBudgetRung} - which is
-     * package-private to {@code bz.stub.parallelconsumer.state} in any case - so that the table is checked against
-     * an independent statement of the arithmetic rather than against itself.
-     */
-    private static int base64Characters(int rawBytes) {
-        return 4 * ((rawBytes + 2) / 3);
-    }
-
-    private static OffsetRiderEnvelope.UnwrappedEnvelope unwrapOrFail(byte[] raw) {
-        try {
-            return OffsetRiderEnvelope.unwrap(raw);
-        } catch (CorruptOffsetMetadataException corrupt) {
-            throw new AssertionError("a payload this test just committed did not unwrap", corrupt);
-        }
     }
 
 }

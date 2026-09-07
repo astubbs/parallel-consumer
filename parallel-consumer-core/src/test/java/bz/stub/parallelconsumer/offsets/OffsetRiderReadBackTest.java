@@ -105,7 +105,7 @@ class OffsetRiderReadBackTest {
     }
 
     /**
-     * The ladder's third rung: the drop marker itself did not fit, so the envelope was shed and the hole map
+     * The ladder's third rung: the drop marker itself did not fit, so the envelope was shed and the offset map
      * committed bare (R9). Byte for byte that is today's payload, and R6 says so out loud - the rider reads back as
      * never configured, and the dropped-rider counter is the only remaining signal.
      */
@@ -204,7 +204,7 @@ class OffsetRiderReadBackTest {
     }
 
     /**
-     * AE7. The envelope parsed and the hole map inside it did not - the two are structurally independent, and the
+     * AE7. The envelope parsed and the offset map inside it did not - the two are structurally independent, and the
      * rider was read before the body was looked at. So {@code IGNORE} still answers with the rider, and {@code FAIL}
      * still stops.
      */

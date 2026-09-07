@@ -4,18 +4,16 @@ package bz.stub.parallelconsumer.state;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.RiderContext;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
-import bz.stub.parallelconsumer.offsets.CorruptOffsetMetadataException;
 import bz.stub.parallelconsumer.offsets.NoEncodingPossibleException;
 import bz.stub.parallelconsumer.offsets.OffsetDecodingError;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope.RiderState;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import bz.stub.parallelconsumer.offsets.RiderTestFixtures;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -30,9 +28,13 @@ import org.junit.jupiter.api.parallel.ResourceLock;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
-import java.util.Random;
 import java.util.function.Function;
 
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.base64Characters;
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.decoded;
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.moduleWith;
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.riderStateOf;
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.unwrap;
 import static bz.stub.parallelconsumer.state.PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -43,13 +45,13 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * <p>
  * <b>The two measurements, and why they are different numbers</b> (KTD4/R7). Back pressure exists so that a
  * payload can <em>shrink</em> as work completes. Rider bytes do not shrink - the embedder hands over the same
- * blob whatever the hole map is doing - so charging them against the back-pressure threshold would make a rider a
+ * blob whatever the offset map is doing - so charging them against the back-pressure threshold would make a rider a
  * floor that back pressure can never relieve, and on a caught-up partition a permanent block. So the hole
  * encoding alone is measured against the threshold, and the assembled string, rider included, against the hard
  * metadata cap.
  * <p>
  * <b>The ladder</b> (R9). When the assembled string will not fit the cap, PC sheds the rider, then the drop
- * marker, and only then the hole map - so configuring a rider can never cost a partition metadata it would
+ * marker, and only then the offset map - so configuring a rider can never cost a partition metadata it would
  * otherwise have committed. Each rung is chosen by <em>predicted</em> encoded length, from Base64's closed form
  * {@code 4*ceil(n/3)}, so the outer codec runs once on the winning rung rather than once per rung; every scenario
  * here asserts the prediction against the string that was actually produced.
@@ -62,7 +64,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * guard fires first and nothing here would be about the ladder at all. The lock is taken in WRITE mode because
  * these tests move the cap, and both statics are restored per test and again after the class.
  * <p>
- * <b>Sizes are measured, never assumed.</b> Every scenario encodes its own hole map first, reads the byte length
+ * <b>Sizes are measured, never assumed.</b> Every scenario encodes its own offset map first, reads the byte length
  * the encoder competition actually produced, and derives the cap it needs from that - so a change to the
  * encodings moves the fixture rather than silently turning a ladder scenario into a guard scenario. Each one
  * asserts its own preconditions for that reason.
@@ -83,7 +85,7 @@ class PartitionStateRiderBudgetTest {
     private static final int HEADER = OffsetRiderEnvelope.HEADER_BYTES;
 
     /**
-     * Enough records for the hole map to encode to a couple of hundred bytes, which leaves the derived rider cap
+     * Enough records for the offset map to encode to a couple of hundred bytes, which leaves the derived rider cap
      * room to be interesting. Randomised holes rather than a pattern, because an alternating one compresses to
      * almost nothing and the fixture would then be measuring gzip.
      */
@@ -91,20 +93,16 @@ class PartitionStateRiderBudgetTest {
 
     private static final long HOLE_SEED = 20260906L;
 
-    private int realMaxMetadataSize;
-
-    private double realThresholdMultiplier;
+    private RiderTestFixtures.MetadataSizeStatics realSizeStatics;
 
     @BeforeEach
     void rememberStatics() {
-        realMaxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
-        realThresholdMultiplier = PartitionStateManager.getUSED_PAYLOAD_THRESHOLD_MULTIPLIER();
+        realSizeStatics = RiderTestFixtures.MetadataSizeStatics.remember();
     }
 
     @AfterEach
     void restoreStatics() {
-        OffsetMapCodecManager.DefaultMaxMetadataSize = realMaxMetadataSize;
-        PartitionStateManager.setUSED_PAYLOAD_THRESHOLD_MULTIPLIER(realThresholdMultiplier);
+        realSizeStatics.restore();
     }
 
     @AfterAll
@@ -116,9 +114,9 @@ class PartitionStateRiderBudgetTest {
     // ---- the ladder's rungs ---------------------------------------------------------------------------------
 
     /**
-     * AE3, covering R7. The hole encoding sits under the back-pressure threshold; the rider lifts the assembled
+     * AE3, covering R7. The offset map encoding sits under the back-pressure threshold; the rider lifts the assembled
      * string over it but leaves it under the cap. The rider is committed and the partition stays unblocked -
-     * because only the hole encoding is measured against the threshold.
+     * because only the offset map encoding is measured against the threshold.
      * <p>
      * On the pre-change rule (assembled string against both limits) this commit blocks the partition, and nothing
      * would ever unblock it: the rider does not shrink when work completes.
@@ -128,8 +126,8 @@ class PartitionStateRiderBudgetTest {
         int innerBytes = measureInnerEncodingLength();
         int innerCharacters = base64Characters(innerBytes);
 
-        // 1.8x the hole encoding: comfortably above it (so the assembled string clears the 75% threshold once the
-        // rider is on) and comfortably below 1/0.75 of it (so the hole encoding alone is still under that
+        // 1.8x the offset map encoding: comfortably above it (so the assembled string clears the 75% threshold once the
+        // rider is on) and comfortably below 1/0.75 of it (so the offset map encoding alone is still under that
         // threshold). Both are asserted below rather than trusted.
         int cap = roundUpToFour(innerCharacters * 9 / 5);
         OffsetMapCodecManager.DefaultMaxMetadataSize = cap;
@@ -171,8 +169,8 @@ class PartitionStateRiderBudgetTest {
     }
 
     /**
-     * AE4, covering R6 and R9. The hole map fits the cap with room for the drop marker, but not with the rider on
-     * top. The committed payload is the envelope carrying the zero-length marker around the hole map - which is
+     * AE4, covering R6 and R9. The offset map fits the cap with room for the drop marker, but not with the rider on
+     * top. The committed payload is the envelope carrying the zero-length marker around the offset map - which is
      * how a reader tells a rider that was shed for size from one that was never configured - and the block
      * follows the <em>inner</em> length, not the assembled one.
      */
@@ -213,9 +211,9 @@ class PartitionStateRiderBudgetTest {
     }
 
     /**
-     * AE5, covering R9 - the rung that exists because the marker is not free. The hole map's string sits within
+     * AE5, covering R9 - the rung that exists because the marker is not free. The offset map's string sits within
      * the marker's own cost of the cap, so an envelope of any kind would push it over. PC writes today's bare
-     * hole map instead: a payload that reads back as "no rider was ever configured", which is the price of R9's
+     * offset map instead: a payload that reads back as "no rider was ever configured", which is the price of R9's
      * guarantee that configuring a rider never costs the partition metadata it would otherwise have committed.
      */
     @Test
@@ -253,7 +251,7 @@ class PartitionStateRiderBudgetTest {
     }
 
     /**
-     * The bottom of the ladder, and the one rung that predates the rider: the hole map alone does not fit, so the
+     * The bottom of the ladder, and the one rung that predates the rider: the offset map alone does not fit, so the
      * payload is stripped and a bare offset is committed. Asserted with a rider configured <em>and</em> without
      * one, because the outcome has to be identical - that is R9 stated from the other end.
      */
@@ -461,7 +459,7 @@ class PartitionStateRiderBudgetTest {
 
     /**
      * KTD9: the encoder competition runs exactly once per commit, whichever rung the ladder lands on. A ladder
-     * that encoded per rung would snapshot a later hole map on the second pass - the confluentinc#894 tear class
+     * that encoded per rung would snapshot a later offset map on the second pass - the confluentinc#894 tear class
      * - and double-count both encoding meters.
      */
     @Test
@@ -534,26 +532,12 @@ class PartitionStateRiderBudgetTest {
 
     // ---- fixtures -------------------------------------------------------------------------------------------
 
-    /**
-     * The Base64 closed form, written out here rather than borrowed from the production side: it is what the
-     * ladder's predictions are checked <em>against</em>, so a shared implementation would agree with itself.
-     * {@code OffsetSimpleSerialisation.base64} uses the padding encoder, for which this is exact.
-     */
-    private static int base64Characters(int rawBytes) {
-        return 4 * ((rawBytes + 2) / 3);
-    }
-
     private static int roundUpToFour(int characters) {
         return ((characters + 3) / 4) * 4;
     }
 
-    /**
-     * Rider bytes that do not compress, so a fixture's arithmetic about their length survives the outer codec.
-     */
     private static byte[] riderOf(int length) {
-        byte[] bytes = new byte[length];
-        new Random(HOLE_SEED + length).nextBytes(bytes);
-        return bytes;
+        return RiderTestFixtures.riderOf(HOLE_SEED, length);
     }
 
     private List<Function<RiderContext, byte[]>> suppliers(byte[]... returnValues) {
@@ -564,21 +548,10 @@ class PartitionStateRiderBudgetTest {
         return out;
     }
 
-    private PCModuleTestEnv moduleWith(Function<RiderContext, byte[]> supplier) {
-        return new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
-                .riderSupplier(supplier)
-                // its own registry, so the encoder-runs-once assertion counts this test's encodes and nobody else's
-                .meterRegistry(new SimpleMeterRegistry())
-                .build());
-    }
-
     /**
-     * A partition with {@link #RECORDS} offsets polled and a pseudorandom half of them still outstanding - an
-     * ordinary out-of-order completion pattern, chosen over an alternating one because random holes do not
-     * compress and so the encoded length stays a function of the range rather than of gzip.
-     * <p>
-     * Offset zero is always a hole, which pins the commit offset at zero and so the encoder's base; the top
-     * offset always succeeds, which pins the range.
+     * A partition with {@link #RECORDS} offsets polled and a pseudorandom half of them still outstanding.
+     *
+     * @see RiderTestFixtures#stateWithHoles
      */
     private PartitionState<String, String> stateWithHoles(Function<RiderContext, byte[]> supplier) {
         return stateWithHoles(supplier, RECORDS);
@@ -589,46 +562,29 @@ class PartitionStateRiderBudgetTest {
     }
 
     private PartitionState<String, String> stateWithHoles(PCModuleTestEnv module, int records) {
-        var state = new PartitionState<String, String>(0, module, TP, HighestOffsetAndIncompletes.of());
-        populateWithHoles(state, records);
-        return state;
+        return RiderTestFixtures.stateWithHoles(module, TP, records, HOLE_SEED);
     }
 
     private void populateWithHoles(PartitionState<String, String> state, int records) {
-        var holes = new Random(HOLE_SEED);
-        for (long offset = 0; offset < records; offset++) {
-            state.addNewIncompleteRecord(record(offset));
-        }
-        for (long offset = 1; offset < records; offset++) {
-            if (offset == records - 1 || holes.nextBoolean()) {
-                state.onSuccess(offset);
-            }
-        }
+        RiderTestFixtures.populateWithHoles(state, TP, records, HOLE_SEED);
     }
 
     private PartitionState<String, String> caughtUpState(Function<RiderContext, byte[]> supplier) {
-        var state = new PartitionState<String, String>(0, moduleWith(supplier), TP, HighestOffsetAndIncompletes.of());
-        state.addNewIncompleteRecord(record(0));
-        state.onSuccess(0);
-        return state;
+        return RiderTestFixtures.caughtUpState(moduleWith(supplier), TP);
     }
 
     /**
-     * The encoded length of the fixture's hole map, measured by running the same encoder the commit will run,
-     * against a throwaway state. Every cap in this class is derived from this number rather than hard-coded, so a
-     * change to the encodings retunes the fixtures instead of silently reclassifying a scenario.
+     * The encoded length of the fixture's offset map. Every cap in this class is derived from this number rather
+     * than hard-coded, so a change to the encodings retunes the fixtures instead of silently reclassifying a
+     * scenario.
      */
     private int measureInnerEncodingLength() throws NoEncodingPossibleException {
-        var module = moduleWith(context -> null);
-        var state = stateWithHoles(module, RECORDS);
-        byte[] inner = new OffsetMapCodecManager<String, String>(module).encodeOffsetsToInnerBytes(0, state);
-        log.debug("Fixture hole map encodes to {} bytes ({} characters)", inner.length, base64Characters(inner.length));
-        return inner.length;
+        return RiderTestFixtures.measureInnerEncodingLength(TP, RECORDS, HOLE_SEED);
     }
 
     /**
-     * What this build writes for the same holes with no rider configured - the baseline the no-rider scenarios
-     * compare against, produced through the codec's own no-rider entry point.
+     * What this build writes for the same offset map with no rider configured - the baseline the no-rider
+     * scenarios compare against, produced through the codec's own no-rider entry point.
      */
     private String todaysPayload(int records) throws NoEncodingPossibleException {
         var module = moduleWith(context -> null);
@@ -637,28 +593,7 @@ class PartitionStateRiderBudgetTest {
     }
 
     private ConsumerRecord<String, String> record(long offset) {
-        return new ConsumerRecord<>(TP.topic(), TP.partition(), offset, "key", "value");
-    }
-
-    private static byte[] decoded(OffsetAndMetadata committed) {
-        return Base64.getDecoder().decode(committed.metadata());
-    }
-
-    private static OffsetRiderEnvelope.UnwrappedEnvelope unwrap(OffsetAndMetadata committed)
-            throws CorruptOffsetMetadataException {
-        return OffsetRiderEnvelope.unwrap(decoded(committed));
-    }
-
-    /**
-     * What the committed string says about the rider slot - {@link RiderState#NONE} when there is no envelope at
-     * all, which is both "never configured" and the ladder's bottom envelope rung.
-     */
-    private static RiderState riderStateOf(OffsetAndMetadata committed) throws CorruptOffsetMetadataException {
-        byte[] raw = decoded(committed);
-        if (raw.length == 0 || raw[0] != OffsetRiderEnvelope.MAGIC_BYTE) {
-            return RiderState.NONE;
-        }
-        return OffsetRiderEnvelope.unwrap(raw).getRider().getState();
+        return RiderTestFixtures.record(TP, offset);
     }
 
     private static Iterable<Long> incompletesOf(OffsetAndMetadata committed) throws OffsetDecodingError {

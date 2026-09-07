@@ -582,7 +582,7 @@ public class PartitionState<K, V> {
      * {@link OffsetMapCodecManager#makeOffsetMetadataPayload}.
      * <p>
      * <b>This method is the whole commit snapshot, and everything the payload says is sampled inside it</b>: the
-     * offset, the hole map, and - when one is configured - the embedder's rider (see
+     * offset, the offset map, and - when one is configured - the embedder's rider (see
      * {@link #riderFromSupplier}). Reading any of them again elsewhere is the confluentinc#893 defect class, so
      * the write side is two steps rather than one: encode the offset map once, then assemble the string around
      * whatever the rider slot turned out to hold.
@@ -604,7 +604,7 @@ public class PartitionState<K, V> {
             if (caughtUpRider.getState() == OffsetRiderEnvelope.RiderState.NONE) {
                 return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
             }
-            // KTD14: neither ratio takes a sample here, deliberately. There is no hole encoding to report a
+            // KTD14: neither ratio takes a sample here, deliberately. There is no offset map encoding to report a
             // density for, and the offset range is zero or negative on this path - Micrometer records -0.0 and
             // 0.0 as samples, and a positive numerator over a zero range is Infinity, so a sample would drag
             // both distributions off their meaning on every commit of a healthy consumer. The rider itself is
@@ -617,8 +617,8 @@ public class PartitionState<K, V> {
         try {
             // todo refactor use of null shouldn't be needed. Is OffsetMapCodecManager stateful? remove null - confluentinc#233
             var offsetRange = getOffsetHighestSucceeded() - offsetOfNextExpectedMessage;
-            // KTD9: encode the holes ONCE, then ask for the rider, then assemble. A second encode pass here would
-            // snapshot a later hole map (the confluentinc#894 tear class) and double-count the encoding meters.
+            // KTD9: encode the offset map ONCE, then ask for the rider, then assemble. A second encode pass here would
+            // snapshot a later offset map (the confluentinc#894 tear class) and double-count the encoding meters.
             byte[] innerBytes = om.encodeOffsetsToInnerBytes(offsetOfNextExpectedMessage, this);
             var offered = riderFromSupplier(offsetOfNextExpectedMessage, innerBytes.length);
             // KTD4/R9: the ladder picks its rung by PREDICTED length and only then assembles, so the outer codec
@@ -653,8 +653,8 @@ public class PartitionState<K, V> {
     /**
      * The two ratios, which measure <b>different lengths</b> and answer different questions (KTD14).
      * <p>
-     * {@link PCMetricsDef#PAYLOAD_RATIO_USED} is <em>density</em>: how many encoded characters the hole map
-     * spends per offset it describes, so it records the hole encoding's own length and is unmoved by a rider.
+     * {@link PCMetricsDef#PAYLOAD_RATIO_USED} is <em>density</em>: how many encoded characters the offset map
+     * spends per offset it describes, so it records the encoded offset map's own length and is unmoved by a rider.
      * {@link PCMetricsDef#METADATA_SPACE_USED} is <em>headroom</em>: how close this commit came to the broker's
      * metadata limit, so it records the string that actually goes to the broker, rider included - which is what
      * keeps its description true now that a payload can carry more than the offset map.
@@ -666,9 +666,9 @@ public class PartitionState<K, V> {
      * whose highest succeeded offset has not yet passed the offset being committed, and a metadata limit
      * configured to zero.
      *
-     * @param innerEncodingCharacterLength the hole encoding's own length, in characters
+     * @param innerEncodingCharacterLength the encoded offset map's own length, in characters
      * @param assembledPayloadLength       the length of the string that will actually be committed
-     * @param offsetRange                  how many offsets the hole map describes
+     * @param offsetRange                  how many offsets the offset map describes
      */
     private void recordEncodingRatios(int innerEncodingCharacterLength, int assembledPayloadLength, long offsetRange) {
         if (offsetRange > 0) {
@@ -699,7 +699,7 @@ public class PartitionState<K, V> {
      * <p>
      * <b>Back pressure measures the offset map alone</b>, because back pressure exists so that a payload can
      * <em>shrink</em> as work completes. Rider bytes do not shrink - the embedder hands over whatever it hands
-     * over, whatever the hole map is doing - so charging them here would make a rider a floor back pressure can
+     * over, whatever the offset map is doing - so charging them here would make a rider a floor back pressure can
      * never relieve, and on a caught-up partition a permanent block.
      * <p>
      * <b>The hard limit measures the whole assembled string</b>, rider included, because that is what actually
@@ -826,7 +826,7 @@ public class PartitionState<K, V> {
             // never descends it; both spellings of the same loss belong in one series.
             riderDroppedCounter.increment();
             // KTD4: a caught-up partition whose rider will not fit writes no metadata at all, rather than an
-            // envelope whose only content is the marker saying it is empty. With a hole map to sit beside, the
+            // envelope whose only content is the marker saying it is empty. With an offset map to sit beside, the
             // marker is worth its three bytes - it is how a reader tells a rider that was shed from one that was
             // never configured (R6).
             return innerEncodingByteLength > 0
@@ -846,7 +846,7 @@ public class PartitionState<K, V> {
      *     <li><b>The rider cap</b> - {@code maxMetadataSizeInCharacters * (1 - multiplier)} encoded characters,
      *     the slice of the metadata field that back pressure deliberately never uses. Independent of the offset
      *     map, and it is what buys the property an embedder depends on: a rider at its cap can only push the
-     *     assembled payload over the hard limit once the hole map has already crossed the back-pressure
+     *     assembled payload over the hard limit once the offset map has already crossed the back-pressure
      *     threshold, so configuring a rider cannot cost a partition metadata it would otherwise have
      *     committed.</li>
      *     <li><b>What is actually left</b> in this commit once the offset map and the envelope's own header are

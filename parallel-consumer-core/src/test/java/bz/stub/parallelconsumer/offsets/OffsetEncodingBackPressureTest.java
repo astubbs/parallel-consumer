@@ -26,7 +26,6 @@ import org.junit.jupiter.api.parallel.ResourceAccessMode;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import pl.tlinkowski.unij.api.UniLists;
 
-import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -36,6 +35,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.riderStateOf;
 import static bz.stub.parallelconsumer.internal.utils.JavaUtils.getLast;
 import static bz.stub.parallelconsumer.internal.utils.JavaUtils.getOnlyOne;
 import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
@@ -356,7 +356,7 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
      * offset map at 75% of the field while the rider is capped at the remaining 25% - so a rider can only be
      * squeezed out once the offset map has already crossed the threshold. That is the property an embedder
      * depends on (R9: configuring a rider never costs a partition metadata it would otherwise have committed),
-     * and it is why the assertion here is that the <em>rider</em> goes while the hole map stays, not that
+     * and it is why the assertion here is that the <em>rider</em> goes while the offset map stays, not that
      * anything is stripped.
      * <p>
      * <b>The block point does not move.</b> Back pressure measures the offset encoding alone, never the rider
@@ -451,23 +451,6 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
             OffsetMapCodecManager.forcedCodec = Optional.empty();
             PartitionStateManager.setUSED_PAYLOAD_THRESHOLD_MULTIPLIER(USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT);
         }
-    }
-
-    /**
-     * What a committed payload says about the rider slot - {@code NONE} when there is no envelope at all, which
-     * covers both "never configured" and the ladder's bottom envelope rung.
-     */
-    private static OffsetRiderEnvelope.RiderState riderStateOf(OffsetAndMetadata commit)
-            throws CorruptOffsetMetadataException {
-        String metadata = commit.metadata();
-        if (metadata == null || metadata.isEmpty()) {
-            return OffsetRiderEnvelope.RiderState.NONE;
-        }
-        byte[] raw = Base64.getDecoder().decode(metadata);
-        if (raw.length == 0 || raw[0] != OffsetRiderEnvelope.MAGIC_BYTE) {
-            return OffsetRiderEnvelope.RiderState.NONE;
-        }
-        return OffsetRiderEnvelope.unwrap(raw).getRider().getState();
     }
 
     private OffsetAndMetadata getLastCommit() {

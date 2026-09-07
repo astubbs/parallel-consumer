@@ -353,7 +353,7 @@ public class OffsetMapCodecManager<K, V> {
      *     <li>{@link OffsetRiderEnvelope.RiderState#PRESENT} - these are the bytes the supplier returned for this
      *     partition. Decode them.</li>
      *     <li>{@link OffsetRiderEnvelope.RiderState#NONE} - no rider was configured when this was committed, or the
-     *     budget ladder had to shed the envelope itself to keep the hole map (R9). Start from nothing.</li>
+     *     budget ladder had to shed the envelope itself to keep the offset map (R9). Start from nothing.</li>
      *     <li>{@link OffsetRiderEnvelope.RiderState#DROPPED} - a rider existed and was too big for the commit it
      *     would have ridden on. Also start from nothing, but the supplier is producing more bytes than PC can carry
      *     and the dropped-rider counter says how often.</li>
@@ -361,7 +361,7 @@ public class OffsetMapCodecManager<K, V> {
      *     {@code IGNORE} discarded it, so what the rider slot held is <em>unknown</em> rather than absent. Never
      *     returned under {@code FAIL}, which throws instead.</li>
      * </ul>
-     * An envelope that parsed keeps its rider even when the hole map inside it did not: the two are structurally
+     * An envelope that parsed keeps its rider even when the offset map inside it did not: the two are structurally
      * independent, so a corrupt inner body still answers {@code PRESENT} under {@code IGNORE}.
      * <p>
      * <b>The policy is a required parameter, and no overload without one is ever added.</b> There is no default that
@@ -426,7 +426,7 @@ public class OffsetMapCodecManager<K, V> {
      * <p>
      * <b>The encoder competition runs exactly once per call</b>, and so do its meters
      * ({@link PCMetricsDef#OFFSETS_ENCODING_USAGE}, {@link PCMetricsDef#OFFSETS_ENCODING_TIME}). A second pass would
-     * snapshot a later hole map - the confluentinc#894 tear class - and double-count both.
+     * snapshot a later offset map - the confluentinc#894 tear class - and double-count both.
      *
      * @return the offset map, its magic byte first; <b>empty</b> when the partition has nothing incomplete, which is
      *         the caught-up case: there is no map to write, and a rider (if there is one) rides alone. The condition

@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.RiderContext;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import bz.stub.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import bz.stub.parallelconsumer.offsets.CorruptOffsetMetadataException;
 import bz.stub.parallelconsumer.offsets.OffsetDecodingError;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
@@ -16,11 +17,8 @@ import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIn
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope.RiderState;
 import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
@@ -30,7 +28,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.parallel.ResourceAccessMode;
 import org.junit.jupiter.api.parallel.ResourceLock;
-import org.slf4j.LoggerFactory;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.nio.charset.StandardCharsets;
@@ -42,7 +39,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.record;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static java.time.Duration.ofSeconds;
@@ -113,7 +112,7 @@ class RiderSupplierGuardTest {
      * R11: the rider is captured in the same snapshot as the offset it commits against, so the supplier has to be
      * told <em>that</em> offset - the confluentinc#893 rule that a payload travels with the offset it describes.
      * One call, because KTD9 puts the call inside the single snapshot: a second one would be a second sample of a
-     * moving hole map.
+     * moving offset map.
      */
     @Test
     void theSupplierIsCalledOncePerCommitAndToldTheOffsetThatIsCommitted() {
@@ -142,7 +141,7 @@ class RiderSupplierGuardTest {
     }
 
     /**
-     * The whole point: what the supplier returned comes back out of the committed string, and the hole map it
+     * The whole point: what the supplier returned comes back out of the committed string, and the offset map it
      * shares the payload with is unharmed.
      */
     @Test
@@ -165,7 +164,7 @@ class RiderSupplierGuardTest {
     }
 
     /**
-     * R3/KTD6: a caught-up partition has no hole map to write, and before the rider it committed no metadata at
+     * R3/KTD6: a caught-up partition has no offset map to write, and before the rider it committed no metadata at
      * all. It now commits the rider alone - and the early return that unblocks a partition which has caught up
      * still unblocks it, which is the property that stops a rider becoming a permanent block.
      */
@@ -225,17 +224,16 @@ class RiderSupplierGuardTest {
             throw new IllegalStateException("the embedder's supplier is broken");
         });
 
-        var warnings = captureWarningsFromThisThread(PartitionState.class);
         OffsetAndMetadata first;
         OffsetAndMetadata second;
-        try {
+        List<String> about;
+        try (var warnings = LogCapture.of(PartitionState.class, Level.WARN)) {
             first = state.createOffsetAndMetadata();
             // the outstanding offset completes, so the second commit is a real one on moved state - and
             // takes the caught-up path, proving the guard covers that call site too
             state.onSuccess(HOLE_OFFSET);
             second = state.createOffsetAndMetadata();
-        } finally {
-            warnings.detach();
+            about = warningsFromThisThreadMentioning(warnings, ParallelConsumerOptions.Fields.riderSupplier);
         }
 
         assertWithMessage("a throwing supplier must cost the rider only - no envelope is written, so the commit "
@@ -246,7 +244,6 @@ class RiderSupplierGuardTest {
                 .that(second.offset())
                 .isAtLeast(first.offset());
 
-        var about = warnings.mentioning(ParallelConsumerOptions.Fields.riderSupplier);
         assertWithMessage("one warning, naming the option, for two failing commits - the limiter is what stops a "
                         + "permanently broken supplier burying every other line in the log. Saw: %s", about)
                 .that(about)
@@ -258,7 +255,7 @@ class RiderSupplierGuardTest {
     }
 
     /**
-     * R8: a rider bigger than the cap the supplier was handed is dropped at the write side. The hole map is
+     * R8: a rider bigger than the cap the supplier was handed is dropped at the write side. The offset map is
      * untouched - a rider must never cost a partition metadata it would otherwise have committed (R9) - and the
      * envelope survives carrying the zero-length marker, which is how a reader tells a shed rider from one that
      * was never configured (R6).
@@ -268,12 +265,11 @@ class RiderSupplierGuardTest {
             CorruptOffsetMetadataException {
         var state = stateWithHoles(context -> AN_OVERSIZED_RIDER);
 
-        var warnings = captureWarningsFromThisThread(PartitionState.class);
         OffsetAndMetadata committed;
-        try {
+        List<String> warnings;
+        try (var capture = LogCapture.of(PartitionState.class, Level.WARN)) {
             committed = state.createOffsetAndMetadata();
-        } finally {
-            warnings.detach();
+            warnings = warningsFromThisThreadMentioning(capture, ParallelConsumerOptions.Fields.riderSupplier);
         }
 
         assertWithMessage("R6: the envelope survives so the reader can tell a dropped rider from an absent one")
@@ -285,13 +281,13 @@ class RiderSupplierGuardTest {
                         .getIncompleteOffsets())
                 .containsExactly(HOLE_OFFSET);
         assertWithMessage("R8: one rate-limited warning, naming the option")
-                .that(warnings.mentioning(ParallelConsumerOptions.Fields.riderSupplier))
+                .that(warnings)
                 .hasSize(1);
     }
 
     /**
      * KTD4's last sentence: a caught-up partition whose rider exceeds the cap writes no metadata at all, rather
-     * than an empty envelope carrying nothing. There is no hole map for the marker to sit beside, so the marker
+     * than an empty envelope carrying nothing. There is no offset map for the marker to sit beside, so the marker
      * would be the entire payload - all cost, no information.
      */
     @Test
@@ -420,7 +416,7 @@ class RiderSupplierGuardTest {
     // ---- fixtures ---------------------------------------------------------------------------------------
 
     /**
-     * The offset left incomplete in {@link #stateWithHoles}, so that the encoder has a hole map to produce and the
+     * The offset left incomplete in {@link #stateWithHoles}, so that the encoder has an offset map to produce and the
      * payload is not the caught-up case.
      */
     private static final long HOLE_OFFSET = 1L;
@@ -429,7 +425,7 @@ class RiderSupplierGuardTest {
 
     /**
      * A partition with offsets 0-2 polled and 1 still outstanding: an ordinary out-of-order completion, which is
-     * the only state that produces a hole map.
+     * the only state that produces an offset map.
      */
     private PartitionState<String, String> stateWithHoles(Function<RiderContext, byte[]> supplier) {
         var state = freshState(supplier);
@@ -464,7 +460,7 @@ class RiderSupplierGuardTest {
 
     /**
      * The proof that no rider was written: the payload is an ordinary Parallel Consumer encoding - not an envelope
-     * - and it still carries the partition's hole map.
+     * - and it still carries the partition's offset map.
      * <p>
      * <b>Why this is not a byte-for-byte comparison against a separately built baseline</b>, which is the shape it
      * wants to be. The encoder competition collapses equal-sized candidates: {@code OffsetSimultaneousEncoder}
@@ -493,10 +489,6 @@ class RiderSupplierGuardTest {
                         .deserialiseIncompleteOffsetMapFromBase64(committed.offset(), committed.metadata())
                         .getIncompleteOffsets())
                 .containsExactly(HOLE_OFFSET);
-    }
-
-    private static ConsumerRecord<String, String> record(TopicPartition tp, long offset) {
-        return new ConsumerRecord<>(tp.topic(), tp.partition(), offset, "key", "value");
     }
 
     private static OffsetRiderEnvelope.UnwrappedEnvelope unwrap(OffsetAndMetadata committed)
@@ -537,46 +529,22 @@ class RiderSupplierGuardTest {
     }
 
     /**
-     * Captures {@code WARN}s from one class's logger, scoped to the calling thread.
+     * The captured {@code WARN}s that mention {@code token} and were logged by the calling thread.
      * <p>
-     * The scoping is not decoration: surefire runs this module's test <em>methods</em> in parallel, the appender
-     * attaches to a class logger shared by every one of them, and several tests here provoke the same warning. A
-     * warning is logged on the thread that provoked it, and each test method has its own, so the thread name is
-     * the cheapest correct filter available.
+     * The thread scoping is not decoration: surefire runs this module's test <em>methods</em> in parallel,
+     * {@link LogCapture} attaches to a class logger shared by every one of them, and several tests here provoke
+     * the same warning. A warning is logged on the thread that provoked it, and each test method has its own, so
+     * the thread name is the cheapest correct filter available.
      */
-    private static WarningCapture captureWarningsFromThisThread(Class<?> loggingClass) {
-        return new WarningCapture(loggingClass, Thread.currentThread().getName());
-    }
-
-    private static final class WarningCapture {
-
-        private final Logger logger;
-
-        private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
-
-        private final String threadName;
-
-        private WarningCapture(Class<?> loggingClass, String threadName) {
-            this.threadName = threadName;
-            this.logger = (Logger) LoggerFactory.getLogger(loggingClass);
-            appender.start();
-            logger.addAppender(appender);
-        }
-
-        void detach() {
-            logger.detachAppender(appender);
-            appender.stop();
-        }
-
-        List<String> mentioning(String token) {
-            //noinspection FuseStreamOperations - Collectors.toList is the Java 8 API this module compiles against
-            return appender.list.stream()
-                    .filter(event -> event.getLevel() == Level.WARN)
-                    .filter(event -> threadName.equals(event.getThreadName()))
-                    .map(ILoggingEvent::getFormattedMessage)
-                    .filter(message -> message.contains(token))
-                    .collect(java.util.stream.Collectors.toList());
-        }
+    private static List<String> warningsFromThisThreadMentioning(LogCapture capture, String token) {
+        var thisThread = Thread.currentThread().getName();
+        //noinspection FuseStreamOperations - Collectors.toList is the Java 8 API this module compiles against
+        return capture.events().stream()
+                .filter(event -> event.getLevel() == Level.WARN)
+                .filter(event -> thisThread.equals(event.getThreadName()))
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.contains(token))
+                .collect(Collectors.toList());
     }
 
 }

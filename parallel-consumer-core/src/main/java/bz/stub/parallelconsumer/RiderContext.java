@@ -44,7 +44,7 @@ public class RiderContext {
      * <b>Derived, and it moves.</b> It is the smaller of Parallel Consumer's own rider cap - a fixed fraction of
      * the broker's offset-metadata size limit, so that a rider at its cap can never be what pushes a payload over
      * that limit - and what is actually left in this particular commit once the partition's outstanding-offset map
-     * has been encoded. A partition with a large hole map therefore offers less room than the same partition
+     * has been encoded. A partition with a large offset map therefore offers less room than the same partition
      * caught up, and a supplier that wants to be carried on every commit sizes itself for the small case.
      * <p>
      * Bytes, not encoded characters: the outer string encoding is Parallel Consumer's business and leaking it into

@@ -145,7 +145,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      * {@link OffsetRiderEnvelope#unwrap} rejects one that does.
      * <p>
      * The rider is merged into whatever comes back, <b>including the policy's fallback value</b> - an envelope that
-     * parsed keeps its rider even when the hole map inside it did not, because the two are structurally independent.
+     * parsed keeps its rider even when the offset map inside it did not, because the two are structurally independent.
      * The reverse case is why a discarded payload reports {@link OffsetRiderEnvelope.RiderState#UNREADABLE} rather
      * than {@code NONE}: "the metadata was thrown away" and "no rider was ever configured" must not read the same.
      */
@@ -180,7 +180,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
             return decodeEnvelope(input, baseOffset, errorPolicy, tp);
         }
         return new EncodedOffsetPair(encoding.get(), wrap.slice())
-                .decodeWithRider(baseOffset, errorPolicy, tp, Rider.none());
+                .decodeWithRider(baseOffset, errorPolicy, tp);
     }
 
     /**
@@ -229,17 +229,6 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      */
     private static OffsetMapCodecManager.DecodedMetadata discarded(HighestOffsetAndIncompletes fallback) {
         return OffsetMapCodecManager.DecodedMetadata.of(fallback, Rider.unreadable());
-    }
-
-    /**
-     * The rider a discarded payload reports when an intact envelope was already read off it.
-     * <p>
-     * An envelope's rider survives the loss of its inner body - the two are structurally independent, and the rider
-     * was parsed before the body was looked at. Only a payload with no envelope at all degrades to
-     * {@link OffsetRiderEnvelope.RiderState#UNREADABLE}.
-     */
-    private static Rider riderAfterDiscard(Rider rider) {
-        return rider.getState() == OffsetRiderEnvelope.RiderState.NONE ? Rider.unreadable() : rider;
     }
 
     /**
@@ -392,21 +381,24 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
     public HighestOffsetAndIncompletes getDecodedIncompletes(long baseOffset,
                                                              InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                              TopicPartition tp) {
-        return decodeWithRider(baseOffset, errorPolicy, tp, Rider.none()).getOffsets();
+        return decodeWithRider(baseOffset, errorPolicy, tp).getOffsets();
     }
 
     /**
-     * The body of {@link #getDecodedIncompletes(long, InvalidOffsetMetadataHandlingPolicy, TopicPartition)}, carrying
-     * the rider the envelope above this pair held.
-     *
-     * @param rider what the payload's envelope said about the rider slot, or {@link Rider#none()} when there was no
-     *              envelope. Merged into every outcome below, including the policy's fallback.
+     * The body of {@link #getDecodedIncompletes(long, InvalidOffsetMetadataHandlingPolicy, TopicPartition)},
+     * reporting what the payload said about the rider slot alongside the offsets.
+     * <p>
+     * Production only ever builds a pair for a payload with <b>no</b> envelope on it - {@link #decodeEnvelope}
+     * unwraps the envelope above this method and substitutes its rider into the result, and a pair carrying one is
+     * malformed input that the {@code RiderEnvelope} arm below routes to the policy. So the rider reported here is
+     * {@link Rider#none()} when the body decodes and {@link Rider#unreadable()} when the policy discards it. Those
+     * two must not read the same: "the metadata was thrown away" and "no rider was ever configured" lead to
+     * different repairs.
      */
     @SneakyThrows
     OffsetMapCodecManager.DecodedMetadata decodeWithRider(long baseOffset,
                                                           InvalidOffsetMetadataHandlingPolicy errorPolicy,
-                                                          TopicPartition tp,
-                                                          Rider rider) {
+                                                          TopicPartition tp) {
         switch (encoding) {
             case KafkaStreams:
             case KafkaStreamsV2:
@@ -414,7 +406,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
                         errorPolicy,
                         msg("the metadata was written by Kafka Streams ({})", encoding.description()),
                         KafkaStreamsEncodingNotSupported::new,
-                        tp), riderAfterDiscard(rider));
+                        tp), Rider.unreadable());
             // an encoding this build knows of but has no decoder for - same forward-compatibility hazard as an
             // unrecognised magic byte, so it gets the same policy treatment
             case ByteArray:
@@ -423,7 +415,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
                         errorPolicy,
                         msg("no decoder for encoding: {}", encoding.description()),
                         () -> new UnsupportedOffsetEncodingException(encoding, describeSource(tp, baseOffset)),
-                        tp), riderAfterDiscard(rider));
+                        tp), Rider.unreadable());
             // The envelope is unwrapped ABOVE the pair (decodeToRiderAndIncompletes), so a pair carrying it is
             // malformed input rather than something to decode - either metadata that is not what it claims, or a
             // caller that built the pair by hand. Either way it is the user's policy that decides, never
@@ -435,7 +427,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
                         msg("a rider envelope reached the body decoder - it is unwrapped before a pair is built"),
                         () -> new CorruptOffsetMetadataException("a rider envelope is not an inner encoding",
                                 describeSource(tp, baseOffset)),
-                        tp), riderAfterDiscard(rider));
+                        tp), Rider.unreadable());
             // Every remaining constant has a decoder, so it belongs to decodeBody below rather than to the policy.
             // The assumption is not left implicit: decodeBody's own default throws PCInternalRuntimeException, so an
             // encoding added without a decoder AND without an arm here fails loudly instead of being decoded as
@@ -455,7 +447,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
         // the validation is what makes the diagnosis specific, and the catch is what stops a case nobody anticipated
         // escaping the policy as a bare runtime exception.
         try {
-            return OffsetMapCodecManager.DecodedMetadata.of(decodeBody(baseOffset), rider);
+            return OffsetMapCodecManager.DecodedMetadata.of(decodeBody(baseOffset), Rider.none());
         } catch (CorruptOffsetMetadataException | BufferUnderflowException | IOException
                 | IllegalArgumentException | IndexOutOfBoundsException e) {
             return OffsetMapCodecManager.DecodedMetadata.of(handleUnreadableMetadata(baseOffset,
@@ -467,7 +459,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
                     // escapes the rebalance callback inside Kafka's generic wrapper, where its message is the
                     // operator's only clue which assigned partition holds the bad metadata.
                     () -> new CorruptOffsetMetadataException(problemOf(e), describeSource(tp, baseOffset)),
-                    tp), riderAfterDiscard(rider));
+                    tp), Rider.unreadable());
         }
     }
 

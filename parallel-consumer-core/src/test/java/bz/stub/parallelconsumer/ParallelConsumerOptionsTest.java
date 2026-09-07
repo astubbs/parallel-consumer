@@ -7,17 +7,14 @@ package bz.stub.parallelconsumer;
 
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
+import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import org.apache.kafka.clients.producer.Producer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
-
-import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.List;
@@ -321,6 +318,12 @@ class ParallelConsumerOptionsTest {
      * Builds a processor from the given options and returns the {@code INFO} lines it logged about the rider
      * option while doing so.
      * <p>
+     * {@link LogCapture} is asked for {@code INFO} rather than everything, and that is load-bearing rather than
+     * tidy: the test profile runs above {@code INFO}, and logback drops a call below the effective level before
+     * any appender sees it - so without the capture raising the logger, both cases below would pass for the wrong
+     * reason, on an empty capture. It puts the level back on {@link LogCapture#close()}, which matters because
+     * the level is on a shared logger.
+     * <p>
      * Scoped to the calling thread: surefire runs this module's test methods in parallel, the appender attaches to
      * a class logger every one of them shares, and other suites construct processors with rider suppliers of their
      * own. A log event carries the thread that emitted it, and construction happens on the thread that asked for
@@ -332,24 +335,13 @@ class ParallelConsumerOptionsTest {
      */
     private List<String> riderLinesLoggedWhileConstructing(ParallelConsumerOptions<String, String> options) {
         var thisThread = Thread.currentThread().getName();
-        var logger = (Logger) LoggerFactory.getLogger(AbstractParallelEoSStreamProcessor.class);
-        var appender = new ListAppender<ILoggingEvent>();
-        appender.start();
-        // The test profile runs above INFO, and logback drops a call below the effective level before any appender
-        // sees it - so without this the capture is empty whether the line is logged or not, and both cases below
-        // would pass for the wrong reason. Restored in the finally, because the level is on a shared logger.
-        var levelBefore = logger.getLevel();
-        logger.setLevel(Level.INFO);
-        logger.addAppender(appender);
-        try {
+        List<ILoggingEvent> events;
+        try (var capture = LogCapture.of(AbstractParallelEoSStreamProcessor.class, Level.INFO)) {
             var ignoredProcessor = new ParallelEoSStreamProcessor<>(options); // constructed for its logging only
             assertThat(ignoredProcessor).isNotNull();
-        } finally {
-            logger.detachAppender(appender);
-            logger.setLevel(levelBefore);
-            appender.stop();
+            events = capture.events();
         }
-        return appender.list.stream()
+        return events.stream()
                 .filter(event -> event.getLevel() == Level.INFO)
                 .filter(event -> thisThread.equals(event.getThreadName()))
                 .map(ILoggingEvent::getFormattedMessage)

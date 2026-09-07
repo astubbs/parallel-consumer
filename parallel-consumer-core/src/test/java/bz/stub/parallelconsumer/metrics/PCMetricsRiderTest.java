@@ -4,14 +4,13 @@ package bz.stub.parallelconsumer.metrics;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.RiderContext;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import bz.stub.parallelconsumer.offsets.NoEncodingPossibleException;
 import bz.stub.parallelconsumer.offsets.OffsetEncoding;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
-import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope;
+import bz.stub.parallelconsumer.offsets.RiderTestFixtures;
 import bz.stub.parallelconsumer.state.PartitionState;
 import bz.stub.parallelconsumer.state.PartitionStateManager;
 import bz.stub.parallelconsumer.state.ShardManager;
@@ -32,10 +31,11 @@ import org.junit.jupiter.api.parallel.ResourceLock;
 import org.mockito.Mockito;
 
 import java.util.Optional;
-import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.base64Characters;
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.moduleWith;
 import static bz.stub.parallelconsumer.state.PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -47,15 +47,15 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * <b>Why every one of these is a counter and not a log line.</b> The rider is opaque to PC, so PC cannot tell
  * whether an embedder's feature is working - only whether the bytes it was handed reached the wire. Each of the
  * four series is one way they do not: shed for size by the ladder ({@link PCMetricsDef#OFFSETS_RIDER_DROPPED}),
- * stripped along with the hole map because the offset map alone would not fit
+ * stripped along with the offset map because the offset map alone would not fit
  * ({@link PCMetricsDef#OFFSETS_PAYLOAD_STRIPPED}), or never produced because the supplier threw
  * ({@link PCMetricsDef#OFFSETS_RIDER_SUPPLIER_FAILED}). The last of those is the feature's only health signal -
  * KTD8 makes a broken supplier silent by design, so a rider-based feature that has stopped working looks exactly
  * like one that was never configured.
  * <p>
  * <b>The two pre-existing ratios keep answering different questions</b> (KTD14).
- * {@link PCMetricsDef#PAYLOAD_RATIO_USED} is <em>density</em> - how many characters the hole map spends per
- * offset it describes - so it records the hole encoding's own length and is unmoved by a rider.
+ * {@link PCMetricsDef#PAYLOAD_RATIO_USED} is <em>density</em> - how many characters the offset map spends per
+ * offset it describes - so it records the encoded offset map's own length and is unmoved by a rider.
  * {@link PCMetricsDef#METADATA_SPACE_USED} is <em>headroom</em> against the broker's metadata limit, so it
  * records the assembled string, rider included. A caught-up commit records neither: its offset range is zero or
  * negative, and Micrometer takes {@code -0.0} and {@code 0.0} as samples (a positive numerator over a zero range
@@ -87,7 +87,7 @@ class PCMetricsRiderTest {
     private static final int HEADER = OffsetRiderEnvelope.HEADER_BYTES;
 
     /**
-     * Enough records for the hole map to encode to a couple of hundred bytes, so a cap derived from it leaves the
+     * Enough records for the offset map to encode to a couple of hundred bytes, so a cap derived from it leaves the
      * ladder's rungs distinguishable. Randomised holes, because an alternating pattern compresses to almost
      * nothing and the fixture would then be measuring gzip.
      */
@@ -104,22 +104,18 @@ class PCMetricsRiderTest {
 
     private SimpleMeterRegistry registry;
 
-    private int realMaxMetadataSize;
-
-    private double realThresholdMultiplier;
+    private RiderTestFixtures.MetadataSizeStatics realSizeStatics;
 
     @BeforeEach
     void setUp() {
         registry = new SimpleMeterRegistry();
-        realMaxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
-        realThresholdMultiplier = PartitionStateManager.getUSED_PAYLOAD_THRESHOLD_MULTIPLIER();
+        realSizeStatics = RiderTestFixtures.MetadataSizeStatics.remember();
         PartitionStateManager.setUSED_PAYLOAD_THRESHOLD_MULTIPLIER(USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT);
     }
 
     @AfterEach
     void restoreStatics() {
-        OffsetMapCodecManager.DefaultMaxMetadataSize = realMaxMetadataSize;
-        PartitionStateManager.setUSED_PAYLOAD_THRESHOLD_MULTIPLIER(realThresholdMultiplier);
+        realSizeStatics.restore();
         OffsetMapCodecManager.forcedCodec = Optional.empty();
         registry.close();
     }
@@ -160,7 +156,7 @@ class PCMetricsRiderTest {
     // ---- the ladder's drops ---------------------------------------------------------------------------------
 
     /**
-     * The ladder's first descent, counted: the hole map fits the cap with room for the drop marker but not with
+     * The ladder's first descent, counted: the offset map fits the cap with room for the drop marker but not with
      * the rider on top, so the rider is shed. One increment, and no size sample - the bytes never reached the
      * wire.
      */
@@ -256,9 +252,9 @@ class PCMetricsRiderTest {
     }
 
     /**
-     * The bottom of the ladder: the hole map alone is over the cap, so the payload is stripped and a bare offset
+     * The bottom of the ladder: the offset map alone is over the cap, so the payload is stripped and a bare offset
      * is committed. Two events on one commit, and they are separately counted - the rider was lost as well as the
-     * hole map, and an operator reading only the stripped counter would not know a rider had been configured at
+     * offset map, and an operator reading only the stripped counter would not know a rider had been configured at
      * all.
      */
     @Test
@@ -352,12 +348,12 @@ class PCMetricsRiderTest {
 
     /**
      * KTD14, the discriminating case: the same holes committed with and without a rider. Density is a property
-     * of the hole map, so {@link PCMetricsDef#PAYLOAD_RATIO_USED} must record the <em>same</em> value both times;
+     * of the offset map, so {@link PCMetricsDef#PAYLOAD_RATIO_USED} must record the <em>same</em> value both times;
      * headroom is a property of what goes to the broker, so {@link PCMetricsDef#METADATA_SPACE_USED} must record
      * the assembled string - a larger share of the cap when a rider rides along.
      * <p>
      * Recording the assembled string in both, which is what this build did before the rider existed, would make
-     * the density series report a hole map that got denser because somebody configured a rider.
+     * the density series report an offset map that got denser because somebody configured a rider.
      */
     @Test
     void densityIgnoresTheRiderAndHeadroomIncludesIt() {
@@ -391,7 +387,7 @@ class PCMetricsRiderTest {
 
     /**
      * The steady-state path, which is the one that runs on every commit of a healthy consumer once a rider is
-     * configured: a caught-up partition has no hole map, so it has no density and no headroom worth reporting,
+     * configured: a caught-up partition has no offset map, so it has no density and no headroom worth reporting,
      * and its offset range is zero or negative. Neither ratio may take a sample - not {@code 0.0}, not
      * {@code -0.0}, and above all not the {@code Infinity} a positive numerator over a zero range produces.
      * Micrometer drops {@code NaN} but records the other three, so its own sign check cannot be relied on.
@@ -516,54 +512,25 @@ class PCMetricsRiderTest {
 
     // ---- fixtures -------------------------------------------------------------------------------------------
 
-    /**
-     * The Base64 closed form, written out here rather than borrowed from the production side, so a fixture's
-     * arithmetic cannot agree with the ladder's by construction.
-     */
-    private static int base64Characters(int rawBytes) {
-        return 4 * ((rawBytes + 2) / 3);
-    }
-
-    /**
-     * Rider bytes that do not compress, so a fixture's arithmetic about their length survives the outer codec.
-     */
     private static byte[] riderOf(int length) {
-        byte[] bytes = new byte[length];
-        new Random(HOLE_SEED + length).nextBytes(bytes);
-        return bytes;
+        return RiderTestFixtures.riderOf(HOLE_SEED, length);
     }
 
-    private PCModuleTestEnv moduleWith(Function<RiderContext, byte[]> supplier, MeterRegistry meterRegistry) {
-        return new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
-                .riderSupplier(supplier)
-                .meterRegistry(meterRegistry)
-                .build());
-    }
-
+    /**
+     * A partition with {@code records} offsets polled and a pseudorandom half of them still outstanding.
+     *
+     * @see RiderTestFixtures#stateWithHoles
+     */
     private PartitionState<String, String> stateWithHoles(Function<RiderContext, byte[]> supplier, int records) {
         return stateWithHoles(moduleWith(supplier, registry), records);
     }
 
     private PartitionState<String, String> stateWithHoles(PCModuleTestEnv module, int records) {
-        var state = new PartitionState<String, String>(0, module, TP, HighestOffsetAndIncompletes.of());
-        var holes = new Random(HOLE_SEED);
-        for (long offset = 0; offset < records; offset++) {
-            state.addNewIncompleteRecord(record(offset));
-        }
-        for (long offset = 1; offset < records; offset++) {
-            if (offset == records - 1 || holes.nextBoolean()) {
-                state.onSuccess(offset);
-            }
-        }
-        return state;
+        return RiderTestFixtures.stateWithHoles(module, TP, records, HOLE_SEED);
     }
 
     private PartitionState<String, String> caughtUpState(Function<RiderContext, byte[]> supplier) {
-        var state = new PartitionState<String, String>(0, moduleWith(supplier, registry), TP,
-                HighestOffsetAndIncompletes.of());
-        state.addNewIncompleteRecord(record(0));
-        state.onSuccess(0);
-        return state;
+        return RiderTestFixtures.caughtUpState(moduleWith(supplier, registry), TP);
     }
 
     /**
@@ -579,21 +546,15 @@ class PCMetricsRiderTest {
     }
 
     /**
-     * The encoded length of the fixture's hole map, measured by running the same encoder the commit will run
-     * against a throwaway state, so a change to the encodings retunes every cap here instead of silently
-     * reclassifying a scenario.
+     * The encoded length of the fixture's offset map, so a change to the encodings retunes every cap here instead
+     * of silently reclassifying a scenario.
      */
     private int measureInnerEncodingLength() throws NoEncodingPossibleException {
-        var module = moduleWith(context -> null, new SimpleMeterRegistry());
-        var state = stateWithHoles(module, RECORDS);
-        byte[] inner = new OffsetMapCodecManager<String, String>(module).encodeOffsetsToInnerBytes(0, state);
-        log.debug("Fixture hole map encodes to {} bytes ({} characters)", inner.length,
-                base64Characters(inner.length));
-        return inner.length;
+        return RiderTestFixtures.measureInnerEncodingLength(TP, RECORDS, HOLE_SEED);
     }
 
     private ConsumerRecord<String, String> record(long offset) {
-        return new ConsumerRecord<>(TP.topic(), TP.partition(), offset, "key", "value");
+        return RiderTestFixtures.record(TP, offset);
     }
 
     private double counterValue(PCMetricsDef def) {
