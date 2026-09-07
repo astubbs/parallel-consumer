@@ -620,11 +620,15 @@ CI firing on record fits: instance 42, 14 and 0 were live members with work out 
 
 **What is still open, 2026-09-07.**
 
-- **The detector cannot tell workers-busy from workers-idle, and that is the gap to close.** A
-  member holding work with every worker running user code is saturated, not stalled; one holding
-  work with a free worker is PC's problem. The pool's active count, or the `-PC-<id>` worker
-  threads' states, is the discriminator - the dump reads it by hand today. Until it does, an
-  `INSTANCE_STALL` red on this scenario is not evidence of a PC defect.
+- **The detector could not tell workers-busy from workers-idle - closed the same day.** A member
+  holding work with every worker running user code is saturated, not stalled; one holding work
+  with a free worker is PC's problem. `ProgressProbe` now reads the `-PC-<id>` worker threads'
+  own stacks (a worker between tasks sits in `ThreadPoolExecutor.getTask`) and asks before it
+  counts: a full member re-arms the clock on every sample and is reported past the bound as a
+  non-gating `INSTANCE_SATURATED` observation; the `INSTANCE_STALL` violation is reserved for a
+  member holding work with a worker free. `InstanceStallProbeIT` pins both halves and the count.
+  So an `INSTANCE_STALL` red is once again a claim about PC - and every sighting recorded above
+  predates the rule, so read them as saturation until one is replayed under it.
 - **Whether the amplification is a product concern.** At-least-once plus eager rebalances plus
   records longer than the rebalance period multiplies load by design; PC already skips stale work at
   dispatch. The cooperative-sticky assignor is the standard answer, and the control arm below

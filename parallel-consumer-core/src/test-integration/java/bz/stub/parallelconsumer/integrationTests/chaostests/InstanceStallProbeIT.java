@@ -12,6 +12,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -39,9 +44,16 @@ class InstanceStallProbeIT {
         long outForProcessing;
         long workResultsReturned;
         Object incarnation = new Object();
+        /** Unknown by default, so every test written before the busy/idle rule still exercises the old one. */
+        int idleWorkers = ProgressProbe.IDLE_WORKERS_UNKNOWN;
 
         FakeInstance(int id) {
             this.id = id;
+        }
+
+        @Override
+        public int idleWorkers() {
+            return idleWorkers;
         }
 
         @Override
@@ -319,6 +331,123 @@ class InstanceStallProbeIT {
             mine.join(5_000);
             lookalike.join(5_000);
         }
+    }
+
+    /**
+     * The 2026-09-07 diagnosis in one test: a member holding work with a frozen count and EVERY
+     * worker running user code is full, not stalled. It must not fail the run, and it must not be
+     * invisible either - past the bound it is reported once, as an observation.
+     */
+    @Test
+    void aFullMemberIsReportedOnceAndNeverAccused() {
+        FakeInstance instance = new FakeInstance(7);
+        instance.queued = 0;
+        instance.outForProcessing = 30;
+        instance.workResultsReturned = 24_967;
+        instance.idleWorkers = 0;
+        ProgressProbe probe = probeWatching(instance);
+
+        probe.sampleInstanceProgress(T0);
+        probe.sampleInstanceProgress(pastBound(T0));
+        probe.sampleInstanceProgress(pastBound(T0).plusSeconds(1));
+        probe.sampleInstanceProgress(pastBound(pastBound(T0)));
+
+        assertWithMessage("all workers busy in user code is a claim about the user function, not PC")
+                .that(probe.getViolations()).isEmpty();
+        List<String> observations = probe.getObservations();
+        assertWithMessage("saturation past the bound is reported exactly once per stretch")
+                .that(observations).hasSize(1);
+        assertThat(observations.get(0)).contains("INSTANCE_SATURATED: instance 7");
+    }
+
+    /**
+     * The half that keeps the detector a detector: the clock starts the moment a worker is free while
+     * work is still held and the count still frozen - not before, and not from the start of the
+     * saturated stretch. A member that was full for a minute and then sits on held work with an idle
+     * worker for the whole bound is PC's stall, and it fires.
+     */
+    @Test
+    void theStallClockStartsWhenAWorkerFreesWithWorkStillHeld() {
+        FakeInstance instance = new FakeInstance(7);
+        instance.queued = 12;
+        instance.outForProcessing = 10;
+        instance.workResultsReturned = 500;
+        instance.idleWorkers = 0;
+        ProgressProbe probe = probeWatching(instance);
+
+        Instant lastFullSample = pastBound(T0);
+        probe.sampleInstanceProgress(T0);
+        probe.sampleInstanceProgress(lastFullSample);
+        assertWithMessage("full past the bound: reported, not accused")
+                .that(probe.getViolations()).isEmpty();
+
+        instance.idleWorkers = 1;
+        probe.sampleInstanceProgress(lastFullSample.plusSeconds(1));
+        assertWithMessage("a worker just freed - the saturated minute must not count toward the stall")
+                .that(probe.getViolations()).isEmpty();
+
+        probe.sampleInstanceProgress(pastBound(lastFullSample));
+        assertWithMessage("held work, frozen count, a free worker, for the whole bound: that is the stall")
+                .that(probe.getViolations()).hasSize(1);
+        assertThat(probe.getViolations().get(0)).contains("INSTANCE_STALL/NO_WORK_COMPLETED: instance 7");
+    }
+
+    /**
+     * The count behind the rule, against a real pool: a worker parked between tasks sits in
+     * {@code ThreadPoolExecutor.getTask}, a worker running one does not, and a worker the pool has not
+     * created yet is idle by definition. Names follow PC's default-factory shape and the exact
+     * {@code -PC-<id>} suffix, so the lookalike instance's worker is not counted.
+     */
+    @Test
+    void idleWorkersAreCountedFromTheWorkersOwnStacks() throws InterruptedException {
+        CountDownLatch release = new CountDownLatch(1);
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(3, 3, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<>(), pcNamed("pc-pool-77-thread-", "-PC-4242"));
+        ThreadPoolExecutor lookalike = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<>(), pcNamed("pc-pool-78-thread-", "-PC-42421"));
+        try {
+            Runnable park = () -> {
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            };
+            pool.submit(park);
+            pool.submit(park);
+            lookalike.submit(park);
+            await().atMost(Duration.ofSeconds(5)).until(() -> pool.getActiveCount() == 2);
+            await().atMost(Duration.ofSeconds(5)).until(() -> lookalike.getActiveCount() == 1);
+
+            assertWithMessage("two of three busy, the third never created: one idle")
+                    .that(ProgressProbe.idleWorkersOf(4242, 3)).isEqualTo(1);
+            assertWithMessage("capacity two, both busy: none idle")
+                    .that(ProgressProbe.idleWorkersOf(4242, 2)).isEqualTo(0);
+            assertWithMessage("-PC-4242 is a substring of -PC-42421; the lookalike's busy worker must not count")
+                    .that(ProgressProbe.idleWorkersOf(42421, 1)).isEqualTo(0);
+
+            release.countDown();
+            // awaited, not asserted: a worker's active flag clears a few instructions before it is
+            // back inside getTask, and the count reads the frame, not the flag
+            await().alias("released: the two parked-between-tasks workers plus the uncreated one")
+                    .atMost(Duration.ofSeconds(5))
+                    .until(() -> ProgressProbe.idleWorkersOf(4242, 3) == 3);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+            lookalike.shutdownNow();
+            boolean ignoredPool = pool.awaitTermination(5, TimeUnit.SECONDS); // best-effort cleanup; nothing to assert
+            boolean ignoredLookalike = lookalike.awaitTermination(5, TimeUnit.SECONDS);
+        }
+    }
+
+    private static ThreadFactory pcNamed(String prefix, String suffix) {
+        AtomicInteger n = new AtomicInteger();
+        return r -> {
+            Thread t = new Thread(r, prefix + n.incrementAndGet() + suffix);
+            t.setDaemon(true);
+            return t;
+        };
     }
 
     /**
