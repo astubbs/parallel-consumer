@@ -3,28 +3,35 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
 
-Three standalone jobs were deleted because `repo: hygiene` already ran every gate they ran, via
+Standalone jobs were deleted because `repo: hygiene` already ran every gate they ran, via
 `bin/check-all.sh --with-tests`'s glob, on every PR: `Copyright header check` (the whole of
 `.github/workflows/copyright.yml`), and `.github/workflows/maven.yml`'s `quarantine: audit` and
-`docs data: audit`. A fourth, `PR Checklist` (the whole of `.github/workflows/pr-checklist.yml`),
+`docs data: audit`. `PR Checklist` (the whole of `.github/workflows/pr-checklist.yml`)
 was deleted because its steps could run as the tail of the same job - see "Why hygiene hosts the
-checklist" below. Three more, `maven.yml`'s no-build scanners `dups: clones`, `dups: similarity` and
-`deps: vulnerabilities`, became steps of one new job, `scan: repo` - see "The scanner fold" below. Two more, `maven.yml`'s
-build-dependent static analysers `static: infer` and `static: spotbugs`, became steps of one new job,
-`static: analysis` - see "The static-analysis fold" below. A tenth, `dependency-audit.yml`'s
-`deps: whole-tree CVE scan`, became a fourth step of `scan: repo` - see "The CVE fold" below; that
-workflow keeps its `schedule` and `workflow_dispatch` triggers and is not deleted. An eleventh,
-`maven.yml`'s `Mutation Tests (PIT, PR-scoped)`, became the fifth and last step of `scan: repo` -
-and is the one of these eleven folds that owes **no** ruleset edit at all; see "The PIT fold owes no
+checklist" below. `maven.yml`'s no-build scanners `dups: clones`, `dups: similarity` and
+`deps: vulnerabilities` became steps of one new job, `scan: repo` - see "The scanner fold" below. Its
+build-dependent static analysers `static: infer` and `static: spotbugs` became steps of one new job,
+`static: analysis` - see "The static-analysis fold" below. `dependency-audit.yml`'s
+`deps: whole-tree CVE scan` became a further step of `scan: repo` - see "The CVE fold" below; that
+workflow keeps its `schedule` and `workflow_dispatch` triggers and is not deleted. `maven.yml`'s
+`Mutation Tests (PIT, PR-scoped)` became the last step of `scan: repo` -
+and is the one fold here that owes **no** ruleset edit at all; see "The PIT fold owes no
 ruleset edit" below, which exists so a reader diffing the checks list does not go looking for the
 entry that is deliberately absent.
-All ten old names are still **required status-check contexts in the master ruleset**, and the ruleset is repository settings, not tree state - no PR can change it
+Every name on the removal list in "The edit" below is still a **required status-check context in the master ruleset**, and the ruleset is repository settings, not tree state - no PR can change it
 ([`docs/ci.md`](../ci.md), "The required list is repository settings, not tree state").
 <!-- file-refs: N/A - copyright.yml and pr-checklist.yml are named as the files this work deleted; the record of each is its deleting commit, `git log --diff-filter=D -- .github/workflows/copyright.yml .github/workflows/pr-checklist.yml` -->
 
+**The lists below are the authority; nothing here counts them.** A cardinality written into prose
+drifts the moment a fold is added or dropped, and here the drift lands as an INCOMPLETE RULESET
+EDIT - a context left required that nothing produces, which pends every PR in the repository
+([`docs/inflight/AGENTS.md`](AGENTS.md), "Never write down what a command can answer"). Read the
+lists; if you want the number, `gh` will tell you what the ruleset actually holds - see "The edit".
+
 ## The edit
 
-Remove these ten contexts from the master ruleset's `required_status_checks`:
+Remove **every** context on this list from the master ruleset's `required_status_checks` - the list
+is the checklist, and a name left behind is a context nothing will ever produce:
 
 - `Copyright header check`
 - `quarantine: audit`
@@ -37,7 +44,7 @@ Remove these ten contexts from the master ruleset's `required_status_checks`:
 - `static: spotbugs`
 - `deps: whole-tree CVE scan`
 
-Add two:
+Add:
 
 - `scan: repo`
 - `static: analysis`
@@ -46,11 +53,23 @@ Add two:
 `gh api repos/astubbs/parallel-consumer/rules/branches/master`; that command is the answer, not this
 sentence). `scan: repo` and `static: analysis` are new, so they are not.
 
+**Diff the two lists above against the live ruleset rather than counting either.** What is required
+right now, one context per line:
+
+```bash
+gh api repos/astubbs/parallel-consumer/rules/branches/master \
+  --jq '.[] | select(.type == "required_status_checks")
+        | .parameters.required_status_checks[].context'
+```
+
+The edit is done when that output carries none of the removal names and both of the additions. That
+command is the check; a tally written here would only be a second, staler copy of it.
+
 ## When: at the merge of the deleting PR, not before and not after
 
 A required context nothing produces leaves every PR **pending** - it never fails, it never passes.
 
-- **Before the merge** the four jobs still run on every other open PR, so dropping the contexts
+- **Before the merge** the deleted jobs still run on every other open PR, so dropping the contexts
   early only widens the window in which a broken header, a drifted registry or an unresolved
   checklist could merge on a PR opened before the fold.
 - **After the merge** no run produces them, so every PR in the repository pends until somebody edits
@@ -58,7 +77,7 @@ A required context nothing produces leaves every PR **pending** - it never fails
   required").
 
 So: edit the ruleset in the same sitting as the merge. Only one merge is exposed either way - the
-deleting PR's own checks list shows the ten contexts as expected-but-missing until the ruleset
+deleting PR's own checks list shows the removal list's contexts as expected-but-missing until the ruleset
 drops them, which is the intended tell that the edit is still owed, not a fault in that PR.
 
 **The add has the opposite ordering.** A new required context that no master run has produced
@@ -69,10 +88,10 @@ the job definition is on master, so every PR opened afterwards produces the cont
 merge, then:
 
 1. Merge the deleting PR.
-2. In the same sitting, remove the ten old contexts.
+2. In the same sitting, remove every context on the removal list above.
 3. Add `scan: repo` and `static: analysis` only after the merge has landed and a PR run has produced
    each context - the first PR to rebase onto the merged master shows both in its checks list; that
-   is the evidence. Until then the three scanners and the two analysers gate nothing, which is a
+   is the evidence. Until then the folded scanners and analysers gate nothing, which is a
    window measured in one PR's CI run, and is preferable to every PR pending on a context nothing
    yet produces.
 
@@ -112,7 +131,7 @@ fold had to keep:
 - `check-all.sh` used to exit 0 on a CANNOT (exit 2) as long as something else ran. The hygiene job
   now runs `--strict`, under which a CANNOT fails the sweep, and asserts PyYAML and shellcheck are
   present in named steps - so the folded gates cannot silently turn into skips on an image change.
-- For the checklist fold: the three dropped self-test steps were confirmed against
+- For the checklist fold: the dropped self-test steps were confirmed against
   `ls bin/test-*.sh` - each file exists and matches the `bin/test-*.sh` glob `check-all.sh
   --with-tests` iterates, so each already ran in this job. `bin/todo-index.sh --check` does not match
   `bin/check-*`, and cannot be added to the glob because run bare it regenerates the index
@@ -178,16 +197,16 @@ re-read it whenever a job is renamed or folded.
 
 ## The PIT fold owes no ruleset edit - and that is the point of this section
 
-`Mutation Tests (PIT, PR-scoped)` is the eleventh check the `ci-fewer-jobs` folds remove from a PR's
-checks list, and the only one whose name is **not** on the removal list above. It was never a required
+`Mutation Tests (PIT, PR-scoped)` is a check the `ci-fewer-jobs` folds remove from a PR's
+checks list, and the only one removed whose name is **not** on the removal list above. It was never a required
 context: [`docs/ci.md`](../ci.md)'s "These are deliberately NOT required" table has always carried a
 row for it, because the job was `continue-on-error: true` and a required check reads the *conclusion*
 - which `continue-on-error` makes success even when the step fails. Requiring it would have gated
 nothing. So there is nothing to remove, and nothing to add.
 
 Written down because the absence is indistinguishable from an oversight. Somebody comparing a PR's
-checks list before and after the merge sees eleven rows go and ten names accounted for here; without
-this paragraph the eleventh reads as a missed edit, and the natural repair - adding
+checks list before and after the merge sees one more row disappear than the removal list accounts
+for; without this paragraph that row reads as a missed edit, and the natural repair - adding
 `Mutation Tests (PIT, PR-scoped)` to a ruleset that never had it - fails with a context nothing has
 ever produced.
 
@@ -210,7 +229,7 @@ What the fold had to carry:
   including fork and Dependabot ones, so leaving them guarded would have handed the mutation lane a
   cold repository on exactly the PRs that get no CVE scan. Every step that talks to OSS Index is
   still guarded, and `server-id: ossindex` is inert when those steps skip.
-- **`fetch-depth: 0` was already there** for the two duplication tools, which is what the mutation
+- **`fetch-depth: 0` was already there** for the duplication tools, which is what the mutation
   lane needs to diff against the PR base; it must not be narrowed, because an unresolvable base ref
   makes `bin/ci-mutation-test.sh` fall back to the *full* glob.
 - **The self-test still runs first,** `continue-on-error` like the run step - it also runs
@@ -231,7 +250,7 @@ PIT summary now hangs off `scan: repo`.
 
 `deps: whole-tree CVE scan` was the whole of `dependency-audit.yml`'s `ossindex` job, and that
 workflow's `pull_request` trigger was its only PR-time producer. The trigger is gone and the job is
-now a fourth step of `scan: repo`; the workflow itself is **not deleted** - it keeps `schedule` and
+now a step of `scan: repo`; the workflow itself is **not deleted** - it keeps `schedule` and
 `workflow_dispatch`, which is the half no PR can cover (an unchanged tree acquiring a new advisory).
 So the name `deps: whole-tree CVE scan` still exists in the tree, as both a job in that workflow and
 a step in this one, and is still on the removal list above: no PR run produces it any more, and a
@@ -257,7 +276,7 @@ What the fold had to carry:
 - **`timeout-minutes: 25`** where the scanners held 10 and the audit job held 20.
 - **The exposure the standalone job avoided, and what contains it here.** That job deliberately held
   `contents: read` only, because it runs PR-authored build code in the same job as the OSS Index
-  token. `scan: repo` also holds `pull-requests: write`, for the three tools that post comments.
+  token. `scan: repo` also holds `pull-requests: write`, for the tools that post comments.
   What contains it is the guard itself: the CVE steps run only for a branch in *this* repository,
   pushed by somebody who already has write access, so the build code is not attacker-supplied the
   way a fork PR's would be. The OSS Index secrets stay in `env:` on the two steps that need them and
@@ -269,6 +288,6 @@ What the fold had to carry:
   checks that the copies agree; both file headers say so.
 
 This note tracks only the owed edits. Once the live ruleset lists `scan: repo` and
-`static: analysis` and none of the ten old contexts, nothing here is both true and unowned elsewhere
+`static: analysis` and none of the removal list's contexts, nothing here is both true and unowned elsewhere
 - the reasoning is in [`docs/ci.md`](../ci.md), the `repo-hygiene.yml` and `dependency-audit.yml`
 headers, and the `scan: repo` and `static: analysis` jobs' own comments.
