@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - shrunk to what is still open: `bin/inflight.mjs branch` has shipped and covers the per-branch view, the session owner, the containment map and the tracking-gap remedy (confirmed from `inflight help branch`), so those four sections are collapsed to the one part that has not - the branch-index backfill. The `Asking GitHub`, graph-store, Gittybits and fetch-completeness sections are unchanged and still open; the delete-when is unmet -->
 
 Queued capabilities for `bin/inflight.mjs`, each measured on this repository rather than estimated.
 Sibling note: [`ci-inflight-absorbs-the-query-half.md`](ci-inflight-absorbs-the-query-half.md) owns
@@ -17,102 +18,23 @@ it already argues for one concrete thing: repository-specific facts belong in on
 `NOTES_DIR` are single constants today; the `docs/plans|solutions|inflight` section list is
 hard-coded inside `bin/lib/prior-art.mjs`, and that is the one to lift before it spreads.
 
-## `inflight branch` - the per-branch view
+## The per-branch view - SHIPPED as `inflight branch`, and the one part of it that is not
 
-`corpusIndex` already computes both sides of the map - path to refs, and ref to what it carries - and
-`stranded` reads only the first. The second side answers a different question entirely, for no extra
-git work. Per branch:
+Four sections of this note used to specify a per-branch view, the Claude session that owns a branch,
+the tracking-gap detector, and a related-branches map from the commit graph. All four are now one
+command - `bin/inflight.mjs branch <ref>` - whose own help text and the headers in `bin/lib/` own
+the design: relatedness is containment rather than a heuristic, the commit trailer and
+`.worktree-owner` answer two different ownership questions, and an untracked branch gets the remedy
+printed rather than a finding, with an integration branch reported as what it is.
 
-- its PR and state, from the map `prsByBranch` already builds and caches
-- whether it is pushed anywhere at all
-- how many notes it carries that the baseline has never held
-- whether it is fully contained in the baseline, via `git merge-base --is-ancestor` and **never**
-  `git branch -d` or `git cherry`, both of which answer a different question than they appear to
-  (see the sibling note's git-traps section)
-- **the Claude session that owns it** - see below
+**What has NOT shipped is the backfill the detector depends on.** The design was: give every existing
+orphan a `docs/inflight/branch-*.md`, even where it says only "not yet triaged", so an orphan becomes
+by definition a branch with no note and new ones stand out against a recorded set - rather than a
+detector that always says the same sixty things, which is a check nobody reads. It is not a generated
+snapshot, deliberately; [`docs/todo-index.md`](../todo-index.md) is this repository's cautionary tale
+for that. `ls docs/inflight/branch-*.md | wc -l` against `git for-each-ref refs/heads | wc -l` says how
+far off it is, and today it is most of the way.
 
-**Measured 2026-09-02: 144 local branches, 68 of them pushed nowhere at all, and 10 in-flight notes
-that exist only on one disk.** Three branches are fully contained in master and could be deleted.
-There are 131 worktrees.
-
-## The Claude session that owns a branch
-
-**Antony's ask, and the data already exists** - this needs no new plumbing, only a reader. Measured
-2026-09-02: **1035 commits carry a `Claude-Session:` trailer, across 63 distinct sessions**, and 72
-worktrees carry a `.worktree-owner` marker.
-
-Two sources answering different questions, and the output must say which is which:
-
-- the **commit trailer** is durable, travels with the branch, and works from any clone - it says
-  which session *produced* this work
-- the **`.worktree-owner` marker** is local and uncommitted - it says who is holding that worktree
-  *right now*
-
-"Which session owns this?" is currently answered by asking an agent to go hunting.
-
-## The tracking-gap detector, and the remedy it must emit
-
-**This is how work gets lost, and it is the reason the tool exists.** A branch with no PR, no
-`docs/inflight/branch-*.md`, and no mention anywhere in `docs/inflight/` is invisible to every check
-this repository runs: `gh` cannot see it, CI cannot see it, another clone cannot see it.
-
-Worked case, from the day the tool was built: `bin/prior-art.mjs` - 226 lines of tooling - sat on an
-unpushed local branch with no PR and no note. It was found by a hand-written `for-each-ref` sweep,
-not by any gate.
-
-**It must emit the remedy, not a report.** A report gets skimmed; an instruction gets acted on. For
-each gap: *push it*, or *write `docs/inflight/branch-<slug>.md` saying what this is*. The `branch-`
-prefix already exists in [`AGENTS.md`](AGENTS.md) for exactly this - "work sitting on a branch with
-no PR" - and nothing enforces it.
-
-**Baselining is a TIMESTAMP LOOKUP, not stored state** - Antony's design, and better than the two it
-replaced (a committed marker per orphan, or a generated snapshot the tool diffs against; both store
-something that goes stale). The moment `bin/inflight.mjs` first appears on the baseline is the moment
-tracking became expected, and it is recoverable from git at any time:
-
-```
-git log <baseline> --diff-filter=A --format=%ct -- bin/inflight.mjs | tail -1
-```
-
-A branch whose own history predates that was cut when nothing asked, and is reported as backlog
-rather than as a new gap. One cut afterwards has no excuse. The grandfathered set shrinks on its own
-as those branches land or die, and there is no snapshot file to rot. **An unknown moment never
-grandfathers** - if the tool has not reached the baseline yet, every gap still reports loudly, since
-silencing everything is the worst possible default for a detector.
-
-**The remaining day-one concern.** Roughly sixty branches would report at
-once, and a check that always says the same sixty things is a check nobody reads. The answer is not a
-separate baseline file: **backfill the branch index first**, giving every existing orphan a
-`branch-*.md` even where it says only "not yet triaged". An orphan is then *by definition* a branch
-with no note, new ones stand out against a recorded set, and there is no generated snapshot to go
-stale - which is the failure [`docs/todo-index.md`](../todo-index.md) is this repository's cautionary
-tale for.
-
-## Related branches, from the commit graph
-
-**Antony's ask.** Looking at one branch, show what else relates to it - what it integrates, and what
-integrates it. Exact from containment, no heuristic: branch A is a parent of B when A's tip is among
-B's commits off the baseline.
-
-One `rev-list <ref> ^origin/master` per ref builds the whole map - **measured at 1.9s across 436 refs
-and 27,775 commits** - after which every relationship is a set-membership test rather than a fork.
-
-Demonstrated on `origin/feats/ks-streams-reconciled`, which has no PR and looked orphaned:
-
-```
-  PARENTS - branches fully contained in it (it integrates them): 8
-      origin/feats/ks-streams-error-surfacing
-      origin/feats/ks-streams-example
-      origin/feats/ks-streams-execution-seam
-      ... and five more
-  CHILDREN - branches that contain it: 1
-      origin/feats/ks-on-pc-spike
-```
-
-The name says "reconciled" and the graph proves it: it is an integration branch for eight siblings.
-**That is also the answer to why it has no PR**, which the tracking-gap detector would otherwise
-report as a bare orphan - so these two features are worth building together, and the detector should
-say "integration branch for N others" rather than "tracked nowhere".
 
 ## Asking GitHub: local first, one name on a miss, and the fix is the cache
 

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - re-read against the tree and the action: `report.js` in astubbs/duplicate-code-cross-check still only `console.log`s a rejected review comment with no summary-comment fallback, and `maven.yml` still runs `dups: clones` (pinned v1.1.1) as a step inside `scan: repo` -->
 
 <!-- post-merge: checked-begin -->
 `dups: clones` found a real clone on astubbs#267, failed the build for it, and **could not post it**.
