@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.internal.utils;
 
 import lombok.experimental.UtilityClass;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 
 import java.util.Collection;
@@ -17,13 +18,19 @@ import java.util.stream.Collectors;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
- * Renders a batch of polled records as a short, <b>bounded</b> description, for use in log lines.
+ * Renders a batch of polled records, or the offsets a commit carried, as a short, <b>bounded</b> description, for use
+ * in log lines.
  * <p>
  * A log line that interpolates a whole batch - or a whole {@code PollContext} - grows with
  * {@code max.poll.records} and with the number of assigned partitions, so log tooling truncates it and the
  * operator loses exactly the part that identified the event. These helpers keep what actually diagnoses it
- * (topic-partition, record count, offset range) and cap the number of partitions named individually, so the
- * line has a fixed upper bound however large the batch is. The unabridged dump belongs at {@code DEBUG}.
+ * (topic-partition, record count, offset range) and reduce the rest. The unabridged dump belongs at {@code DEBUG}.
+ * <p>
+ * <b>What is bounded differs by rendering, deliberately.</b> The <em>batch</em> renderings cap how many partitions
+ * are named individually ({@value #MAX_PARTITIONS_LISTED}), because a batch says nothing about how many partitions
+ * it spans. {@link #summariseCommit} does not cap, and instead bounds the cost of each entry: a commit map holds
+ * exactly one entry per partition, and naming every one of them is what astubbs#168 asked for - its own javadoc owns
+ * that reasoning.
  * <p>
  * The same defect is live on log lines this class has not been applied to yet;
  * {@code docs/inflight/bug-unbounded-log-lines.md} lists them with their anchors - including the ones deliberately
@@ -32,6 +39,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * @author Antony Stubbs
  * @see <a href="https://github.com/astubbs/parallel-consumer/issues/169">#169 - dropped batch WARN</a>
  * @see <a href="https://github.com/astubbs/parallel-consumer/issues/170">#170 - user function failure ERROR</a>
+ * @see <a href="https://github.com/astubbs/parallel-consumer/issues/168">#168 - commit failure ERROR</a>
  */
 @UtilityClass
 public class RecordBatchSummary {
@@ -40,15 +48,21 @@ public class RecordBatchSummary {
      * The most partitions named individually before the summary collapses the rest into a count. A consumer can be
      * assigned thousands of partitions, and naming every one of them is the unbounded-line bug this class exists to
      * prevent.
+     * <p>
+     * Applies to the <b>batch</b> renderings only. {@link #summariseCommit} deliberately names every partition -
+     * see its javadoc for why that is bounded enough.
      */
     public static final int MAX_PARTITIONS_LISTED = 5;
 
     /**
      * Hoisted rather than rebuilt per call: {@link Comparator#comparing} plus {@link Comparator#thenComparingInt}
      * allocates two composed comparators, and this is reached from a log line on a failure path.
+     * <p>
+     * Wildcarded in the value so every rendering here sorts the same way - it reads only the key, and
+     * {@code Stream.sorted(Comparator<? super T>)} accepts it for any entry type.
      */
-    private static final Comparator<Map.Entry<TopicPartition, List<Long>>> BY_TOPIC_THEN_PARTITION = Comparator
-            .comparing((Map.Entry<TopicPartition, List<Long>> entry) -> entry.getKey().topic())
+    private static final Comparator<Map.Entry<TopicPartition, ?>> BY_TOPIC_THEN_PARTITION = Comparator
+            .comparing((Map.Entry<TopicPartition, ?> entry) -> entry.getKey().topic())
             .thenComparingInt(entry -> entry.getKey().partition());
 
     /**
@@ -134,6 +148,46 @@ public class RecordBatchSummary {
                 pluralise(recordCount, "record"),
                 pluralise(partitionCount, "partition"),
                 detail);
+    }
+
+    /**
+     * @param offsets what a commit carried, keyed by partition - the map handed to the consumer's
+     *                {@code commitSync}/{@code commitAsync}, and handed back to its callback
+     * @return e.g. {@code 2 partitions: my-topic-0: offset 1000, 812 chars of metadata; my-topic-1: offset 5, no
+     * metadata}. <b>EVERY</b> partition and its offset is named - they are what astubbs#168 asked for, and there is
+     * one entry per partition, so the line's cost per partition is fixed and the
+     * {@value #MAX_PARTITIONS_LISTED} cap the batch renderings apply deliberately is not. Only the metadata is
+     * reduced, to its length: it is PC's base64-encoded offset map, up to
+     * {@code OffsetMapCodecManager.DefaultMaxMetadataSize} per partition, unreadable without decoding, and its
+     * length is itself the diagnostic when a commit is rejected for it. The leader epoch is omitted - PC never sets
+     * one. A single-partition commit renders as just that entry, since the total would only repeat it
+     */
+    public static String summariseCommit(Map<TopicPartition, OffsetAndMetadata> offsets) {
+        int partitionCount = offsets.size();
+        if (partitionCount == 0) {
+            return pluralise(0, "partition");
+        }
+        if (partitionCount == 1) {
+            // the total would just repeat the single entry - returning here, before the sort and the join, is the
+            // same shape summariseOffsets(Map) takes for the same reason
+            Map.Entry<TopicPartition, OffsetAndMetadata> only = offsets.entrySet().iterator().next();
+            return summariseCommitEntry(only.getKey(), only.getValue());
+        }
+
+        String detail = offsets.entrySet().stream()
+                .sorted(BY_TOPIC_THEN_PARTITION)
+                .map(entry -> summariseCommitEntry(entry.getKey(), entry.getValue()))
+                .collect(Collectors.joining("; "));
+
+        return msg("{}: {}", pluralise(partitionCount, "partition"), detail);
+    }
+
+    private static String summariseCommitEntry(TopicPartition topicPartition, OffsetAndMetadata offsetAndMetadata) {
+        String metadata = offsetAndMetadata.metadata(); // never null - the constructor substitutes "" for null
+        String metadataNote = metadata.isEmpty()
+                ? "no metadata"
+                : msg("{} chars of metadata", metadata.length());
+        return msg("{}: offset {}, {}", topicPartition, offsetAndMetadata.offset(), metadataNote);
     }
 
     private static String pluralise(long count, String noun) {

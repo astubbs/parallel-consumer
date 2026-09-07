@@ -225,6 +225,20 @@ believing any zero, and when both branches of a decision are worth observing, em
 level - logging only one makes "took the other branch" indistinguishable from "never reached the
 fork". Evidence a failure message must carry belongs in the assertion, which no profile can filter.
 
+**Aggregate verdict**
+A reading taken at one granularity and read as settling a claim about one member of it - a whole-fleet
+count offered as evidence about the single instance that was accused of stalling. Distinct from a
+filtered diagnostic and an inert configuration, where the instrument could not speak at all: here it
+speaks fluently, correctly and on time, about a different subject than the one in question.
+
+It is the hardest of that family to notice, because nothing about the output looks wrong. A healthy
+majority conceals one sick member by construction, so the aggregate reads identically whether that
+member recovered or never did, and no amount of care in reading it can recover the difference. The
+test is to name the subject the claim is about and ask whether any field the instrument reports varies
+with that subject; when none does, the reading is a fact about the instrument's scope rather than
+about the system. The repair is to widen the instrument's granularity, not to reinterpret what it
+already emits.
+
 **Positive control**
 An arm of a measurement whose only job is to register a hit, proving the instrument could have detected
 something on this run. Its own reading is never the result — it is what licenses reading every other
