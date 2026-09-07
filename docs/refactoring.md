@@ -590,15 +590,6 @@ cosmetic - see the last bullet.*
   control/poller threads share state - removed under shared-nothing (confluentinc#200).
   `todo refactor use of null shouldn't be needed`: `null` passed to the codec manager
   (confluentinc#233). `visible for legacy testing`: visibility widened for legacy tests.
-- **Draft astubbs#410 reintroduces the publish-then-register order astubbs#370 removed.** Its
-  `restoreCompletedButUncommittedWork` replay loop calls `getShardManager().addWorkContainer(...)`
-  before `addNewIncompleteRecord(record)`, the same order the register-then-publish swap in
-  `maybeRegisterNewPollBatchAsWork` took out - latent for the same reason (control thread, under the
-  producer write lock), and the same defect the moment there is a second selector. Swap the two lines
-  when that PR lands over astubbs#370; the invariant and why it holds are on
-  `maybeRegisterNewPollBatchAsWork`.
-
-### state/PartitionStateManager.java
 - There was a throwaway `OffsetMapCodecManager` per assignment
   (`todo remove throw away instance creation`, confluentinc#233); PR astubbs#57
   cached it (the `confluentinc#859` leak site), but the broader [confluentinc#233](https://github.com/confluentinc/parallel-consumer/issues/233)

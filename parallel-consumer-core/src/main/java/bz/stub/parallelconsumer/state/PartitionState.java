@@ -366,12 +366,16 @@ public class PartitionState<K, V> {
         }
         long epoch = getPartitionsAssignmentEpoch();
         for (ConsumerRecord<K, V> record : discarded.values()) {
-            getShardManager().addWorkContainer(epoch, record);
+            // register, then publish - the order maybeRegisterNewPollBatchAsWork keeps (astubbs#370), for the same
+            // reason: a scanner may select and complete the container the instant it is reachable through its
+            // shard, and that completion must find the offset already in the incomplete set. Pinned by
+            // PartitionStateAbortedTransactionReplayTest's completion-on-publish case.
             addNewIncompleteRecord(record);
+            getShardManager().addWorkContainer(epoch, record);
         }
         // forgotten only once every entry is back in processing: a throw mid-loop leaves the ledger intact for the
-        // next pass, and both registrations tolerate a repeat (the shard keeps its resident, the incomplete set is a
-        // put), so replaying an entry twice costs nothing
+        // next pass, and both registrations tolerate a repeat (the incomplete set is a put, the shard keeps its
+        // resident), so replaying an entry twice costs nothing
         uncommittedCompletions.forget(discarded.keySet());
         setDirty();
         log.debug("Restored {} completed-but-uncommitted record(s) to processing for {} after an aborted transaction; commit frontier is now {}",
