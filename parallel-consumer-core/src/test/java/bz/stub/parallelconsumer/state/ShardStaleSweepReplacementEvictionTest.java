@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.state;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -14,8 +15,12 @@ import static com.google.common.truth.Truth.assertWithMessage;
 import static org.mockito.Mockito.spy;
 
 /**
- * The poller's stale sweep removes by KEY, so a fresh container the controller put at that offset while the sweep
- * was deciding is what actually leaves the shard.
+ * The poller's stale sweep must evict the container it inspected and nothing else - never a fresh container the
+ * controller put at that offset while the sweep was deciding.
+ * <p>
+ * <b>It used to remove by KEY</b> ({@code removeWorkAtOffset(entry.getKey())}), so whatever occupied the offset
+ * when the removal landed is what left the shard. The sweep now removes conditionally on the
+ * {@code ProcessingShard.Residency} it inspected, in one atomic step.
  * <p>
  * <b>The two sides are genuinely different threads.</b> {@link ProcessingShard#removeStaleWorkContainersFromShard}
  * is reached from {@code PartitionStateManager.onPartitionsRemoved} / {@code onPartitionsAssigned}, i.e. inside a
@@ -90,10 +95,12 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
                 + "partition is re-polled")
                 .that(shard.getWorkContainerAtOffset(CONTESTED_OFFSET).orElse(null))
                 .isSameInstanceAs(fresh);
-        assertThat(swept).hasSize(1);
-        assertWithMessage("and the sweep reports the container it actually inspected, which is what the caller "
-                + "hands on to the retry-queue cleanup")
-                .that(swept.get(0)).isSameInstanceAs(stale);
+        assertWithMessage("the sweep reports what IT evicted, and it evicted nothing - the replacement won the "
+                + "offset. ShardManager.removeStaleContainers feeds this list to the retry queue, and "
+                + "astubbs/parallel-consumer#437 pins that the queue removal is reached only through a real "
+                + "shard removal; reporting a container this call did not remove would break that gating and "
+                + "would take the entry at coordinates the FRESH container now owns")
+                .that(swept).isEmpty();
 
         assertThat(shard.getCountOfWorkTracked()).isEqualTo(1L);
         assertWithMessage("the counter agrees with the units actually held - the accounting half of this defect "
@@ -136,5 +143,69 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
         assertThat(shard.getCountOfWorkTracked()).isEqualTo(0L);
         assertThat(shard.getCountOfWorkAwaitingSelection()).isEqualTo(shard.countSelectionClaimedByScan());
         assertThat(population.getInSystem()).isEqualTo(0L);
+    }
+
+    /**
+     * The premise the fix rests on, measured rather than assumed: <b>no value-conditional removal keyed on
+     * {@link WorkContainer} equality can express "remove the one I inspected"</b>, so the shard stores a
+     * {@link ProcessingShard.Residency} token whose equality is reference identity.
+     * <p>
+     * This is a characterisation of the primitive, not of the JDK for its own sake. Both forms below are the
+     * obvious fixes for the defect above, both read as correct, and both silently take the replacement -
+     * <b>including the identity check inside {@code computeIfPresent}</b>, because that method commits its
+     * removal through {@code doRemove(key, v)}, which re-reads the node value and gates on
+     * {@code v.equals(reRead)} before its compare-and-set. The identity test does not survive to the commit.
+     * <p>
+     * It is also the tripwire for the day {@link WorkContainer#equals(Object)} becomes identity-based: this test
+     * goes red, and the token can then be deleted.
+     */
+    @Test
+    // reference equality is the SUBJECT of this test, not an accident of it: the whole point is that the
+    // identity comparison below does not survive to the map's commit while equality does
+    @SuppressWarnings("ReferenceEquality")
+    void noRemovalKeyedOnContainerEqualityCanExpressWhichContainerToRemove() {
+        var record = recordAt(CONTESTED_OFFSET);
+        var stale = new WorkContainer<>(0L, record, module);
+        var fresh = new WorkContainer<>(1L, record, module);
+        assertWithMessage("PRECONDITION: the two containers are different objects that compare EQUAL - "
+                + "WorkContainer.equals is topic/partition/offset only, which is the whole difficulty")
+                .that(stale).isEqualTo(fresh);
+        assertThat(stale).isNotSameInstanceAs(fresh);
+
+        // FORM 1: the JDK's compare-and-remove, asked about the stale container after the replacement landed
+        var byEquality = new ConcurrentSkipListMap<Long, WorkContainer<String, String>>();
+        byEquality.put(CONTESTED_OFFSET, fresh);
+        assertWithMessage("remove(key, value) compares with equals, so it answers YES about a container that is "
+                + "not there and takes the replacement instead")
+                .that(byEquality.remove(CONTESTED_OFFSET, stale)).isTrue();
+        assertThat(byEquality.get(CONTESTED_OFFSET)).isNull();
+
+        // FORM 2: computeIfPresent with an identity check in the function - the fix that looks airtight. The put
+        // inside the function stands in for the controller's replacement landing after the function has decided
+        // and before ConcurrentSkipListMap commits the removal; that gap is inside the JDK and cannot be reached
+        // from the production seam, which is why this arm exists at all.
+        var byIdentityInTheFunction = new ConcurrentSkipListMap<Long, WorkContainer<String, String>>();
+        byIdentityInTheFunction.put(CONTESTED_OFFSET, stale);
+        byIdentityInTheFunction.computeIfPresent(CONTESTED_OFFSET, (offset, resident) -> {
+            byIdentityInTheFunction.put(offset, fresh);
+            return resident == stale ? null : resident;
+        });
+        assertWithMessage("the identity check in the remapping function does not survive to the commit: "
+                + "computeIfPresent removes through doRemove(key, v), which re-reads the value and gates on "
+                + "equals - so this narrows the window instead of closing it, and loses the record just the same")
+                .that(byIdentityInTheFunction.get(CONTESTED_OFFSET)).isNull();
+
+        // FORM 3: the token the shard actually stores
+        var byResidency = new ConcurrentSkipListMap<Long, ProcessingShard.Residency<String, String>>();
+        var staleResidency = new ProcessingShard.Residency<>(stale);
+        var freshResidency = new ProcessingShard.Residency<>(fresh);
+        byResidency.put(CONTESTED_OFFSET, staleResidency);
+        byResidency.put(CONTESTED_OFFSET, freshResidency);
+        assertWithMessage("Residency overrides neither equals nor hashCode, so the comparison the map performs "
+                + "is reference identity and the compare-and-remove declines")
+                .that(byResidency.remove(CONTESTED_OFFSET, staleResidency)).isFalse();
+        assertThat(byResidency.get(CONTESTED_OFFSET)).isSameInstanceAs(freshResidency);
+        assertWithMessage("and it still removes the residency it really was asked about")
+                .that(byResidency.remove(CONTESTED_OFFSET, freshResidency)).isTrue();
     }
 }

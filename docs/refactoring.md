@@ -118,6 +118,18 @@ refactors below, which are non-breaking and can land at any point in any line.
   runs; after this it fails at construction. Small blast radius, but "started yesterday, will not
   start today" is what a `=== Breaking` bullet exists for. Recorded here rather than only in the
   commit, because this section is what the release notes are assembled from.
+- **Give `WorkContainer` identity equality, and delete `ProcessingShard.Residency`.**
+  `WorkContainer.equals` is topic, partition and offset only, so two containers for the same record at
+  different epochs compare equal - and every value-conditional operation the JDK offers on a
+  collection of them (`Map.remove(key, value)`, `Map.replace`, `computeIfPresent`'s removal path,
+  `Set.remove`) therefore cannot say *which* container it means. The engine already treats identity as
+  the truth everywhere it matters (`ProcessingShard.isResident` and `includeInSelection` both compare
+  with `!=`), so the equality is worked around rather than used. Identity equality would delete the
+  `Residency` token that astubbs/parallel-consumer#468 added to get a conditional removal, and close the
+  `holdingDispatchPermit` defect in
+  [`docs/inflight/bug-dispatch-permit-set-cannot-tell-two-containers-at-one-offset-apart.md`](inflight/bug-dispatch-permit-set-cannot-tell-two-containers-at-one-offset-apart.md)
+  outright. It is **breaking** because `WorkContainer` is public and
+  `WorkContainer.compareTo` orders by offset, which would become inconsistent with equals.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**

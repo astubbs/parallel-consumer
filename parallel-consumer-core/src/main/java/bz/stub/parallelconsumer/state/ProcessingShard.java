@@ -48,8 +48,60 @@ public class ProcessingShard<K, V> {
      * the only thing that can touch the map. Read-only totals are available through
      * {@link #getCountOfWorkTracked()}; a test that needs a resident planted white-box goes through
      * {@link #plantResident(WorkContainer)}, which keeps the pairing.
+     * <p>
+     * <b>The value is a {@link Residency} token rather than the container itself</b>, so that a removal can be
+     * made conditional on the exact container the caller inspected - see that class for why the container
+     * cannot play that role.
      */
-    private final NavigableMap<Long, WorkContainer<K, V>> workMap = new ConcurrentSkipListMap<>();
+    private final NavigableMap<Long, Residency<K, V>> workMap = new ConcurrentSkipListMap<>();
+
+    /**
+     * One occupancy of one offset in this shard: the container that holds it, and nothing else.
+     * <p>
+     * <b>It exists to make {@link Map#remove(Object, Object)} mean what the sweeps need it to mean.</b> That is
+     * the JDK's compare-and-remove - remove the entry only if it is still mapped to the value I inspected - and
+     * it decides "still mapped to" with {@code equals}. {@link WorkContainer#equals(Object)} is topic, partition
+     * and offset only, so a <em>fresh</em> container that replaced a stale one at the same offset compares
+     * <em>equal</em> to it, and a compare-and-remove asked about the stale container will happily take the
+     * replacement instead. This token overrides neither {@code equals} nor {@code hashCode}, so its equality is
+     * reference identity and the comparison the map performs is the one the caller meant.
+     * <p>
+     * <b>{@code computeIfPresent} with an identity check in the function is NOT an alternative, and it looks
+     * like one.</b> Measured against the JDK 17 source and by experiment:
+     * {@code computeIfPresent(offset, (k, v) -> v == inspected ? null : v)} commits its removal through
+     * {@code ConcurrentSkipListMap.doRemove(key, v)}, which <em>re-reads</em> the node's value and gates on
+     * {@code v.equals(reReadValue)} before its compare-and-set. The identity test in the function therefore does
+     * not survive to the commit: a replacement landing in that gap is equal-by-offset, passes the gate, and is
+     * removed. It narrows the window from "the whole staleness check" to "a few instructions inside the JDK" and
+     * closes nothing, which is exactly the shape
+     * {@code docs/solutions/logic-errors/stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md}
+     * warns about: sweeping harder only moves the window. {@code ShardStaleSweepReplacementEvictionTest}'s
+     * premise arm pins both halves of that measurement.
+     * <p>
+     * <b>The deeper fix is to give {@link WorkContainer} identity equality</b>, which would delete this class and
+     * make every value-conditional map operation on a container correct at once. It is not done here because
+     * {@code WorkContainer} is public, {@link WorkContainer#compareTo(WorkContainer)} orders by offset and would
+     * become inconsistent with equals, and collections keyed on containers elsewhere
+     * ({@code ExternalEngine.holdingDispatchPermit}) would silently change meaning - a release-gated breaking
+     * change rather than a bug fix. Recorded in {@code docs/refactoring.md}.
+     */
+    static final class Residency<K, V> {
+
+        private final WorkContainer<K, V> container;
+
+        Residency(WorkContainer<K, V> container) {
+            this.container = container;
+        }
+
+        WorkContainer<K, V> container() {
+            return container;
+        }
+
+        @Override
+        public String toString() {
+            return "Residency(" + container + ")";
+        }
+    }
 
 
     @Getter(PRIVATE)
@@ -109,14 +161,14 @@ public class ProcessingShard<K, V> {
 
     void addWorkContainer(WorkContainer<K, V> incomingWorkContainer) {
         long offset = incomingWorkContainer.offset();
-        WorkContainer<K, V> residentBeforePut = workMap.get(offset);
-        if (residentBeforePut != null && !isWorkContainerStale(residentBeforePut)) {
+        Residency<K, V> residentBeforePut = workMap.get(offset);
+        if (residentBeforePut != null && !isWorkContainerStale(residentBeforePut.container())) {
             log.debug("Entry for {} already exists in shard queue, dropping record", incomingWorkContainer);
             return;
         }
         if (residentBeforePut != null) {
             log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
-                    residentBeforePut.getEpoch(), offset, incomingWorkContainer.getEpoch());
+                    residentBeforePut.container().getEpoch(), offset, incomingWorkContainer.getEpoch());
         }
 
         // ADMIT FIRST, then let the map itself say what happened - never the read above.
@@ -132,7 +184,7 @@ public class ProcessingShard<K, V> {
         // be observed against an admission that has not been committed yet - which is what lets getInSystem() be
         // non-negative by construction instead of by clamp.
         population.onAdmitted();
-        WorkContainer<K, V> displaced = workMap.put(offset, incomingWorkContainer);
+        Residency<K, V> displaced = workMap.put(offset, new Residency<>(incomingWorkContainer));
 
         // The claim protocol is separate accounting, and deliberately reads NOTHING from the branch above: the
         // arrival is offered a claim because it is now resident, and the displaced container gives one back
@@ -169,7 +221,7 @@ public class ProcessingShard<K, V> {
             // already taken as work, and does when it was only ever queued - the compare-and-set tells those
             // apart from the container's own record instead of guessing, which is what used to leave this
             // branch a claim short every time a taken entry was replaced.
-            excludeFromSelection(displaced);
+            excludeFromSelection(displaced.container());
         }
     }
 
@@ -189,7 +241,7 @@ public class ProcessingShard<K, V> {
     // visible for testing
     void plantResident(WorkContainer<K, V> wc) {
         population.onAdmitted();
-        workMap.put(wc.offset(), wc);
+        workMap.put(wc.offset(), new Residency<>(wc));
     }
 
     /**
@@ -206,7 +258,7 @@ public class ProcessingShard<K, V> {
      * {@link #plantResident} are the only ways in.
      */
     Optional<WorkContainer<K, V>> getWorkContainerAtOffset(long offset) {
-        return Optional.ofNullable(workMap.get(offset));
+        return Optional.ofNullable(workMap.get(offset)).map(Residency::container);
     }
 
     public void onSuccess(WorkContainer<?, ?> successfulWork) {
@@ -238,6 +290,7 @@ public class ProcessingShard<K, V> {
 
     public long getCountWorkInFlight() {
         return workMap.values().stream()
+                .map(Residency::container)
                 .filter(WorkContainer::isInFlight)
                 .count();
     }
@@ -272,17 +325,40 @@ public class ProcessingShard<K, V> {
      * container that has left the shard holds no claim" is an invariant of every exit path rather than a property
      * of the paths somebody remembered; only the caller that wins the compare-and-set moves the counter.
      * <p>
-     * A value-conditional {@code workMap.remove(offset, container)} would not do instead.
-     * {@link WorkContainer#equals(Object)} is topic, partition and offset only, so a <em>fresh</em> container
-     * that replaced this one at the same offset compares equal to it and would be removed as though it were the
-     * stale one.
+     * <b>This one is by KEY and takes whatever is there, which is correct for its callers and wrong for a
+     * caller that inspected a container first</b> - the revocation sweep is emptying an offset regardless of who
+     * occupies it, and {@link #onSuccess} is removing a container that by construction cannot have been
+     * replaced (a non-stale resident is never replaced by {@link #addWorkContainer}). A caller that judged a
+     * <em>particular</em> container and now wants that one gone must use {@link #evictIfStillResident} instead,
+     * because between the judgement and the removal a replacement can arrive.
      */
-    private WorkContainer<K, V> retire(WorkContainer<K, V> removed) {
-        if (removed != null) {
-            population.onRetired();
-            excludeFromSelection(removed);
+    private WorkContainer<K, V> retire(Residency<K, V> removed) {
+        if (removed == null) {
+            return null;
         }
-        return removed;
+        population.onRetired();
+        excludeFromSelection(removed.container());
+        return removed.container();
+    }
+
+    /**
+     * Removes an offset's occupant <b>only if it is still the exact residency the caller inspected</b>, and
+     * retires it if so.
+     * <p>
+     * This is the removal for any site that looked at a container, made a decision about <em>that</em> container,
+     * and now wants it gone: the decision and the removal are two steps, and the writer on the other thread can
+     * land a replacement between them. {@link Map#remove(Object, Object)} settles it in one atomic step, and
+     * {@link Residency} is what makes the comparison it performs reference identity rather than
+     * {@link WorkContainer#equals(Object)}'s offset equality - that class carries the measurement, including why
+     * {@code computeIfPresent} with an identity check in the function does not do instead.
+     *
+     * @return the container this call evicted, or {@code null} if the residency had already been replaced or
+     *         removed - in which case this call changed nothing and must account for nothing
+     */
+    private WorkContainer<K, V> evictIfStillResident(long offset, Residency<K, V> inspected) {
+        return workMap.remove(offset, inspected)
+                ? retire(inspected)
+                : null;
     }
 
 
@@ -292,21 +368,25 @@ public class ProcessingShard<K, V> {
     // 2. will cause the consumer to paused consuming new messages indefinitely
     public List<WorkContainer<K, V>> removeStaleWorkContainersFromShard() {
         List<WorkContainer<K, V>> staleContainers = new ArrayList<>();
-        for (Map.Entry<Long, WorkContainer<K, V>> entry : workMap.entrySet()) {
-            if (isWorkContainerStale(entry.getValue())) {
-                // Not iterator.remove(): it discards the map's return value, so it cannot tell "this call removed
-                // the record" from "another thread had already removed it" - and both the retirement and the
-                // claim release have to know which. See retire().
+        for (Map.Entry<Long, Residency<K, V>> entry : workMap.entrySet()) {
+            Residency<K, V> inspected = entry.getValue();
+            if (isWorkContainerStale(inspected.container())) {
+                // Not iterator.remove(), and not removeWorkAtOffset(key) either: both remove whatever occupies the
+                // offset when they land, and this thread is the broker poller inside a rebalance callback while
+                // addWorkContainer's stale-replacement branch runs on the controller. Nothing orders the two, so
+                // the container answered "stale" above can have been replaced by a FRESH one carrying the current
+                // epoch by the time the removal runs - and a by-key removal then evicts the replacement. The
+                // record is lost: PartitionState still carries its offset as incomplete, so nothing selects it
+                // again until the partition is re-polled.
                 //
-                // This still removes by KEY, so a fresh container the controller put here since next() returned
-                // is what actually leaves. Accounting for what LEFT rather than for what was inspected is half of
-                // that defect closed: the population and the claim now follow the evicted object, and the caller
-                // is handed it rather than the container the sweep was looking at. The eviction of the fresh
-                // record itself is untouched and still open, with the decision it needs, in
-                // docs/inflight/bug-stale-sweep-iterator-evicts-fresh-replacement.md.
-                WorkContainer<K, V> removed = removeWorkAtOffset(entry.getKey());
-                if (removed != null) {
-                    staleContainers.add(removed);
+                // The removal is therefore conditional on the residency this loop inspected, settled in one
+                // atomic step. Nothing evicted means the replacement won, which is the correct outcome and not a
+                // failure: this call changed nothing, so it retires nothing and reports nothing - and the
+                // downstream retry-queue removal in ShardManager.removeStaleContainers stays gated on a real
+                // shard removal, which is the invariant astubbs/parallel-consumer#437 pinned.
+                WorkContainer<K, V> evicted = evictIfStillResident(entry.getKey(), inspected);
+                if (evicted != null) {
+                    staleContainers.add(evicted);
                 }
             }
         }
@@ -321,7 +401,8 @@ public class ProcessingShard<K, V> {
 
         var iterator = workMap.entrySet().iterator();
         while (workTaken.size() < workToGetDelta && iterator.hasNext()) {
-            var workContainer = iterator.next().getValue();
+            var residency = iterator.next().getValue();
+            var workContainer = residency.container();
 
             if (pm.couldBeTakenAsWork(workContainer)) {
                 // ONE call, deliberately. This used to read `isAvailableToTakeAsWork()` and then call
@@ -365,8 +446,21 @@ public class ProcessingShard<K, V> {
                     // entry behind orphans it forever: nothing else removes an entry whose container is no longer
                     // in any shard, and the workable figure the load gate reads subtracts a parked-for-retry
                     // count that would then include a record the population no longer does.
+                    //
+                    // Conditional on the residency this scan inspected, for the same reason
+                    // removeStaleWorkContainersFromShard is: a by-key removal here would evict a fresh
+                    // replacement.
+                    //
+                    // CLEARED SUSPICION, 2026-09-07: unlike the epoch-change sweep, this site is not
+                    // reachable by that race today. Suspected because it has the same shape - inspect a
+                    // container, then remove its offset. The discriminator is that addWorkContainer is the
+                    // ONLY writer of workMap outside tests and runs on the controller, which is also the
+                    // thread that runs this scan, so no replacement can land between the two statements.
+                    // It reopens the moment anything puts into a shard off the controller thread, and
+                    // nothing would go red if that happened - hence the conditional form anyway: it costs
+                    // the same, and it does not rest on a thread-confinement claim nothing checks.
                     log.debug("shard {} there are still stale work container, need to remove container : {}", this, workContainer);
-                    WorkContainer<K, V> removed = removeWorkAtOffset(workContainer.offset());
+                    WorkContainer<K, V> removed = evictIfStillResident(workContainer.offset(), residency);
                     if (removed != null) {
                         retryQueue.remove(removed);
                     }
@@ -448,7 +542,8 @@ public class ProcessingShard<K, V> {
      * {@link ShardManager#onFailure(WorkContainer)} are both built that way, and each says why it closes.
      */
     boolean isResident(WorkContainer<?, ?> wc) {
-        return workMap.get(wc.offset()) == wc;
+        Residency<K, V> resident = workMap.get(wc.offset());
+        return resident != null && resident.container() == wc;
     }
 
     /**
@@ -495,6 +590,6 @@ public class ProcessingShard<K, V> {
      * {@link #getCountOfWorkAwaitingSelection()} must always agree with this.
      */
     long countSelectionClaimedByScan() {
-        return workMap.values().stream().filter(WorkContainer::isSelectionClaimed).count();
+        return workMap.values().stream().map(Residency::container).filter(WorkContainer::isSelectionClaimed).count();
     }
 }
