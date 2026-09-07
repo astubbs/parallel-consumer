@@ -777,7 +777,9 @@ Only the items needing a decision are listed here - do not restate the inventory
   `LoadTest` stays at 4,000: it is untagged, so it runs in the gating lane, and it is already a
   listed member of the load-tightness flake family at that volume.
 
-Not listed as work: `largeNumberOfInstances` is owned by open PR astubbs#29. The three
+Not listed as work: `largeNumberOfInstances` stays in `docs/quarantined-tests.md` as an unowned entry -
+astubbs#29 merged on 2026-09-02 fixing one confluentinc#857 mechanism without lifting this quarantine, so it
+is tracked by the registry, not here. The three
 `@Timeout(60000L)` annotations (`MockConsumerEarlyCloseTest`, `MockConsumerSaslAuthenticationTest`,
 `MockConsumerCommitTimeoutTest`) are owned by open PR astubbs#206, which replaces them with
 `@Timeout(120)` on a shared `MockConsumerTestBase` and adds the assertion

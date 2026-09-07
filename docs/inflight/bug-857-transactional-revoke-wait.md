@@ -82,8 +82,8 @@ composition is fixed by that file rather than derived from what the tree contain
 `sanity` package, not `@Tag("chaos")`, was never selected by any shard and its removal changes none
 of them.
 
-**Failing condition:** `AbstractRevokeUnderWorkScenario.runRevokeUnderWorkScenario:283`, the
-Awaitility condition aliased *"backlog drained after the storm settles (quiet phase)"* did not
+**Failing condition:** the `diagnosableWait` in `AbstractRevokeUnderWorkScenario.runRevokeUnderWorkScenario`
+aliased *"backlog drained after the storm settles (quiet phase)"* (grep that alias) did not
 complete within its 5-minute bound - `ConditionTimeout`, 366.8s elapsed. Seed
 `7976335177229963841` (scenario `w4tx`, printed by `AbstractRevokeUnderWorkScenario`'s
 `"=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ==="` banner;
