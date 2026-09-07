@@ -214,8 +214,18 @@
                          (-Dpc.log.dir=/tmp/run-3), and ${surefire.forkNumber} is left for surefire to
                          expand per fork - Maven passes unknown properties through untouched.
 
-                         FAILSAFE IS DELIBERATELY NOT GIVEN THIS. It declares no forkCount, so it runs at
-                         the default of 1, and the bin/ experiment runners record a flat
+                         FAILSAFE IS DELIBERATELY NOT GIVEN THIS - but NOT for the reason this comment
+                         used to give. It said failsafe "declares no forkCount, so it runs at the
+                         default of 1". It declares none here, but .github/workflows/maven.yml runs the
+                         gating Integration Tests lane with -DforkCount=4, and with no <forkCount> pinned
+                         below, failsafe takes that bare user property - the same -DforkCount vs
+                         -Dsurefire.forkCount trap noted a few lines above, in the direction that bites.
+                         So four failsafe JVMs already share one flat pc.log.dir, which is exactly the
+                         multi-JVM-on-one-file case described above, and raising forkCount further
+                         worsens it rather than introducing it.
+
+                         The path stays flat anyway, on the surviving half of the original reason: the
+                         bin/ experiment runners record a flat
                          <their -Dpc.log.dir>/probes.log path for a reader to open, which a fork
                          subdirectory would break. (They CLASSIFY from the run log, not from the silo -
                          the violation and the trajectory land in different silos, and only the run log

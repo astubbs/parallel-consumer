@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.state.PausableInsertShardManager;
@@ -115,6 +116,16 @@ class RegistrationRaceStaleResidentIT extends BrokerIntegrationTest<String, Stri
     private final CountDownLatch processingGate = new CountDownLatch(1);
 
     @Test
+    @Quarantined(
+            reason = "Times out after ~31s on its own SETUP GUARD - the awaited condition is the "
+                    + "control thread reaching the mid-loop pause point (offset 25) that saturates "
+                    + "the pipeline - not the confluentinc#909 signature assertion this test exists "
+                    + "to make, so a failure says nothing about the defect it reproduces. A pass "
+                    + "completes in about 10s; every recorded failure sits at the 30s timeout, which "
+                    + "is the shape of a precondition the test cannot force under load rather than a "
+                    + "wrong answer.",
+            tracking = "docs/inflight/test-untracked-ci-flakes.md",
+            flapping = true)
     void freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed() throws Exception {
         setupTopic();
 

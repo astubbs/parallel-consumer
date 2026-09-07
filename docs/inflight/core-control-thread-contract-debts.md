@@ -114,8 +114,19 @@ rework.
 astubbs#296 added to it anyway - deliberately, because the alternative was shipping a silent
 work-drop. Worth deciding explicitly whether further hardening here waits for the decomposition.
 
-Directly relevant to item 1: the `state` field these paths read is **non-volatile**, written by one
-thread and read by another.
+Directly relevant to item 1, **and half-corrected since this was written**: the `state` field these
+paths read is now `volatile` (`private volatile State state`), made so by astubbs#342 for its own
+reasons. What is still a plain field is `controlThreadFuture`, which `isClosedOrFailed()` also reads
+from another thread.
+
+<!-- post-merge: checked-begin -->
+That half arrived here from astubbs#116, whose result stream reads `isClosedOrFailed()` from the
+caller's consuming thread and therefore depended on it. That PR is cited as where the debt was
+found, which stays true once it lands.
+<!-- post-merge: checked-end --> Its failure mode is now benign rather than a
+hang: a consumer seeing a stale `Optional.empty()` falls through to the volatile `state` read and gets
+the right answer. So it is one keyword, owned by this class rather than by whoever needed it - which
+is why it is recorded here rather than left on a merged PR's note.
 
 ## 3. `RejectedExecutionException` does not mean "pool shut down"
 
@@ -142,6 +153,7 @@ and hands back a `Future` that never completes. An unbounded queue removes *satu
 *rejection* - a distinction a review of astubbs#296 got wrong in the direction of weakening the guard,
 now pinned by `anUnboundedQueueDoesNotMakeALosingHandlerHarmless`.
 
+<!-- post-merge: checked-begin -->
 Recorded on astubbs#216 ("Metrics: expose the buffers that have no upper bound"), which astubbs#116
 names as the mitigation for buffers that cannot be bounded. That queue is unbounded by *type* but
 self-limited by the control loop's in-flight target, so it is not the JStream failure mode - its bound
@@ -149,3 +161,4 @@ is emergent from `numberRecordsOutForProcessing` bookkeeping rather than structu
 
 There is no general "bound our queues" initiative to attach to: astubbs#116 settled that the JStream
 deque is unbounded by design, and observability is the answer instead.
+<!-- post-merge: checked-end -->

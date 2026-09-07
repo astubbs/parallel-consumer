@@ -76,6 +76,12 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 
 ---
 
+- **`JStreamParallelEoSStreamProcessor`'s javadoc overstates one guarantee.** It says queued results
+  are delivered rather than discarded, which holds for an ordinary close but not for the
+  `shutdownNow()` branch: that can make `isClosedOrFailed()` true while a worker can still enqueue, so
+  a result produced in that window is dropped. Narrow the sentence to the path it actually covers, or
+  make the branch match the claim. From astubbs#116, which stated it in the PR rather than the code.
+
 ## Breaking changes queued for next major version
 
 **The gate is currently OPEN: `0.6.0.0` is that major, it is unreleased, and it is the release being
@@ -118,8 +124,22 @@ refactors below, which are non-breaking and can land at any point in any line.
   (`public void setCommitInterval`, `private final Duration defaultMessageRetryDelay`,
   `isUsingTransactionalProducer`) **and retire the temporary Kafka-compat work-around flag**
   (`ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck`) - `ParallelConsumerOptions.java`.
-- **Remove the JStream API** (deprecate first) - design ref
-  `origin/refactor/deprecate-jstream` @8a8f6508.
+- **DONE, landing with astubbs/parallel-consumer#116: the `Stream` returned by
+  `pollProduceAndStream` / `vertxHttpReqInfoStream` now blocks until the processor closes.** It used
+  to return almost immediately, because the queue-to-`Stream` bridge ended the stream on the first
+  momentarily-empty poll - which is what `Spliterator.tryAdvance` returning `false` means, and it is
+  the confluentinc#912 OOM: results produced afterwards piled up behind a consumer that had already
+  walked away. A caller that collected on the calling thread and read a size got whatever had been
+  produced so far; the same caller now waits for close. **No compatibility path is offered and none
+  should be** - the old shape did not deliver the caller's results, so there is no correct behaviour
+  to preserve. Callers consume on their own thread, as the Vert.x example now shows. Recorded here
+  rather than only in the commit, because this section is what the release notes are assembled from.
+- ~~**Remove the JStream API** (deprecate first)~~ - **WITHDRAWN 2026-09-03, owner's call.** The
+  removal was queued while the API was broken in the way above; deprecating something because it does
+  not work is a different argument from deprecating something that does. It works now, so it stays,
+  and astubbs#116 removed the deprecation it had added to all four types. Design ref
+  the archive tag `archive/refactor/deprecate-jstream` (branch deleted 2026-09-03) is kept for whoever
+  revisits the question on its merits.
 - **Rename the enum to the standard pattern** (public enum rename) -
   `origin/refactor/minor-changes` @193bbf80.
 - **Rehome `LongPollingMockConsumer` out of `bz.stub.parallelconsumer.internal.utils`.** astubbs#159 /
@@ -185,6 +205,24 @@ diagnosing the mirror rather than while reading the file:
 Large, mostly interdependent, several **undecided**. Most trace to confluentinc#200.
 Do not start one casually.
 
+### `corpusIndex` lists each distinct docs tree with one `ls-tree` - the next lever is unpulled
+
+`bin/lib/notes.mjs` resolves every ref's `docs/` tree in one `cat-file --batch-check` and lists each
+distinct tree once, which is what brought the session-start hook back inside its budget. If a
+measurement ever asks for more, the next lever is parsing the distinct trees through one batched
+`cat-file` per depth instead of one `ls-tree` per tree. Not pulled: `node bin/inflight.mjs --perf docs`
+prints the figures, and none demands it.
+
+### `formatRank` moves to `rank-views.mjs` when a second rank-family command lands
+
+`bin/lib/views.mjs` grew by a third when `rank` arrived, making it the second-largest file in
+`bin/lib`. **The trigger is a second command in the family, not the size.** Its stated boundary -
+render strings, run no git, decide no exit code - is intact, and `refsText`/`scopeLine` are shared
+with `docsShape` on purpose, so moving them would recreate the duplication the file exists to
+prevent. The `docs-views.mjs` split earned its place because docs is *several* formatters; every
+other command's single formatter still lives here, so moving `rank` alone makes it the odd one out.
+When the second one arrives, take `formatRank` with it and import the shared helpers one way.
+
 ### The portable-mtime probe exists three times
 
 `hook_file_mtime` in `.claude/hooks/lib/hook-common.sh`, `_mtime` in
@@ -196,6 +234,25 @@ GNU-vs-BSD `stat` probe. The shared one was added for the two push hooks; the ot
 aborts the script instead of reaching its documented fail-closed branch. `hook_file_mtime` already
 carries `|| true` on both arms for exactly this, so it is safe to point the other two at - but point
 them, do not copy them back.
+
+### JUnit tag resolution is implemented twice, in two languages, from one rule
+
+`bin/lib/compiled-classes.mjs` (the integration shard's completeness guard) and
+`TransactionalClaimCoverageTest.effectiveTagsOf` (the transactional claim register) both answer "which
+tags would JUnit apply to this test?", and both had to get the same three cases right: a tag on the
+method, a tag on the class, and a tag reached only through a meta-annotation such as `@Quarantined`,
+which is a `@Tag` carrier rather than a `@Tag`. They arrived independently, days apart, and agree.
+
+**Not a consolidation candidate, which is why it is written down rather than queued.** One reads
+`javap` output from Node before any JVM starts; the other resolves annotations inside a running test
+JVM through JUnit's own `AnnotationSupport`. Neither can call the other, and re-deriving the rule in a
+shared place would produce a third implementation rather than removing one.
+
+What is worth doing, if either is ever changed: change both, or record why not. The rule they encode
+is JUnit's, not this repo's, so it moves only when JUnit's does - but a fix applied to one and not the
+other leaves two answers to one question, and each is load-bearing for a different gate. The failure
+is silent in both directions: a guard that under-reads tags reports coverage it does not have, and one
+that over-reads them excuses a test that really runs.
 
 ### Thread model: eliminate the separate poller thread (MASSIVE, UNDECIDED)
 *Mirror: [#142](https://github.com/astubbs/parallel-consumer/issues/142) · orphaned implementation in [confluentinc PR #270](https://github.com/confluentinc/parallel-consumer/pull/270), closed unmerged in the 2023-06-15 sweep.*
@@ -231,12 +288,21 @@ them, do not copy them back.
   codebase contains no annotation. Every detector here is discovery and none prevents regression, so
   the annotation is what makes a fix permanent - write it with the fix.
 
-### `AbstractParallelEoSStreamProcessor.lastCommitTime` is read unsynchronised
+### `ProducerManager.ProducingLock` is the retry-queue iterator's shape, undeclared (SMALL, but establish the premise first)
 
-- Plain `Instant`, written in the commit path and read by `isTimeToCommitNow()` with no
-  happens-before edge. Found by RacerD 2026-08-25; **not previously in any ledger**. The poll thread
-  can read a stale value and mis-time a commit, on a codebase that already tracks commit-timeout
-  flakes. Not diagnosed further. Fix it with `@GuardedBy` per the policy above.
+- Found by the defect-class sweep at astubbs#433's merge prep, which declared and asserted the same
+  shape on `RetryQueue.RetryQueueIterator`. `ProducingLock` wraps a `ReentrantReadWriteLock.ReadLock`
+  taken in `acquireProduceLock` and released by whoever calls its `unlock()`, so the same constraint
+  applies: a read lock may only be released by its holder, and an escaped one cannot be released at
+  all - which its own javadoc already describes the cost of, "the same permanent block on the next
+  commit's write-lock acquisition".
+- The recipe is `@ThreadConfined(ThreadConfined.ANY)` plus an owning-thread assertion, per
+  `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`. **Do not apply it
+  blind**: the premise is that the acquirer is always the releaser, and that is exactly what was
+  wrong about `lastCommitTime`. The lock is taken on a worker thread in
+  `ParallelEoSStreamProcessor`, stored on the `PollContextInternal`, and released through that
+  context - so establish which thread performs the release before declaring anything. If it can
+  differ, that is a defect and not a tidy-up, and it becomes a note rather than this line.
 
 ### Make the commit/close ownership polymorphism official - an interface, not a rename (SMALL, do any time)
 *Independent of the thread-model work below/above. No behaviour change, but do not file this as
@@ -260,14 +326,37 @@ cosmetic - see the last bullet.*
 - Background and the full commit record:
   `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
 
-### Decompose the God class - `AbstractParallelEoSStreamProcessor` (1533 lines)
+### Decompose the God class - `AbstractParallelEoSStreamProcessor`
 - Control loop + lifecycle/state machine + commit orchestration + threading +
   rebalance listener + deprecated options in one class. Design ref: draft
-  `confluentinc#488`. Branch `origin/refactor/state-machine` @8f90da8a (extract the lifecycle
-  state machine). Do alongside the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) work; high risk.
+  `confluentinc#488`. Do alongside the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) work; high risk.
+- **Size is deliberately not written down here.** It was recorded as 1533 lines and was still being
+  cited as that after the class had grown by most of a thousand - a stale figure reads as current
+  state forever, and nothing goes red. Ask instead:
+  `wc -l parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java`
+- **And one argument built on that figure is now falsified, which is worth more than the figure.**
+  `docs/ideation/2026-08-17-actor-collection-revival-ideation.html` reasons from "the file has moved
+  one line in 3.5 years, which is the clearest evidence that branch-shaped goals don't move it", and
+  proposes tracking progress by that line count. Measured 2026-09-03: the class was 1534 lines at
+  that ideation's own date and is over a thousand lines larger now - it moved in a fortnight what the
+  argument said it had not moved in three and a half years. The dated record is left as written, per
+  `docs/citations.md`; the correction belongs here, where the live decision is. It does not weaken the
+  case for decomposing - it inverts the reason. The class is not inert, it is accreting, and a
+  line-count target measures growth this section did not predict rather than progress against it.
+- **Two branches already attempted it, and one of them got much further** (both catalogued in
+  `branch_accounting` in `src/docs/development/upstream-map.yaml`; `bin/inflight.mjs branch <name>`
+  answers from any checkout):
+  - `origin/refactor/state-machine` @8f90da8a - extracts the lifecycle state machine only.
+  - `origin/refactor/control-loop` @c3a0f28ae - **the furthest any attempt reached**: it compiles,
+    with tests migrated and a review pass. It cuts along **`ControlLoop` / `Controller` /
+    `StateMachine` / `PCWorkerPool` / `WorkMailbox`**. Those five names are the useful part: this
+    section argues about *whether* to split without recording what a working split actually cut
+    along, and someone starting fresh would re-derive the seams rather than start from a set that
+    was shown to compile. `origin/refactor/controller-extract-base` was a marker for this work and
+    was deleted 2026-09-03 (an ancestor of master, nothing lost).
 - **Landing this unblocks whole-FILE static analysis, and it can be taken piecemeal.** The
   new-code analysis profile is scoped to changed *lines* rather than changed *files* purely because
-  of size: touching a 1533-line class would otherwise inherit every latent finding in it. Line
+  of size: touching a class this large would otherwise inherit every latent finding in it. Line
   scoping is the weaker choice - it misses a finding reported away from the edit that caused it - so
   each file that comes down to a reviewable size can be promoted to file scoping on its own, without
   waiting for the whole decomposition.
@@ -331,6 +420,12 @@ cosmetic - see the last bullet.*
     be visible to another: `ConsumerManager.commitRequested`, `RetryQueue.closed`.
     Was 3: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` is now
     `volatile` (astubbs#201), and SpotBugs no longer reports it.
+    **`RetryQueue.closed` is now a FALSE POSITIVE and stays listed for that reason.** The
+    iterator that owns it is `@ThreadConfined(ANY)` with a runtime guard
+    (`assertOnOwningThread`), so there is no second thread to be stale for - it never
+    could be, because the iterator holds a read lock only its opener can release.
+    SpotBugs reads no confinement annotation and will keep reporting it; do not "fix" it
+    with `volatile`, which would assert a sharing that does not exist.
   - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
     on the astubbs#119 branch:**
     `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
@@ -919,8 +1014,10 @@ astubbs#228 (confluentinc#24, distributed rate limiting); ideation:
   make sense to have a producer facade." Don't revisit.
 - `origin/features/consumer-interface` @e67833f8, `origin/refactor/interface` @400643c8 - Consumer /
   interface naming (→ cohesive-API draft `confluentinc#303`).
-- `origin/refactor/deprecate-jstream` @8a8f6508 - deprecate the JStream API (breaking removal is
-  queued under *Breaking changes queued for next major version*).
+- `archive/refactor/deprecate-jstream` @8a8f6508 (branch deleted 2026-09-03) - deprecate the JStream
+  API. **The queued removal was withdrawn on 2026-09-03** - see the struck-through entry under *Breaking changes queued for next
+  major version* for why. The branch is kept as the design record for whoever argues the case on the
+  API's merits rather than on the defect astubbs#116 fixed.
 - `origin/move-cons-to-pc` @f25256cf - move the consumer into PC (old/new styles verified equal).
 - `origin/refactor/minor-changes` @193bbf80 - rename enum to the standard pattern (breaking; see
   *Breaking changes queued for next major version*).

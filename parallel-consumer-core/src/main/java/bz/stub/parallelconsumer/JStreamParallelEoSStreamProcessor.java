@@ -10,7 +10,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 
 import java.util.List;
-import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -19,14 +20,26 @@ public class JStreamParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamPr
 
     private final Stream<ConsumeProduceResult<K, V, K, V>> stream;
 
-    private final ConcurrentLinkedDeque<ConsumeProduceResult<K, V, K, V>> userProcessResultsStream;
+    /**
+     * Results waiting for the caller to take them off {@link #stream}.
+     * <p>
+     * Blocking because the stream waits here rather than ending when it finds nothing; {@link
+     * LinkedBlockingQueue} specifically because its {@code size()} is a counter rather than a walk, which a
+     * gauge over this buffer would need. Its enqueue takes a lock where the previous
+     * {@code ConcurrentLinkedDeque} was lock-free, which is not worth avoiding: each addition follows a Kafka
+     * produce that dominates it.
+     * <p>
+     * It has no capacity, so a consumer that keeps up holds nothing while one that is merely slower than the
+     * producer still grows it. What is fixed is the consumer that stops taking at all.
+     */
+    private final BlockingQueue<ConsumeProduceResult<K, V, K, V>> userProcessResultsStream;
 
     public JStreamParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> parallelConsumerOptions) {
         super(parallelConsumerOptions);
 
-        this.userProcessResultsStream = new ConcurrentLinkedDeque<>();
+        this.userProcessResultsStream = new LinkedBlockingQueue<>();
 
-        this.stream = Java8StreamUtils.setupStreamFromDeque(this.userProcessResultsStream);
+        this.stream = Java8StreamUtils.setupStreamFromQueue(this.userProcessResultsStream, this::isClosedOrFailed);
     }
 
     @Override
