@@ -680,7 +680,7 @@ entries:
   - id: upstream-pr-log-noise
     group: logging-ux
     summary: Trim noisy user-function / RemovedPartitionState logging
-    fork: {branches: [fix/log-verbosity-batch, fix/168-commit-error-line-keeps-identifiers], prs: [203, 428], fork_issues: [168, 169, 170, 238], status: pr-open}
+    fork: {branches: [fix/log-verbosity-batch, fix/168-commit-error-line-keeps-identifiers], prs: [203, 428], fork_issues: [168, 169, 170, 238], status: merged}
     upstream: {repo: confluentinc/parallel-consumer, issues: [640, 57, 629], prs: [918, 919], related: [631], status: mixed, last_checked: 2026-09-03}
     adoc_anchor: null
     notes: >
@@ -715,6 +715,13 @@ entries:
       the fork is now acting on it rather than noting it. The deferral WARN siblings in
       the same class are handed to astubbs#352 -- see
       docs/inflight/bug-deferred-commit-warn-names-no-offsets.md.
+      2026-09-07: astubbs#428 merged, so no PR in this entry is open and the fork
+      status is `merged`. Written in the branch rather than after the fact, because
+      branch content is invisible until it lands and correct the moment it does --
+      the rule docs/upstream.md states and a gate now enforces. The entry itself is
+      NOT finished: the #57 umbrella (the debug/trace call sites across core main)
+      is untouched, and the deferral WARN siblings wait on astubbs#352, so `merged`
+      describes the fork work that has shipped rather than the family being closed.
 
 
   - id: issue-402-max-load-factor-log-noise
