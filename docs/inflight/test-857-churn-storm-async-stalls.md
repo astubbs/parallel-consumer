@@ -660,3 +660,26 @@ The 40s that remains is the last heavy records finishing their one legitimate 45
 the tail the scenario builds on purpose. The 13s extra above it in the eager arm, and the
 three-to-ten-fold worker occupancy, is the amplification. Whole-assignment revokes are the term
 that produces it.
+
+**Same-defect sweep, 2026-09-07: the two other recorded seeds show the same shape.** Both replayed
+once on the same tree with the 20s early dump, both green, and every dumped member across the two
+runs was a working member, not a stalled one:
+
+| Seed | Where it came from | Run | Peak instance stall | Dumps | Workers in the dwell at each dump |
+|---|---|---|---|---|---|
+| `1630088991107806597` | the CI-hunted seed that went red twice in three CI runs | 89s | 66s | 5 members | 10/10 on four of them; 8/10 on instance 5, with 2 parked between tasks and one incomplete offset |
+| `5650361238717170909` | the 2026-09-04 sighting on a pom-only PR | 341s | 84s | 11 dumps, 6 of them instance 0 | 10/10 on every one |
+
+The long run is the more instructive. Instance 0 was dumped six times over three minutes, each a
+separate frozen stretch, holding `incompleteOffsets` of 759, 550, 555, 431 and 230 on successive
+dumps with `recordsInShards` to match - hundreds of records queued in its shards behind ten workers
+asleep in the dwell, draining a little between stretches. That is what a member looks like when it
+keeps being handed whole partitions' backlogs under churn: the same mechanism, with a longer tail
+because there was more to re-ingest. The Class 2 lag bound also tripped once in that run (154s
+against 150s), which is the same tail seen from the offset side. Neither run fired the gating
+detector, and neither would have told anyone anything without the dump.
+
+Instance 5 on the first seed is the case that matters for the detector: a member holding work, count
+frozen, with two workers parked between tasks - spare hands and nothing to hand them, because the
+records it holds are on the eight busy ones. A rule that accuses on "a free worker beside held work"
+accuses it; the rule that lands with the stacked follow-up accuses only nobody-in-user-code.
