@@ -57,6 +57,24 @@ class VertxCloseReleasesEngineTest extends VertxCloseTestBase {
         assertThat(probe.engineBeganClosing()).isTrue();
     }
 
+    /**
+     * {@code close(DrainingMode)} always re-runs {@code releaseOwnedVertxEngine} - the base class's own
+     * {@code state == CLOSED} short-circuit only skips ITS drain/wait bookkeeping on a second call, not this
+     * override's teardown. A second entry point is therefore a genuine repeat call into {@code webClient.close()}
+     * and {@code vertx.close()} on already-closed resources - pinned green here because Vert.x's close is
+     * idempotent (a closed engine's {@code close()} returns an already-completed future rather than throwing),
+     * not because anything in this override guards against the repeat.
+     */
+    @Test
+    void closingASecondTimeThroughAnotherEntryPointDoesNotThrow() {
+        var probe = EngineProbeVerticle.deployOn(vertxAsync.getVertx());
+
+        vertxAsync.close();
+        assertThat(probe.engineBeganClosing()).isTrue();
+
+        vertxAsync.closeDontDrainFirst();
+    }
+
     @Test
     void aFailingTeardownIsSuppressedOnTheCloseFailureRatherThanReplacingIt() {
         var heldOpen = EngineProbeVerticle.deployHoldingOpen(vertxAsync.getVertx());
