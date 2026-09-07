@@ -214,8 +214,18 @@ assert_contains "clean repo reports zero violations" "0 violation(s)" "$out"
 
 # --- Fixture C: fork point not in history (rule 15) ---------------------------------
 # Default: WARN and skip (exit 0) - can't determine provenance, so degrade gracefully (e.g. a
-# shallow clone or a `mvn validate` build); the authoritative gate is copyright.yml (fetch-depth: 0).
-out=$( (cd "$repoB" && COPYRIGHT_CHECK_FORK_POINT=0000000000000000000000000000000000000000 \
+# shallow clone or a `mvn validate` build); the authoritative gate is the `repo: hygiene` job in
+# .github/workflows/repo-hygiene.yml (fetch-depth: 0 + strict mode).
+#
+# `env -u` IS LOAD-BEARING, and this case is worth nothing without it. It asserts the DEFAULT, so it
+# must not inherit an ambient COPYRIGHT_CHECK_REQUIRE_FORK_POINT that redefines what the default is.
+# That is not hypothetical: repo-hygiene.yml sets that variable at JOB level for the real gate, and
+# the same job runs `bin/check-all.sh --with-tests`, which sweeps this self-test - so the variable
+# reaches here and turned this assertion into "expected 0, got 2". Green on a laptop, red only in
+# CI, which is the worst place to learn it. Clear it explicitly rather than trusting the caller's
+# environment; the strict-mode case below sets it explicitly for the same reason.
+out=$( (cd "$repoB" && env -u COPYRIGHT_CHECK_REQUIRE_FORK_POINT \
+        COPYRIGHT_CHECK_FORK_POINT=0000000000000000000000000000000000000000 \
         bash "$SCANNER") 2>&1 ) && rc=0 || rc=$?
 assert          "missing fork point skips (exit 0) by default" 0 "$rc"
 assert_contains "missing fork point warns + explains the fix"  "fetch-depth: 0" "$out"

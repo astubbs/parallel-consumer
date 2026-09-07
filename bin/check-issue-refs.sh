@@ -4,7 +4,7 @@
 #
 
 # Flags unqualified `#NN` references below #1000 on lines this branch ADDS - the same rule the
-# `PR Checklist` workflow enforces (AGENTS.md -> Issue references).
+# `repo: hygiene` gate enforces (AGENTS.md -> Issue references).
 #
 # WHY THIS EXISTS
 #
