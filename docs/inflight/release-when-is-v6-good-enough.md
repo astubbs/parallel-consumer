@@ -8,12 +8,12 @@
 a note gets its own line in the session-start index. This question needs to be *met*, not looked up
 - so it is filed where an agent trips over it.
 
-The other two release notes answer different questions and neither answers this one:
-[`release-0.6.0.0.md`](release-0.6.0.0.md) is the content and the breaking-change record;
-[`release-0600-blockers.md`](release-0600-blockers.md) is correctness of the artefacts we are about
-to publish. **Both answer "is it ready?". This one asks "is it enough?"** - and, since 2026-09-08,
-it also carries the burn-down that gets from here to the tag, because the answer to "is it enough"
-turned out to be "yes, once the fixes already built are merged", and that is a list.
+[`release-0.6.0.0.md`](release-0.6.0.0.md) is the content and the breaking-change record, and
+answers "is it ready?". **This one asks "is it enough?"** - and, since 2026-09-08, it also carries
+the burn-down that gets from here to the tag, because the answer to "is it enough" turned out to be
+"yes, once the fixes already built are merged", and that is a list. The artefact-correctness
+register that was `release-0600-blockers.md` is folded in below as the tag-day checks, so the
+release has one note to burn down rather than three.
 
 ## The decision, 2026-09-08
 
@@ -40,9 +40,10 @@ them. A second release gets a smaller launch, but the roadmap announcement is wh
 shipping since the 26 August date passed; the previous version of this note said the failure mode
 was never shipping, and that is the failure mode that occurred.
 
+<!-- post-merge: checked-begin - the paragraph names astubbs#475 as the PR that merged and removed the note, which stays true after it lands -->
 **Prior art this supersedes, and what it still gets right.** A merge-order note from 2026-08-08,
 `release-v6-merge-order.md`, sat on the never-pushed branch `docs/v6-merge-order`; that branch was
-merged into this note's PR and the file removed in the same PR, so the note is in history
+merged into astubbs#475 and the file removed there, so the note is in history
 (`git log --all --oneline -- docs/inflight/release-v6-merge-order.md`) and nowhere live. It ordered a far larger v6: the
 transactional-atomicity trio first, then the loss and confluentinc#857 fixes, then **new surface**
 (the health check, MDC, the mock consumer in the main jar), then **new opt-in modules** (the
@@ -54,7 +55,8 @@ announcement plan carries the "maintained, and past where upstream stopped" clai
 its points survive unchanged and are in tier 3 below: astubbs#199 is the one item that cannot be
 applied after the tag, and astubbs#197's body reads as more blocked than it is. Its open question
 of which modules v6 publishes is moot under this decision, since no module PR is in the queue.
-<!-- file-refs: N/A - the merge-order note was merged and removed in this PR; the path is cited as history -->
+<!-- file-refs: N/A - the merge-order note was merged and removed by astubbs#475; the path is cited as history -->
+<!-- post-merge: checked-end -->
 
 **"Draft" on a fork PR means "needs the owner to review and merge", not "unfinished".** Every PR in
 the queue below is implemented, tested and green on everything except the human-LGTM gate and, where
@@ -122,16 +124,14 @@ Each rung was re-cut on 2026-09-07 so it can be reviewed against pieces already 
   the release page is empty.
 - [ ] **astubbs#446** - lift the announcement plan onto master, so the announcement is not being
   written from a branch nobody merges.
-- [ ] The artefact checks in [`release-0600-blockers.md`](release-0600-blockers.md) - regenerate the
-  changelog and confirm the breaking bullet still names both the `groupId` and the packages; re-read
-  the maturity wording now that the critical-defect gate has moved.
+- [ ] The tag-day artefact checks in the section of that name below.
 - [ ] Amend the release claim, not the standard, for what is still open in the confluentinc#857
   family below. The claim is "every known **critical** defect resolved and evidenced", and the
   family is not closed - say which mechanisms are, and which sightings remain unattributed.
 - [ ] Post the drafted issue responses (`ls docs/inflight/issue-response-*.md` and
   [`release-0.6.0.0-issue-response-drafts.md`](release-0.6.0.0-issue-response-drafts.md)) in the
   pre-release sweep [`docs/releasing.md`](../releasing.md) describes.
-- [ ] Tag. Then the after-it-ships items in `release-0600-blockers.md` and astubbs#197.
+- [ ] Tag. Then the after-it-ships items below, and the rest of astubbs#197.
 
 ### Can follow - finished or nearly, and deliberately not v6
 
@@ -205,7 +205,58 @@ churn rather than a PC defect.
   sightings and no diagnosis.
 - The maturity claim itself: `docs/data/module-maturity.yaml` carries a bare `production-use` next
   to a conditional support posture, and a renderer can lift the bare value without its condition.
-  [`release-0600-blockers.md`](release-0600-blockers.md) owns the recheck.
+  The tag-day checks below carry the recheck.
+
+## Tag-day artefact checks - are the things we publish true on the day we cut?
+
+Folded in from the register that was `release-0600-blockers.md`. Scope: `CHANGELOG.adoc` and
+`README.adoc` as published. Release mechanics stay in [`release-0.6.0.0.md`](release-0.6.0.0.md);
+the tracker is astubbs#197.
+
+- **The package rename shipped (astubbs#294); keep the release notes honest about it.** The
+  `== 0.6.0.0` changelog section is rebuilt from the commit log when the tag is cut, and generation
+  cannot notice that it dropped a claim the current text makes. After regenerating, confirm the
+  opening paragraph and the `=== Breaking` bullet still name **both** the Maven `groupId` and the
+  Java packages every import names, not just the `groupId`. Reasoning and the Apache 2.0 analysis:
+  [`docs/plans/2026-08-11-001-refactor-package-rename-plan.md`](../plans/2026-08-11-001-refactor-package-rename-plan.md).
+- **Recheck the documentation data after tiers 1 and 2 land.** The published claim is "every known
+  **critical** defect resolved and evidenced". Nothing verifies it automatically -
+  `bin/check-docs-data.sh` checks structure only, on purpose. `docs/data/module-maturity.yaml` is
+  only half conditional: each shipped module carries a bare `maturity: production-use` and,
+  separately, a `support_posture` line that is qualified ("when the release validation passes").
+  Whether the bare value is a claim the still-open confluentinc#857 items falsify, or a label the
+  posture line conditions, is the owner's call - start from
+  `grep -n 'maturity:\|support_posture' docs/data/module-maturity.yaml`, not from "already
+  conditional". A first pass on 2026-09-05 established the state and changed no value; it did
+  correct a stale claim in `docs/data/roadmap.yaml`'s `known-defects-cleared` entry (it said
+  astubbs#29 was unmerged). The staged Streams and Connect rows in
+  `docs/data/staging/module-maturity-rows.yaml` and the records in `docs/features/staging/` stay
+  staged: under the bug-release decision no module PR is in the queue, and each moves with the PR
+  that lands its module.
+- **The release page must not be empty** - astubbs#199, tier 3 above. The rest of astubbs#197's
+  triage list has been picked up (the magic-byte hazard in astubbs#217, the load-factor WARN in
+  astubbs#201, MDC in astubbs#205); the tracker's own checklist boxes lag the work.
+- **Three `3.9.1` references, and only one was wrong.** The CI description that named the default
+  Kafka version was fixed in astubbs#272 by dropping the number. The `bin/ci-build.sh 3.9.1` command
+  examples in `AGENTS.md` and in `src/docs/README_TEMPLATE.adoc` (which reaches the published
+  README) demonstrate that the script takes a version argument and assert nothing about CI's
+  default. Do not "fix" either.
+- **After it ships:** the mirrors that describe 0.6.0.0 in the future tense need the real
+  coordinate (`gh issue list -R astubbs/parallel-consumer --label 0.6.0.0` finds them);
+  astubbs#186, astubbs#188 and astubbs#195 close with a pointer to the release; and the
+  `issue-response-*.md` drafts are posted in the same sweep.
+
+Context worth inheriting on the day:
+
+- **`README.adoc` is generated - never hand-edit it.** Edit `src/docs/README_TEMPLATE.adoc` and
+  regenerate with `./mvnw -N asciidoc-template:build`. A PR that touches only the template has
+  silently not changed the published README.
+- **`CHANGELOG.adoc`'s `== 0.6.0.0` section is working text until the tag** - it is regenerated from
+  the commit log, so do not quote it as the release notes, and when agents work in parallel exactly
+  one holds that file; it is the highest-collision file in the repo.
+- **A dependency version in prose drifts silently.** The `3.9.1`/`3.9.2` mismatch came from a
+  Dependabot group bump moving `kafka.version` after the note was written. Re-read the
+  `=== Dependencies` section against `pom.xml` immediately before cutting, not weeks earlier.
 
 ## Upstream items with no fix PR and no prepared response - surveyed 2026-09-08
 
@@ -280,6 +331,8 @@ been told the fixes merged.
 ## Delete when
 
 The tag is cut. Migrate first: the family and data-loss dispositions above go into the release note
-text and `docs/data/roadmap.yaml`'s `known-defects-cleared` entry; the upstream survey's residue goes
-to [`upstream-coverage-completeness.md`](upstream-coverage-completeness.md) if any of it is still
+text and `docs/data/roadmap.yaml`'s `known-defects-cleared` entry; the "context worth inheriting"
+bullets go to [`docs/releasing.md`](../releasing.md) if it does not already carry them; the
+upstream survey's residue goes to
+[`upstream-coverage-completeness.md`](upstream-coverage-completeness.md) if any of it is still
 unanswered after the sweep.

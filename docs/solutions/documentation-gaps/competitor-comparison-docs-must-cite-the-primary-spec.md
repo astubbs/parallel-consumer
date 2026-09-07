@@ -285,7 +285,7 @@ leaves half the table stale.
   has since been sharpened.
 - astubbs#222 -- the same move in a different medium: having established what the library provides over
   the competitor, make the advantage *measurable* rather than merely asserted.
-- `docs/inflight/release-0600-blockers.md` -- the sibling concern for version claims: "are the things
+- `docs/inflight/release-0600-blockers.md` (folded into `docs/inflight/release-when-is-v6-good-enough.md` on 2026-09-08; the cited version is `git show 2c874ecac:docs/inflight/release-0600-blockers.md`) -- the sibling concern for version claims: "are the things
   0.6.0.0 publishes true on the day we cut it?" Same class (nothing tests prose), different trigger
   (a fact changed underneath static text, rather than text that was under-sourced when written).
 - `docs/inflight/docs-site.md` -- parks the KIP-932 chapter as future work and points at

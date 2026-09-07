@@ -131,7 +131,7 @@ worth.
 
 At release, when the changelog section is regenerated, check both survived into `=== Breaking`:
 generation reads the commit log, so they are only as findable as those commit bodies. The rename side
-of that same check is in [`release-0600-blockers.md`](release-0600-blockers.md).
+of that same check is in [`release-when-is-v6-good-enough.md`](release-when-is-v6-good-enough.md), under the tag-day artefact checks.
 
 ## Public API change landing with astubbs#204: the commit give-up exception
 
