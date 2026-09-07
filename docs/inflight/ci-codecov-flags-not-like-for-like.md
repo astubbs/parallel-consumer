@@ -45,10 +45,11 @@ per-suite `files` value in the matrix, and three of the five suites (`performanc
 
 <!-- post-merge: checked-begin -->
 Observed on astubbs/parallel-consumer#105, check `codecov/project/unit`. That PR is the cleanest
-possible probe for this, and the reason is worth stating before the numbers: **its diff contains no
-Java at all** - a surefire `runOrder` property, one exempt path in a shell script, three documents
-and ten `.surefire-pc-unit-times` data files. So any difference the comparison reports is the
-comparison's, not the change's.
+possible probe for this, and the reason is worth stating before the numbers: **its diff contained no
+Java at all** when the sighting was taken - a build property, a shell-script line, some documents and
+some checked-in data files. So any difference the comparison reports is the comparison's, not the
+change's. (That PR has since been re-scoped to documentation only, which does not weaken the probe -
+it strengthens it.)
 
 Reproduce the shape from that PR's codecov comment; the figures are deliberately not copied here,
 because they move at every re-upload and a stale one reads as current:
