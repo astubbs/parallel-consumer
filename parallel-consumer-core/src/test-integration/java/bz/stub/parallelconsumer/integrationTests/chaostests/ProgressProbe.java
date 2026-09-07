@@ -844,7 +844,15 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     static int busyWorkersOf(int instanceId) {
         String suffix = "-PC-" + instanceId;
         int busy = 0;
-        for (var entry : Thread.getAllStackTraces().entrySet()) {
+        Map<Thread, StackTraceElement[]> stacks;
+        try {
+            stacks = Thread.getAllStackTraces();
+        } catch (RuntimeException e) {
+            // A failed walk must not read as "nobody busy", which would accuse; unknown gets the old
+            // rule - the same guard instanceThreadDump keeps around its own walk.
+            return BUSY_WORKERS_UNKNOWN;
+        }
+        for (var entry : stacks.entrySet()) {
             String name = entry.getKey().getName();
             if (!name.startsWith("pc-pool-") || !name.endsWith(suffix)) continue;
             boolean betweenTasks = false;
