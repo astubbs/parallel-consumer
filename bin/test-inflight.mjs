@@ -3903,6 +3903,22 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'vet.mjs'), 'return (body.trim() || l.trim()).slice(0, 160)', 'return l.trim().slice(0, 160)'),
     },
     {
+        id: 'vet-reads-a-named-ref-instead-of-the-baseline',
+        why: "docs/grooming.md calls `vet` the sweep's progress view, and a sweep's own result is not on the baseline until it lands - so without `--ref` the view cannot show the thing it exists to show. A ref that silently fell back to the baseline would report the branch's stamps as missing",
+        run: async (binDir) => {
+            const { baselineNotes } = await vetLib(binDir)
+            return inVetFixture(async () => {
+                const onBranch = baselineNotes({ ref: 'sweep' })
+                const onBase = baselineNotes()
+                const has = (r, stem) => r.ok && r.notes.some((n) => n.path === `docs/inflight/${stem}.md`)
+                return onBranch.baseline === 'sweep' && has(onBranch, 'bug-j-only-on-the-sweep-branch')
+                    && !has(onBase, 'bug-j-only-on-the-sweep-branch')
+                    && baselineNotes({ ref: 'no-such-ref' }).ok === false
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'vet.mjs'), 'const base = ref ?? baseline()', 'const base = baseline()'),
+    },
+    {
         id: 'first-added-dates-take-the-earliest-add-across-refs',
         why: 'a note is born on a branch and reaches the baseline later, so the baseline history dates the merge; and the parse reads a NUL-separated token stream where a path carries a leading newline - the first cut split on record boundaries that git does not emit and returned zero dates for every note, silently',
         run: async (binDir) => {
@@ -4030,6 +4046,12 @@ function vetFixture() {
     note('bug-h-delete-when', `# Delete when\n\n${stall}\n## Delete when\n\nThe thing lands.\n`)
     note('ci-i-other-area', '# Another area\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nbody\n')
     dated('2026-02-01T12:00:00 +0000', 'newer')
+    // A SWEEP BRANCH: one note the baseline has never had, for `--ref`. Left checked out on
+    // master afterwards, so the baseline reads are unaffected.
+    git('checkout', '-q', '-b', 'sweep')
+    note('bug-j-only-on-the-sweep-branch', `# Only on the sweep branch\n\n${stall}<!-- inflight-vetted: 2026-04-01 - stamped on the branch -->\nbody\n`)
+    dated('2026-03-01T12:00:00 +0000', 'the sweep')
+    git('checkout', '-q', 'master')
     VET = dir
     return dir
 }

@@ -579,6 +579,7 @@ value is the reasoning attached to the order, which no computed scheme carries.
         usage: `Usage: bin/inflight.mjs vet                   every open note on the baseline, unvetted first
        bin/inflight.mjs vet --area <prefix>   one area - the filename prefix, e.g. ci, test, core, bug
        bin/inflight.mjs vet --all             deferred and closed notes too
+       bin/inflight.mjs vet --ref <ref>       read that ref instead of the baseline - a sweep branch before it lands
 
 The worklist for a vetting sweep. Every open note on the baseline, partitioned by whether it carries
 an \`<!-- inflight-vetted: YYYY-MM-DD - what was checked -->\` marker, ordered by the index's group
@@ -597,24 +598,31 @@ on a branch is vetted by that branch's merge. \`rank\` is the every-ref view.
   bin/inflight.mjs vet
   bin/inflight.mjs vet --area bug`,
         run: (args, emit) => {
-            const at = args.indexOf('--area')
-            const known = new Set(['--area', '--all'])
+            const known = new Set(['--area', '--all', '--ref'])
             const unknown = args.filter((a) => a.startsWith('--') && !known.has(a))
-            if (unknown.length) return { ok: false, reason: `vet: unknown option(s): ${unknown.join(', ')} - known: --area <prefix>, --all` }
-            if (at >= 0 && (args[at + 1] === undefined || args[at + 1].startsWith('--'))) {
-                return { ok: false, reason: 'vet: --area needs a filename prefix after it' }
+            if (unknown.length) return { ok: false, reason: `vet: unknown option(s): ${unknown.join(', ')} - known: --area <prefix>, --all, --ref <ref>` }
+            // THE SAME THREE GUARDS `rank` MAKES FOR `--impact`, for each valued flag: a missing
+            // value, a repeated flag, and a positional that would otherwise be dropped silently.
+            const valued = {}
+            for (const flag of ['--area', '--ref']) {
+                const at = args.indexOf(flag)
+                if (at >= 0 && (args[at + 1] === undefined || args[at + 1].startsWith('--'))) {
+                    return { ok: false, reason: `vet: ${flag} needs a value after it` }
+                }
+                if (args.filter((a) => a === flag).length > 1) {
+                    return { ok: false, reason: `vet: ${flag} given more than once - which one did you mean?` }
+                }
+                valued[flag] = at >= 0 ? args[at + 1] : null
             }
-            if (args.filter((a) => a === '--area').length > 1) {
-                return { ok: false, reason: 'vet: --area given more than once - which one did you mean?' }
-            }
-            const stray = args.filter((a, i) => a !== '--area' && a !== '--all' && !(at >= 0 && i === at + 1))
+            const consumed = new Set(Object.values(valued).filter((v) => v !== null))
+            const stray = args.filter((a) => !known.has(a) && !consumed.has(a))
             if (stray.length) {
                 return { ok: false, reason: `vet: takes no positional argument(s): ${stray.join(', ')} - did you mean --area ${stray[0]}?` }
             }
-            const area = at >= 0 ? args[at + 1].replace(/-$/, '') : null
-            const listed = baselineNotes()
+            const area = valued['--area'] !== null ? valued['--area'].replace(/-$/, '') : null
+            const listed = baselineNotes({ ref: valued['--ref'] })
             if (!listed.ok) return { ok: false, reason: `vet: ${listed.reason}` }
-            emit(formatWarnings(freshnessWarnings(listed.baseline, 1, { invalidatingOnly: true })))
+            if (valued['--ref'] === null) emit(formatWarnings(freshnessWarnings(listed.baseline, 1, { invalidatingOnly: true })))
             const tree = baselineTree(listed.baseline)
             const symbols = symbolsPresent(listed.baseline, symbolCandidates(listed.notes))
             const v = vet(listed.notes, {

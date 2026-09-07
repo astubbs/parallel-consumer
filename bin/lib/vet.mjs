@@ -243,10 +243,20 @@ export function vet(notes, { numbers, tree, symbols, ages, area = null, all = fa
 
 // --- The git half, held apart so `vet` stays pure. -----------------------------------------------
 
-/** Every note on the baseline with its content, from the refs - never the working tree. */
-export function baselineNotes() {
-    const base = baseline()
+/**
+ * Every note on one ref with its content, from the refs - never the working tree.
+ *
+ * THE BASELINE BY DEFAULT, and `--ref` for the branch a sweep has just merged into: the doc calls
+ * this the sweep's progress view, and a sweep's own result is not on the baseline until it lands.
+ * Any ref git resolves is accepted; the caller names it in the output so a reader knows which tree
+ * answered.
+ */
+export function baselineNotes({ ref = null } = {}) {
+    const base = ref ?? baseline()
     if (!base) return { ok: false, reason: 'no baseline - neither origin/master nor master resolves' }
+    if (ref !== null && !exec('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).ok) {
+        return { ok: false, reason: `'${ref}' does not resolve to a commit` }
+    }
     const listed = treeEntries(base, `${NOTES_DIR}/`)
     if (!listed.ok) return { ok: false, reason: `git could not list ${NOTES_DIR} on ${base}` }
     const read = blobContents(listed.entries.map((e) => e.blob))

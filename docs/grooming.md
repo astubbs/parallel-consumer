@@ -90,7 +90,9 @@ not verify a claim, say so rather than guessing.
 
 ## While it runs
 
-Do not read the agents' transcripts; read the status files. Work that does not touch
+Do not read the agents' transcripts; read the status files. Once an area branch is merged into the
+sweep branch, `node bin/inflight.mjs vet --ref <sweep-branch>` is the progress view - `vet` reads the
+baseline by default, and the sweep's result is not there until it lands. Work that does not touch
 `docs/inflight/` is safe to do in the tooling worktree meanwhile. Expect an agent to take ten to
 fifteen minutes per twenty notes.
 
