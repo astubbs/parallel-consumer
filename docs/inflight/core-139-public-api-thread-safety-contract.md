@@ -3,6 +3,7 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: reliability -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED partly true (public-API contract, owner to decide): most of the audit re-verifies at HEAD - `pauseIfRunning`/`resumeIfPaused` are still non-atomic check-then-set, `setLongPollTimeout` still writes `BrokerPollSystem`s `private static Duration longPollTimeout`, `controlLoopHooks` is a `CopyOnWriteArrayList`, `pausedPartitionSizeCache` is volatile, and `RetryQueue` still carries the GUARD ON THE CALLERS OWN LIST comment. Two rows have moved and are now wrong: `state` IS volatile on master (`private volatile State state = State.UNUSED`), so the "not volatile" premise and the "astubbs#226 makes it volatile" bullet are stale - astubbs#226 is still OPEN and is now a health-check PR, not the volatility one - while `controlThreadFuture` is still NOT volatile; and astubbs#51 is CLOSED, so the virtual-thread collision bullet no longer describes live work. `DirectStateSource` does not exist on master (astubbs#268 is still OPEN). astubbs#139/158/142 are all still OPEN. Suggest correcting those two bullets and the volatility premise, keeping steps 1-4, and dropping the delete-when section -->
 
 
 astubbs#139 (mirroring confluentinc#186) is labelled *blocker* and *1.0*, and has been since 2022,

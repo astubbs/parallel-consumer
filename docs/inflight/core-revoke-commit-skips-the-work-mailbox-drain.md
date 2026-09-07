@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: data-loss -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - re-read `AbstractParallelEoSStreamProcessor#tryCommitOffsetsOnRevoke`: it still takes `commitLock.tryLock()` and calls `committer.retrieveOffsetsAndCommit()` with no drain, and the only `processWorkCompleteMailBox` call sites are still the control loop and the close sequence. Both experiment arms are still in `ProducerManagerTest`, the red one is still listed in docs/quarantined-tests.md, `TransactionalClaim` C9 still reads REFUTED, and astubbs#408 and astubbs#173 are both still OPEN -->
 
 **Pre-existing on master, not introduced by astubbs/parallel-consumer#408.** Found while disproving a
 P0 raised against that PR, and recorded because the disproof turned up a real thing one step over.

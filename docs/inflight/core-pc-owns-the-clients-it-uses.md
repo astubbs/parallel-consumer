@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: reliability -->
+<!-- inflight-vetted: 2026-09-07 - the consumer half is still untaken: `ParallelConsumerOptions` still takes a `consumer` instance with no supplier or factory, while `ThreadConfinedConsumer` and `ConsumerOwnership` still enforce ownership at runtime only, which is the asymmetry the note argues from. `origin/client-factory` still exists as the 2022 draft, and astubbs#420 (the producer half) is still OPEN, so the pair is still unanswered -->
 
 astubbs/parallel-consumer#420 makes PC build its **producer** from configuration through a factory it
 enforces, instead of taking a finished instance. The same argument applies to the **consumer**, it was

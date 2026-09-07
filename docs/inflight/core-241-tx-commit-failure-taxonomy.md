@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: reliability -->
+<!-- inflight-vetted: 2026-09-07 - re-read `ProducerManager#commitOffsets`: the `catch (TimeoutException | InterruptException e)` and its classifying comment block are still there (the vet tools four missing anchors are that blocks `IllegalStateException`/`UnsupportedVersionException`/`AuthorizationException`/`InvalidProducerEpochException` - present, just spelt in full), `arbitrarilyChosenLimitForArbitraryErrorSituation = 200` is still a count, and the retry arm still sets `committed = true` outside the `isTransactionCompleting()` branch. astubbs#241 and astubbs#225 are still OPEN; astubbs#423 is now CLOSED, which does not change the ordering constraint the note states -->
 
 
 astubbs#241 (confluentinc#144). **The premise both the mirror body and the manifest entry
