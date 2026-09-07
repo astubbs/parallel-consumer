@@ -178,14 +178,19 @@ but it is no longer disabled.
 The one name this section never carried was the actual last `@Disabled` on master:
 `ProgressBarTest.width`, a manual/visual check with no assertions
 (`docs/test-hardening/inactive-tests-audit-2026-08-08.md` §1.5 has the full diagnosis). It carried no
-product behaviour to preserve, so it is deleted rather than fixed or quarantined; the deletion and its
-evidence are recorded in a new dated entry under `docs/test-hardening/`.
+product behaviour to preserve, so it is deleted rather than fixed or quarantined. A retired inflight
+note (`test-progressbar-width-needs-a-machine-assertion`, retired by astubbs#448) had argued for a third <!-- post-merge: checked -->
+option: split it into a machine assertion on rendered width plus a deliberately runnable, tagged visual
+demo. Deletion won because the test asserted nothing, so nothing a suite relied on was removed and the
+proposed assertion would be written from scratch either way; `ProgressBarUtils.getNewMessagesBar`
+keeps its other in-tree callers (`grep -rn "ProgressBarUtils" --include="*.java" .`); and a tagged demo
+stays available to reinstate at any time - what the gate could not accept was a `@Disabled` test
+sitting inside the suite while running as no part of it.
 `grep -rn "@Disabled" --include="*.java" .` no longer returns a live bare `@Disabled` on any test
 class or method - which is what this gate asks. It does still match: javadoc and comment prose about
 the annotation, two `@Disabled` string literals inside `TransactionalClaimCoverageTest`'s assertion
 messages, and one `@DisabledOnOs(OS.WINDOWS)` platform guard on `AbstractQuarantineScriptTest`. None
-of those switches a test off. Run the command rather than trusting a summary here; the deletion entry
-under `docs/test-hardening/` breaks the matches down one by one.
+of those switches a test off. Run the command rather than trusting a summary here.
 
 **Worth saying in release copy: this was inherited debt, not a rule being broken here.** Every test
 this gate ever named was disabled before the fork existed, in the years before this repo had a rule

@@ -830,8 +830,9 @@ is tracked by the registry, not here. The three
 `MockConsumerEarlyCloseTest` was missing - and **`@Timeout(60)` would have been wrong**, because two
 of those tests wait 45s and 50s internally, so it would have raced them rather than fixing them.
 `ProgressBarTest.width` was a deliberate manual check, and has since been **deleted** - it was the
-last `@Disabled` test on master and the release gate made that the deciding factor
-([`docs/test-hardening/progressbartest-deleted-2026-09-05.md`](test-hardening/progressbartest-deleted-2026-09-05.md)).
+last `@Disabled` test on master and the release gate made that the deciding factor (the
+"Release gate: no disabled tests" section of [`docs/inflight/release-0.6.0.0.md`](inflight/release-0.6.0.0.md)
+records why deletion won over the split that was proposed).
 Five of the ten deleted stubs (§4 of the audit)
 are already covered by named enabled tests, and `truncationOnCommit` is obsolete - on-commit
 truncation is structurally unreachable, and the truncation that does exist happens on the bootstrap
