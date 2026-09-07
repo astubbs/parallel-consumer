@@ -27,6 +27,8 @@ use_this_when:
   - You found a branch and do not know what it is, who owns it, or whether deleting it loses work.
   - You want to know what would be lost if a machine died - notes that exist on a branch and have
     never reached the baseline.
+  - You are deciding what to pick up next, and want the open work grouped by what it costs you to
+    not know it - plus the places that grouping disagrees with the standing ranking.
 setup:
   artifact: none - it is the repository
   steps:
@@ -64,6 +66,13 @@ boundaries:
     answers are held, and the cache layer states its own policy per kind rather than being kept
     correct from outside: an ABSENCE is never stored, because "this branch has no PR" is the answer
     that goes stale in the dangerous direction.
+  - >
+    It reports which refs CARRY a note and never which branch fixes what the note describes - the
+    second is not available at all, because a note travels on the branch that produced it. The
+    worked case is a data-loss note carried by one branch whose own text says the bug predates that
+    branch's pull request, so a row reading "owned by" it would be confidently wrong. Where a note's
+    versions disagree - open on one ref, closed on another - the disagreement is reported rather
+    than resolved to a single status.
   - >
     The tracking-gap detector reports a branch nothing explains, and it can be wrong in the
     direction that gets a detector ignored: an integration branch and a stack base both looked
