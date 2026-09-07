@@ -275,8 +275,13 @@ Anyone picking this up fixes these before running anything.
 - **The family-wise column is pinned to one sparse density and sits on a rounding boundary.** `z[α/2]`
   rises with `P`, so those entries are only valid at the `P` the plan below yields. The recommended
   entry computes to about 4.87 before rounding: it crosses into **6** once the adjacent-pair count
-  passes roughly 51, i.e. a `P` in the low fifties - which an every-sixth-commit density would give.
-  Recompute the column for whatever density is actually chosen; do not carry the 5 over.
+  (`P - 1`) passes roughly 51, i.e. at `P ≈ 52`. Under the plan's own every-eighth cadence
+  (`git rev-list --first-parent 0.5.3.3..origin/master | awk 'NR%8==1' | wc -l`), that `P` is pinned
+  at 44 today, so the crossover is about eight more sample points away - roughly 64 more first-parent
+  master commits landing in the range, not a different density. A denser, every-sixth-commit density
+  would reach `P ≈ 52` sooner (at today's commit count it already has), but that is an **alternative**
+  to the plan's cadence below, not the plan itself. Recompute the column for whatever density is
+  actually chosen; do not carry the 5 over.
 - **The subject comparison is a spread ratio, not a "four times quieter".** Pinned, the current
   subject's spread is about **2.2×** the proposed one (13.4% against 6.1%). It is the **variance**
   ratio, about **4.8×**, that sets the repeats - which is why the family-wise column goes 24 against 5.
