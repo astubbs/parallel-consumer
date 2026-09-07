@@ -36,6 +36,70 @@ If the right fix is `volatile` or removing the sharing outright, there is no loc
 annotation to write. That is fine - the rule is "record the invariant you just established", not
 "add an annotation".
 
+## Declare thread confinement with `@ThreadConfined`, and assert it at the entry point
+
+`@GuardedBy` names a lock, so it cannot say "only one thread ever runs this" - and state that is
+confined rather than guarded holds no lock to name. Say it with Infer's `@ThreadConfined`, on a
+method, a field or a type, which RacerD reads: the accesses inside are taken as confined to that
+thread, so they are not reported as racing with each other, while an unannotated access to the same
+state elsewhere still is.
+
+**It is a declaration the analyser consumes and never checks, so pair it with a runtime assertion.**
+An annotation nobody enforces is a comment that silences a detector, which is worse than no
+annotation at all - RacerD believes it and stops looking. `RetryQueue.RetryQueueIterator` is the
+pattern: `@ThreadConfined(ThreadConfined.ANY)` on the type, `assertOnOwningThread` at the top of
+every entry point, and `RetryQueueIteratorConfinementTest` failing when the two disagree.
+`ThreadConfinedConsumer` is the older, hand-rolled version of the same idea for the poll thread.
+
+**`ThreadConfined.ANY` says "one thread, whichever one got here first"**, which is the honest value
+when the confining thread varies by caller - an object handed out per call, like that iterator. Name
+a thread instead only when the code really does pin one, and then the assertion has something
+specific to compare against.
+
+**Check the premise before you write it.** The declaration is only as good as the claim that the
+state is confined, and that claim is easy to get wrong from reading one method:
+`AbstractParallelEoSStreamProcessor.lastCommitTime` was described as control-thread-confined by
+every record that mentioned it, and is written by `tryCommitOffsetsOnRevoke()` on the poll thread.
+Grep every writer and every reader of the field, not the two the surrounding code shows you. Where
+it turns out not to be confined, `volatile` is usually the answer, and a modifier tripwire is what
+keeps it - see "Known shared state" below.
+
+## Which of Infer's annotations this repo uses, and which it does not
+
+All of `com.facebook.infer.annotation` is on the compile classpath, so all of it is *writable*.
+Most of it is not *worth* writing here, and this list exists so the next reader does not re-derive
+that. Every verdict below was measured by applying the annotation and re-running
+`bin/infer-test.sh`, not reasoned about.
+
+- **`@ThreadConfined` - in use, and the only one that is.** The section above owns how to write it.
+- **`@ThreadSafe` - would move the lane most, and is blocked.** Over half the findings it raises are
+  `INTERFACE_NOT_THREAD_SAFE` on `org.slf4j.Logger` and micrometer's `Meter` - one per log call site,
+  in interfaces that are thread-safe and not ours to annotate. Open, with the two blockers and the
+  triage of what it did find:
+  `docs/inflight/static-infer-threadsafe-is-blocked-by-third-party-interfaces.md`.
+- **`@Initializer`, `@Functional`, `@SynchronizedCollection` - not yet writable, and the reason is
+  the entry above.** All three exist to *suppress* a report, and RacerD raises none of those reports
+  on an unannotated class. They become worth writing the day `@ThreadSafe` goes on, and not before.
+  The note names the first `@Initializer` site the survey found.
+- **`@Lockless` - fires, and sees what `ArchitectureTest.rebalanceCallbacksMustNotBlock` cannot.**
+  Measured on `onPartitionsRevoked`: it reports the `synchronized (commitCommand)` monitor reached
+  through `clearCommitCommand()`, which the ArchUnit rule misses because a `synchronized` block is a
+  `MONITORENTER` and that rule matches method calls. It does **not** report `commitLock.tryLock()`,
+  so it agrees with this repo about declining rather than waiting. It is still not adopted, because
+  the monitor it reports is one the design deliberately keeps: annotating the callback would leave a
+  violation that stands whether the invariant holds or not, which is the same criticism the cleared
+  suspicion on `clearCommitCommand()` makes of the ArchUnit rule. Reach for it as a *query* - it is
+  the only thing here that can enumerate the monitors a rebalance callback reaches, which is work
+  that has been done by hand twice: `clearCommitCommand()`'s suspicion, and the `PCMetrics.removeMeter`
+  monitor astubbs#431 found on the same path and left alone.
+- **`@NonBlocking` - inert here.** On the same method, over the same `Thread.sleep(100)` in
+  `onPartitionsRevoked`, it reported nothing.
+- **The `Nullsafe` family** is a different checker mode and belongs with the open null-safety
+  decision, not here - `docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md`.
+- **Not for this codebase at all**: `PrivacySource`/`Sink` and `IntegritySource`/`Sink` (taint),
+  `Expensive`, `PerformanceCritical`, `IgnoreAllocations`, `NoAllocation` (Android-oriented cost
+  checkers), `OkToExtend`, `Cleanup`, `ReturnsOwnership`.
+
 ## Record a CLEARED suspicion in the javadoc, not only in the commit
 
 When you investigate a concurrency path and conclude it is safe, **write that conclusion where the
@@ -69,10 +133,15 @@ Do not re-derive these; they are measured and recorded.
   `config/infer-known-findings.txt`, keyed on bug type plus `Class.method`. Fix one and **delete its
   line there**, or the lane fails telling you to. (There is no `RACERD_MAX_FINDINGS`; the bare count
   ceiling was replaced precisely because fixing one race and introducing another left it unchanged.)
-- **The non-volatile offenders** `ConsumerManager.commitRequested`, `RetryQueue.closed`, and
-  `AbstractParallelEoSStreamProcessor.lastCommitTime` - `docs/refactoring.md`.
-  `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` was a fourth until astubbs#201
-  made it `volatile`.
+- **The non-volatile offenders**, now just `ConsumerManager.commitRequested` -
+  `docs/refactoring.md`. `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` was fixed
+  by astubbs#201 and `lastCommitTime` the same way, both `volatile`, both with a modifier tripwire
+  (`PartitionStateDirtyFlagFenceTest` is the pattern) because nothing else goes red when a modifier
+  is dropped. **`RetryQueue.closed` came off the list a different way**: the iterator that
+  owns it holds a read lock only its opener can release, so it was already confined and the answer
+  was to declare and assert that (`@ThreadConfined(ANY)` plus `assertOnOwningThread`), not to make
+  it `volatile`. SpotBugs cannot read the declaration and still reports it - one of the two places
+  a detector here is now wrong on purpose.
 - **The torn-read family** - check-then-act and two-read divergence, which are a *different* class
   from unguarded access and are not what `@GuardedBy` addresses.
 

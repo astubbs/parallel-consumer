@@ -24,18 +24,29 @@ import { execFileSync } from 'node:child_process'
 import { perfRecord } from './perf.mjs'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 
-/** Run a command; return {ok, out, status}. Never throws - callers decide what a failure means. */
+/**
+ * Run a command; return {ok, out, err, status}. Never throws - callers decide what a failure means.
+ *
+ * STDERR IS CAPTURED, NOT INHERITED. execFileSync forwards a child's stderr to the parent's unless
+ * told otherwise, so every `fatal: not a git repository` git printed reached whoever ran the
+ * library - and for a hook, whose stderr the harness shows the user on some paths, that turned a
+ * fail-open silence into three lines of git noise (caught by bin/test-check-docs-hooks.mjs's
+ * forced-failure case). The text is returned as `err` rather than dropped: the reason a command
+ * failed is exactly what a caller rendering "could not answer" wants to say.
+ */
 export function exec(cmd, args, opts = {}) {
     // Timed on both paths: a command that FAILS still cost its time, and the failures are exactly
     // where an unexpected cost hides - a retry loop, a command dying slowly on a huge input.
     const t0 = Date.now()
     try {
-        const out = execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, ...opts })
+        const out = execFileSync(cmd, args, {
+            encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'], ...opts,
+        })
         perfRecord(`${cmd} ${args[0] ?? ''}`.trim(), Date.now() - t0)
-        return { ok: true, out, status: 0 }
+        return { ok: true, out, err: '', status: 0 }
     } catch (e) {
         perfRecord(`${cmd} ${args[0] ?? ''}`.trim(), Date.now() - t0)
-        return { ok: false, out: e.stdout ?? '', status: e.status ?? -1 }
+        return { ok: false, out: e.stdout ?? '', err: String(e.stderr ?? ''), status: e.status ?? -1 }
     }
 }
 
@@ -176,7 +187,39 @@ export function blobsForPath(refs, path) {
     return { ok: true, blobs: out }
 }
 
-/** Every (blob, path) pair under a pathspec on one ref. */
+/**
+ * THE SAME BATCH, NAMED FOR WHAT A DIRECTORY PATH RESOLVES TO. `<ref>:docs` names a TREE object,
+ * and `cat-file --batch-check` answers for it exactly as it does for a blob - one process, one
+ * self-describing line per ref, `missing` for a ref without that directory. `corpusIndex` uses this
+ * to find which refs share a corpus tree before listing any of them; the name exists so that call
+ * site does not read as if it were fetching note contents.
+ */
+export const treesForPath = blobsForPath
+
+/**
+ * The blob id git WOULD record for a working-tree file - `hash-object --path`, so the clean filters
+ * and line-ending normalisation `.gitattributes` and `core.autocrlf` apply at `git add` are applied
+ * here too. A hash computed over the raw bytes (the `blob <len>\0` header through node:crypto, which
+ * is what this replaced) disagrees with the committed blob on exactly the files git normalises, and
+ * reports a clean checkout as edited on a CRLF host. One process, and only worth it where the
+ * answer is about to be shown.
+ *
+ * @returns {string|null} the sha, or null when git could not hash it - a failure to distinguish from
+ *   "differs", which is why this does not return a boolean
+ */
+export function workingTreeBlob(path) {
+    const res = exec('git', ['hash-object', '--path', path, '--', path])
+    return res.ok ? res.out.trim() : null
+}
+
+/**
+ * Every (blob, path) pair under one pathspec - or several - on one tree-ish: a ref, or a bare tree
+ * SHA, in which case the paths come back relative to that tree.
+ *
+ * SEVERAL PATHSPECS IN ONE CALL, because the cost of an index is the fork count: the corpus index
+ * runs this once per DISTINCT corpus tree (`treesForPath` finds them), and widening it from one
+ * docs area to three as three calls would have tripled the pass to answer the same question.
+ */
 export function treeEntries(ref, pathspec) {
     // `-z`, because git C-QUOTES a path containing non-ASCII or special characters unless told
     // otherwise - wrapping it in quotes with octal escapes. Splitting the default output on tab
@@ -187,7 +230,8 @@ export function treeEntries(ref, pathspec) {
     // failed ls-tree returned `[]`, which corpusIndex read as "this branch carries no notes". If
     // the failing ref were the BASELINE, basePaths would empty and every landed note would report
     // as stranded - a plumbing failure feeding a headline number, unreported.
-    const res = exec('git', ['ls-tree', '-r', '-z', ref, '--', pathspec])
+    const specs = Array.isArray(pathspec) ? pathspec : [pathspec]
+    const res = exec('git', ['ls-tree', '-r', '-z', ref, '--', ...specs])
     if (!res.ok) return { ok: false, entries: [] }
     const entries = res.out.split('\0').filter((r) => r.length > 0).map((rec) => {
         const [meta, path] = rec.split('\t')
@@ -195,6 +239,52 @@ export function treeEntries(ref, pathspec) {
         return { blob: cols[2], path }
     }).filter((e) => e.blob && e.path)
     return { ok: true, entries }
+}
+
+/**
+ * The CONTENT of many blobs, in ONE process - `git cat-file --batch`, the full-content sibling of
+ * the `--batch-check` that `blobsForPath` already relies on.
+ *
+ * WHY A BATCH. Titles were read with one `cat-file -p` per blob, memoised per process. That is fine
+ * for `note drift`, which asks for a few dozen, and not for an index over three docs areas across
+ * every ref, where every off-baseline document needs its title and the session-start budget has no
+ * room for a fork per document. The plan's KTD16 makes this the only way a title is read.
+ *
+ * PARSED IN BYTES, NOT CHARACTERS. Each record is `<sha> <type> <size>\n`, then exactly `size`
+ * BYTES, then `\n`. A note with a non-ASCII character is longer in bytes than in characters, so
+ * slicing a decoded string by `size` walks off the end of one record into the header of the next -
+ * and every title after that point is garbage that looks like a title. The subprocess is therefore
+ * read as a Buffer and cut by byte offsets; decoding happens per blob, after the cut.
+ *
+ * A missing blob comes back `<sha> missing` and is simply absent from the map. `{ok}` for the
+ * reason every batch here carries it: a failed cat-file and an empty request both produce an
+ * empty map, and only one of them is an answer.
+ *
+ * @returns {{ok: boolean, contents: Map<string, string>}} blob -> its content, as utf8
+ */
+export function blobContents(blobs) {
+    const contents = new Map()
+    if (blobs.length === 0) return { ok: true, contents }
+    // `encoding: null` is how execFileSync is asked for a Buffer. The documented alias `'buffer'`
+    // throws "Unknown encoding: buffer" on Node 25, and `exec` reports a throw as a failed command -
+    // so the first cut of this returned an empty map that read as "no blob has a title".
+    const res = exec('git', ['cat-file', '--batch'], { input: `${blobs.join('\n')}\n`, encoding: null })
+    if (!res.ok) return { ok: false, contents }
+    const buf = Buffer.isBuffer(res.out) ? res.out : Buffer.from(res.out ?? '')
+    let at = 0
+    while (at < buf.length) {
+        const eol = buf.indexOf(0x0a, at)
+        if (eol < 0) break
+        const header = buf.subarray(at, eol).toString('utf8').split(' ')
+        at = eol + 1
+        // `<sha> missing` has two fields; a hit has three, the last being the byte size.
+        if (header.length < 3) continue
+        const size = Number(header[2])
+        if (!Number.isInteger(size)) return { ok: false, contents }
+        contents.set(header[0], buf.subarray(at, at + size).toString('utf8'))
+        at += size + 1 // the record's trailing newline
+    }
+    return { ok: true, contents }
 }
 
 /** Line-level size of the difference between two blobs, without checking anything out. */
@@ -208,6 +298,38 @@ export function blobDiffStat(a, b) {
     if (!first) return { added: 0, removed: 0, identical: true }
     const [added, removed] = first.split('\t')
     return { added: Number(added), removed: Number(removed), identical: false }
+}
+
+/**
+ * The lines blob `b` ADDS over blob `a`, in order - the raw material for "what does this version
+ * add", which is the evidence the divergence header shows instead of calling anything "newer".
+ *
+ * `a` may be null, meaning there is nothing to diff against - the branch created the file after it
+ * diverged - and then every line of `b` is an addition. That is one `cat-file -p` rather than a diff
+ * against the empty blob, whose object name depends on the repository's hash algorithm.
+ *
+ * `git diff <blob> <blob>` prints a unified diff of the two objects with no working tree involved.
+ * The `+++ b/...` header line starts with the same character as an added line, so added lines are
+ * taken only from inside hunks - after the first `@@` - rather than by excluding a `+++` prefix,
+ * which would also drop a content line that happens to begin `++`.
+ *
+ * @returns {{ok: boolean, lines: string[]}}
+ */
+export function blobDiffAddedLines(a, b) {
+    if (a === b) return { ok: true, lines: [] }
+    if (a === null) {
+        const whole = exec('git', ['cat-file', '-p', b])
+        return whole.ok ? { ok: true, lines: lines(whole.out) } : { ok: false, lines: [] }
+    }
+    const res = exec('git', ['diff', a, b])
+    if (!res.ok) return { ok: false, lines: [] }
+    const added = []
+    let inHunk = false
+    for (const l of res.out.split('\n')) {
+        if (l.startsWith('@@')) inHunk = true
+        else if (inHunk && l.startsWith('+')) added.push(l.slice(1))
+    }
+    return { ok: true, lines: added }
 }
 
 /**
@@ -290,6 +412,17 @@ function lastFetch(commonDir) {
 }
 
 /**
+ * The freshness warnings that VOID an answer rather than date it. `no-baseline` is not staleness,
+ * it is a declaration that the run is unreliable; the others say the ref set itself is partial.
+ * The rest - a stale or narrow fetch, a main checkout, HEAD behind - date the answer, and a
+ * command that is one step of a longer walk, or a hook whose silence must be earned, need not
+ * repeat them. Beside `freshnessWarnings` because it is a fact about ITS ids: a new id added there
+ * has to be classified here, and two callers each holding their own copy of the set would classify
+ * it twice or not at all.
+ */
+export const INVALIDATING_WARNINGS = new Set(['no-baseline', 'never-fetched', 'shallow'])
+
+/**
  * Reasons the answers below may be stale, as data.
  *
  * A complete search of a stale corpus is still a false negative, and it reads exactly like a
@@ -297,42 +430,61 @@ function lastFetch(commonDir) {
  * main checkout while master advanced 151 commits underneath it, and every working-tree read
  * answered for that snapshot without saying so.
  *
- * @returns {{id: string, lines: string[]}[]}
+ * INVALIDATING ONLY, FOR THE CHANNELS THAT ANSWER UNASKED. The read-time header and the prompt
+ * hook need to know whether the ref set is partial - a shallow or never-fetched clone - and
+ * nothing about its age; the dating warnings are for the commands that print the full set. With
+ * `invalidatingOnly` the answer costs ONE git process (the probe below) instead of two, because
+ * `rev-list --count` is skipped, and only ids in INVALIDATING_WARNINGS come back. Measured on the
+ * read-time hook: the full call added about 25 ms to a four-path read that was already at its
+ * 500 ms budget.
+ *
+ * @param {{invalidatingOnly?: boolean}} [opts]
+ * @returns {{id: string, lines: string[], remedy?: string}[]} `remedy` - the command that lifts
+ *   it - on the warnings in INVALIDATING_WARNINGS only
  */
-export function freshnessWarnings(base, refCount) {
+export function freshnessWarnings(base, refCount, { invalidatingOnly = false } = {}) {
     const warnings = []
     const warn = (id, ...text) => warnings.push({ id, lines: text })
+    // A WARNING THAT VOIDS THE ANSWER CARRIES ITS REMEDY AS DATA. The full renderers print every
+    // line; the one-line ones - the read-time header's summary tier, a match block's count line -
+    // have room for the id and the command only, and must not print a confident count from a
+    // truncated ref set with nothing in front of it. Every id here is in INVALIDATING_WARNINGS.
+    const voids = (id, remedy, ...text) => warnings.push({ id, lines: [...text, `Run: ${remedy}`], remedy })
 
     if (!base) {
-        warn('no-baseline', 'neither origin/master nor master resolves in this checkout, so there is',
+        voids('no-baseline', 'git fetch origin master',
+            'neither origin/master nor master resolves in this checkout, so there is',
             'NO baseline to compare against. Every answer below is unreliable - a shallow or',
-            'single-ref clone is the usual cause. Run: git fetch origin master')
+            'single-ref clone is the usual cause.')
         return warnings
     }
 
-    const gitDir = exec('git', ['rev-parse', '--git-dir']).out.trim()
-    const commonDir = exec('git', ['rev-parse', '--git-common-dir']).out.trim()
-    if (!gitDir || !commonDir) {
-        // Both empty compare EQUAL, which used to print a confident "this is the MAIN CHECKOUT".
-        // A git that cannot answer `rev-parse` is not a diagnosis, it is a missing answer.
-        warn('git-unreadable', 'git could not answer `rev-parse --git-dir`; freshness below is UNKNOWN,',
-            'not clean. Everything this run reports may be answering for the wrong tree.')
-    } else if (gitDir === commonDir) {
-        warn('main-checkout',
-            'this is the MAIN CHECKOUT, which AGENTS.md says never to work in - several',
-            'sessions share it, so its HEAD can move between two of your own commands.',
-            'Cut a worktree: git worktree add .claude/worktrees/<name> -b <branch> origin/master')
+    // ONE PROBE FOR THE THREE FACTS: `rev-parse` answers its flags in argument order, one per line,
+    // and three processes for three one-word answers were most of what this function cost.
+    const probe = exec('git', ['rev-parse', '--git-dir', '--git-common-dir', '--is-shallow-repository']).out.split('\n')
+    const gitDir = (probe[0] ?? '').trim()
+    const commonDir = (probe[1] ?? '').trim()
+    const shallow = (probe[2] ?? '').trim() === 'true'
+    if (!invalidatingOnly) {
+        if (!gitDir || !commonDir) {
+            // Both empty compare EQUAL, which used to print a confident "this is the MAIN CHECKOUT".
+            // A git that cannot answer `rev-parse` is not a diagnosis, it is a missing answer.
+            warn('git-unreadable', 'git could not answer `rev-parse --git-dir`; freshness below is UNKNOWN,',
+                'not clean. Everything this run reports may be answering for the wrong tree.')
+        } else if (gitDir === commonDir) {
+            warn('main-checkout',
+                'this is the MAIN CHECKOUT, which AGENTS.md says never to work in - several',
+                'sessions share it, so its HEAD can move between two of your own commands.',
+                'Cut a worktree: git worktree add .claude/worktrees/<name> -b <branch> origin/master')
+        }
     }
-    if (exec('git', ['rev-parse', '--is-shallow-repository']).out.trim() === 'true') {
-        warn('shallow',
-            'SHALLOW clone - any commit search covers only the fetched depth.',
-            'Run: git fetch --unshallow')
+    if (shallow) {
+        voids('shallow', 'git fetch --unshallow', 'SHALLOW clone - any commit search covers only the fetched depth.')
     }
     const last = lastFetch(commonDir)
     if (!last) {
-        warn('never-fetched', 'no FETCH_HEAD and no packed-refs - this clone may never have fetched.',
-            "Run 'git fetch origin'.")
-    } else {
+        voids('never-fetched', 'git fetch origin', 'no FETCH_HEAD and no packed-refs - this clone may never have fetched.')
+    } else if (!invalidatingOnly) {
         const ageSeconds = (Date.now() - last.at) / 1000
         if (ageSeconds > 3600) {
             warn('stale-fetch',
@@ -348,6 +500,7 @@ export function freshnessWarnings(base, refCount) {
                 "is measuring the wrong thing. Run 'git fetch origin' for the whole set.")
         }
     }
+    if (invalidatingOnly) return warnings
     const behind = Number(exec('git', ['rev-list', '--count', `HEAD..${base}`]).out.trim() || '0')
     if (behind > 0) {
         warn('head-behind',

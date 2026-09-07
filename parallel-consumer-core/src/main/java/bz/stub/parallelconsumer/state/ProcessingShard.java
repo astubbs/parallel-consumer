@@ -144,6 +144,26 @@ public class ProcessingShard<K, V> {
             // A real replacement after all: one container left the map as this one entered it, so the
             // speculative admission is balanced by the displaced container's retirement and the shard's
             // population is unchanged.
+            //
+            // KNOWN GAP, not fixed here: a container leaving a shard has to be taken out of the retry queue
+            // too, and this branch cannot do it - the shard holds no reference to the RetryQueue, which is
+            // passed in per-call to getWorkIfAvailable and nowhere else (on astubbs/parallel-consumer#431's
+            // branch also to removeStaleWorkContainersFromShard, so that clause goes stale when it lands). A
+            // displaced container that was parked for retry therefore leaves its queue entry behind.
+            //
+            // THAT ENTRY IS NOT PERMANENT, and an earlier version of this comment said it was. RetryQueue keys
+            // by topic, partition and offset alone (WorkContainerKey.of), never by container identity, and
+            // ShardManager.onSuccess removes by that key unconditionally - so the replacement admitted here,
+            // which carries the same coordinates, clears the entry at its own first terminal event: success
+            // removes it, failure re-adds the same key (add() replaces rather than duplicates), and a sweep
+            // that finds the replacement removes it by key. What is wrong meanwhile is the FIGURE - the
+            // surviving entry carries the DISPLACED container's retry-due time, so the ready-to-retry count
+            // and RetryQueue.getLowestRetryTime read one entry high until then. Bounded misdirection, not the
+            // stall this was first written up as.
+            //
+            // The pairing gap is demonstrated; whether production can reach this branch with a queue-resident
+            // container is the open question, and it is what decides whether this is worth a design change.
+            // Both are in docs/inflight/bug-shard-displacement-orphans-the-retry-queue-entry.md.
             population.onRetired();
             // The displaced container gives back its claim IF it still holds one. It does not when it was
             // already taken as work, and does when it was only ever queued - the compare-and-set tells those
@@ -438,6 +458,23 @@ public class ProcessingShard<K, V> {
     }
 
     /**
+     * Is {@code wc} the container this shard currently holds at its offset?
+     * <p>
+     * <b>Reference identity, not {@code equals}.</b> {@link WorkContainer#equals(Object)} is topic, partition
+     * and offset only, so a fresh container that replaced a stale one at the same offset compares equal to it -
+     * and every caller here is asking "has THIS container left the shard", which equality cannot answer.
+     * <p>
+     * <b>A residency answer is only ever true about the instant it was taken</b>, so a caller may not use it as
+     * a guard in front of an action that must not happen to a departed container - that is a check-then-act, and
+     * it is the shape this class keeps being fixed to remove. It is safe in the other order: act first, then ask
+     * this, then undo if the answer is no. {@link #includeInSelection(WorkContainer)} and
+     * {@link ShardManager#onFailure(WorkContainer)} are both built that way, and each says why it closes.
+     */
+    boolean isResident(WorkContainer<?, ?> wc) {
+        return workMap.get(wc.offset()) == wc;
+    }
+
+    /**
      * Include {@code wc} in selection, if it is not included already.
      * <p>
      * Takes the claim first and confirms residency second, deliberately: the reverse order is a check-then-act, and
@@ -455,7 +492,7 @@ public class ProcessingShard<K, V> {
     private void includeInSelection(WorkContainer<?, ?> wc) {
         if (wc.claimSelection()) {
             workAwaitingSelectionCount.incrementAndGet();
-            if (workMap.get(wc.offset()) != wc) {
+            if (!isResident(wc)) {
                 excludeFromSelection(wc);
             }
         }
