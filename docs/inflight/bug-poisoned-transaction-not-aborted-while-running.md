@@ -1,4 +1,8 @@
-# A terminally failed send leaves the transaction abortable but unaborted
+# A result record that can never be sent has nowhere to go
+
+<!-- The filename still says "not aborted while running", which stopped being true on 2026-09-03 - the abort is
+     implemented, see the section below. The file is NOT renamed: four places cite it by path, and one of them is a
+     dated plan that docs/citations.md forbids rewriting to match today's code. -->
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
@@ -47,6 +51,20 @@ broker reports against the producer (fencing and its relatives), with a replacem
 replay of the discarded work on top. The send-side poison record this note is about is outside that
 set by a settled decision there, so this note stays open; when it is taken up, that plan's detection
 and recovery path is the seam to extend rather than a second one to build.
+
+## The abort half is fixed, 2026-09-03; the terminal-failure half is what this note now owns
+
+The two shapes above are settled. Shape 1 - record the failure, let the controller abort - is implemented on
+astubbs#225's recovery seam: the producer callback records the poisoning send, and the recovery pass aborts on its
+next turn. Shape 2 is obsolete, not rejected: it existed only because nothing ran on the control thread when nothing
+was dirty, and that pass now runs regardless of the `isDirty` gate, which is therefore untouched.
+`bug-wedged-after-poisoned-transaction.md` records that change and is closed by it.
+
+**So the liveness gap in the title is closed, and what remains is the root this note already identified**: PC has no
+terminal-failure concept, so the undeliverable record returns on its retry delay and poisons the replacement
+transaction too. The instance now makes progress between those cycles instead of stopping until close, which is a
+different and much smaller defect than the one described above - but a record that can never be sent still has
+nowhere to go, and that is the DLQ and max-attempts work below, unchanged.
 
 ## The workaround users have today
 

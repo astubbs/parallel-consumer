@@ -673,3 +673,36 @@ Instance 5 on the first seed is the case that matters for the detector: a member
 frozen, with two workers parked between tasks - spare hands and nothing to hand them, because the
 records it holds are on the eight busy ones. A rule that accuses on "a free worker beside held work"
 accuses it; the rule that lands with the stacked follow-up accuses only nobody-in-user-code.
+
+## Sighting, 2026-09-05 - the `ZOMBIE_MEMBER` arm, on a branch the mode gate rules out by construction
+
+<!-- post-merge: checked-begin - a dated sighting, written in the past tense against a PR number and a
+     job link rather than a branch name, so it stays resolvable after the branch is deleted -->
+`churnStormMeetsSlosAndBalancesLedger` killed fail-fast (`probe violation during run`) on the
+`Chaos Pain Suite 4/4` shard of astubbs/parallel-consumer#434 at head `4409adc02`,
+[job 101227221022](https://github.com/astubbs/parallel-consumer/actions/runs/33937004185/job/101227221022),
+after 142s. The gating violation was *`ZOMBIE_MEMBER/REBALANCE_BLOCKED`: group `group-1-574651464` dwelling
+in `PreparingRebalance` for 15s (bound 15s) - a member is not answering the rebalance* - the
+protocol-unresponsive arm, the same one the fourth sighting above and the 2026-09-03 entry in
+`bug-857-family.md` carry. **Not `INSTANCE_STALL`**, so it is not a new seed for the wedge classified above,
+and not `NO_PROGRESS`. After the kill the autopsy listed 23 partitions of one member, `w1`, committed-stagnant
+for 129-135s with lag 56-1132; a member that stopped answering the rebalance and kept its partitions would
+look like that, but the per-instance snapshot was not read out of this log, so which member it was and
+whether its completion count froze is unrecorded.
+
+**Replay seed `5684946990969099277`** (`CHAOS W1 churn storm: seed=5684946990969099277`):
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=5684946990969099277
+
+The branch's change is ruled out by the mode gate, not by argument: it adds a send-callback detection site
+behind `ProducerRecovery#canRecover()`, which requires the transactional commit mode, and this scenario is
+`PERIODIC_CONSUMER_ASYNCHRONOUS` - the first fact in this file. The job log carries none of the lines that path
+emits (`Recorded producer invalidation`, `Producer recovery`). The recorded history also shows the same
+failure text on `feats/inflight-rank-cli` and `docs/v6-announcement` within the same hour, neither touching
+the engine; which detector fired on those two was not checked.
+
+A first version of this entry, written before astubbs/parallel-consumer#435's classification reached this
+branch, read the frozen partitions as the runner-load stagnation shape. That was an inference from the
+autopsy peaks, not from the detector, and it is withdrawn here: the detector was the zombie-member arm.
+<!-- post-merge: checked-end -->

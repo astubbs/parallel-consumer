@@ -148,6 +148,10 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 if (!usingTransactions) {
                     throw new PCInternalRuntimeException("Error producing result message", exception);
                 }
+                // Transactional mode only: this send has just poisoned the open transaction, and nothing else in PC
+                // would abort it before close. Recording is all that happens here - the control thread's recovery
+                // pass does the aborting, so this stays safe to call from whichever thread the client used.
+                recovery.recordIfPoisonsTransaction(exception);
             }
         };
 

@@ -207,6 +207,30 @@ public class ProducerRecovery<K, V> {
     }
 
     /**
+     * The send-side detect-and-record step, from the producer {@code Callback} in {@link ProducerManager}. A
+     * terminally failed send leaves the open transaction in kafka-clients' abortable error state, and nothing in PC
+     * aborts it while the instance runs: {@code abortTransaction} is reachable only from {@code ProducerManager#close},
+     * and the commit that would surface the error is gated on {@code WorkManager#isDirty}, which only a SUCCESS sets.
+     * With no other traffic the instance stays up, looking healthy, holding a dead transaction until it closes.
+     * <p>
+     * Recording it here hands that to the control thread's recovery pass, which runs at the top of every pass
+     * independently of the dirty gate - so the abort happens whether or not anything else is in flight. That
+     * independence is what makes this the whole fix; before the recovery pass existed, the alternative on the table
+     * was to bypass the dirty gate so the failing commit surfaced.
+     * <p>
+     * Unlike {@link #recordIfRecoverable} this returns nothing: the callback has no caller to unwind. The send future
+     * completes exceptionally regardless, and the produce path fails the record for retry exactly as before.
+     *
+     * @param sendFailure the exception the callback was handed
+     * @see PoisonedTransactionCondition
+     */
+    public void recordIfPoisonsTransaction(Throwable sendFailure) {
+        if (canRecover() && PoisonedTransactionCondition.poisonsTheTransaction(sendFailure)) {
+            recordInvalidation(sendFailure);
+        }
+    }
+
+    /**
      * @return true where PC built the producer and so can build another, and the commit mode is the transactional
      *         one whose control loop performs the recovery; false on the producer-instance path, and in the
      *         consumer-commit modes, where PC's producer is non-transactional and there is nothing to recover

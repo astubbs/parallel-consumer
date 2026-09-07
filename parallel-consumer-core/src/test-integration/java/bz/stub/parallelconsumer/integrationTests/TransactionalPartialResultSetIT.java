@@ -8,7 +8,9 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.internal.PoisonedTransactionCondition;
 import bz.stub.parallelconsumer.internal.ProducerManager;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -29,6 +31,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -39,6 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -78,6 +82,17 @@ import static org.awaitility.Awaitility.await;
  *     known-committed result records. A consumer that is assigned nothing trivially satisfies "no partial set
  *     is visible" and would prove nothing at all.</li>
  * </ul>
+ * <p>
+ * <b>The second case is the liveness half of the same defect.</b> Fixing the callback made the transaction
+ * abortable - and then nothing aborted it while the instance ran, because {@code abortTransaction} was reachable
+ * only from close and the commit that would surface the error is gated on {@code isDirty}, which only a success
+ * sets. A single oversized record stopped its partition for the life of the process, visibly under other traffic
+ * and silently without it. {@link #aTerminallyFailedSendIsAbortedWhileRunningSoHealthyWorkAfterItStillPublishes()}
+ * pins the fix: the callback records the poisoning send ({@link PoisonedTransactionCondition}), the control
+ * thread's recovery pass aborts and replaces, and healthy work sent AFTER the poison becomes visible while PC is
+ * still running. It needs a producer PC built itself - on the producer-instance path {@code canRecover()} is
+ * false and recovery never runs, which is why the first test cannot double as this one, and why that test's
+ * outcome (PC dies at the next commit, or sits on a dead transaction) is left exactly as it was.
  *
  * @author Antony Stubbs
  * @see ProducerManager#produceMessages
@@ -146,7 +161,16 @@ class TransactionalPartialResultSetIT extends BrokerIntegrationTest<String, Stri
 
     private String outputTopic;
 
+    private Consumer<String, String> pcConsumer;
+
     private ParallelEoSStreamProcessor<String, String> pc;
+
+    /**
+     * Read only by the PC-built-producer case, for {@code pc.producer.recoveries} - the counter is the proof that
+     * the recovery pass actually ran against the poisoned transaction, rather than the instance having limped on
+     * some other way.
+     */
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
     /**
      * A {@code read_committed} consumer - {@link KafkaClientUtils#setupConsumerProps} already sets that isolation
@@ -184,40 +208,60 @@ class TransactionalPartialResultSetIT extends BrokerIntegrationTest<String, Stri
 
         // PC's consumer first - createNewConsumer(NEW_GROUP) overwrites the shared group id, so the verifier
         // must take its own explicit group afterwards
-        var pcConsumer = getKcu().<String, String>createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP);
-
-        var producerProps = new Properties();
-        producerProps.put(ProducerConfig.MAX_REQUEST_SIZE_CONFIG, MAX_REQUEST_SIZE_BYTES);
-
-        var options = ParallelConsumerOptions.<String, String>builder()
-                .consumer(pcConsumer)
-                .producer(getKcu().createNewProducer(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER, producerProps))
-                .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
-                .ordering(ParallelConsumerOptions.ProcessingOrder.KEY)
-                .batchSize(1)
-                .commitInterval(ofSeconds(1))
-                .defaultMessageRetryDelay(NO_RETRY_WITHIN_THIS_TEST)
-                .build();
-
-        pc = new ParallelEoSStreamProcessor<>(options);
-        pc.subscribe(UniLists.of(getTopic()));
+        pcConsumer = getKcu().<String, String>createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP);
 
         verifier = getKcu().createNewConsumer("partial-result-set-verifier-" + nextInt());
         verifier.subscribe(UniLists.of(outputTopic));
     }
 
-    @AfterEach
-    void tearDown() {
-        closeQuietly();
-        if (verifier != null) {
-            verifier.close();
-        }
+    /**
+     * Everything the two cases share. Each test finishes the builder with the one thing they differ on - who
+     * builds the producer - because that is the whole difference between a fix that can run and one that cannot.
+     */
+    private ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> commonOptions() {
+        return ParallelConsumerOptions.<String, String>builder()
+                .consumer(pcConsumer)
+                .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
+                .ordering(ParallelConsumerOptions.ProcessingOrder.KEY)
+                .batchSize(1)
+                .commitInterval(ofSeconds(1))
+                .defaultMessageRetryDelay(NO_RETRY_WITHIN_THIS_TEST);
     }
 
-    @Test
-    void aTerminallyFailedSendMustNotLeaveHalfOfAResultSetVisible() {
-        String oversizedValue = StringUtils.repeat('x', OVERSIZED_VALUE_BYTES);
+    private Properties producerPropsPinningTheSizeLimit() {
+        var producerProps = new Properties();
+        producerProps.put(ProducerConfig.MAX_REQUEST_SIZE_CONFIG, MAX_REQUEST_SIZE_BYTES);
+        return producerProps;
+    }
 
+    /** The original shape: a finished {@code Producer} handed in, which PC can neither rebuild nor recover. */
+    private void startPcWithSuppliedProducer() {
+        var producer = getKcu().createNewProducer(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER, producerPropsPinningTheSizeLimit());
+        startPc(commonOptions().producer(producer).build());
+    }
+
+    /**
+     * PC builds the producer from configuration, so a replacement can be built under the same
+     * {@code transactional.id} - the precondition for {@code canRecover()}, and so for the abort under test.
+     */
+    private void startPcWithPcBuiltProducer() {
+        Map<String, Object> producerConfig = new HashMap<>(getKcu().transactionalProducerConfig(producerPropsPinningTheSizeLimit()));
+        producerConfig.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "partial-result-set-pc-built-" + nextInt());
+        startPc(commonOptions().producerConfig(producerConfig).meterRegistry(registry).build());
+    }
+
+    private void startPc(ParallelConsumerOptions<String, String> options) {
+        pc = new ParallelEoSStreamProcessor<>(options);
+        pc.subscribe(UniLists.of(getTopic()));
+        installPoisoningUserFunction();
+    }
+
+    /**
+     * Every source record returns {@link #RESULTS_PER_INPUT} results; {@link #POISON_KEY}'s set has one that the
+     * producer will reject client-side for its size, with the ones before it already accepted.
+     */
+    private void installPoisoningUserFunction() {
+        String oversizedValue = StringUtils.repeat('x', OVERSIZED_VALUE_BYTES);
         pc.pollAndProduceMany(context -> {
             String sourceKey = context.key();
             sourceKeysProcessed.add(sourceKey);
@@ -231,16 +275,21 @@ class TransactionalPartialResultSetIT extends BrokerIntegrationTest<String, Stri
             }
             return resultSet;
         });
+    }
 
-        // phase one: healthy traffic, committed and read back - this is the non-vacuity anchor
-        goodKeys.forEach(key -> sendSourceRecord(key));
-        proveVerifierIsActuallyReading();
+    @AfterEach
+    void tearDown() {
+        closeQuietly();
+        if (verifier != null) {
+            verifier.close();
+        }
+    }
 
-        // phase two: the source record whose result set contains a send that can never succeed
-        sendSourceRecord(POISON_KEY);
-        await("the poison source record to reach the user function")
-                .atMost(SETTLE_TIMEOUT)
-                .until(() -> sourceKeysProcessed.contains(POISON_KEY));
+    @Test
+    void aTerminallyFailedSendMustNotLeaveHalfOfAResultSetVisible() {
+        startPcWithSuppliedProducer();
+
+        publishHealthyWorkThenThePoisonRecord();
         settleWhileNudgingCommits();
 
         // the abort (if there is one to do) happens on close, so read only once PC is fully down
@@ -248,6 +297,71 @@ class TransactionalPartialResultSetIT extends BrokerIntegrationTest<String, Stri
         drainFor(ofSeconds(10));
 
         assertNoPartialResultSetIsVisible();
+    }
+
+    /**
+     * The liveness half. Same poison, but on a producer PC built itself, so the recovery pass can act on what
+     * the callback records: the poisoned transaction is aborted and the producer replaced WHILE PC RUNS, and a
+     * healthy source record sent after the poison is published and read back before close. The all-or-none rule
+     * is then re-asserted over everything, the poison key included - recovery must not have leaked its prefix.
+     * <p>
+     * Verified in both directions against the one call this fix adds, {@code recordIfPoisonsTransaction} in the
+     * callback: with it commented out the recovery counter never moves and the await on it is what fails, which
+     * is exactly the wedge - PC alive, transaction dead, nothing published. See the commit that added this case.
+     */
+    @Test
+    void aTerminallyFailedSendIsAbortedWhileRunningSoHealthyWorkAfterItStillPublishes() {
+        startPcWithPcBuiltProducer();
+
+        publishHealthyWorkThenThePoisonRecord();
+
+        // the fix: the recovery pass runs from the control loop regardless of the dirty gate, so no nudge is
+        // needed to make it act - which is the point. The counter is the proof that it did.
+        await("the poisoned transaction to be aborted and the producer replaced, while PC is still running")
+                .atMost(SETTLE_TIMEOUT)
+                .pollInterval(ofMillis(200))
+                .until(() -> recoveries() >= 1);
+        assertWithMessage("recovery must name what it recovered from, or an unrelated recovery would satisfy the await")
+                .that(registry.find("pc.producer.recoveries").tag("condition", RecordTooLargeException.class.getSimpleName()).counter())
+                .isNotNull();
+
+        // liveness: work sent AFTER the poison, on the replacement, is published and visible before close
+        String afterPoisonKey = "after-poison-key-0";
+        nudgeKeys.add(afterPoisonKey); // so the all-or-none assertion below covers it too
+        sendSourceRecord(afterPoisonKey);
+        await("a healthy source record sent after the poison to have its whole result set visible, with PC still up")
+                .atMost(SETTLE_TIMEOUT)
+                .pollInterval(ofMillis(200))
+                .untilAsserted(() -> {
+                    drainFor(ofMillis(500));
+                    assertThat(resultsFor(afterPoisonKey)).hasSize(RESULTS_PER_INPUT);
+                });
+        assertWithMessage("the instance must still be running - a close is not recovery, it is what this replaces")
+                .that(pc.isClosedOrFailed())
+                .isFalse();
+
+        closeQuietly();
+        drainFor(ofSeconds(10));
+
+        assertNoPartialResultSetIsVisible();
+    }
+
+    /**
+     * Phase one: healthy traffic, committed and read back - the non-vacuity anchor. Phase two: the source record
+     * whose result set contains a send that can never succeed, waited for until the user function has seen it.
+     */
+    private void publishHealthyWorkThenThePoisonRecord() {
+        goodKeys.forEach(key -> sendSourceRecord(key));
+        proveVerifierIsActuallyReading();
+
+        sendSourceRecord(POISON_KEY);
+        await("the poison source record to reach the user function")
+                .atMost(SETTLE_TIMEOUT)
+                .until(() -> sourceKeysProcessed.contains(POISON_KEY));
+    }
+
+    private double recoveries() {
+        return registry.find("pc.producer.recoveries").counters().stream().mapToDouble(c -> c.count()).sum();
     }
 
     /**
