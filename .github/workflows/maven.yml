@@ -633,13 +633,34 @@ jobs:
           flags: ak-experimental
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Duplicate code detection using both PMD CPD and jscpd engines.
-  # See https://github.com/astubbs/duplicate-code-cross-check
-  duplicate-detection:
+  # ── Scanners (PR-only, no build) ──────────────────────────────────────
+
+  # Three scanners that used to be three jobs - `dups: clones`, `dups: similarity` and
+  # `deps: vulnerabilities` - now run as steps of one. None of them builds anything; each needs only
+  # a checkout, and the repo is on the free plan's 20-concurrent-job cap, so three one-minute jobs
+  # were three slots the sharded suites queued behind (ce-optimize run `ci-fewer-jobs`).
+  #
+  # FAIL AT THE END, REPORT EVERYTHING. Every scanner step carries `!cancelled()`, so a red first
+  # scanner never hides the second or third; the job's own conclusion aggregates the step failures,
+  # so there is no verdict step and no continue-on-error. Cheapest signal first: dependency review
+  # takes seconds, the two duplication engines take about a minute each.
+  #
+  # One checkout at fetch-depth 0: both duplication tools compare the PR against its base branch
+  # (`compare_with_base`, `max-increase`), which needs the base's history on disk.
+  #
+  # THE OLD JOB NAMES LIVE ON AS STEP NAMES, so the log reads the same way the checks list used to,
+  # and every doc that says "`dups: clones` found ..." still names the thing that found it. What did
+  # change is the check: `scan: repo` is the required-check name in the making, and the three names
+  # it replaces are still in the master ruleset. docs/inflight/ci-fewer-jobs-ruleset-edits.md owns
+  # the swap and its ordering.
+  scan:
     if: github.event_name == 'pull_request'
-    name: "dups: clones"
+    name: "scan: repo"
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    # All three tools post PR comments: the two duplication tools through their github-token /
+    # github_token inputs, dependency review through comment-summary-in-pr. Same grant the clones job
+    # carried; nothing widens.
     permissions:
       contents: read
       pull-requests: write
@@ -647,6 +668,20 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      # Dependency vulnerability scanning - GitHub's own dependency review
+      - name: "deps: vulnerabilities"
+        uses: actions/dependency-review-action@v4
+        if: ${{ !cancelled() }}
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: always
+          # github-script is MIT, but the license lookup returns null for
+          # floating major tags (@v7 -> "7.*.*"), so it warns as "unknown"
+          allow-dependencies-licenses: pkg:githubactions/actions/github-script
+
+      # Duplicate code detection using both PMD CPD and jscpd engines.
+      # See https://github.com/astubbs/duplicate-code-cross-check
       # v1.1.1. The bump is not routine: at c828d78 this action installed jscpd with `npx jscpd@4`
       # INSIDE the step it measures, so the base-branch engine step paid a cold install the PR-branch
       # step did not - measured at 288s against 15s on the same tree - and npm's default 300s
@@ -656,7 +691,9 @@ jobs:
       # It also stopped unzipping its own PMD distribution into the tree it scans. That had inflated
       # the duplication DENOMINATOR ~4x, so every percentage this check reported was about a quarter
       # of the truth - see cpd-max-duplication below.
-      - uses: astubbs/duplicate-code-cross-check@b462149cbfcdc7585c851e3109763c72787699a7 # v1.1.1
+      - name: "dups: clones"
+        uses: astubbs/duplicate-code-cross-check@b462149cbfcdc7585c851e3109763c72787699a7 # v1.1.1
+        if: ${{ !cancelled() }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # SCAN EVERYTHING. There is nothing here to exclude, and three earlier attempts at a
@@ -712,17 +749,10 @@ jobs:
           cpd-max-duplication: '0.5'    # measured baseline 0.11%
           jscpd-max-duplication: '2'    # measured baseline 1.17%
 
-  # File similarity detection - finds files that are semantically similar overall
-  file-similarity:
-    if: github.event_name == 'pull_request'
-    name: "dups: similarity"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: astubbs/duplicate-code-detection-tool@74adf74b65b6a288b21ba957d7d7bef43831ee65 # master: base-vs-PR comparison + ce-review fixes
+      # File similarity detection - finds files that are semantically similar overall
+      - name: "dups: similarity"
+        uses: astubbs/duplicate-code-detection-tool@74adf74b65b6a288b21ba957d7d7bef43831ee65 # master: base-vs-PR comparison + ce-review fixes
+        if: ${{ !cancelled() }}
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # Scan everything, same reasoning as the clones job. `file_extensions: java` is what
@@ -951,22 +981,6 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body: stamped });
             }
-
-  # Dependency vulnerability scanning - GitHub's own dependency review
-  dependency-scan:
-    if: github.event_name == 'pull_request'
-    name: "deps: vulnerabilities"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: high
-          comment-summary-in-pr: always
-          # github-script is MIT, but the license lookup returns null for
-          # floating major tags (@v7 -> "7.*.*"), so it warns as "unknown"
-          allow-dependencies-licenses: pkg:githubactions/actions/github-script
 
   # ── Push Builds (master) ───────────────────────────────────────────────
 

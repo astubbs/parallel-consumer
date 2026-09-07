@@ -70,8 +70,11 @@ document. This section is the detail behind it.
   **gating**, like the job they replaced: a chaos RED is a real finding. The **`Integration
   Tests`** lane is likewise two gating shards since astubbs#442 - a named heavy set and a
   catch-all defined by subtraction; see
-  ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). Also carries SpotBugs, duplicate
-  detection, PR-scoped mutation testing (PIT), and dependency vulnerability scanning. Push to
+  ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). Also carries SpotBugs, PR-scoped
+  mutation testing (PIT), and the `scan: repo` job - the two duplication scanners and dependency
+  vulnerability review as steps of one no-build job, each step keeping the name of the job it used
+  to be (`dups: clones`, `dups: similarity`, `deps: vulnerabilities`), so a red step still reads the
+  way the red check did. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
   job - never `setup-java cache: 'maven'`.
@@ -542,7 +545,7 @@ runner count rather than about this workflow:
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
   stops occupying runners. Housekeeping only; gates nothing.
 - **`dependency-audit.yml`** - "Dependency Audit", job `deps: whole-tree CVE scan`. Named against
-  `deps: vulnerabilities` (`maven.yml`), which reviews only the dependencies a PR *changes*; this one
+  `deps: vulnerabilities` (a step of `maven.yml`'s `scan: repo`), which reviews only the dependencies a PR *changes*; this one
   scans the whole resolved tree. The **only** place `ossindex-maven-plugin` is switched on
   (`-Dossindex.skip=false`); it binds to `validate`, so enabling it globally would mean six-plus
   scans per PR from one account. Runs on every in-repo PR, on dispatch, and **weekly on a schedule**

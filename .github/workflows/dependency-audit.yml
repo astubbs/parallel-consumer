@@ -4,7 +4,8 @@
 #
 # WHAT THIS COVERS THAT NOTHING ELSE DOES
 #
-# `deps: vulnerabilities` (maven.yml, actions/dependency-review-action) gates PRs, but only on the
+# `deps: vulnerabilities` (a step of maven.yml's `scan: repo`, actions/dependency-review-action)
+# gates PRs, but only on the
 # dependencies a PR *changes*. Dependabot alerts cover the standing tree, but read from GitHub's
 # dependency graph, which holds what the poms DECLARE rather than what Maven resolves - so a purely
 # transitive component can carry a published advisory and never produce an alert. `lz4-java` is the
@@ -89,7 +90,8 @@ jobs:
   ossindex:
     # Named for what it does, not for who supplies it. "ossindex" is vendor jargon and unfindable in
     # a checks list; this also has to be told apart at a glance from `deps: vulnerabilities`
-    # (maven.yml), which reviews only the dependencies a PR CHANGES - "whole-tree" is the whole
+    # (a step of maven.yml's `scan: repo`), which reviews only the dependencies a PR CHANGES -
+    # "whole-tree" is the whole
     # difference. Job names are an API here, referenced by repo rulesets (see repo-hygiene.yml's
     # header): renaming is free only while this check is not yet required and not on master.
     name: "deps: whole-tree CVE scan"
