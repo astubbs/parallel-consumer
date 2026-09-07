@@ -633,37 +633,79 @@ jobs:
           flags: ak-experimental
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # ── Scanners (PR-only, no build) ──────────────────────────────────────
+  # ── Scanners (PR-only) ────────────────────────────────────────────────
 
-  # Three scanners that used to be three jobs - `dups: clones`, `dups: similarity` and
-  # `deps: vulnerabilities` - now run as steps of one. None of them builds anything; each needs only
-  # a checkout, and the repo is on the free plan's 20-concurrent-job cap, so three one-minute jobs
-  # were three slots the sharded suites queued behind (ce-optimize run `ci-fewer-jobs`).
+  # Four scanners that used to be four jobs - `dups: clones`, `dups: similarity`,
+  # `deps: vulnerabilities` and `deps: whole-tree CVE scan` - now run as steps of one. The repo is on
+  # the free plan's 20-concurrent-job cap, so each was a slot the sharded suites queued behind
+  # (ce-optimize run `ci-fewer-jobs`).
   #
   # FAIL AT THE END, REPORT EVERYTHING. Every scanner step carries `!cancelled()`, so a red first
-  # scanner never hides the second or third; the job's own conclusion aggregates the step failures,
+  # scanner never hides the ones after it; the job's own conclusion aggregates the step failures,
   # so there is no verdict step and no continue-on-error. Cheapest signal first: dependency review
-  # takes seconds, the two duplication engines take about a minute each.
+  # takes seconds, the two duplication engines take about a minute each, and the whole-tree CVE scan
+  # - the only step that needs a JDK, a Maven cache and a build - goes last.
   #
   # One checkout at fetch-depth 0: both duplication tools compare the PR against its base branch
   # (`compare_with_base`, `max-increase`), which needs the base's history on disk.
   #
   # THE OLD JOB NAMES LIVE ON AS STEP NAMES, so the log reads the same way the checks list used to,
   # and every doc that says "`dups: clones` found ..." still names the thing that found it. What did
-  # change is the check: `scan: repo` is the required-check name in the making, and the three names
+  # change is the check: `scan: repo` is the required-check name in the making, and the four names
   # it replaces are still in the master ruleset. docs/inflight/ci-fewer-jobs-ruleset-edits.md owns
   # the swap and its ordering.
+  #
+  # THE CVE STEPS RUN PR-AUTHORED BUILD CODE IN A JOB THAT HOLDS `pull-requests: write`, which the
+  # standalone job deliberately did not (dependency-audit.yml's `permissions:` comment states why).
+  # What contains it is the credentials guard below: those steps run only for a branch in THIS
+  # repository, i.e. one pushed by somebody who already has write access, so the build code they
+  # execute is not attacker-supplied in the way a fork PR's would be. The OSS Index secrets stay on
+  # the two steps that need them and are not visible to the pinned third-party actions above.
   scan:
     if: github.event_name == 'pull_request'
     name: "scan: repo"
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # All three tools post PR comments: the two duplication tools through their github-token /
-    # github_token inputs, dependency review through comment-summary-in-pr. Same grant the clones job
-    # carried; nothing widens.
+    # The scanners held 10 and the CVE audit held 20. Sized for the sum with headroom for a cold
+    # Maven cache, without leaving a hung tool sitting for an hour.
+    timeout-minutes: 25
+    needs: prepare-deps
+    # All three no-build tools post PR comments: the two duplication tools through their
+    # github-token / github_token inputs, dependency review through comment-summary-in-pr. Same
+    # grant the clones job carried; nothing widens. The CVE steps need nothing beyond
+    # `contents: read` - they report to the job summary, never to a comment.
     permissions:
       contents: read
       pull-requests: write
+    env:
+      # TWO WAYS A PR ARRIVES WITHOUT THE OSS INDEX CREDENTIALS, AND BOTH MUST SKIP RATHER THAN GO
+      # RED. The preflight below turns a missing secret into a red check on purpose - it is the
+      # right answer when the secret is missing by accident. On these two it would be missing by
+      # design, every time, which is a permanent false alarm that teaches people to ignore the check.
+      #
+      #   1. FORK PRs receive no secrets at all. Same test the self-hosted lanes use.
+      #   2. DEPENDABOT PRs. The branch is in THIS repository, so the fork test passes it - but
+      #      GitHub swaps the secret store for a Dependabot-triggered run: `secrets.*` resolves
+      #      against Dependabot secrets, not Actions secrets, so OSSINDEX_USERNAME/OSSINDEX_TOKEN
+      #      come back empty and the preflight fails deterministically. Every dependency-update PR
+      #      would carry a red whole-tree audit, on the PRs least likely to be read line by line.
+      #
+      # Gated on `github.actor` rather than the PR author because the actor is what actually selects
+      # the secret store: when a human pushes to a Dependabot branch the run is theirs, Actions
+      # secrets ARE present, and the scan should run normally.
+      #
+      # The alternative - mirroring the two secrets into the Dependabot secret store - was rejected.
+      # It would put the OSS Index token in a second store, reachable by a job that runs
+      # `test-compile` over a dependency set an automated process just changed. The scheduled
+      # whole-tree scan in dependency-audit.yml covers what those PRs merge anyway, one channel
+      # later and without handing the credential around.
+      #
+      # This was the standalone job's `if:`, unchanged in meaning and moved here because a job-level
+      # `if:` cannot skip four steps of a job that has other work to do. It is ONE copy on purpose:
+      # repeated inline on five steps it would drift. Guarded steps read
+      # `!cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true'`.
+      CVE_SCAN_CREDENTIALS_PRESENT: >-
+        ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        && github.actor != 'dependabot[bot]' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -769,6 +811,110 @@ jobs:
           one_comment: true
           compare_with_base: true
           max_increase: 10
+
+      # ── Whole-tree CVE scan (was the `deps: whole-tree CVE scan` job) ──────────────────────
+      #
+      # .github/workflows/dependency-audit.yml OWNS the reasoning for this lane - what it covers
+      # that `deps: vulnerabilities` above does not, why exactly one job may switch the plugin on,
+      # why findings gate the PR, why a green Maven run is not evidence the scan happened, and the
+      # two different reds. That file still runs the same steps on its weekly schedule and on
+      # dispatch, which is the half no PR can cover. Read its header before changing anything here;
+      # the comments below are only what a reader of THIS job cannot do without.
+      #
+      # These five steps are the only ones here that need a JDK, the Maven cache and `needs:
+      # prepare-deps`, so they go last and their setup goes with them - a fork or Dependabot PR
+      # skips the whole block and pays none of it.
+      - uses: actions/setup-java@v5
+        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # `server-id` must match the plugin's `authId`, which is `ossindex`. setup-java writes a
+          # settings.xml whose <server> reads these two env var NAMES at Maven runtime, so the
+          # secrets have to be in `env:` on the Maven step - not here.
+          server-id: ossindex
+          server-username: OSSINDEX_USERNAME
+          server-password: OSSINDEX_TOKEN
+          # No `cache: maven` - see the caching note at the top of this file.
+
+      # Restore-only, off prepare-deps' rotating key. These steps must not SAVE a cache: it would
+      # compete with the key the build lanes own, and it resolves a different (smaller) set.
+      - name: Restore Maven cache
+        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
+      # Before the guard runs, prove the guard still works - the sequencing repo-hygiene.yml uses
+      # (bin/check-all.sh runs every self-test ahead of the gates). A guard nobody has watched fail
+      # is decoration.
+      - name: Self-test the did-it-actually-scan guard
+        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
+        run: bash bin/test-check-ossindex-audit.sh
+
+      # An empty secret produces a 401, which the guard catches - but it names three possible causes
+      # where this step names the actual one. Cheap, and it fails before spending a build.
+      - name: Preflight - credentials must be present
+        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
+        env:
+          OSSINDEX_USERNAME: ${{ secrets.OSSINDEX_USERNAME }}
+          OSSINDEX_TOKEN: ${{ secrets.OSSINDEX_TOKEN }}
+        run: |
+          if [ -z "${OSSINDEX_USERNAME}" ] || [ -z "${OSSINDEX_TOKEN}" ]; then
+            echo "::error::OSSINDEX_USERNAME / OSSINDEX_TOKEN are not both set as repo secrets. The audit cannot authenticate, and OSS Index no longer serves anonymous component-report requests."
+            exit 1
+          fi
+
+      # `test-compile`, not `validate`: the audit mojo resolves TEST-scope dependencies and the
+      # modules depend on `parallel-consumer-core:jar:tests`, so on a runner with no PC snapshots
+      # installed a bare `ossindex:audit` (or a `validate`-only run) dies at the second module with
+      # "Could not resolve dependencies".
+      #
+      # `-Dossindex.fail=false` is the load-bearing property, and it is NOT laxity - it is what makes
+      # bin/check-ossindex-audit.sh the single place that decides red. Letting Maven fail here would
+      # take the step down via `pipefail` BEFORE the guard runs, losing both the did-it-actually-scan
+      # proof and the rendered summary on exactly the runs with findings. Maven stays lenient; the
+      # guard gates. dependency-audit.yml's header carries the rest.
+      - name: Audit dependencies against OSS Index
+        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
+        shell: bash
+        env:
+          OSSINDEX_USERNAME: ${{ secrets.OSSINDEX_USERNAME }}
+          OSSINDEX_TOKEN: ${{ secrets.OSSINDEX_TOKEN }}
+        run: |
+          # pipefail, or `tee` swallows a Maven BUILD FAILURE and the step goes green on a broken run.
+          set -o pipefail
+          ./mvnw --batch-mode test-compile \
+            -Dossindex.skip=false \
+            -Dossindex.fail=false \
+            -Dossindex.authId=ossindex \
+            -Dossindex.reportFile=target/ossindex-report.json \
+            | tee ossindex-audit.log
+
+      # THE STEP THAT CARRIES THE OLD JOB'S NAME, because it is the one that decided red: it renders
+      # findings into the run summary, exits 1 when it cannot prove the scan happened, and 2 when the
+      # scan found something. A red here reads in the log the way the red check used to.
+      - name: "deps: whole-tree CVE scan"
+        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          bash bin/check-ossindex-audit.sh ossindex-audit.log | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Kept so a finding can be triaged from the structured report rather than re-run by hand, and
+      # so a failed run can be diagnosed from the log that produced the verdict.
+      - name: Upload audit reports
+        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ossindex-reports
+          path: |
+            ossindex-audit.log
+            **/target/ossindex-report.json
+          if-no-files-found: warn
 
   # TWO STATIC ANALYSERS IN ONE JOB. They ran as `static: infer` and `static: spotbugs`: both waited
   # on prepare-deps and both restored the same Maven cache with an identical step, so batching them

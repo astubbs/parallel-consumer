@@ -11,14 +11,16 @@ was deleted because its steps could run as the tail of the same job - see "Why h
 checklist" below. Three more, `maven.yml`'s no-build scanners `dups: clones`, `dups: similarity` and
 `deps: vulnerabilities`, became steps of one new job, `scan: repo` - see "The scanner fold" below. Two more, `maven.yml`'s
 build-dependent static analysers `static: infer` and `static: spotbugs`, became steps of one new job,
-`static: analysis` - see "The static-analysis fold" below.
-All nine old names are still **required status-check contexts in the master ruleset**, and the ruleset is repository settings, not tree state - no PR can change it
+`static: analysis` - see "The static-analysis fold" below. A tenth, `dependency-audit.yml`'s
+`deps: whole-tree CVE scan`, became a fourth step of `scan: repo` - see "The CVE fold" below; that
+workflow keeps its `schedule` and `workflow_dispatch` triggers and is not deleted.
+All ten old names are still **required status-check contexts in the master ruleset**, and the ruleset is repository settings, not tree state - no PR can change it
 ([`docs/ci.md`](../ci.md), "The required list is repository settings, not tree state").
 <!-- file-refs: N/A - copyright.yml and pr-checklist.yml are named as the files this work deleted; the record of each is its deleting commit, `git log --diff-filter=D -- .github/workflows/copyright.yml .github/workflows/pr-checklist.yml` -->
 
 ## The edit
 
-Remove these nine contexts from the master ruleset's `required_status_checks`:
+Remove these ten contexts from the master ruleset's `required_status_checks`:
 
 - `Copyright header check`
 - `quarantine: audit`
@@ -29,6 +31,7 @@ Remove these nine contexts from the master ruleset's `required_status_checks`:
 - `deps: vulnerabilities`
 - `static: infer`
 - `static: spotbugs`
+- `deps: whole-tree CVE scan`
 
 Add two:
 
@@ -51,7 +54,7 @@ A required context nothing produces leaves every PR **pending** - it never fails
   required").
 
 So: edit the ruleset in the same sitting as the merge. Only one merge is exposed either way - the
-deleting PR's own checks list shows the nine contexts as expected-but-missing until the ruleset
+deleting PR's own checks list shows the ten contexts as expected-but-missing until the ruleset
 drops them, which is the intended tell that the edit is still owed, not a fault in that PR.
 
 **The add has the opposite ordering.** A new required context that no master run has produced
@@ -62,7 +65,7 @@ the job definition is on master, so every PR opened afterwards produces the cont
 merge, then:
 
 1. Merge the deleting PR.
-2. In the same sitting, remove the nine old contexts.
+2. In the same sitting, remove the ten old contexts.
 3. Add `scan: repo` and `static: analysis` only after the merge has landed and a PR run has produced
    each context - the first PR to rebase onto the merged master shows both in its checks list; that
    is the evidence. Until then the three scanners and the two analysers gate nothing, which is a
@@ -161,13 +164,56 @@ not fail the lane, and that reasoning is recorded at the step.
 check used to, and the prose in `docs/solutions/` and `docs/inflight/` that says what
 `static: spotbugs` found stays accurate - only the check name changed.
 
-**One out-of-scope repair is owed**: `bin/check-pr-analysis-surfaces.sh` filters check runs by name
-with `test("Mutation|spotbugs|racerd|CVE|Quarantine")`. That regex reads the CHECK name, not the step
-names, so once the ruleset carries `static: analysis` the script stops matching the analysis lane and
-silently reports one surface fewer. The fix is one alternation:
-`test("Mutation|spotbugs|racerd|static: analysis|CVE|Quarantine")`.
+**A name-matching consumer had to be repaired, and it is the class to check on every fold**:
+`bin/check-pr-analysis-surfaces.sh` filters check runs by name. That regex reads the CHECK name, not
+the step names, so a fold silently drops a surface from its listing - nothing fails, the row just
+stops appearing. It read `test("Mutation|spotbugs|racerd|CVE|Quarantine")`, in which `racerd` had
+already been dead since the job became `static: infer`; it now names the live checks,
+`test("Mutation|static: analysis|scan: repo|CVE|Quarantine")`, and carries a comment saying to
+re-read it whenever a job is renamed or folded.
+
+## The CVE fold
+
+`deps: whole-tree CVE scan` was the whole of `dependency-audit.yml`'s `ossindex` job, and that
+workflow's `pull_request` trigger was its only PR-time producer. The trigger is gone and the job is
+now a fourth step of `scan: repo`; the workflow itself is **not deleted** - it keeps `schedule` and
+`workflow_dispatch`, which is the half no PR can cover (an unchanged tree acquiring a new advisory).
+So the name `deps: whole-tree CVE scan` still exists in the tree, as both a job in that workflow and
+a step in this one, and is still on the removal list above: no PR run produces it any more, and a
+required context nothing produces on a PR leaves every PR pending.
+
+What the fold had to carry:
+
+- **The credentials guard, verbatim and with its semantics unchanged.** The standalone job's `if:`
+  skipped for fork PRs and for Dependabot-actor runs, because in both cases `secrets.*` resolves
+  empty and the preflight would red every time by design. A job-level `if:` cannot skip four steps
+  of a job that has other work to do, so the same expression is now the job-level env var
+  `CVE_SCAN_CREDENTIALS_PRESENT` and every CVE step reads
+  `!cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true'`. Skip, not warn and not red: those
+  PRs get no CVE steps at all, exactly as they got no job before. A *present-but-empty* secret is
+  still red, from the preflight - that case is a mistake, not a design.
+- **The setup the scanners did not need**: `needs: prepare-deps`, `actions/setup-java` with
+  `server-id: ossindex` (the plugin's `authId`, read from the generated settings.xml at Maven
+  runtime), and the restore-only Maven cache step. All three sit with the CVE steps at the end of
+  the job and behind the same guard, so a fork PR pays none of it.
+- **Last, not first.** It is the only step here that builds, so the cheap signals still land first
+  in the log, and the `dups: clones` comment about `target/` not being on disk stays true - the
+  Maven step is below it, not above.
+- **`timeout-minutes: 25`** where the scanners held 10 and the audit job held 20.
+- **The exposure the standalone job avoided, and what contains it here.** That job deliberately held
+  `contents: read` only, because it runs PR-authored build code in the same job as the OSS Index
+  token. `scan: repo` also holds `pull-requests: write`, for the three tools that post comments.
+  What contains it is the guard itself: the CVE steps run only for a branch in *this* repository,
+  pushed by somebody who already has write access, so the build code is not attacker-supplied the
+  way a fork PR's would be. The OSS Index secrets stay in `env:` on the two steps that need them and
+  are not visible to the pinned third-party actions.
+- **The steps are now duplicated between two files.** `dependency-audit.yml` still owns the
+  reasoning - what the lane covers, why findings gate, the two different reds, the
+  did-it-actually-scan guard - and `maven.yml` points at it rather than restating it. The commands
+  themselves are copied, because sharing them needs a composite action and a third file. Nothing
+  checks that the copies agree; both file headers say so.
 
 This note tracks only the owed edits. Once the live ruleset lists `scan: repo` and
-`static: analysis` and none of the nine old contexts, nothing here is both true and unowned elsewhere
-- the reasoning is in [`docs/ci.md`](../ci.md), the `repo-hygiene.yml` header and the `scan: repo`
-and `static: analysis` jobs' own comments.
+`static: analysis` and none of the ten old contexts, nothing here is both true and unowned elsewhere
+- the reasoning is in [`docs/ci.md`](../ci.md), the `repo-hygiene.yml` and `dependency-audit.yml`
+headers, and the `scan: repo` and `static: analysis` jobs' own comments.

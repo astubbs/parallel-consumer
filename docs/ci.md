@@ -72,10 +72,12 @@ document. This section is the detail behind it.
   catch-all defined by subtraction; see
   ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). Also carries PR-scoped
   mutation testing (PIT) and two batched jobs: **`static: analysis`** - Infer then SpotBugs, the
-  cheaper signal first - and **`scan: repo`** - the two duplication scanners and dependency
-  vulnerability review, no build between them. In both, each step keeps the name of the job it used
+  cheaper signal first - and **`scan: repo`** - the two duplication scanners, dependency
+  vulnerability review, and the whole-tree CVE scan last because it is the only one that builds.
+  In both, each step keeps the name of the job it used
   to be (`static: infer`, `static: spotbugs`; `dups: clones`, `dups: similarity`,
-  `deps: vulnerabilities`), so a red step still reads the way the red check did. Push to
+  `deps: vulnerabilities`, `deps: whole-tree CVE scan`), so a red step still reads the way the red
+  check did. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
   job - never `setup-java cache: 'maven'`.
@@ -549,12 +551,16 @@ runner count rather than about this workflow:
   stops occupying runners. Housekeeping only; gates nothing.
 - **`dependency-audit.yml`** - "Dependency Audit", job `deps: whole-tree CVE scan`. Named against
   `deps: vulnerabilities` (a step of `maven.yml`'s `scan: repo`), which reviews only the dependencies a PR *changes*; this one
-  scans the whole resolved tree. The **only** place `ossindex-maven-plugin` is switched on
-  (`-Dossindex.skip=false`); it binds to `validate`, so enabling it globally would mean six-plus
-  scans per PR from one account. Runs on every in-repo PR, on dispatch, and **weekly on a schedule**
-  - the schedule catches what no PR can, an unchanged tree acquiring a new advisory. (The one
-  deliberate exception to "there is no scheduled build" below; it re-runs no suite the gate already
-  covers.) Skipped for fork PRs, which receive no secrets and would 401 forever.
+  scans the whole resolved tree. `ossindex-maven-plugin` binds to `validate`, so enabling it
+  globally would mean six-plus scans per PR from one account: it is switched on
+  (`-Dossindex.skip=false`) in **exactly two places, whose triggers cannot both fire for one
+  event** - this workflow on **dispatch and weekly on a schedule**, and the identically-named
+  `deps: whole-tree CVE scan` **step** of `maven.yml`'s `scan: repo` on every PR. Everything below
+  is true of both; they are the same steps in two files, and changing one means changing the other.
+  The schedule catches what no PR can, an unchanged tree acquiring a new advisory. (The one
+  deliberate exception to "there is almost no scheduled build" below; it re-runs no suite the gate
+  already covers.) The PR half skips for fork and Dependabot PRs, which receive no Actions secrets
+  and would 401 forever.
   - **Findings fail it.** astubbs/parallel-consumer#281 retired the standing backlog into
     `excludeVulnerabilityIds` entries in the root pom, each carrying a stated retirement condition,
     so a finding that reaches the gate is by construction an advisory nobody has looked at.
