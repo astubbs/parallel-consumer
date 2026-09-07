@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
+import com.facebook.infer.annotation.ThreadConfined;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import org.apache.kafka.common.utils.CloseableIterator;
@@ -296,25 +297,58 @@ public class RetryQueue {
         }
     }
 
+    /**
+     * Confined to the thread that opened it - {@link ThreadConfined#ANY} rather than a named thread, because
+     * which one it is varies by caller and the invariant is that it is only ever the one.
+     * <p>
+     * <b>The lock discipline already required this.</b> {@link RetryQueue#iterator()} takes the queue's read
+     * lock on the calling thread and {@link #close()} releases it, and a {@link ReentrantReadWriteLock} read
+     * lock may only be released by its holder. An iterator that escaped to another thread could therefore never
+     * be closed there: the unlock would throw {@link IllegalMonitorStateException} and strand the read lock,
+     * blocking every writer for the life of the process. The guard below turns that into a refusal at the first
+     * foreign call, naming both threads.
+     * <p>
+     * <b>Why the declaration is here and not just the guard.</b> RacerD reads {@code @ThreadConfined} and
+     * reported four {@code THREAD_SAFETY_VIOLATION}s on {@code closed} without it - one unsynchronised
+     * read/write pair on a class it had no reason to believe was confined. It is a declaration the analyser
+     * consumes and does not check, which is why {@link #assertOnOwningThread} is beside it;
+     * {@code RetryQueueIteratorConfinementTest} is what fails when the two disagree. The rule:
+     * {@code parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md}, "Declare thread
+     * confinement".
+     */
+    @ThreadConfined(ThreadConfined.ANY)
     public static class RetryQueueIterator implements CloseableIterator<WorkContainer<?, ?>> {
         private final ReentrantReadWriteLock lock;
         private final Iterator<WorkContainer<?, ?>> wrapped;
+
+        /**
+         * The thread that opened this iterator, and so the only one that may use or close it. Held rather than
+         * merely asserted against the read lock's holder because {@link ReentrantReadWriteLock} does not expose
+         * who holds a READ lock - {@code isWriteLockedByCurrentThread} has no read-side counterpart, and
+         * {@code getReadHoldCount()} counts this thread's own holds, so it cannot tell "I am the opener" from
+         * "I hold a read lock for some other reason".
+         */
+        private final Thread owner;
+
         private boolean closed;
 
         public RetryQueueIterator(ReentrantReadWriteLock lock, Iterator<WorkContainer<?, ?>> wrapped) {
             this.lock = lock;
             this.wrapped = wrapped;
+            this.owner = Thread.currentThread();
             this.closed = false;
         }
 
         @Override
         public void close() {
+            assertOnOwningThread("closing");
             lock.readLock().unlock();
             this.closed = true;
         }
 
         @Override
         public boolean hasNext() {
+            assertOnOwningThread("hasNext on");
             if (closed) {
                 throw new IllegalStateException("RetryQueueIterator is closed");
             }
@@ -323,10 +357,25 @@ public class RetryQueue {
 
         @Override
         public WorkContainer<?, ?> next() {
+            assertOnOwningThread("next on");
             if (closed) {
                 throw new IllegalStateException("RetryQueueIterator is closed");
             }
             return wrapped.next();
+        }
+
+        /**
+         * The confinement declared above, asserted rather than trusted. Ordered BEFORE the closed check in every
+         * caller: a foreign thread reading {@code closed} is the unsynchronised read the declaration promises
+         * cannot happen, so answering it - even to refuse - would be honouring the wrong contract first.
+         */
+        private void assertOnOwningThread(String what) {
+            Thread current = Thread.currentThread();
+            if (current != owner) {
+                throw new IllegalStateException("RetryQueueIterator is confined to the thread that opened it, '"
+                        + owner.getName() + "', but " + what + " it was attempted on '" + current.getName()
+                        + "'. It holds that thread's read lock on the queue, which only that thread can release.");
+            }
         }
     }
 }

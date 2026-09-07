@@ -3,8 +3,6 @@ package bz.stub.parallelconsumer.state;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
 
@@ -34,21 +32,7 @@ import static com.google.common.truth.Truth.assertThat;
  * @author Antony Stubbs
  * @see RetryQueue
  */
-class RetryQueueTest {
-
-    private static final String TOPIC = "retry-queue-topic";
-
-    private static final int PARTITION = 0;
-
-    private static final long EPOCH = 0L;
-
-    private final PCModuleTestEnv module = new PCModuleTestEnv();
-
-    private final RetryQueue retryQueue = new RetryQueue();
-
-    private WorkContainer<String, String> workFor(long offset) {
-        return new WorkContainer<>(EPOCH, new ConsumerRecord<>(TOPIC, PARTITION, offset, "key-" + offset, "value"), module);
-    }
+class RetryQueueTest extends RetryQueueTestBase {
 
     @Test
     void removeAllOfNullRemovesNothingAndReportsUnmodified() {
