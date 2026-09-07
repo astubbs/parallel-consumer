@@ -689,3 +689,30 @@ Instance 5 on the first seed is the case that matters for the detector: a member
 frozen, with two workers parked between tasks - spare hands and nothing to hand them, because the
 records it holds are on the eight busy ones. A rule that accuses on "a free worker beside held work"
 accuses it; the rule that lands with the stacked follow-up accuses only nobody-in-user-code.
+
+## Sighting, 2026-09-07 - the `ZOMBIE_MEMBER` arm again, 4% over its bound
+
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` failed on the `Chaos Pain Suite 4/4` shard
+of astubbs/parallel-consumer#468, on the equality change, with the same arm as the fourth sighting
+above:
+
+    [chaos-probe] VIOLATION: ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-1645296212' dwelling in
+    PreparingRebalance for 15s (bound 15s) - a member is not answering the rebalance
+    (protocol-unresponsive)
+    [chaos-probe] peaks: maxRebalanceDwell=15632ms maxDrainDuration=11664ms
+                         maxLagStagnation=50717ms maxInstanceStall=0ms
+
+**Replay seed `1053013618367208111`** (`CHAOS W1 churn storm: seed=1053013618367208111`).
+
+**Recorded, not diagnosed, and the branch is a weak suspect on a stated mechanism rather than on
+"looks unrelated".** That PR's commit deletes `WorkContainer.equals`/`hashCode` so equality becomes
+identity. Nothing on the rebalance path consults either: the shard's conditional removal is
+`Map.remove(key, value)` whose semantics are unchanged from the `Residency` token the same branch
+carried through a green run of this suite one commit earlier, and the only other collection of
+containers in the engine (`ExternalEngine.holdingDispatchPermit`) was already identity-keyed. The
+one behaviour that does move is the per-scan `slowWork` `HashSet`'s de-duplication, which feeds a
+rate-limited warning and nothing else.
+
+`maxInstanceStall=0ms` also separates this from the line diagnosed above: no member was stalled
+holding work. It is the rebalance dwell alone, over its bound by 632ms of 15000 - the tail shape the
+`ci-disabled-jobs-and-runner-load.md` confound predicts, not a wedge.
