@@ -181,6 +181,19 @@ public class PartitionState<K, V> {
     @Getter
     private final long partitionsAssignmentEpoch;
 
+    /**
+     * The highest offset the broker has acknowledged a commit for on this partition - what
+     * {@code pc.partition.latest.committed.offset} reads.
+     * <p>
+     * <b>It only ever rises</b>, which {@link #recordCommittedOffset} is what enforces. Under
+     * {@code PERIODIC_CONSUMER_ASYNCHRONOUS} two commits can be in flight at once and their acknowledgements can
+     * arrive in either order, so an answer carrying an offset a later one has already passed reaches here after the
+     * higher one. Recording it would walk the commit watermark, and the gauge, BACKWARDS.
+     * <p>
+     * Package-private getter because this is the only way a test can read it - the gauge is the sole production
+     * reader.
+     */
+    @Getter(PACKAGE)
     private long lastCommittedOffset;
     private Gauge lastCommittedOffsetGauge;
     private Gauge highestSeenOffsetGauge;
@@ -236,9 +249,41 @@ public class PartitionState<K, V> {
         }
     }
 
+    /**
+     * The broker acknowledged a commit carrying the <b>highest offset in flight</b> for this partition: record the
+     * offset, and mark the partition clean unless its state changed again while that commit was in flight.
+     */
     public void onOffsetCommitSuccess(OffsetAndMetadata committed) { //NOSONAR
-        lastCommittedOffset = committed.offset();
+        recordCommittedOffset(committed);
         setClean();
+    }
+
+    /**
+     * The broker acknowledged a commit whose offset for this partition a <b>later request, still unanswered, has
+     * already passed</b>: record the offset, and leave the partition dirty.
+     * <p>
+     * The acknowledgement is true - the broker really did commit up to that offset - so throwing it away would
+     * discard information the gauge is entitled to. What it cannot do is end the story: the offsets between it and
+     * the newer request are the ones nothing would ever re-commit if this marked clean and that newer request then
+     * failed or was dropped, which is the very defect
+     * {@code docs/solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md}
+     * removed. Whoever decides that a request is superseded is {@code ConsumerOffsetCommitter}, per partition.
+     */
+    public void onSupersededOffsetCommitSuccess(OffsetAndMetadata committed) {
+        recordCommittedOffset(committed);
+    }
+
+    /**
+     * Advances {@link #lastCommittedOffset} monotonically - see that field for why it may not move backwards.
+     */
+    private void recordCommittedOffset(OffsetAndMetadata committed) {
+        if (committed.offset() > lastCommittedOffset) {
+            lastCommittedOffset = committed.offset();
+        } else {
+            log.debug("Acknowledged commit for {} carries offset {}, at or below the {} already recorded - keeping " +
+                            "the higher one, as the commit watermark only rises",
+                    tp, committed.offset(), lastCommittedOffset);
+        }
     }
 
     private void setClean() {

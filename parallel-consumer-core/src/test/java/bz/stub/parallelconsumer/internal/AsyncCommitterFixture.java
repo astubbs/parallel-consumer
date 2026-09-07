@@ -13,6 +13,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.mockito.ArgumentCaptor;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -91,7 +92,26 @@ final class AsyncCommitterFixture {
     static Map<TopicPartition, OffsetAndMetadata> commitOf(String topic, long offset, String metadata) {
         // singletonMap rather than Map.of: --release 8 restricts the API surface (see the Jabel note in
         // the root pom), so the Java 9 factory does not compile here
-        return Collections.singletonMap(new TopicPartition(topic, 0), new OffsetAndMetadata(offset, metadata));
+        return Collections.singletonMap(partitionOf(topic, 0), new OffsetAndMetadata(offset, metadata));
+    }
+
+    /**
+     * A two-partition commit, so a test can send a newer request that supersedes ONE of the partitions and leaves
+     * the other's offset where it was - which is the only shape that distinguishes a per-partition rule from a
+     * whole-request one.
+     */
+    static Map<TopicPartition, OffsetAndMetadata> commitOf(String topic,
+                                                           long offsetOnPartition0,
+                                                           long offsetOnPartition1,
+                                                           String metadata) {
+        Map<TopicPartition, OffsetAndMetadata> commit = new HashMap<>();
+        commit.put(partitionOf(topic, 0), new OffsetAndMetadata(offsetOnPartition0, metadata));
+        commit.put(partitionOf(topic, 1), new OffsetAndMetadata(offsetOnPartition1, metadata));
+        return commit;
+    }
+
+    static TopicPartition partitionOf(String topic, int partition) {
+        return new TopicPartition(topic, partition);
     }
 
 }

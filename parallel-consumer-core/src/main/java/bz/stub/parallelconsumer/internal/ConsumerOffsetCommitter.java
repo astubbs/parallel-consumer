@@ -18,12 +18,12 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.RebalanceInProgressException;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
@@ -82,16 +82,21 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
     private static final CommitResponse POLLER_DIED = new CommitResponse(new CommitRequest());
 
     /**
-     * Numbers the {@code commitAsync} requests this committer has sent, so {@link #onAsyncCommitAnswered} can tell
-     * the answer to the request currently outstanding from the answer to one that a later request has superseded.
+     * The highest offset this committer has asked the broker to commit for each partition and not yet had
+     * acknowledged - what {@link #onAsyncCommitAnswered} compares an answer against, <b>per partition</b>, to decide
+     * whether that answer is the newest word on that partition or whether a later request has already passed it.
+     * <p>
+     * Written on send and only ever upwards for a given partition (offsets to commit rise); an entry is removed by
+     * the acknowledgement that matches it, at which point nothing is in flight for that partition. An answer that
+     * finds no entry, or a lower one, is therefore an answer a newer request has overtaken.
      * <p>
      * Sends happen on the broker-poll thread ({@link #maybeDoCommit()}, or {@link #commit()} when the poll thread
      * is itself the caller), and Kafka delivers a commit callback on whatever thread next drives the consumer -
      * normally that same poll thread, but a pending callback is also flushed by {@code Consumer#close()}, which
-     * runs on the closing thread once the poll loop has handed ownership over. Two threads, therefore, and the
-     * atomic is what gives the answer side a coherent read of the send side. Only ever incremented.
+     * runs on the closing thread once the poll loop has handed ownership over. Two threads, therefore, which is why
+     * this is a concurrent map read and written only through its atomic operations.
      */
-    private final AtomicLong asyncCommitSequence = new AtomicLong();
+    private final Map<TopicPartition, Long> highestOffsetInFlight = new ConcurrentHashMap<>();
 
     public ConsumerOffsetCommitter(final ConsumerManager<K, V> newConsumer, final WorkManager<K, V> newWorkManager, final ParallelConsumerOptions options) {
         super(newConsumer, newWorkManager);
@@ -135,9 +140,8 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
             }
             case PERIODIC_CONSUMER_ASYNCHRONOUS -> {
                 log.debug("Committing offsets Async");
-                long sequence = asyncCommitSequence.incrementAndGet();
-                consumerMgr.commitAsync(offsetsToSend,
-                        (offsets, exception) -> onAsyncCommitAnswered(sequence, offsets, exception));
+                recordAsInFlight(offsetsToSend);
+                consumerMgr.commitAsync(offsetsToSend, this::onAsyncCommitAnswered);
             }
             default ->
                     throw new IllegalArgumentException("Cannot use " + commitMode + " when using " + this.getClass().getSimpleName());
@@ -178,63 +182,106 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * the async mode has no commit budget and so cannot reach the commit-failure seam (astubbs#317) at all -
      * see below.
      * <p>
-     * <b>Why the sequence check.</b> Deferring the clean-marking is what makes two async commits able to be in
-     * flight at once - before this change the first send marked the partition clean, so there was never a
-     * second. An acknowledgement of a <em>superseded</em> request must not mark clean, because the offsets the
-     * newer request carried are higher and still unanswered; ignoring it leaves the partition dirty until the
-     * newest request is acknowledged, which costs at most one extra commit and cannot under-report. This is the
-     * monotonic-sequence discipline {@code Consumer#commitAsync}'s own javadoc recommends for exactly this
-     * reason. In practice the client answers in send order, so the check normally passes; it is here because
-     * "normally" is not a guarantee this class can make. Nothing downstream is a second line of defence:
-     * {@code PartitionState.onOffsetCommitSuccess} assigns {@code lastCommittedOffset} unconditionally, so a
-     * stale success reaching it would walk the recorded offset <em>backwards</em>.
+     * <b>Every acknowledgement is recorded; only the CLEAN mark waits.</b> Deferring the clean-marking is what
+     * makes two async commits able to be in flight at once - before this change the first send marked the
+     * partition clean, so there was never a second - and an answer can therefore arrive for a request a later one
+     * has partly overtaken. That answer is still <em>true</em>: the broker committed up to the offsets it names,
+     * for every partition it names, so those offsets are recorded either way. What it may not do is mark a
+     * partition clean whose offset a newer, still-unanswered request has passed, because that is precisely the
+     * state that would leave nothing dirty to re-send if the newer request then failed or was dropped. The
+     * decision is <b>per partition</b> against {@link #highestOffsetInFlight}: a request can be the newest word on
+     * one partition and superseded on another, which is the common shape when one partition of an assignment
+     * completes work faster than another. Leaving a partition dirty costs at most one extra commit and cannot
+     * under-report.
      * <p>
-     * <b>Why supersession is checked BEFORE the exception.</b> The ERROR line for a failure states what the
-     * failure means - that these offsets stay dirty and this cycle re-commits them - and for a superseded
-     * request that claim can be false: a later request has already been sent, so what happens to those offsets
-     * is decided by <em>its</em> answer, not this one. A superseded answer decides nothing either way, success
-     * or failure, so both are reported as supersession rather than as an outcome. The failure half is still
-     * worth a WARN, because a request did fail; it is simply not the ERROR that says a re-commit is in hand.
+     * <b>Why the failure line distinguishes the two cases.</b> The ERROR line states what the failure means - that
+     * these offsets stay dirty and this cycle re-commits them - and that promise is true exactly for the
+     * partitions this request still carries the highest in-flight offset for. When it holds for none of them, a
+     * later request has already been sent and <em>its</em> answer decides every offset on the line, so the failure
+     * is reported at WARN saying so rather than as an ERROR promising a re-commit that is not this answer's to
+     * promise. A request really did fail either way, which is why it is not merely a DEBUG.
      *
-     * @param sequence  which request this answers - {@link #asyncCommitSequence} as it stood when it was sent
-     * @param offsets   the offsets that request carried
+     * @param offsets   the offsets the answered request carried
      * @param exception {@code null} if and only if the broker acknowledged the commit
      */
-    private void onAsyncCommitAnswered(long sequence,
-                                       Map<TopicPartition, OffsetAndMetadata> offsets,
-                                       Exception exception) {
-        long latest = asyncCommitSequence.get();
-        if (sequence != latest) {
-            if (exception == null) {
-                log.debug("Ignoring the acknowledgement of superseded async commit {} (latest is {}) - the newer " +
-                                "request carries higher offsets and has not been answered yet, so the partitions " +
-                                "stay dirty",
-                        sequence, latest);
-            } else {
-                // Summarised for the same reason the ERROR line below is - astubbs#168 (confluentinc#629). WARN,
-                // not ERROR: a request really did fail, but this one cannot claim the re-commit the ERROR line
-                // promises, because the newer request's answer is what decides these offsets.
-                log.warn("Async offset commit {} failed, and it had already been superseded by commit {} - what " +
-                                "happens to these offsets is decided by that newer request, not by this answer. " +
-                                "Offsets: {}, exception: ",
-                        sequence, latest, RecordBatchSummary.summariseCommit(offsets), exception);
-            }
-            return;
-        }
+    private void onAsyncCommitAnswered(Map<TopicPartition, OffsetAndMetadata> offsets, Exception exception) {
         if (exception != null) {
-            // Every partition and offset stays on this line - astubbs#168 (confluentinc#629) asked for
+            // Every partition and offset stays on both of these lines - astubbs#168 (confluentinc#629) asked for
             // exactly them - and only the metadata string is reduced, to its length: it is PC's encoded
             // offset map, up to OffsetMapCodecManager.DefaultMaxMetadataSize of base64 PER PARTITION, and
             // interpolating the map rendered all of it on the one line that most needs to survive log
             // truncation. The map in full is one level down, where it has to be asked for.
-            log.error("Async offset commit deferred, not dropped - these offsets stay dirty and are re-committed " +
-                            "next cycle. Offsets: {}, exception: ",
-                    RecordBatchSummary.summariseCommit(offsets), exception);
+            if (stillCarriesTheHighestOffsetInFlightForAnyPartition(offsets)) {
+                log.error("Async offset commit deferred, not dropped - these offsets stay dirty and are re-committed " +
+                                "next cycle. Offsets: {}, exception: ",
+                        RecordBatchSummary.summariseCommit(offsets), exception);
+            } else {
+                log.warn("Async offset commit failed, and every partition it carried has already been superseded " +
+                                "by a newer request - what happens to these offsets is decided by that newer " +
+                                "request, not by this answer, so they are not re-committed on its account. " +
+                                "Offsets: {}, exception: ",
+                        RecordBatchSummary.summariseCommit(offsets), exception);
+            }
             log.debug("Failed commit in full: {}", offsets);
             return;
         }
-        log.debug("Async commit acknowledged by the broker: {}", RecordBatchSummary.summariseCommit(offsets));
-        onOffsetCommitSuccess(offsets);
+
+        Map<TopicPartition, OffsetAndMetadata> newestWord = new HashMap<>();
+        Map<TopicPartition, OffsetAndMetadata> overtaken = new HashMap<>();
+        offsets.forEach((tp, meta) -> {
+            if (acknowledgeTheHighestOffsetInFlight(tp, meta.offset())) {
+                newestWord.put(tp, meta);
+            } else {
+                overtaken.put(tp, meta);
+            }
+        });
+
+        if (!overtaken.isEmpty()) {
+            log.debug("Async commit acknowledged by the broker for offsets a newer request has already passed - " +
+                            "recording them, but these partitions stay dirty until that request is answered: {}",
+                    RecordBatchSummary.summariseCommit(overtaken));
+            onSupersededOffsetCommitSuccess(overtaken);
+        }
+        if (!newestWord.isEmpty()) {
+            log.debug("Async commit acknowledged by the broker: {}", RecordBatchSummary.summariseCommit(newestWord));
+            onOffsetCommitSuccess(newestWord);
+        }
+    }
+
+    /**
+     * Records what a {@code commitAsync} request about to be sent puts in flight, per partition.
+     * <p>
+     * {@code Math::max} rather than a plain put because the value may only rise while a request is outstanding: the
+     * offsets PC commits do rise, but an out-of-order answer must not be able to lower the bar a later answer is
+     * measured against.
+     */
+    private void recordAsInFlight(Map<TopicPartition, OffsetAndMetadata> offsetsToSend) {
+        offsetsToSend.forEach((tp, meta) -> highestOffsetInFlight.merge(tp, meta.offset(), Math::max));
+    }
+
+    /**
+     * Claims this answer as the one for the highest offset in flight on that partition, clearing the entry when it
+     * is - after which nothing is in flight for that partition until the next send.
+     * <p>
+     * Atomic compare-and-remove rather than a get followed by a remove, because sends and answers can be on
+     * different threads ({@link #highestOffsetInFlight}).
+     *
+     * @return true if this answer carries that partition's highest in-flight offset - i.e. it is the newest word on
+     * it, and the partition may be marked clean
+     */
+    private boolean acknowledgeTheHighestOffsetInFlight(TopicPartition tp, long acknowledged) {
+        return highestOffsetInFlight.remove(tp, acknowledged);
+    }
+
+    /**
+     * The failure counterpart of {@link #acknowledgeTheHighestOffsetInFlight}, which does not clear the entry: a
+     * failed request leaves the offsets dirty, so the next cycle re-sends them and re-establishes the same bar.
+     *
+     * @return true if the deferred-not-dropped promise is true for at least one partition on this line
+     */
+    private boolean stillCarriesTheHighestOffsetInFlightForAnyPartition(Map<TopicPartition, OffsetAndMetadata> offsets) {
+        return offsets.entrySet().stream()
+                .anyMatch(entry -> Long.valueOf(entry.getValue().offset()).equals(highestOffsetInFlight.get(entry.getKey())));
     }
 
     /**

@@ -154,7 +154,7 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
 
     /**
      * The success marking is nobody's business here, so the {@code WorkManager} is a bare mock - what happens past
-     * it is {@link ConsumerOffsetCommitterSupersededAsyncCommitTest}'s subject.
+     * it is {@link ConsumerOffsetCommitterOverlappingAsyncCommitTest}'s subject.
      */
     private static ConsumerOffsetCommitter<String, String> committerFor(ConsumerManager<String, String> consumerMgr) {
         return AsyncCommitterFixture.asyncCommitter(consumerMgr, AsyncCommitterFixture.workManagerMock());

@@ -89,16 +89,29 @@ javadoc argues for at length, arrived at from the other direction: there, deferr
 exception *causes* by aborting before the success marking; here it is what the absence of a success signal
 causes. Both are the same rule - **only an acknowledgement advances the state.**
 
-### The one hazard the fix itself creates, and the guard for it
+### The one hazard the fix itself creates, and the rule for it
 
 Deferring the clean-marking is what makes **two async commits able to be in flight at once**; before, the
-first send marked the partition clean so there was never a second. An acknowledgement of a *superseded*
-request must therefore not mark clean - the newer request carries higher offsets and is still unanswered.
-`ConsumerOffsetCommitter` numbers its sends (`asyncCommitSequence`) and the callback ignores any answer that
-is not the latest. Ignoring it costs at most one extra commit and cannot under-report; accepting it could
-mark clean at an offset the broker has already been asked to move past. This is the monotonic-sequence
-discipline `commitAsync`'s own javadoc recommends, and it is here because "the client normally answers in
-send order" is not a guarantee this class can make.
+first send marked the partition clean so there was never a second. An answer can therefore arrive for a
+request a later one has partly overtaken, and the rule that handles it separates the two things an
+acknowledgement carries:
+
+- **The offsets are always recorded.** The answer is true - the broker committed up to the offsets it
+  names, for every partition it names - so `PartitionState` stores them, monotonically. Ignoring a true
+  acknowledgement, which an earlier draft of this fix did by numbering the sends and dropping any answer
+  that was not the latest, throws away a fact the broker established for partitions nothing had
+  superseded.
+- **The clean mark waits.** A partition is marked clean only by the answer carrying the highest offset
+  `ConsumerOffsetCommitter` has in flight for *that partition* (`highestOffsetInFlight`, a map written on
+  send and cleared by the matching answer). Marking a superseded partition clean is what would leave
+  nothing dirty to re-send if the newer request then failed or was dropped - this defect, re-entered
+  through the door the fix opened.
+
+The decision is per partition because a request is routinely the newest word on one partition and
+superseded on another: the commit carries every dirty partition, and only the ones that completed more
+work move. Leaving a partition dirty costs at most one extra commit and cannot under-report, so where the
+two answers differ the conservative one wins. `PartitionState.lastCommittedOffset` only ever rises, which
+is what makes an out-of-order answer safe to record rather than something the committer must filter.
 
 ## The experiment
 

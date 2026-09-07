@@ -93,6 +93,18 @@ public abstract class AbstractOffsetCommitter<K, V> implements OffsetCommitter {
         wm.onOffsetCommitSuccess(committed);
     }
 
+    /**
+     * Records offsets the broker has acknowledged for partitions where a <b>later commit request carrying a higher
+     * offset is still unanswered</b>: the partition's last committed offset advances, and it stays dirty so that
+     * newer request's answer is what decides it.
+     * <p>
+     * Only reachable from a committer whose {@link #commitOffsetsReturnsOnlyOnceAcknowledged()} is false, because
+     * only that committer can have two requests in flight at once.
+     */
+    protected void onSupersededOffsetCommitSuccess(final Map<TopicPartition, OffsetAndMetadata> committed) {
+        wm.onSupersededOffsetCommitSuccess(committed);
+    }
+
     protected abstract void commitOffsets(final Map<TopicPartition, OffsetAndMetadata> offsetsToSend, final ConsumerGroupMetadata groupMetadata);
 
 }

@@ -261,6 +261,23 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
     }
 
     /**
+     * Records that a commit succeeded for partitions a <b>later, still unanswered</b> commit request has already
+     * passed: the offset is stored as above, and the partition is deliberately left dirty so the newer request's
+     * answer is what decides it.
+     * <p>
+     * Only the asynchronous commit mode can produce this - see {@link PartitionState#onSupersededOffsetCommitSuccess}
+     * and {@code ConsumerOffsetCommitter}'s {@code onAsyncCommitAnswered}, which decides it per partition.
+     *
+     * @param committed the offsets the broker acknowledged, by partition
+     */
+    public void onSupersededOffsetCommitSuccess(Map<TopicPartition, OffsetAndMetadata> committed) {
+        committed.forEach((tp, meta) -> {
+            var partition = getPartitionState(tp);
+            partition.onSupersededOffsetCommitSuccess(meta);
+        });
+    }
+
+    /**
      * Remove work from removed partition.
      * <p>
      *
