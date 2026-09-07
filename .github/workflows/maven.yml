@@ -38,8 +38,27 @@ permissions:
   # the check cannot list them and correctly reports "cannot run" rather than inventing a baseline.
   actions: read
 
+# A PUSH TO MASTER GETS ITS OWN GROUP, KEYED BY SHA, SO NO MASTER RUN IS EVER CANCELLED. The
+# `build` job below is the only thing that uploads coverage for master, and Codecov compares every
+# pull request against the report for its merge-base commit. Keyed on the ref, a second push to master
+# inside the ~30 minutes that job takes cancelled the first one's run - `gh run list --event push
+# --branch master` showed roughly half of them `cancelled`, in bursts of up to five - and a cancelled
+# run uploads nothing, so Codecov held no report for that commit and every PR based on it was
+# compared against OLDER master data. That read as a coverage drop the branch had not made; the
+# files count in the diff block was the tell (docs/ci.md -> "Codecov"). The commit that shipped the
+# coverage-glob fix (astubbs/parallel-consumer#414) was itself cancelled this way.
+#
+# Per-SHA rather than `cancel-in-progress: false`, because a concurrency group does not queue: it
+# keeps one run in progress and at most ONE pending, and discards the rest (docs/ci.md -> "Why a
+# `concurrency` group is not a mutex", measured). A burst of three merges would still lose the
+# middle commit's upload. `repo-hygiene.yml` already keys its push runs on `github.sha` for the same
+# reason. The cost is concurrent GitHub-hosted `build` jobs during a merge burst, which is what they
+# are for; nothing here runs on the self-hosted box.
+#
+# Pull requests keep superseding their own older runs, keyed on the head ref as before. A
+# `workflow_dispatch` on master keys on the ref and no longer shares a group with push runs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -580,37 +599,34 @@ jobs:
 
   # ── Scanners (PR-only) ────────────────────────────────────────────────
 
-  # Five checks that used to be five jobs - `dups: clones`, `dups: similarity`,
-  # `deps: vulnerabilities`, `deps: whole-tree CVE scan` and `Mutation Tests (PIT, PR-scoped)` - now
-  # run as steps of one. The repo is on the free plan's 20-concurrent-job cap, so each was a slot the
-  # sharded suites queued behind (ce-optimize run `ci-fewer-jobs`).
+  # Four checks that used to be four jobs - `dups: clones`, `dups: similarity`,
+  # `deps: vulnerabilities` and `deps: whole-tree CVE scan` - now run as steps of one. The repo is on
+  # the free plan's 20-concurrent-job cap, so each was a slot the sharded suites queued behind
+  # (ce-optimize run `ci-fewer-jobs`).
+  #
+  # `Mutation Tests (PIT, PR-scoped)` WAS FOLDED IN HERE TOO, AND HAD TO COME BACK OUT. It is a
+  # separate job again, below. A job emits ONE check run and that check reports only when the whole
+  # job finishes, so a required check must not carry a lane that is deliberately non-gating and
+  # whose runtime is bimodal: PIT is ~11 seconds when nothing in scope changed and up to ~20 minutes
+  # when it mutates. On job 101622402881 every step of this job was finished 3m29s in and PIT held
+  # the required context for another ~17 minutes. The mutation job's own header owns the reasoning;
+  # what belongs here is the rule the fold broke - batch fast, bounded, GATING work, and nothing else.
   #
   # FAIL AT THE END, REPORT EVERYTHING. Every scanner step carries `!cancelled()`, so a red first
   # scanner never hides the ones after it; the job's own conclusion aggregates the step failures,
-  # so there is no verdict step and no continue-on-error. Cheapest signal first: dependency review
-  # takes seconds, the two duplication engines take about a minute each, then the whole-tree CVE
-  # scan, and the PIT lane dead last because it is the only step whose runtime is unbounded in
-  # practice (11s when it has nothing to mutate, half an hour when it does).
-  #
-  # THE PIT STEPS ARE THE ONE EXCEPTION TO "NO CONTINUE-ON-ERROR" HERE, and it is not a relaxation:
-  # the mutation lane was a `continue-on-error: true` JOB, so neither its self-test nor its run could
-  # ever gate a merge. `scan: repo` IS a required check, so folding those steps in bare would have
-  # promoted an advisory lane to a gating one by accident. `continue-on-error: true` on the two PIT
-  # steps keeps exactly the old semantics - the step still renders red in the log and in the job's
-  # step list, and still cannot fail the check. docs/ci.md, "A green mutation tick usually means
-  # 'measured nothing' - read the exit code", owns why the exit codes matter and why requiring this
-  # signal is a code change rather than a ruleset edit.
+  # so there is no verdict step and no continue-on-error anywhere in this job. Cheapest signal
+  # first: dependency review takes seconds, the two duplication engines take about a minute each,
+  # then the whole-tree CVE scan.
   #
   # One checkout at fetch-depth 0: both duplication tools compare the PR against its base branch
-  # (`compare_with_base`, `max-increase`), which needs the base's history on disk, and
-  # bin/ci-mutation-test.sh diffs against the PR base to scope PIT to the changed classes. Do not
-  # narrow it - the mutation lane falls back to the FULL glob when the base ref will not resolve.
+  # (`compare_with_base`, `max-increase`), which needs the base's history on disk. Do not narrow it.
   #
   # THE OLD JOB NAMES LIVE ON AS STEP NAMES, so the log reads the same way the checks list used to,
   # and every doc that says "`dups: clones` found ..." still names the thing that found it. What did
-  # change is the check: `scan: repo` is the required-check name in the making, and the four names
-  # it replaces are still in the master ruleset. docs/inflight/ci-fewer-jobs-ruleset-edits.md owns
-  # the swap and its ordering.
+  # change is the check: `scan: repo` is the required-check name in the making, and the names it
+  # replaces are still in the master ruleset. docs/inflight/ci-fewer-jobs-ruleset-edits.md owns
+  # the swap and its ordering. `Mutation Tests (PIT, PR-scoped)` is NOT among them - that context
+  # was never required, is produced by its own job again, and needs no ruleset edit either way.
   #
   # THE CVE STEPS RUN PR-AUTHORED BUILD CODE IN A JOB THAT HOLDS `pull-requests: write`, which the
   # standalone job deliberately did not (dependency-audit.yml's `permissions:` comment states why).
@@ -622,14 +638,14 @@ jobs:
   # `!cancelled()` replaces the implicit job-level `success()`, so the `needs: prepare-deps` edge
   # below can no longer SKIP this job when the cache lane fails. That mattered here and nowhere else
   # in this fold: the three no-build scanners were three jobs with no dependency on prepare-deps at
-  # all, and they reported through a failed cache job; batching them behind the CVE and PIT steps'
+  # all, and they reported through a failed cache job; batching them behind the CVE steps'
   # cache edge silently made a transient Maven Central timeout (docs/solutions/build-errors/ - the
   # Azure west-US case prepare-deps exists for) able to wedge every PR on a required context that
   # never resolves. Red is recoverable and visible; pending is neither.
   #
   # NOTHING IS DEGRADED INTO A PASS by running anyway, which is the constraint that decides the
   # shape. The scanners need no Maven at all. The cache restore below is restore-only with a prefix
-  # fallback, so with prepare-deps dead the CVE and PIT steps get an older cache or a cold one -
+  # fallback, so with prepare-deps dead the CVE steps get an older cache or a cold one -
   # slower, not silently weaker - and a Maven step that genuinely cannot resolve still fails its
   # step, which still fails this job. A CANNOT-measure reads as red, never as a tick.
   #
@@ -639,11 +655,13 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     name: "scan: repo"
     runs-on: ubuntu-latest
-    # The scanners held 10, the CVE audit 20 and the mutation lane 30. Sized for the sum of the
-    # first two plus the PIT step's OWN 20-minute cap (below), not for the old 30: the step bound is
-    # what stops a mutating run holding the job, and the job bound is only the backstop. 45 leaves
-    # headroom for a cold Maven cache without letting a hung tool sit for an hour.
-    timeout-minutes: 45
+    # 45 while this job also carried the mutation lane, sized around that step's own 20-minute cap.
+    # PIT is its own job again, so the cap comes back down to what the remaining steps need: they
+    # measured 3m29s end to end on job 101622402881, and the only one that can legitimately run long
+    # is the Maven audit, whose standalone job held 20. 25 is that plus ~5 minutes for the
+    # fetch-depth-0 checkout, the JDK, a cold cache restore and the three no-build scanners - room
+    # for a bad day without letting a hung tool sit for three quarters of an hour.
+    timeout-minutes: 25
     needs: prepare-deps
     # All three no-build tools post PR comments: the two duplication tools through their
     # github-token / github_token inputs, dependency review through comment-summary-in-pr. Same
@@ -797,15 +815,15 @@ jobs:
       # dispatch, which is the half no PR can cover. Read its header before changing anything here;
       # the comments below are only what a reader of THIS job cannot do without.
       #
-      # THE JDK AND THE CACHE ARE SHARED WITH THE PIT STEPS BELOW, so these two are NOT behind the
-      # credentials guard, while every step that actually talks to OSS Index still is. They were
-      # guarded when the CVE block was the only thing here that built; the mutation lane runs on
-      # every PR including forks and Dependabot ones, so guarding the setup would leave PIT with no
-      # Maven cache on exactly the PRs that get no CVE scan. `server-id: ossindex` is inert when the
-      # audit steps skip: setup-java only writes a settings.xml <server> entry, which nothing reads
-      # unless the Maven audit run happens.
+      # BEHIND THE CREDENTIALS GUARD AGAIN, like every other step here that talks to OSS Index. These
+      # two were unguarded only because the mutation lane was folded in below and needed a JDK and a
+      # cache on every PR, forks and Dependabot ones included. That lane is its own job again and
+      # carries its own copies, so the CVE block is once more the only thing here that builds and
+      # the guard goes back where it was - a fork or Dependabot PR now sets up nothing it will not
+      # use. `server-id: ossindex` is inert when the audit steps skip anyway: setup-java only writes
+      # a settings.xml <server> entry, which nothing reads unless the Maven audit run happens.
       - uses: actions/setup-java@v5
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -819,9 +837,9 @@ jobs:
 
       # Restore-only, off prepare-deps' rotating key. These steps must not SAVE a cache: it would
       # compete with the key the build lanes own, and it resolves a different (smaller) set.
-      # Unguarded for the same reason as the JDK above - the PIT steps need it on every PR.
+      # Guarded for the same reason as the JDK above - nothing left in this job builds without it.
       - name: Restore Maven cache
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository
@@ -897,30 +915,89 @@ jobs:
             **/target/ossindex-report.json
           if-no-files-found: warn
 
-      # ── Mutation testing, PIT (was the `Mutation Tests (PIT, PR-scoped)` job) ──────────────
-      #
-      # ci-mutation-test.sh scopes to the classes CHANGED vs the PR base (GITHUB_BASE_REF), so it is
-      # fast enough for the 2-core hosted runner - the full internal.* sweep would time out here
-      # (which is why it used to be self-hosted-only, and why mutation-full-sweep.yml still is).
-      #
-      # ADVISORY ABOUT SCORES, NOT ABOUT ITSELF. The `continue-on-error: true` that used to sit on
-      # the JOB now sits on each of these two steps, which is what keeps the semantics: a mutation
-      # result must not fail the check, while a failed step still renders red where a reader sees it
-      # (measured on the old job, see docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md). So red
-      # was always honest here and green never was: measured 2026-08-25 over the last 40
-      # pull_request runs of this workflow, 40 green ticks and zero mutants scored, because every
-      # path out of the script exited 0. The step below reads bin/ci-mutation-test.sh's exit code
-      # instead and reacts to each state separately - survivors still fail nothing, but a lane that
-      # could not run, or ran and measured nothing, now goes red. The exit-code contract lives in
-      # that script's header; docs/inflight/ci-mutation-testing.md has the measurement.
-      #
-      # LAST, AND ON ITS OWN CLOCK. Every check above has already reported by the time this starts,
-      # and `timeout-minutes: 20` on the run step is what stops a mutating PR (up to ~30 minutes of
-      # PIT) leaving the scanner and CVE results waiting behind it. 20 is above the 19m18s scored run
-      # on record while staying under the job's 45; the old lane's 30-minute JOB cap had about a
-      # third headroom over a normal run and was seen to flap on a slow runner
-      # (docs/inflight/test-untracked-ci-flakes.md). A step-level timeout ends the STEP, so the job
-      # still finishes and reports; a cancelled job reported nothing.
+  # ── Mutation testing, PIT (PR-scoped) ─────────────────────────────────
+
+  # ITS OWN JOB ON PURPOSE - A REQUIRED CHECK MUST NOT WAIT ON A NON-GATING LANE. These two steps
+  # spent astubbs/parallel-consumer#457 as the last steps of `scan: repo`, and that fold was the one
+  # wrong call in it. A GitHub job emits ONE check run, and that check does not report until the
+  # whole job finishes - so folding this lane into a REQUIRED check made a lane whose OUTCOME is
+  # deliberately non-gating gate the merge with its RUNTIME instead. PIT's runtime is BIMODAL: about
+  # 11 seconds when no in-scope class changed (the common case) and up to ~20 minutes when it
+  # actually mutates, with nothing in between - so a harness scoring the fold on MEDIAN step
+  # duration saw a rounding error where the worst case is twenty minutes. Measured on job
+  # 101622402881 (PR astubbs/parallel-consumer#106): every other step of `scan: repo` was finished
+  # 3m29s in, and PIT alone held the required context for the remaining ~17 minutes.
+  #
+  # ci-mutation-test.sh scopes to the classes CHANGED vs the PR base (GITHUB_BASE_REF), so it is
+  # fast enough for the 2-core hosted runner - the full internal.* sweep would time out here
+  # (which is why it used to be self-hosted-only, and why mutation-full-sweep.yml still is).
+  #
+  # ADVISORY ABOUT SCORES, NOT ABOUT ITSELF. `continue-on-error: true` sits on each of the two
+  # STEPS and NOT on the job, and the distinction is the whole point: a JOB-level
+  # `continue-on-error` makes the check-run conclusion `success` even when the step failed, which
+  # is why requiring this context would be vacuous (docs/ci.md owns that reasoning). Step-level
+  # keeps the old semantics exactly - a mutation result cannot fail the check, while a failed step
+  # still renders red in the log and in the step list (measured on the old job, see
+  # docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md). So red was always honest here and
+  # green never was: measured 2026-08-25 over the last 40 pull_request runs of this workflow, 40
+  # green ticks and zero mutants scored, because every path out of the script exited 0. The step
+  # below reads bin/ci-mutation-test.sh's exit code instead and reacts to each state separately -
+  # survivors still fail nothing, but a lane that could not run, or ran and measured nothing, now
+  # goes red. The exit-code contract lives in that script's header;
+  # docs/inflight/ci-mutation-testing.md has the measurement.
+  #
+  # THE 20-MINUTE CAP IS ON THE STEP, NOT THE JOB, and stays there. 20 is above the 19m18s scored
+  # run on record; the old standalone lane's 30-minute JOB cap had about a third headroom over a
+  # normal run and was seen to flap on a slow runner (docs/inflight/test-untracked-ci-flakes.md).
+  # A step-level timeout ends the STEP and lets the job report its verdict; the job-level cap
+  # cancelled the row outright, which reported nothing at all.
+  #
+  # WHY `!cancelled()`, AND WHY IT IS NOT THE GUARD `scan:`/`static:` CARRY. Those two name a
+  # status function because they are REQUIRED contexts and a skipped required check pends forever.
+  # That hazard does not apply here and never will: `Mutation Tests (PIT, PR-scoped)` is not in the
+  # ruleset, so a skipped run is a grey row nobody is waiting on. What does apply is the second
+  # reason written on `scan:` - the implicit `success()` on a `needs:` edge would silently delete
+  # the only mutation signal a PR gets whenever the cache lane has a transient failure, and the
+  # restore below is restore-only with a prefix fallback, so PIT degrades to a colder cache rather
+  # than to a false verdict. Not `always()`: a superseded push should stay cancelled.
+  mutation:
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    name: "Mutation Tests (PIT, PR-scoped)"
+    runs-on: ubuntu-latest
+    # 25 = the run step's own 20-minute cap plus headroom for a fetch-depth-0 checkout, a JDK
+    # download and a cold Maven cache restore. The job bound is only a backstop; the STEP bound is
+    # what actually stops a mutating run overrunning. Nothing but that setup and PIT lives here, so
+    # it needs nowhere near the 45 `scan: repo` was raised to while it carried this lane.
+    timeout-minutes: 25
+    needs: prepare-deps
+    # The standalone lane declared none and inherited the workflow-wide grant. PIT reports to the
+    # log and the job summary and never to a PR comment, so `contents: read` is all it uses -
+    # narrowing, not widening.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # bin/ci-mutation-test.sh diffs against the PR base to scope PIT to the changed classes.
+          # Do not narrow this - the lane falls back to the FULL glob when the base will not resolve.
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # No `cache: maven` - see the caching note at the top of this file.
+
+      # Restore-only, off prepare-deps' rotating key. This step must not SAVE a cache: it would
+      # compete with the key the build lanes own, and it resolves a different (smaller) set.
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
       - name: Self-test the mutation verdict
         # Ahead of the lane it protects, the same ordering repo-hygiene.yml uses.
         # Seconds, no maven: it feeds canned PIT logs through the verdict and asserts the exit codes.
@@ -948,6 +1025,7 @@ jobs:
             *) echo "::error::PIT exited ${rc}."
                exit "$rc" ;;
           esac
+
 
   # TWO STATIC ANALYSERS IN ONE JOB. They ran as `static: infer` and `static: spotbugs`: both waited
   # on prepare-deps and both restored the same Maven cache with an identical step, so batching them
@@ -1237,8 +1315,18 @@ jobs:
       #
       # The two halves are collected in one step rather than two because this is one job; keeping the
       # outputs separate is what preserves the per-flag split.
+      #
+      # NO `if: always()` HERE - ONLY A COMPLETE BUILD MAY BECOME A BASE. Maven stops at the first
+      # failing module and a cancellation stops it wherever it is, and either way the modules that
+      # finished have written their jacoco reports. With `always()` the collector found those and the
+      # upload ran, so Codecov received a report for that master commit that LOOKED complete and held
+      # a fraction of the tree. Measured on master `ce6f39a47`: cancelled in module 3 of 11, and each
+      # flag uploaded exactly one file, core's; the PR based on it then compared 95 files against 84
+      # on a diff with no Java in it, and both per-flag gates went red. A truncated base is worse than
+      # none - with none, Codecov compares against the nearest older master commit that has one, and
+      # that one is whole. The PR lane keeps its `always()`: a red PR's coverage is still the coverage
+      # of that head, and nothing is ever compared AGAINST a PR head.
       - name: Collect jacoco report files for Codecov
-        if: always()
         id: coverage
         run: |
           unit=$(find . -type f -path '*/target/site/jacoco/jacoco.xml' | paste -sd, -)

@@ -15,6 +15,7 @@ import org.mockito.Mockito;
 import pl.tlinkowski.unij.api.UniMaps;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.mockito.Mockito.mock;
@@ -67,7 +68,10 @@ public class PolledTestBatch {
         ConsumerRecords<String, String> consumerRecords = new ConsumerRecords<>(UniMaps.of(tp, polledBatch));
 
         PartitionStateManager<String, String> mock = mock(PartitionStateManager.class);
-        Mockito.when(mock.getEpochOfPartition(tp)).thenReturn(0L);
+        // Stub the accessor EpochAndRecordsMap reads. Mockito's default for an Optional-returning method is
+        // Optional.empty(), which that reader takes as "not yet assigned" and silently skips the whole batch -
+        // every test built on this fixture then sees an empty poll rather than a stubbing failure.
+        Mockito.when(mock.epochOfPartitionIfAssigned(tp)).thenReturn(Optional.of(0L));
         this.polledRecordBatch = new EpochAndRecordsMap<>(consumerRecords, mock);
     }
 
