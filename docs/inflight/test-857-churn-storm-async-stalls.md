@@ -1,7 +1,7 @@
 # `ChaosChurnStormIT` stalls - three sightings no known defect explains
 
 <!-- inflight-type: bug -->
-<!-- inflight-impact: stall -->
+<!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
 
 **Commit mode: `PERIODIC_CONSUMER_ASYNCHRONOUS`** (`ChaosChurnStormIT`, verified in source). This is
@@ -398,24 +398,311 @@ against the new. The lesson this file already records - a wrong verdict on a rig
 finding - held for the second time in four days.
 <!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; named here as the instrument that produced these runs, not as a file in this tree -->
 
+## CLASSIFIED, 2026-09-03: the INSTANCE_STALL line is NOT the timing proxy the NO_PROGRESS line is
+
+The soak's cycle 111 signature - `INSTANCE_STALL/NO_WORK_COMPLETED`, seed `6077035105695` - **replays
+on demand on unmodified master**, and with per-instance telemetry it classifies as a live instance
+holding work and completing nothing. That is a different answer from the one this file reached for
+`NO_PROGRESS`, and the two must not be read together.
+
+**Reproduction rate.** Two replays of the seed on master at `7a8a7f0c4`, both fired
+`INSTANCE_STALL/NO_WORK_COMPLETED` on instance 0. The first is clean; **the second ran while a
+`test-compile` was writing to the same worktree's `target/`, so count it as suggestive rather than
+evidence** - it is recorded because suppressing a disturbed run is how a rate gets quietly inflated,
+not because it stands on its own.
+
+**Why every earlier sighting on this line was unclassifiable, and it was the instrument.** The
+recovery diagnostic that demoted `NO_PROGRESS` logs FLEET consumed/started only. An
+`INSTANCE_STALL` violation accuses ONE member, and a fleet that drains AROUND a wedged member drains
+exactly like a healthy one - so the fleet line cannot classify an instance-level firing at all. This
+is the same shape of gap as the one that kept this line open before the diagnostic was lifted into
+`ChaosScenarioBase`: not a hard problem, a missing capability. `ProgressProbe#instanceProgressSnapshot`
+now emits `<id>(live|down q= out= res=)` per member on every diagnostic poll, which is what produced
+the reading below.
+
+**The reading, and it is a wedge that never recovers.** Instance 0, live throughout, across **198
+consecutive diagnostic samples** - the whole remainder of the run at a 2s poll:
+
+- `res` (work results returned) frozen at `24337`, having reached it from `12624` then `21151`
+- `out` (records out for processing) NOT frozen - climbing throughout, `100` in the final sample
+- `q` (queued in shards) non-zero at times, so it is still being handed work
+- final sample: `0(live q=6 out=100 res=24337)`
+
+**And the fleet finished around it** - `consumed=100593/100000 done=true`, with two violations
+recorded. That combination is the point: a wedged member and a healthy one are indistinguishable at
+fleet scope, which is precisely why every earlier sighting on this line went unclassified, and why
+"the backlog drained" must never again be quoted as though it settled an instance-level firing.
+
+**An instance that keeps ACCEPTING work while returning none is not a bookkeeping artefact.** That
+distinction is the whole value of the second counter: a phantom `numberRecordsOutForProcessing`
+(the drift recorded in `bug-number-records-out-for-processing-is-a-plain-int.md`) would sit still,
+because a phantom is not replenished. This one climbs, so the control loop is alive and taking work
+while nothing comes back from the workers.
+
+<!-- post-merge: checked-begin -->
+**The instrument has one blind spot, found by REVIEWING it rather than by running it.** A restart of
+the accused instance forges recovery in these tokens: `res` deliberately spans incarnations and is
+never reset, and `out` is read from whichever `WorkManager` is current, so a member the conductor
+kills and brings back shows `res` climbing on from its frozen value and `out` filling from a fresh
+one - the exact shape read above as recovery, and `RESTART` carries weight 3 in this scenario. It
+does not touch the reading above, which is instance 0 **live throughout** with no restart drawn
+against it, and the detector itself is immune because it re-arms on the incarnation marker. It does
+mean that until the token carries the incarnation, any FUTURE seed classified from these lines must
+have them paired with the conductor's action log for that instance id. Adding the incarnation to the
+token is the fix; astubbs/parallel-consumer#435 recorded the blind spot rather than closing it, and
+`ProgressProbe#instanceProgressSnapshot` states the same limitation from the code's side.
+<!-- post-merge: checked-end -->
+
+
+**Ruled out, each cheaply and each worth not re-deriving:**
+
+- **Phantom in-flight counter** - `out` climbs and oscillates, so it is being both incremented and
+  decremented. A stuck counter cannot do that.
+- **The key-order recorder blocking every worker** - `ChaosChurnStormIT` does not override
+  `orderRecorder()`, so it is null in this scenario and no worker touches it.
+- **A `ConcurrentModificationException` escaping the control loop** - the only occurrence in the run
+  log is a NullAway *compiler warning* naming the class, not a thrown exception. Grepping the
+  exception name across a build log finds the compiler talking about it; this file has now made that
+  class of mistake often enough to be worth naming again.
+- **Heavy-tail clustering alone** - `isHeavyKey` makes every 4000th record heavy, so there are ~25
+  heavy records in a 100,000-record run. Ten workers cannot all be inside one 45s dwell at the same
+  time from that supply. A REDELIVERY CHAIN of heavy records remains open and is not ruled out.
+
+**What is still open, and it is the next experiment.** Why the workers return nothing. The control
+loop is demonstrably alive, so this is not the control-thread wedge the detector's javadoc describes
+as its prey. `bug-worker-future-swallows-framework-exceptions.md` predicts exactly this shape - a
+framework exception inside `runUserFunction` goes into a `Future` nothing reads, the result never
+reaches the mailbox, and the record silently leaves the pipeline - but nothing has yet shown that
+firing here. A thread dump of instance 0 during the freeze is the cheapest next instrument, and the
+seed makes one obtainable on demand.
+
+## Two claims about the detector that were wider than the code, corrected the same day
+
+Neither is the cause of the above; both were found while reading the detector to interpret it, and
+both would mislead the next reader.
+
+- **"Any returned work result re-arms it" is not what the code does - only a SUCCESSFUL result
+  does.** The harness re-arms through `WorkManager#addSuccessfulWorkListener`, which only
+  `onSuccessResult` fires. `onFailureResult` and the revoked-partition drop branch of
+  `handleFutureResult` both return a work result and decrement the in-flight count while notifying
+  nothing. So an instance whose work is all FAILING is, to this detector, indistinguishable from a
+  wedged one. Not shown reachable in these scenarios - their user functions swallow interrupts and
+  do not throw - so it is an assumption to keep honest, not a defect. A scenario that adds a throwing
+  user function invalidates it. The claim was stated in `ProgressProbe#INSTANCE_STALL_BOUND` and
+  repeated in `docs/testing.md`; both now say what the code does. The principle as stated in
+  `docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`
+  is correct and is deliberately left alone - it is the implementation that falls short of it.
+- **The bound's headroom arithmetic assumes a storm that ENDS.** It budgets an eager storm at 60s
+  plus a 30s eviction horizon, 90s against a 150s bound. W1 leaves `useCooperativeAssignor` false and
+  drives a membership change every 500-1500ms for the entire run, so its eager revocations are
+  continuous rather than a bounded episode and that headroom is not established for this scenario.
+  This is the transfer question
+  [`test-no-progress-window-may-not-transfer-to-w1.md`](test-no-progress-window-may-not-transfer-to-w1.md)
+  raises for the fleet-level window, one detector along. Settle it the way `REBALANCE_DWELL_BOUND`
+  was settled, against the healthy peak - `getPeakInstanceStallMs()` already reports it on every run.
+  **Note what the reading above does to the priority**: an instance that accepts work while returning
+  none is not the merely-slow case a loose bound would excuse, so a re-calibration must not be
+  allowed to quietly absorb it.
+
+## Sighting, 2026-09-03 - recorded late, and its seed recovered from a CANCELLED run
+
+`node bin/inflight.mjs codecov test ChaosChurnStormIT` records a **failure at `f75f4ee`**
+(`feat/225-pc-built-producer`, 2026-09-03 05:20, 324.7s), which no ledger held. The failure text is
+the outer wait rather than a gating detector - *"Condition with alias 'all messages consumed under
+churn' didn't complete within 5 minutes"* - which is cycle 16's shape, not the `INSTANCE_STALL` one
+above.
+
+**Replay seed `166202700392495171`** (`CHAOS W1 churn storm: seed=166202700392495171`).
+
+Two things about how it was retrieved are worth more than the sighting itself:
+
+- **`gh run list` finds nothing, because the CI run was CANCELLED, not failed.** A later push
+  cancelled it by concurrency group while the chaos job was mid-flight; codecov had already taken the
+  test's outcome. So a test failure can be recorded with **no failed run to find**, and any search
+  that filters on `conclusion=failure` misses it entirely. The run id is `33717741761` and the log
+  came from `gh api repos/.../actions/runs/<id>/logs`, which still serves a cancelled run's archive.
+- **Because the job was cancelled, treat this one as WEAK evidence.** A runner being torn down can
+  starve a fleet past a 5-minute cap, so the timeout is not attributable. It is recorded for the seed,
+  not for the verdict.
+
+This is the rule about recording a sighting before the PR that saw it merges, missed: astubbs#426 had
+already merged by the time anyone looked. The seed survived only because the archive outlives the
+run listing.
+
+## Sighting, 2026-09-04 - on a pom-only PR, and the second signature in one CI run
+
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` errored after 331s on the `Chaos Pain
+Suite 4/4` shard of astubbs/parallel-consumer#445, a dependency change touching nothing but pom files
+and one shell self-test - so that branch cannot be the cause, which is the same control this file's
+earlier entries rely on.
+
+**Replay seed `5650361238717170909`** (`CHAOS W1 churn storm: seed=5650361238717170909`).
+
+Recorded rather than diagnosed. What makes it worth keeping is that it is a fresh reproducer for the
+line this file classifies above as a real non-recovering wedge, and it arrived on an unrelated branch
+within hours of that classification. Replaying it with `-Dchaos.diagnoseStallRecovery=true` and the
+per-instance telemetry `ProgressProbe#instanceProgressSnapshot` emits is the cheap next step: if its
+stalled instance also holds work while its completion count stays frozen, that is a second seed for
+the wedge rather than a second timing proxy.
+
+**The same run also failed `RegistrationRaceStaleResidentIT`**, which is already carried in
+`test-untracked-ci-flakes.md`. `bin/inflight.mjs codecov test` places that failure alongside one on
+an unrelated branch nine minutes later and passes on three other branches in the same window, so it
+is master-state rather than either branch's doing. Noted here only because the two arriving together
+is what a reader of this run's checks will see.
+
+## DIAGNOSED, 2026-09-07: the instance-stall line is worker saturation by stale heavy dwells under eager rebalance churn - the control loop is healthy
+
+The thread dump the `## CLASSIFIED, 2026-09-03` section asked for has been taken, and it overturns
+that section's reading. The samples there were right; the sentence "a wedge that never recovers"
+was not. Nothing in PC is stuck. The accused member's ten workers are all inside the scenario's own
+45-second heavy dwell, most of them on records whose partition was revoked while they slept, and
+ordinary records queue in the executor behind them until they too go stale.
+
+**How the seed behaves on master `9999144b5`.** Seed `6077035105695` replayed three times under
+`-Dchaos.diagnoseStallRecovery=true`, on a 32-core box at load ~2 with nothing else running: green
+every time, ~105s each, `maxInstanceStall` 52.9s, 53.0s and 53.0s - the schedule is deterministic
+to the second. **The seed reproduces the frozen shape every time. It does not reproduce the
+firing**, because the run finishes about 46s into the freeze and the bound is 150s. The 2026-09-03
+replays fired only because their tail outlasted the bound; that run's own record says `done=true`,
+so it finished too. The only core change between the two trees is a `volatile` on
+`lastCommitTime` and a confinement assertion on the retry-queue iterator (astubbs#433), neither
+of which can shorten a tail.
+
+**The frozen window IS the tail.** In every replay the fleet's consumed count has already passed
+100,000 when instance 0's `res` freezes; the wait that remains is for the last few keys. In that
+window *every* member's `res` is frozen - there is nothing left to complete. Instance 0 is singled
+out by the detector only because it is the one member the conductor never stops (one `Starting
+instance 0`, no stop, in the whole timeline), so its stretch is the longest.
+
+**What the dump shows**, taken 20s into the freeze on instances 0, 10 and 12 by the new
+`-Dchaos.instanceStallDumpAfterSeconds=20` (a 150s default keeps a gating run's dump at the firing
+and nowhere else - the two thresholds are then EQUAL, so the firing sample trips both branches and
+the sampler takes one dump for it, not two, which
+`InstanceStallProbeIT.takesOneThreadDumpPerFiringInTheDefaultConfiguration` counts):
+
+- all ten `pc-pool-*-PC-<id>` workers `TIMED_WAITING` in `ChaosScenarioBase.newInstance`'s heavy
+  branch - the `Thread.sleep(Math.min(left, 1_000))` loop - on every one of the three instances;
+- `pc-control-PC-<id>` parked in `processWorkCompleteMailBox`, waiting for results that are not
+  coming; `pc-broker-poll-PC-<id>` in `Selector.select`. The control loop is idle and healthy.
+- instance 0's engine counters at the same instant: `incompleteOffsets=2 recordsInShards=2
+  parkedForRetry=0`, against `out=17` climbing to `22` two samples later. **At least fifteen of the
+  records it had out belonged to partitions it no longer owned.**
+
+**The mechanism, and it is arithmetic rather than chance.** The scenario uses the eager assignor
+(it never sets `useCooperativeAssignor`), so every rebalance revokes a member's whole assignment:
+instance 0 logged 28 `Partitions revoked` lines in the 50s window, one every ~2s. Each revoke bumps
+the epoch under every dwell in flight, so a heavy record's result is dropped as stale when its
+sleep ends and the record is redelivered to the partition's next owner - which starts a fresh 45s
+dwell while the old one keeps sleeping (the dwell is deliberately non-interruptible). A 45s dwell
+against a ~2-3s rebalance period spawns fifteen to twenty concurrent copies per heavy record; 25
+heavy records against 160 worker slots fleet-wide saturates them. Ordinary records are then
+dispatched into an executor queue behind sleeping workers (`out` reaching 30 on a 10-worker
+instance is that queue), and by the time a worker frees they are stale too: `out` drops 30 to 15
+in one sample with `res` unmoved, which is the skip path, not the success path. Progress happens
+only in rebalance lulls - the one 6s gap between revokes in the replay-2 tail is where 26 of its
+last 30 consumptions landed.
+
+**Ruled in and out, against the list the CLASSIFIED section left:**
+
+- `bug-worker-future-swallows-framework-exceptions.md` - **refuted here.** A swallowed framework
+  exception leaves a worker idle in the pool's `take()`; every worker in the dump is running user
+  code.
+- "a REDELIVERY CHAIN of heavy records" - **confirmed**, and it is the whole explanation. The
+  supply arithmetic that ruled out clustering (25 heavy records cannot occupy 160 workers) omitted
+  the multiplier.
+- the control-thread wedge, the phantom counter, the order recorder - stayed ruled out.
+
+**What this makes the detector.** `INSTANCE_STALL/NO_WORK_COMPLETED` names its prey as "this
+instance's control loop is holding work and finishing nothing". Here the control loop is finishing
+everything it is given; the workers are busy in user code. On this scenario the detector is
+therefore a timing proxy for the length of the tail - the same verdict this file reached for
+`NO_PROGRESS` - and it fires when churn keeps the heavy records stale for longer than 150s. Every
+CI firing on record fits: instance 42, 14 and 0 were live members with work out late in a run.
+
+**What is still open, 2026-09-07.**
+
+- **The detector cannot tell workers-busy from workers-idle, and that is the gap to close.** A
+  member holding work with every worker running user code is saturated, not stalled; one holding
+  work with a free worker is PC's problem. The pool's active count, or the `-PC-<id>` worker
+  threads' states, is the discriminator - the dump reads it by hand today. Until it does, an
+  `INSTANCE_STALL` red on this scenario is not evidence of a PC defect.
+- **Whether the amplification is a product concern.** At-least-once plus eager rebalances plus
+  records longer than the rebalance period multiplies load by design; PC already skips stale work at
+  dispatch. The cooperative-sticky assignor is the standard answer, and the control arm below
+  measures how much of the tail it removes on this seed.
+
+**Control arm, same seed, one term changed: the cooperative-sticky assignor.** A scratch edit
+setting `useCooperativeAssignor(true)` on the scenario's instance config, run once, then reverted -
+it is not a change this file proposes to the scenario, whose eager churn is deliberate. Under it a
+rebalance revokes only the partitions that move, so the prediction was fewer stale dwells, a smaller
+`out`, fewer duplicates, and a tail no longer than one honest heavy dwell. All four held:
+
+| | eager (replay 6) | cooperative (replay 7) |
+|---|---|---|
+| `Partitions revoked` on instance 0 in the tail | 28 | 3 |
+| workers in the heavy dwell at the 20s dump, instances 0 / 10 / 12 | 10 / 10 / 10 | 8 / 1 / 4 |
+| instance 0 `out` at the dump | 17, climbing to 22 | 8, climbing to 9 |
+| `maxInstanceStall` | 53.0s | 40.1s |
+| duplicates in the ledger | 286 | 210 |
+
+The 40s that remains is the last heavy records finishing their one legitimate 45s sleep, which is
+the tail the scenario builds on purpose. The 13s extra above it in the eager arm, and the
+three-to-ten-fold worker occupancy, is the amplification. Whole-assignment revokes are the term
+that produces it.
+
+**Same-defect sweep, 2026-09-07: the two other recorded seeds show the same shape.** Both replayed
+once on the same tree with the 20s early dump, both green, and every dumped member across the two
+runs was a working member, not a stalled one:
+
+| Seed | Where it came from | Run | Peak instance stall | Dumps | Workers in the dwell at each dump |
+|---|---|---|---|---|---|
+| `1630088991107806597` | the CI-hunted seed that went red twice in three CI runs | 89s | 66s | 5 members | 10/10 on four of them; 8/10 on instance 5, with 2 parked between tasks and one incomplete offset |
+| `5650361238717170909` | the 2026-09-04 sighting on a pom-only PR | 341s | 84s | 11 dumps, 6 of them instance 0 | 10/10 on every one |
+
+The long run is the more instructive. Instance 0 was dumped six times over three minutes, each a
+separate frozen stretch, holding `incompleteOffsets` of 759, 550, 555, 431 and 230 on successive
+dumps with `recordsInShards` to match - hundreds of records queued in its shards behind ten workers
+asleep in the dwell, draining a little between stretches. That is what a member looks like when it
+keeps being handed whole partitions' backlogs under churn: the same mechanism, with a longer tail
+because there was more to re-ingest. The Class 2 lag bound also tripped once in that run (154s
+against 150s), which is the same tail seen from the offset side. Neither run fired the gating
+detector, and neither would have told anyone anything without the dump.
+
+Instance 5 on the first seed is the case that matters for the detector: a member holding work, count
+frozen, with two workers parked between tasks - spare hands and nothing to hand them, because the
+records it holds are on the eight busy ones. A rule that accuses on "a free worker beside held work"
+accuses it; the rule that lands with the stacked follow-up accuses only nobody-in-user-code.
+
+## Sighting, 2026-09-05 - the `ZOMBIE_MEMBER` arm, on a branch the mode gate rules out by construction
+
 <!-- post-merge: checked-begin - a dated sighting, written in the past tense against a PR number and a
      job link rather than a branch name, so it stays resolvable after the branch is deleted -->
-**Seventh sighting, 2026-09-05 - and two more the same hour on unrelated branches, which is the point.**
-`churnStormMeetsSlosAndBalancesLedger` killed fail-fast (`probe violation during run`) on
-astubbs/parallel-consumer#434 at head `4409adc02`,
+`churnStormMeetsSlosAndBalancesLedger` killed fail-fast (`probe violation during run`) on the
+`Chaos Pain Suite 4/4` shard of astubbs/parallel-consumer#434 at head `4409adc02`,
 [job 101227221022](https://github.com/astubbs/parallel-consumer/actions/runs/33937004185/job/101227221022),
-seed `5684946990969099277`, after 142s. Replay:
-`./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=5684946990969099277`.
+after 142s. The gating violation was *`ZOMBIE_MEMBER/REBALANCE_BLOCKED`: group `group-1-574651464` dwelling
+in `PreparingRebalance` for 15s (bound 15s) - a member is not answering the rebalance* - the
+protocol-unresponsive arm, the same one the fourth sighting above and the 2026-09-03 entry in
+`bug-857-family.md` carry. **Not `INSTANCE_STALL`**, so it is not a new seed for the wedge classified above,
+and not `NO_PROGRESS`. After the kill the autopsy listed 23 partitions of one member, `w1`, committed-stagnant
+for 129-135s with lag 56-1132; a member that stopped answering the rebalance and kept its partitions would
+look like that, but the per-instance snapshot was not read out of this log, so which member it was and
+whether its completion count froze is unrecorded.
 
-The autopsy crossed **no** calibrated bound: peaks `rebalanceDwell=5715ms lagStagnation=132294ms`, with 23
-partitions of `w1` frozen at 129-135s stagnant and lag 56-1132 - the whole fleet member, not a key. That is the
-stall/stagnation shape the runner-load confound above predicts. The recorded history makes the confound the
-leading explanation rather than a guess: the same probe violation fired on `feats/inflight-rank-cli` at 01:43 and
-`docs/v6-announcement` at 01:40, neither of which touches the engine, and passed on six other heads in the same
-two hours.
+**Replay seed `5684946990969099277`** (`CHAOS W1 churn storm: seed=5684946990969099277`):
 
-The branch's own change is ruled out by the mode gate, not by argument: it adds a send-callback detection site
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=5684946990969099277
+
+The branch's change is ruled out by the mode gate, not by argument: it adds a send-callback detection site
 behind `ProducerRecovery#canRecover()`, which requires the transactional commit mode, and this scenario is
 `PERIODIC_CONSUMER_ASYNCHRONOUS` - the first fact in this file. The job log carries none of the lines that path
-would emit (`Recorded producer invalidation`, `Producer recovery`).
+emits (`Recorded producer invalidation`, `Producer recovery`). The recorded history also shows the same
+failure text on `feats/inflight-rank-cli` and `docs/v6-announcement` within the same hour, neither touching
+the engine; which detector fired on those two was not checked.
+
+A first version of this entry, written before astubbs/parallel-consumer#435's classification reached this
+branch, read the frozen partitions as the runner-load stagnation shape. That was an inference from the
+autopsy peaks, not from the detector, and it is withdrawn here: the detector was the zombie-member arm.
 <!-- post-merge: checked-end -->

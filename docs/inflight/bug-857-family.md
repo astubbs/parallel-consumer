@@ -82,18 +82,26 @@ assignor arms, the captured seeds opened the window ZERO times. The chaos suite 
 luck; only a purpose-built probe finds it by construction. Two write-ups were retracted the same day
 for reading a green replay as evidence when the mechanism had never executed.
 
-**THE ASYNC LINE NOW HAS A REPLAYABLE SEED - the first this family has ever had.**
-`9086872209853284830` on `ChaosChurnStormIT` reproduces `NO_PROGRESS` in most runs on unmodified
-master, in minutes, on a laptop. Found by RANDOM-SEED HUNTING in CI, not by replaying anything.
-astubbs#344 was the obvious candidate - same commit mode, right symptom shape - and is **refuted**:
-both arms either side of it fail. Details in
-[`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md).
+**THE ASYNC LINE IS TWO LINES, AND NEITHER IS THE OPEN `NO_PROGRESS` QUESTION THIS PARAGRAPH USED
+TO POSE.** [`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md) **owns
+both** - its dated sections are the record, with the seeds, the sample sizes and the rulings-out.
+This file keeps only the shape, so that a reader arriving here is not told the opposite of what is
+established:
 
-**A DETECTOR SILENCE PROBLEM, and it bears on everything below.** Across the astubbs#344 arms, **a
-third of the failures went red with `NO_PROGRESS` not firing at all**. Since the 2026-08-25 demotion
-moved the Class 2 bound to non-gating, the liveness claim rests on `INSTANCE_STALL` and this
-detector. **A detector whose silence cannot be trusted is worse than one that is absent**, because
-the suite goes green on its say-so. Settle it before reading any quiet run from it as evidence.
+- The fleet-scoped `NO_PROGRESS` firings are a **timing proxy** - the backlog drains every time the
+  detector fires. Its `## ANSWERED, 2026-08-28` and `## CONFIRMED, 2026-08-28` sections.
+- The per-instance `INSTANCE_STALL/NO_WORK_COMPLETED` firings are **a different line from the
+  fleet-scoped one and must not be read with it**: one member stays live, keeps taking work, and
+  returns nothing while the fleet finishes around it. What that member's workers are doing is the
+  churn note's question, not this file's - read from its `## CLASSIFIED, 2026-09-03` section
+  forward, and take the latest dated section as the current reading.
+
+**THE DETECTOR SILENCE PROBLEM IS WITHDRAWN.** This paragraph once reported a third of the
+astubbs#344 arms going red with `NO_PROGRESS` silent, and told readers to settle that before trusting
+any quiet run. The observation was a grep counting one detector's name, so a failure caught by a
+different detector read as caught by none. The churn note's
+`## The detector "silence" is EXPLAINED, 2026-08-28` section owns the retraction. Anything below
+that leans on the silence claim predates it.
 
 **THE SYMPTOM IS A BUCKET, and this file only ever covered part of it.** Read from upstream's own
 comments rather than the mirror's summary: at least four distinguishable behaviours are reported,
@@ -2448,6 +2456,36 @@ hour is recorded as a rate, not a cause: the scenario's path does not include an
 changes. Not run: the same seed on astubbs#410's tree, which a clean replay on this tree makes
 uninformative.
 <!-- post-merge: checked-end -->
+
+## 2026-09-03, the `ZOMBIE_MEMBER` arm on a PR whose diff holds no Java at all - a control arm the branch supplies for free
+
+**Same class, the protocol-unresponsive arm.** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`,
+killed by a gating probe violation: *`ZOMBIE_MEMBER/REBALANCE_BLOCKED`: group `group-1-1393237041`
+dwelling in `PreparingRebalance` for 15s (bound 15s) - a member is not answering the rebalance
+(protocol-unresponsive)*. The run settled with `consumed=100618` against the correctness ledger and no
+other violation; peaks `rebalanceDwell=15482ms drainDuration=11394ms lagStagnation=27609ms
+instanceStall=28712ms`, so neither the Class 2 bound nor the `INSTANCE_STALL` detector was anywhere
+near firing. The test took 158s; the class 180s. `Chaos Pain Suite 4/4` on a GitHub-hosted runner, one
+fork, its own VM - the gate's own configuration.
+
+**What makes this sighting worth a line: the branch it fired on changes no Java and no pom.**
+astubbs/parallel-consumer#419 is the docs context query - Node tooling under `bin/`, two hooks, and <!-- post-merge: checked -->
+documents. `git diff --name-only origin/master...HEAD` filtered to `*.java` and `pom.xml` is empty.
+The Java under test is therefore master's at merge base `558fcfbc9`, byte for byte, which is the
+control arm the earlier entries had to dispatch by hand: this is a master-state firing of the
+`ZOMBIE_MEMBER` arm, observed on a PR lane without any change in the product or the harness to
+suspect. It attaches to the unattributed `ZOMBIE_MEMBER` list above - the twentieth sighting's
+question, whether the co-occurrence with any branch is coincidence, gets one more "coincidence" datum.
+<!-- post-merge: checked-begin - a dated sighting against a run id and a job id, both durable -->
+[run 33711378531](https://github.com/astubbs/parallel-consumer/actions/runs/33711378531), job
+100511491045, artifact `chaos-suite-reports-2701-shard4`, head `6e1a19b12`.
+<!-- post-merge: checked-end -->
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=2935533165547308183
+
+Not replayed: the eighth sighting's seed replayed clean and the 2026-09-02 seeds did too, so a single
+replay would settle nothing either way. Recorded so the rate is counted, per the section above.
 
 ## Delete when
 
