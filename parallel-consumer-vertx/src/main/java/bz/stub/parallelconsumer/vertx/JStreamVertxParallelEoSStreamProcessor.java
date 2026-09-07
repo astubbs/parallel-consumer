@@ -47,7 +47,10 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
     /**
      * Provide your own instances of the Vertx engine and it's webclient.
      * <p>
-     * Use this to share a Vertx runtime with different systems for efficiency.
+     * Use this to share a Vertx runtime with different systems for efficiency. An instance you supply stays yours
+     * to close - this processor leaves it running when it closes; pass {@code null} for either and this processor
+     * builds, owns and closes that one itself. The full contract is on
+     * {@link VertxParallelEoSStreamProcessor#VertxParallelEoSStreamProcessor(Vertx, WebClient, ParallelConsumerOptions)}.
      */
     public JStreamVertxParallelEoSStreamProcessor(Vertx vertx,
                                                   WebClient webClient,
@@ -60,7 +63,8 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
     }
 
     /**
-     * Simple constructor. Internal Vertx objects will be created.
+     * Simple constructor. This processor builds its own Vertx engine and web client, owns both, and closes both when
+     * it closes.
      */
     public JStreamVertxParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> options) {
         this(null, null, options);
