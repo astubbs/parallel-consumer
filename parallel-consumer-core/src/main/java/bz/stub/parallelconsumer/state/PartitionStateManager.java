@@ -228,20 +228,25 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
      *                                 was posted
      */
     public void fenceForRevocation(Map<TopicPartition, Long> partitionEpochsAtRequest) {
-        partitionEpochsAtRequest.forEach((partition, epochAtRequest) -> {
+        // A loop, not a forEach lambda: Infer keys its findings on Class.method, and a lambda added here renumbers
+        // the synthetic lambda$... names of every method after it - which renamed a known finding in
+        // onOffsetCommitSuccess and read as a new one to the ratchet.
+        for (Map.Entry<TopicPartition, Long> entry : partitionEpochsAtRequest.entrySet()) {
+            TopicPartition partition = entry.getKey();
+            Long epochAtRequest = entry.getValue();
             var state = getPartitionState(partition);
             if (state == null || state.isRemoved()) {
                 log.debug("No state to fence for {} - never assigned, its assignment failed, or already truncated", partition);
-                return;
+                continue;
             }
             Long liveEpoch = getEpochOfPartition(partition);
             if (!Objects.equals(liveEpoch, epochAtRequest)) {
                 log.info("Not fencing {}: it was revoked at epoch {} but is now assigned at epoch {}, so the fence " +
                         "belongs to a generation that has already been truncated", partition, epochAtRequest, liveEpoch);
-                return;
+                continue;
             }
             state.fenceForRevocation();
-        });
+        }
     }
 
     void onPartitionsRemoved(final Collection<TopicPartition> partitions) {
