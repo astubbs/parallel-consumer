@@ -66,9 +66,20 @@ public class ProducerWrapper<K, V> implements Producer<K, V> {
     @Delegate(excludes = Excludes.class)
     private final Producer<K, V> producer;
 
+    /**
+     * Wraps the caller's finished producer, {@link ParallelConsumerOptions#getProducer()}.
+     */
     public ProducerWrapper(ParallelConsumerOptions<K, V> options) {
+        this(options, options.getProducer());
+    }
+
+    /**
+     * Wraps a producer PC built itself, from {@link ParallelConsumerOptions#getProducerConfig()}. Whether it is
+     * transactional is discovered the same way as for the caller's instance, so from here on the two paths are alike.
+     */
+    public ProducerWrapper(ParallelConsumerOptions<K, V> options, Producer<K, V> producer) {
         this.options = options;
-        producer = options.getProducer();
+        this.producer = producer;
         this.producerIsConfiguredForTransactions = discoverIfProducerIsConfiguredForTransactions();
     }
 

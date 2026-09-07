@@ -25,10 +25,11 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 <!-- post-merge: checked - the row states the fix and the lift as things that happened -->
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#265**, which deleted the wall-clock assertion rather than repairing it. astubbs#262, its owner, lifted the quarantine and deleted the registry entry - see below |
 | `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and `.testFlatMapProduce` | 1 seen (2026-09-01) | Not from the original scan - found in a **local** core unit run on a parallel re-cut of astubbs#207, not on astubbs#207 itself. Both failed together on produced-record count (`Expected size: 1/2 but was: 0`), i.e. the returned stream carried nothing. **Mechanism now known and owned by astubbs#116** - see below | <!-- post-merge: checked -->
-| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 5 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01, 2026-09-02) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third, fourth and fifth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
+| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 6 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01, 2026-09-02, 2026-09-05) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third, fourth and fifth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 | `Mutation Tests (PIT, PR-scoped)` lane | 1 seen (2026-09-02, astubbs#207, [run 33610711974](https://github.com/astubbs/parallel-consumer/actions/runs/33610711974)) | Not a test - the LANE hit its `timeout-minutes: 30` cap and was cancelled, on a **markdown-only** delta from a head where it had scored in 19m18s with the same class set. The cap has about a third headroom over a normal run, so it will flap on a slow runner. `continue-on-error: true`, so it never gates a merge - but a cancelled row reads like a failure <!-- post-merge: checked --> |
 | `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 1 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225)) | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
-| `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 1 seen (2026-09-01) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
+| `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 13 seen (2026-09-01; 2026-09-03 seven times - once on a producer branch, twice on astubbs#419, twice in a row on astubbs#429, whose same head then passed on a deliberate re-run, once on a `ce-optimize` measurement branch, and once on astubbs#438, and once on astubbs#433; on astubbs#442 four times - 2026-09-05 at 7075b26f, at 2ee84193 three heads later, and at 4fc15b8b, a head that differs from the green 69ecd0d1 before it by one markdown file, so the same-code control arm is the run immediately preceding it; and 2026-09-06 at eb1e88a1, again a documentation-only head - the identical `mid-loop pause point (offset 25)` guard every time, in the catch-all shard of a two-shard run, so still roughly one in two on that lane) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below **It also has a same-day cross-branch control**: `bin/inflight.mjs codecov test freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` shows it failing on two unrelated branches within an hour with the identical `mid-loop pause point (offset 25)` signature, while passing on both of those same branches at neighbouring commits - so it is master-state and test-side, not any one branch's regression, answered from recorded history rather than by re-running builds. **And a WITHIN-branch control, which establishes something none of the others can**: astubbs#433 ran the same content twice, passing at `01fb0c4` and failing at `53ef4d6` after a re-cut that changed only the commit split and merged one unrelated reactor-test commit - so one tree produced both outcomes. The controls above rule out branch content; this one rules out the tree entirely, leaving only the runner. **astubbs#438 is the strongest of these controls and needs no neighbouring commit at all**: the documentation-only heads above still sit on branches whose earlier commits changed Java, so the tree that was built carries those changes - whereas astubbs#438's whole branch diff is `bin/` and `docs/`, compiling no Java and changing no test, so the tree built there IS master's. A branch that cannot have caused an integration failure produced one. Confirm with `gh pr diff 438 -R astubbs/parallel-consumer --name-only | grep -vE '^(bin/|docs/)'`, which prints nothing - asked of the pull request rather than of `origin/feats/inflight-rank-cli`, because that branch is deleted on merge and the check has to outlive it. <!-- post-merge: checked --> |
+| `AmbientProbeExtensionTest.headroomIsReportedOnAPassingTestToo` and `.headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod` | 2/2 isolated runs, 1 seen in a full core run (2026-09-02, local, astubbs#116) | **DIAGNOSED, and not a product defect** - two methods of one class each capture the *same process-global* logger with `LogCapture.of(AmbientProbeExtension.class)` while the suite runs them concurrently, so each sees the other's headroom line and the `hasSize(1)` assertion gets 2. Reproduces on demand - see below | <!-- post-merge: checked -->
 | `ParallelEoSStreamProcessorTest.processInKeyOrder` | 8 seen locally (2026-09-01) across three branches, 1 in 3 isolated runs; the input-data failure separately **1 of 8 on unmodified `master`** | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing. The second failure now has a control arm on master and a source-level lead, so classify from those rather than re-measuring |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
@@ -171,7 +172,74 @@ Whoever merges astubbs#116 owns retiring this entry, per the four outcomes in th
 rather than being deleted.
 <!-- post-merge: checked-end -->
 
+### `AmbientProbeExtensionTest` - two tests, one global logger, run concurrently
+
+<!-- post-merge: checked-begin -->
+Found while babysitting astubbs#116, whose merge had touched `AmbientProbeExtension` itself - so the
+first question was whether that merge broke it. It did not, and the control arm is what settles it
+rather than argument. That PR is cited as where the sighting came from, which stays true once it
+lands; the flake is not its to own.
+<!-- post-merge: checked-end -->
+
+**Reproduce it, which is the unusual part - this one does not need luck:**
+
+    ./mvnw -o -pl parallel-consumer-core -am test -Dtest=AmbientProbeExtensionTest
+
+Run as a class on its own it failed **2 of 2** attempts, two methods each time. Inside a full
+`parallel-consumer-core` run it is intermittent: one failure in one run, clean in another on the same
+head. That direction is backwards for ordinary contention - a busier suite fails it *less* - and it is
+the tell for the mechanism, because a full suite interleaves other classes between these two methods
+while running the class alone puts them side by side.
+
+**The mechanism is in the test, and it is visible in one line.** Both
+`headroomIsReportedOnAPassingTestToo` and `headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod`
+open `LogCapture.of(AmbientProbeExtension.class)`. That attaches to the logger for that class, which is
+process-global, not test-scoped - so while both are inside their `try`, each captures BOTH lines:
+
+    value of    : iterable.size()
+    expected    : 1
+    but was     : 2
+    iterable was: [PC-DEADLINE-HEADROOM ... outcome=PASSED,
+                   PC-DEADLINE-HEADROOM ... outcome=FAILED]
+
+The `outcome=FAILED` line belongs to the sibling test. Each method's own assertion is correct; what is
+missing is that only one of them may hold the capture at a time.
+
+<!-- post-merge: checked-begin -->
+**Control arm.** With astubbs#116's own change to `JStreamLiveResultStreamTest` reverted entirely, both
+runs above still failed 2 of 2 - so the flake is inherited, and that PR only perturbed scheduling.
+`AmbientProbeExtension.java` (main) was untouched by it in any way that reaches this.
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+**Not fixed by the PR that found it, deliberately.** `bin/check-pr-analysis-surfaces.sh` classified this
+class as inherited for astubbs#116, and this directory's rule is that inherited findings go to a
+register rather than being bulk-fixed by a PR that happens to meet them.
+<!-- post-merge: checked-end --> The fix is test-isolation, not a product change - forcing
+these two methods onto one thread, or giving `LogCapture` a per-test scope - and whoever takes it should
+check the other `LogCapture` users for the same shape rather than patching these two.
+
+Unowned.
+
 ### `RegistrationRaceStaleResidentIT` - the setup guard timed out, which is not the 909 assertion
+
+<!-- post-merge: checked-begin -->
+**Rule 2 is now satisfied, and nobody has acted on it.** As of 2026-09-03 the sightings span at
+least three unrelated branches on one day, always failing the same guard -
+`control thread must reach the mid-loop pause point (offset 25)`, `awaitPausePoint(...)
+expected to be true` at `RegistrationRaceStaleResidentIT.java:221` - and always passing on those
+same branches at neighbouring commits. That is the master-state evidence
+`docs/quarantined-tests.md` asks for, so this is a legitimate quarantine candidate under rule 2
+rather than an undiagnosed one under rule 1.
+
+**It is deliberately NOT quarantined here.** The test reproduces confluentinc#909 through the real
+registration path, so parking it costs a genuine reproduction, and the choice between that cost and
+a required check that fails a few times a day is the owner's rather than a babysitter's. What it
+needs first is the classification this section already asks for: the guard is a SETUP step, so the
+question is whether the control thread is merely slow to reach offset 25 under CI load, or whether
+something is actually preventing it - and only the second is a product defect. `codecov test` gives
+the per-commit history to bisect that from recorded runs rather than by re-running builds.
+<!-- post-merge: checked-end -->
 
 <!-- post-merge: checked-begin - names astubbs#257 in the past tense as the branch the sighting came
      from, which stays true once that work has landed -->
@@ -187,6 +255,22 @@ direction, and do not conflate it with
 [`test-909-reproduction-cannot-observe-the-collision.md`](test-909-reproduction-cannot-observe-the-collision.md),
 which is the opposite worry - that the same test goes silently *green* with the defect branch
 unexercised.
+
+**Seventh sighting, 2026-09-03**, on `optimize/ig-exp003-both`
+([run 33803467808](https://github.com/astubbs/parallel-consumer/actions/runs/33803467808)), one
+failure in 201 integration tests, same assertion - `control thread must reach the mid-loop pause
+point (offset 25)`. That branch is a `ce-optimize` measurement arm carrying two changes: failsafe
+`forkCount` 4 -> 6, and `Rebalance857CommitSyncDeadlockProbeIT` split into four classes. Neither
+touches this test.
+
+Worth recording precisely because the same run *did* produce a genuine fork-pressure casualty
+elsewhere - `ManagedPCInstanceLifecycleTest`, which had never failed before, went red on the sibling
+arm under the same forkCount=6. **This sighting is not that.** `bin/inflight.mjs codecov test`
+shows this test already failing on 2026-09-03 at 11:06 on `feat/infer-annotation-sweep`, an
+unrelated branch at forkCount=4, with the identical assertion. So it belongs to the existing rate,
+not to fork pressure, and the two must not be conflated when someone eventually diagnoses either.
+Measurements and the fork-count finding:
+[`docs/plans/2026-09-03-001-investigate-integration-gate-wall-time.md`](../plans/2026-09-03-001-investigate-integration-gate-wall-time.md).
 
 **Ruled out as astubbs#257's doing, on mechanism rather than counts:**
 
@@ -204,6 +288,42 @@ frozen partitions observed`. Worth weighing against the probe's own thresholds b
 it points away from broker contention and toward the test's own 30s timing budget - which is
 `forkCount=4` on a shared runner, waiting on a hand-orchestrated race between a paused registration
 loop and a forced eager rebalance.
+
+**Seen three times more on 2026-09-03.** Identical assertion each time - `control thread must reach the mid-loop pause point
+(offset 25)` - on two branches with nothing in common:
+`feat/225-pc-built-producer` at `e35db1e` (02:24) and astubbs#429 at `fc99d29` (02:41,
+[job 100501224076](https://github.com/astubbs/parallel-consumer/actions/runs/33707938531/job/100501224076),
+1 failure in 201 integration tests). The probe was clean again, and the failing runs took 30.8s and
+30.9s against 14-19s on the passing ones either side - the shape of a 30s budget being waited out in
+full, not of work going wrong.
+
+**Then astubbs#429 failed it a second time in a row**, at `6fd8e70` (03:03, 30.7s, the same assertion),
+which is the count that stops the sentence above from being safe: two consecutive failures on one
+branch against roughly one in a dozen elsewhere is not a coincidence anyone should merge through. So
+the same head was re-run once as a **measurement, with the outcome recorded here whichever way it
+went** - not the retry-to-green that AGENTS.md forbids. It passed, in 17.0s, the same length as the
+19.1s pass this branch had at `909a885` before it merged master. Two of three on this branch, every
+failure at the guard's 30s ceiling and every pass at the length other branches see; the only delta
+between the green head and the two red ones is the pom exclusion and the doc astubbs#430 landed.
+
+**The control arm is unusually good here and cost nothing**, because the same lane ran on four other
+branches inside the same 25 minutes: `fix/422-commit-interval-unset-detection` (02:42), astubbs#428
+at `def16c6` (02:41), `optimize/chaos-ci-perf` (02:44) and `feat/225-producer-config` (02:49) all
+PASSED it. So the failure is not a property of any one branch's diff, and it is not the runner being
+uniformly slow that half-hour either. `node bin/inflight.mjs codecov test
+freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` reproduces that table.
+
+**Ruled out as astubbs#429's doing, on mechanism:** that PR changes the produce path's
+`InvalidPidMappingException` arm, `ProducerManager#close` and `innerDoClose`'s producer step. This IT
+is `CommitMode.PERIODIC_CONSUMER_SYNC` driving `pc.poll(...)`, so it never produces and never reaches
+any of them, and it fails in stage 2 of its own setup - before the instance is closed at all. Same
+reasoning that cleared astubbs#257 above, for the same reason: the test never enters the changed code.
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin - a dated sighting against a PR number, past tense, stays true after the merge -->
+**Second sighting, 2026-09-03, on astubbs/parallel-consumer#419's Integration Tests lane** (`https://github.com/astubbs/parallel-consumer/actions/runs/33703351182/job/100487356073`), at a head that changes no Java at all - the branch carries Node tooling and hooks only. Same shape as the first: the setup guard `control thread must reach the mid-loop pause point (offset 25)` timed out after about thirty seconds, the ambient probe was clean (no rebalance dwell, no lag stagnation, no frozen partitions, every detector reachable), and the confluentinc#909 assertion was never reached. The recorded history shows it passing on the same branch's previous two heads and on five other branches in the surrounding hour, so this is the flapper firing, not a change on the branch.
+
+**Third sighting on the same PR, 2026-09-03, at `002ba7ef3`** (`https://github.com/astubbs/parallel-consumer/actions/runs/33720084880/job/100537346929`), the head that merged master after astubbs/parallel-consumer#429 had recorded its own pair. Same assertion, 30.75s against the 30s guard, 1 failure in 201 integration tests, the probe clean. Still no Java on the branch: between this head and the previous sighting the only change to anything under `src/` is what master brought in. That is the fourth firing at the guard ceiling on 2026-09-03 across three branches, so the rate the row above counts is the finding, and the next push re-runs the lane as its measurement rather than a retry to green. That measurement and the one after it both passed, at `c925d187e` and `ca8236d2b`, the shape the row above already had: red at the ceiling, then green at normal length with nothing changed.
 <!-- post-merge: checked-end -->
 
 ### `ManagedPCInstanceLifecycleTest` - a sleep-timed test that names one cause for a symptom with several
@@ -254,6 +374,8 @@ astubbs/parallel-consumer#320 - and the failure is the same one, not a similar o
 30-second timeout and the lambda all come from `BatchTestMethods` in **core**, which both wrapper
 modules drive. One sighting looked like a Reactor flake. Two, in different modules, means the
 Reactor and Mutiny wrappers are not the variable.
+
+**Sixth sighting, 2026-09-05, `ReactorBatchTest` parameter `[3]` on astubbs/parallel-consumer#442 at f1e87d81, the Unit Tests lane** - identical code had passed that lane at the three previous heads of the same PR. Same alias, same 30s, expected 3 batches and got 4 - and the dump shows **key 66 at offsets 0, 1 and 2**, three records on one key out of five, which is the three-way collision the third, fourth and fifth sightings each carried. Four in a row now. Recorded and re-run on the same head, not diagnosed. <!-- post-merge: checked -->
 
 The 2026-08-19 assertion is the useful part, because it is off by exactly one in the direction that
 matters: **`Expected size: 3 but was: 4`** - grep `BatchTestMethods` for `expected number of

@@ -225,6 +225,20 @@ believing any zero, and when both branches of a decision are worth observing, em
 level - logging only one makes "took the other branch" indistinguishable from "never reached the
 fork". Evidence a failure message must carry belongs in the assertion, which no profile can filter.
 
+**Aggregate verdict**
+A reading taken at one granularity and read as settling a claim about one member of it - a whole-fleet
+count offered as evidence about the single instance that was accused of stalling. Distinct from a
+filtered diagnostic and an inert configuration, where the instrument could not speak at all: here it
+speaks fluently, correctly and on time, about a different subject than the one in question.
+
+It is the hardest of that family to notice, because nothing about the output looks wrong. A healthy
+majority conceals one sick member by construction, so the aggregate reads identically whether that
+member recovered or never did, and no amount of care in reading it can recover the difference. The
+test is to name the subject the claim is about and ask whether any field the instrument reports varies
+with that subject; when none does, the reading is a fact about the instrument's scope rather than
+about the system. The repair is to widen the instrument's granularity, not to reinterpret what it
+already emits.
+
 **Positive control**
 An arm of a measurement whose only job is to register a hit, proving the instrument could have detected
 something on this run. Its own reading is never the result — it is what licenses reading every other
@@ -301,6 +315,14 @@ and never blocks. Its failure budget is the mirror of a refusing guard's: silenc
 blocking is not, and a reminder that fires too often trains its reader to skip it, which is the
 same end state as one that never fires.
 
+### Divergent version
+A copy of a document, on some branch, that carries content the mainline has never held. It is
+distinct from a copy that is merely **behind** - one that lacks what the mainline gained since the
+branch was cut - because a behind copy is nobody's finding and gets further behind every day, while
+a divergent one holds knowledge the mainline reader cannot see. Divergence is sized against the
+branch's own fork point, so it says what the branch added, not how far the mainline has moved. A
+**divergence header** is the advisory reminder that surfaces this at the moment a document is read.
+
 ### Labelled fallback
 The rule that an automated answer must name its own provenance, and that an answer derived from a
 weaker source must say so. A guard that cannot read the authoritative fact (the thing the action
@@ -337,3 +359,8 @@ vocabulary keeps naming from different sides.
   is the poller pausing the broker subscription; and the Kafka consumer's own pause state is the
   authority the back-pressure pause manipulates. A user report of "paused consumption" typically
   describes none of them — a stall presenting as a pause — so the word alone attributes nothing.
+- **"Shard" names the engine's ordering unit, and the CI chaos lane borrows the word for its split
+  jobs.** The Shard entry above is the engine concept. A "chaos shard" in CI documentation is one of
+  the parallel jobs the Chaos Pain Suite is divided into, an ordinary test-sharding sense with no
+  relation to record ordering; when a sentence could mean either, say "chaos shard" or "shard job"
+  for the CI one.

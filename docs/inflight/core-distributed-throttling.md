@@ -12,7 +12,10 @@ extended 2026-08-18; eight ranked, code-verified directions:
 (branch `feats/ideate-distributed-throttling` until merged). Read that before restarting - it
 holds the bases, the rejection table, and the prior-art autopsies. Related abandoned branches
 (`features/rate-limiting`, `features/dynamic-concurrency-control`, `feature/auto-tuning-pressure`,
-plus upstream draft PR confluentinc#22) are now catalogued in `docs/refactoring.md`'s idea bank.
+plus upstream draft PR confluentinc#22) are now catalogued in `docs/refactoring.md`'s idea bank, and
+since 2026-09-03 in `branch_accounting` in `src/docs/development/upstream-map.yaml` - which adds what
+each one actually contains and whether the idea landed. `features/rate-limiting` is a bucket4j POC and
+is NOT absorbed: master's `internal/RateLimiter` throttles log lines, not consumption.
 
 Auto-scaling (astubbs#227) now has its own note - [`core-auto-scaling.md`](core-auto-scaling.md) -
 split 2026-08-18 because the two efforts will reach mergeable PRs at different times and carry
