@@ -25,8 +25,8 @@
 //   const sticky = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/sticky-report-comment.js`)
 //
 // `actions/github-script` runs with the workspace checked out, so `require` of a repo file works and
-// is already the convention here (see .github/workflows/pr-checklist.yml, which requires four gate
-// modules this way). Tests: .github/scripts/sticky-report-comment.test.js.
+// is already the convention here (see .github/workflows/repo-hygiene.yml, whose PR-body gates require four
+// gate modules this way). Tests: .github/scripts/sticky-report-comment.test.js.
 
 "use strict";
 
