@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: data-loss -->
+<!-- inflight-vetted: 2026-09-07 - `OffsetRunLength.runLengthDecodeToIncompletes` still validates only what astubbs#207 added - a negative run length, a body that is not a whole number of entries, a declared bit length with no bytes - and still has no upper bound: a large positive run simply advances `currentOffset` and `highestSeenOffset`. `PartitionState.isRecordPreviouslyCompleted` still returns `recOffset <= offsetHighestSucceeded` for anything not in `incompleteOffsets`, so the skip the note describes is intact. The product decision on a ceiling is still unmade -->
 <!-- post-merge: checked-begin -->
 
 A `RunLengthV2` entry of `Integer.MAX_VALUE` moves the highest-seen offset about two billion forward.

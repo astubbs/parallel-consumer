@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink/merge: the code claims all hold - `abortTransaction()` is still reached only from `ProducerManager`s close path, `ProducerWrapper.isTransactionOpen()` is still `producerState.equals(BEGIN)`, and `ProducerManager`s `log.error("Error producing result message", exception)` is still unthrottled. But this notes titular question is answered by its own last section ("there is no recovery path short of close"), and what it leaves open - the abort-and-reopen versus fail-fast decision - is the same decision `bug-poisoned-transaction-not-aborted-while-running.md` owns under "The decision pending". Propose folding the two mitigations and the freeze-behaviour test suggestion into that note and removing this one, rather than keeping an answered question open as a stall -->
 
 Surfaced by astubbs#261's CI review, which reproduced the control arm independently. Not a regression
 from that fix - the fix is what makes the state *reachable and visible* rather than silently wrong.

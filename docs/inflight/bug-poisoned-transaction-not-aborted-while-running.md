@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-vetted: 2026-09-07 - every code claim holds at HEAD: `abortTransaction()` still has exactly one reachable call site in main, inside `ProducerManager`s close path, and the commit is still gated on `wm.isDirty()` (`isTimeToCommitNow() && wm.isDirty() && !isRebalanceInProgress.get()`). `PCRetriableException` still exists with no terminal counterpart, and there is still no dead-letter code in `parallel-consumer-core/src/main`. astubbs#261 is MERGED - it is this notes premise, not its fix - and the design decision it names is still unmade -->
 
 
 Opened by astubbs#261, which fixed the data-correctness half of this and deliberately left the

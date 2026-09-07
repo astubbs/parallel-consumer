@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: the defect is intact - `AbstractParallelEoSStreamProcessor.onPartitionsRevoked` still runs `while (isTransactionCommittingInProgress()) Thread.sleep(100);` with no deadline, still gated on `options.isUsingTransactionCommitMode()`, and astubbs#44, astubbs#225 and astubbs#408 are all OPEN. Four things around it are stale. (1) "no open PR addresses it" and "Branch `fix/bound-revoke-transaction-wait` exists with no code on it" are both false: astubbs#408, a draft on `fix/803-bound-transactional-revoke-wait`, is exactly this fix, and the branch this note names does not exist on origin. (2) The `next-recoverable-producer-fencing.md` citation no longer resolves - the `next-` prefix was retired and the note is now `core-recoverable-producer-fencing.md`. (3) The `:418-419` and `:1494-1496` line citations are both wrong (the loop is at 639-640, the predicate at 2500-2503) and are the file:line form the root AGENTS.md forbids. (4) "do not write code before settling it" now contradicts an open draft PR that wrote it -->
 
 **Commit mode: `PERIODIC_TRANSACTIONAL_PRODUCER` only.** This is the discriminator - the defect below
 <!-- post-merge: checked -->

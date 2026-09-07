@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - re-read `PartitionState#maybeTruncateBelowOrAbove` at HEAD: `expectedBootstrapRecordOffset = getOffsetToCommit()` still never asks whether commit data existed, the comparison is still strict, and the `Truncating state` warn still says "expected {} from loaded commit data"; `OffsetMapCodecManager` still builds the `defaultEntry` for uncommitted partitions and still routes the `OffsetDecodingError` catch into it. No test in either suite names the method or the warning. The delete-when condition is not met - both live cases are still open -->
 
 [astubbs#162](https://github.com/astubbs/parallel-consumer/issues/162), mirroring
 [confluentinc issue #546](https://github.com/confluentinc/parallel-consumer/issues/546). That thread
