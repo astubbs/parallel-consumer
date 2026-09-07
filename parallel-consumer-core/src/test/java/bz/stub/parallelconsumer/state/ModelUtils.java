@@ -91,7 +91,7 @@ public class ModelUtils {
      * offsets in one batch, which {@link #createFreshWork()} cannot express.
      */
     public static ConsumerRecords<String, String> pollOf(TopicPartition partition, long... offsets) {
-        List<ConsumerRecord<String, String>> records = new ArrayList<>();
+        List<ConsumerRecord<String, String>> records = new ArrayList<>(offsets.length);
         for (long offset : offsets) {
             records.add(new ConsumerRecord<>(partition.topic(), partition.partition(), offset, "key-" + offset, "value-" + offset));
         }

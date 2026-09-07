@@ -39,6 +39,7 @@ import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
 
 import java.time.Duration;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -1295,13 +1296,13 @@ class ProducerManagerTest {
         Truth.assertWithMessage("one transaction spans the whole sequence; calls were " + trace.getCallsInOrder())
                 .that(trace.countOf("beginTransaction"))
                 .isEqualTo(1);
+        int theOnlyTransactionBegan = trace.indexOfNthCall("beginTransaction", 1);
         int revokedPartitionsOutput = trace.indexOfNthCall("send", OFFSET_PRODUCED_BUT_UNDRAINED + 1);
         int theNextCommit = trace.indexOfNthCall("commitTransaction", 1);
         Truth.assertWithMessage("offset " + OFFSET_PRODUCED_BUT_UNDRAINED + "'s output was sent inside the transaction "
                         + "the next commit closes: begin < send < commit, with no abort between; calls were "
                         + trace.getCallsInOrder())
-                .that(trace.indexOfNthCall("beginTransaction", 1) < revokedPartitionsOutput
-                        && revokedPartitionsOutput < theNextCommit)
+                .that(theOnlyTransactionBegan < revokedPartitionsOutput && revokedPartitionsOutput < theNextCommit)
                 .isTrue();
         Truth.assertWithMessage("the commit that published that output carried no offset for its partition - "
                         + "the revoked partition is gone from the state, so its input can never be committed by this "
@@ -1468,7 +1469,7 @@ class ProducerManagerTest {
     }
 
     /** Subscribed, assigned, running - the state every hand-driven revoke experiment starts from. */
-    private void startRunning(AbstractParallelEoSStreamProcessor<String, String> pc, List<TopicPartition> partitions) {
+    private void startRunning(AbstractParallelEoSStreamProcessor<String, String> pc, Collection<TopicPartition> partitions) {
         pc.subscribe(UniLists.of(mu.getTopic()));
         pc.onPartitionsAssigned(partitions);
         pc.setState(State.RUNNING);

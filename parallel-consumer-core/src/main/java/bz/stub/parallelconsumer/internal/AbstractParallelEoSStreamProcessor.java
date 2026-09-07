@@ -794,7 +794,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             return;
         }
 
-        Map<TopicPartition, Long> epochsAtRequest = new HashMap<>();
+        Map<TopicPartition, Long> epochsAtRequest = new HashMap<>(partitions.size());
         for (TopicPartition partition : partitions) {
             epochsAtRequest.put(partition, wm.getPm().getEpochOfPartition(partition));
         }

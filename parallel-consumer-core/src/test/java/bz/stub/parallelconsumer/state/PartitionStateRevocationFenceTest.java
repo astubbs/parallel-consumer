@@ -9,8 +9,8 @@ import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import org.apache.kafka.common.TopicPartition;
 import pl.tlinkowski.unij.api.UniMaps;
 
+import java.util.Collection;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -138,8 +138,8 @@ class PartitionStateRevocationFenceTest {
     }
 
     /** The epochs a revocation callback would capture when it posts its request. */
-    private static Map<TopicPartition, Long> epochsNow(WorkManager<String, String> wm, List<TopicPartition> partitions) {
-        Map<TopicPartition, Long> epochs = new HashMap<>();
+    private static Map<TopicPartition, Long> epochsNow(WorkManager<String, String> wm, Collection<TopicPartition> partitions) {
+        Map<TopicPartition, Long> epochs = new HashMap<>(partitions.size());
         for (TopicPartition partition : partitions) {
             epochs.put(partition, wm.getPm().getEpochOfPartition(partition));
         }
