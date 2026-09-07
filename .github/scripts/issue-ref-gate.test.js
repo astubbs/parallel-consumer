@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Antony Stubbs and contributors
 
-// Unit tests for issue-ref-gate.js. Run by the PR Checklist job before the gate itself, so a
+// Unit tests for issue-ref-gate.js. Run by the `repo: hygiene` job before the gate itself, so a
 // broken rule fails loudly rather than silently passing - or failing - every PR.
 const assert = require("assert");
 const {
