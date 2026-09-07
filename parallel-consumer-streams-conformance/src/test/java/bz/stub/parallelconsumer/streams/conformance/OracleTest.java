@@ -158,11 +158,10 @@ class OracleTest {
     /**
      * Scenario 2: a join yields the joined value per matching key and nothing for an unmatched one.
      * <p>
-     * Two sources, so the fan-out {@link Oracle} documents applies: each record reaches {@code left} and then
-     * {@code right}, one record at a time. The stream side reads {@code left} and the table is built from
-     * {@code right}, so the first record of a key hits an empty table and produces nothing; the second finds the
-     * previous record's value there. {@code b} arrives once, so it never joins - which is the "nothing for unmatched
-     * keys" half.
+     * Two sources, and every record names the one it goes to: each logical record is written to {@code left} and
+     * then to {@code right}. The stream side reads {@code left} and the table is built from {@code right}, so the
+     * first record of a key hits an empty table and produces nothing; the second finds the previous record's value
+     * there. {@code b} arrives once, so it never joins - which is the "nothing for unmatched keys" half.
      * <p>
      * Derived: {@code a}'s second record ({@code y}) joins against the table's {@code X} (the upper-cased first
      * record), giving {@code y|X} at the second record's timestamp. {@code b} produces no sink record at all.
@@ -520,8 +519,15 @@ class OracleTest {
     // ------------------------------------------------------------------------------------------------ fixtures
 
     /**
-     * The two-source join shape both join scenarios share: {@code left} is declared first, so the fan-out reaches it
-     * first for every record, and the caller supplies the entries between the sources and the sink.
+     * The two-source join shape both join scenarios share: the caller supplies the entries between the sources and
+     * the sink.
+     * <p>
+     * Every logical record is written <strong>twice, {@code left} then {@code right}</strong>, so both sides of the
+     * join see the same record stream and the interleaving is the record list itself. That is what the derivations
+     * below rest on: for each logical record the stream side is fed before the table side, so the first record of a
+     * key meets an empty table and the second finds the first one there. A case may of course send different records
+     * to each topic - the format now says which topic every record goes to - but a shared stream keeps the two join
+     * scenarios comparable, since the only thing that changes between them is which source feeds the table.
      */
     private static String joinCase(String name, String middle) {
         return ""
@@ -533,13 +539,19 @@ class OracleTest {
                 + middle
                 + "  - {sink: {of: j, topic: out}}\n"
                 + "inputs:\n"
-                + "  - {key: a, value: x, at-ms: 0}\n"
-                + "  - {key: a, value: y, at-ms: 1000}\n"
-                + "  - {key: b, value: z, at-ms: 2000}\n"
+                + "  - {key: a, value: x, at-ms: 0, topic: left}\n"
+                + "  - {key: a, value: x, at-ms: 0, topic: right}\n"
+                + "  - {key: a, value: y, at-ms: 1000, topic: left}\n"
+                + "  - {key: a, value: y, at-ms: 1000, topic: right}\n"
+                + "  - {key: b, value: z, at-ms: 2000, topic: left}\n"
+                + "  - {key: b, value: z, at-ms: 2000, topic: right}\n"
                 + "perturbation:\n"
-                + "  - {key: a, value: x, at-ms: 0}\n"
-                + "  - {key: a, value: q, at-ms: 1000}\n"
-                + "  - {key: b, value: z, at-ms: 2000}\n";
+                + "  - {key: a, value: x, at-ms: 0, topic: left}\n"
+                + "  - {key: a, value: x, at-ms: 0, topic: right}\n"
+                + "  - {key: a, value: q, at-ms: 1000, topic: left}\n"
+                + "  - {key: a, value: q, at-ms: 1000, topic: right}\n"
+                + "  - {key: b, value: z, at-ms: 2000, topic: left}\n"
+                + "  - {key: b, value: z, at-ms: 2000, topic: right}\n";
     }
 
     /** Writes one case file into its own directory and loads it, so every fixture is a case the loader accepts. */

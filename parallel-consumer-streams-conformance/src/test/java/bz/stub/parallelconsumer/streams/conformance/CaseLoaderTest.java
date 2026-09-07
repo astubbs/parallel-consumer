@@ -60,8 +60,12 @@ class CaseLoaderTest {
         assertThat(loaded.inputs().get(1).key()).isEqualTo("a");
         assertThat(loaded.inputs().get(1).atMs()).isEqualTo(60_000L);
         assertThat(loaded.inputs().get(1).timestamp()).isEqualTo(Instant.parse("2025-01-01T02:01:00Z"));
+        // The topology declares one source, so a record naming no topic takes that one - and the loaded record
+        // carries the resolved topic, never the absence, because the oracle pipes what the case resolved to.
+        assertThat(loaded.inputs().get(1).topic()).isEqualTo("in");
         assertThat(loaded.perturbation()).hasSize(3);
         assertThat(loaded.perturbation().get(0).key()).isEqualTo("b");
+        assertThat(loaded.perturbation().get(0).topic()).isEqualTo("in");
 
         assertThat(loaded.agreement()).isEqualTo(ConformanceCase.Agreement.FINAL_STATE);
         assertThat(loaded.emit()).isNull();
@@ -166,6 +170,42 @@ class CaseLoaderTest {
         assertThat(refusals).contains("at-ms");
         // The second record is the one without a timestamp, and the message has to say which.
         assertThat(refusals).contains("input record 2");
+    }
+
+    /**
+     * The multi-source half of the topic rule. With one source a record's topic defaults to it; with more than one
+     * there is no obvious default, and inventing one would silently decide which side of a join a record feeds - so
+     * every record must name a topic, and the refusal has to say which record omitted it.
+     */
+    @Test
+    void aRecordNamingNoTopicUnderTwoSourcesIsRefusedNamingTheRecord() {
+        String refusals = refusalsFrom("invalid-cases/record-without-topic");
+
+        assertThat(refusals).contains("record-without-topic");
+        assertThat(refusals).contains("topic");
+        // The second input record is the one that omits it, and the message has to say which.
+        assertThat(refusals).contains("input record 2");
+
+        // The same shape with every record naming a topic loads, so the rule discriminates rather than refusing
+        // every multi-source case outright.
+        List<ConformanceCase> loaded = CaseLoader.loadClasspathDirectory("valid-variants/multi-source-named-topics");
+        ConformanceCase named = caseNamed(loaded, "multi-source-named-topics");
+        assertThat(named.inputs().get(0).topic()).isEqualTo("left");
+        assertThat(named.inputs().get(1).topic()).isEqualTo("right");
+        assertThat(named.perturbation().get(1).topic()).isEqualTo("right");
+    }
+
+    /**
+     * A record piped to a topic no source reads is a record that vanishes - the silent shape this rung exists to
+     * refuse - so the topic is checked against the declared sources even when one source would have supplied a
+     * default.
+     */
+    @Test
+    void aRecordNamingATopicNoSourceDeclaresIsRefusedNamingTheTopic() {
+        String refusals = refusalsFrom("invalid-cases/record-topic-not-declared");
+
+        assertThat(refusals).contains("record-topic-not-declared");
+        assertThat(refusals).contains("elsewhere");
     }
 
     @Test

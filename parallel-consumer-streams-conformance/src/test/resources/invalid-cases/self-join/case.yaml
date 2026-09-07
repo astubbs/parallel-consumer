@@ -11,7 +11,7 @@ topology:
   - {id: t1, reduce: {of: tg, fn: last-wins, store: right-table}}
   - {id: j, join: {stream: s1, table: s1, fn: concat-sides}}
   - {sink: {of: j, topic: out}}
-inputs:
-  - {key: a, value: "1", at-ms: 0}
+inputs:                                 # two sources, so every record names its topic - this fixture
+  - {key: a, value: "1", at-ms: 0, topic: left}   # trips the self-join rule and nothing else
 perturbation:
-  - {key: b, value: "1", at-ms: 0}
+  - {key: b, value: "1", at-ms: 0, topic: left}

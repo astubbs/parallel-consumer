@@ -84,21 +84,18 @@ import java.util.TreeMap;
  * <em>not</em> cache-driven is close-driven suppression, which is why {@code emit: on-window-close} is the one
  * attribute that changes what a sink sees (KTD5).
  *
- * <h2>Two things the case format leaves open, decided here</h2>
+ * <h2>Every record names its own topic</h2>
  *
- * <ul>
- *     <li><b>Which source topic a record goes to.</b> {@link ConformanceCase.InputRecord} carries a key, a value and
- *     a timestamp, and no topic - so a case with two sources (the shape a join needs) has no way to say which side a
- *     record feeds. This rung fans each record out to <em>every</em> source topic, in the order the sources are
- *     declared, one record at a time: the driver processes each pipe synchronously, so record 1 reaches every source
- *     before record 2 reaches any. For the single-source case that is the obvious behaviour; for a join it makes the
- *     declaration order of the two sources the thing that decides whether the table side is already populated when
- *     the stream side arrives, which is deterministic and hand-derivable. Giving a record its own {@code topic:}
- *     field is a case-format change, and so a driver-rung obligation rather than something to bolt on here.</li>
- *     <li><b>{@code to-stream} on a windowed table drops the window</b> - the key becomes the inner key, which is
- *     what R3 already assumes when it says last-per-key would keep one record of many. The window survives in the
- *     store observable, where its bounds are part of every entry's rendering.</li>
- * </ul>
+ * {@link ConformanceCase.InputRecord#topic()} is always resolved by the time a case reaches here - the loader
+ * defaults it to the single source's topic when a topology declares exactly one, and refuses a record that names
+ * none when it declares any other number. So the oracle pipes each record to exactly the topic it names, in list
+ * order, at its absolute timestamp, and nothing about which side of a join a record feeds is decided here.
+ *
+ * <h2>One thing the case format leaves open, decided here</h2>
+ *
+ * <b>{@code to-stream} on a windowed table drops the window</b> - the key becomes the inner key, which is what R3
+ * already assumes when it says last-per-key would keep one record of many. The window survives in the store
+ * observable, where its bounds are part of every entry's rendering.
  */
 public final class Oracle {
 
@@ -154,7 +151,7 @@ public final class Oracle {
             stateDirectory = Files.createTempDirectory("pc-streams-conformance-oracle-");
             try (TopologyTestDriver driver =
                          new TopologyTestDriver(translation.topology, configuration(stateDirectory))) {
-                pipe(driver, translation, records);
+                pipe(conformanceCase, driver, translation, records);
                 // Inside the scope, always: close() cleans the state directory, and a post-close read observes
                 // nothing at all while every assertion over it still passes (KTD3).
                 return snapshot(driver, translation);
@@ -178,7 +175,7 @@ public final class Oracle {
 
         private final String description;
 
-        /** Source topics, in declaration order - the order a record is fanned out in. */
+        /** Source topics, in declaration order - what a record's own topic is resolved against. */
         private final List<String> sourceTopics = new ArrayList<>();
 
         /** Store name to whether it is a window store, in declaration order. */
@@ -579,20 +576,32 @@ public final class Oracle {
         return configuration;
     }
 
-    private static void pipe(TopologyTestDriver driver,
+    private static void pipe(ConformanceCase conformanceCase,
+                             TopologyTestDriver driver,
                              Translation translation,
                              List<ConformanceCase.InputRecord> records) {
         Map<String, TestInputTopic<byte[], byte[]>> inputs = new LinkedHashMap<>();
         for (String topic : translation.sourceTopics) {
-            inputs.put(topic, driver.createInputTopic(topic,
+            TestInputTopic<byte[], byte[]> previous = inputs.put(topic, driver.createInputTopic(topic,
                     Serdes.ByteArray().serializer(), Serdes.ByteArray().serializer()));
-        }
-        // Record-major, then source-major: record 1 reaches every source before record 2 reaches any. The class
-        // javadoc owns why the fan-out exists at all.
-        for (ConformanceCase.InputRecord record : records) {
-            for (TestInputTopic<byte[], byte[]> input : inputs.values()) {
-                input.pipeInput(bytes(record.key()), bytes(record.value()), record.timestamp());
+            // Two sources on one topic would make "which source read this record" unanswerable; named rather than
+            // dropped, because the overwrite would otherwise be silent.
+            if (previous != null) {
+                throw new OracleExecutionException(conformanceCase.name(),
+                        "declares two sources reading topic " + topic, null);
             }
+        }
+        // Each record to the topic it names, in list order: the driver processes each pipe synchronously, so the
+        // list IS the interleaving, and a join's two sides are ordered by the case rather than by the oracle.
+        for (ConformanceCase.InputRecord record : records) {
+            TestInputTopic<byte[], byte[]> input = inputs.get(record.topic());
+            if (input == null) {
+                // The loader has already refused this, so reaching it means a case was built some other way.
+                throw new OracleExecutionException(conformanceCase.name(), "pipes " + record + " to topic "
+                        + record.topic() + ", which no source reads; the sources are " + translation.sourceTopics,
+                        null);
+            }
+            input.pipeInput(bytes(record.key()), bytes(record.value()), record.timestamp());
         }
     }
 

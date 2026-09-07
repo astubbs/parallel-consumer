@@ -116,6 +116,24 @@
                     <skipPublishing>true</skipPublishing>
                 </configuration>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!--
+                        The gate's cells are dynamic tests named <case>/<proof> (CorpusGateTest), and surefire's
+                        default XML writes a dynamic test's LEGACY reporting name - everyExecutableCase...()[2] -
+                        which identifies the cell by an index that moves whenever the corpus changes. The whole
+                        point of the naming is that a red is legible in the report without opening a log, so this
+                        module asks the JUnit 5 reporter for the display name instead. Module-scoped: it changes
+                        nothing for a plain @Test, whose display name is already its method name.
+                    -->
+                    <statelessTestsetReporter
+                            implementation="org.apache.maven.plugin.surefire.extensions.junit5.JUnit5Xml30StatelessReporter">
+                        <usePhrasedTestCaseMethodName>true</usePhrasedTestCaseMethodName>
+                    </statelessTestsetReporter>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 

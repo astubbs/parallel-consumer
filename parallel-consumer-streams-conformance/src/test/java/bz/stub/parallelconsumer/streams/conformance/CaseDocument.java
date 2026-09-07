@@ -184,6 +184,10 @@ final class CaseDocument {
         String topic;
     }
 
+    /**
+     * One record. {@code topic} is optional in the file and resolved by the loader: it defaults to the topology's
+     * one source when there is exactly one, and is mandatory when there is any other number.
+     */
     static final class Record {
 
         @Nullable
@@ -194,5 +198,8 @@ final class CaseDocument {
 
         @Nullable
         Long atMs;
+
+        @Nullable
+        String topic;
     }
 }

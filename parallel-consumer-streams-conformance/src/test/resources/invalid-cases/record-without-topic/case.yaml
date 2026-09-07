@@ -1,0 +1,18 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# Two sources, so no record may leave its topic to a default: with more than one source there is no
+# obvious one to fall back to, and guessing would silently decide which side of a join a record feeds.
+# The second input record names none, and the refusal has to say which record.
+name: record-without-topic
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: l, source: {topic: left}}
+  - {id: r, source: {topic: right}}
+  - {id: g, group-by-key: {of: l}}
+  - {id: c, count: {of: g, store: counts}}
+inputs:
+  - {key: a, value: "1", at-ms: 0, topic: left}
+  - {key: a, value: "2", at-ms: 1000}
+perturbation:
+  - {key: b, value: "1", at-ms: 0, topic: left}
+  - {key: b, value: "2", at-ms: 1000, topic: right}

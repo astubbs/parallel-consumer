@@ -51,6 +51,10 @@ import java.util.stream.Stream;
  *     <li><b>Unique names</b> (R1) - two files declaring one name are refused, naming the name and both files.</li>
  *     <li><b>Explicit timestamps</b> (R1) - every input and perturbation record carries {@code at-ms}, so no case
  *     inherits wall-clock time. A missing one names the record.</li>
+ *     <li><b>Resolved topics</b> - every input and perturbation record is piped to a topic some source declares. A
+ *     record may leave {@code topic} out only when the topology declares exactly one source, whose topic it then
+ *     takes; a record naming none under any other source count is refused naming the record, and one naming a topic
+ *     no source declares is refused naming the topic.</li>
  *     <li><b>Resolvable handles</b> (KTD2) - every operation names an input handle some <em>earlier</em> entry
  *     declared; naming none, or naming an unknown id, is refused with the id. A join names two <em>distinct</em>
  *     handles, because two handles going in is what makes it the one non-linear operation.</li>
@@ -209,10 +213,11 @@ public final class CaseLoader {
                     + "rung fills it (R4)");
         }
 
+        List<String> sourceTopics = sourceTopicsOf(topology);
         List<ConformanceCase.InputRecord> inputs =
-                resolveRecords(document.inputs, "input record", baseInstant, name, file, refusals);
-        List<ConformanceCase.InputRecord> perturbation =
-                resolveRecords(document.perturbation, "perturbation record", baseInstant, name, file, refusals);
+                resolveRecords(document.inputs, "input record", baseInstant, sourceTopics, name, file, refusals);
+        List<ConformanceCase.InputRecord> perturbation = resolveRecords(document.perturbation,
+                "perturbation record", baseInstant, sourceTopics, name, file, refusals);
 
         boolean refusalClass = !isBlank(document.expectsFault);
         if (refusalClass) {
@@ -522,6 +527,7 @@ public final class CaseLoader {
     private static List<ConformanceCase.InputRecord> resolveRecords(@Nullable List<CaseDocument.Record> documentRecords,
                                                                     String what,
                                                                     @Nullable Instant baseInstant,
+                                                                    List<String> sourceTopics,
                                                                     String name,
                                                                     Path file,
                                                                     List<String> refusals) {
@@ -538,13 +544,61 @@ public final class CaseLoader {
                         + "relative to the case's base instant, so no case inherits wall-clock time (R1)");
                 continue;
             }
-            if (baseInstant == null) {
+            String topic = resolveTopic(record.topic, sourceTopics, where, name, file, refusals);
+            if (topic == null || baseInstant == null) {
                 continue;
             }
             records.add(new ConformanceCase.InputRecord(record.key, record.value, atMs,
-                    baseInstant.plusMillis(atMs)));
+                    baseInstant.plusMillis(atMs), topic));
         }
         return records;
+    }
+
+    /**
+     * Which source topic a record is piped to (R1's sibling: nothing about a run may be implicit).
+     * <p>
+     * A record MAY name a {@code topic}. When the topology declares exactly one source it may leave it out and take
+     * that source's topic; with any other number there is no obvious default, and inventing one would silently
+     * decide which side of a join a record feeds - which is precisely the thing a conformance case has to state
+     * rather than inherit. A topic no source declares is refused whatever the source count, because a record piped
+     * to a topic nothing reads simply vanishes.
+     *
+     * @return the resolved topic, or {@code null} when the record was refused - in which case {@code refusals} has
+     *         grown and the record is dropped rather than built with a topic nobody chose
+     */
+    @Nullable
+    private static String resolveTopic(@Nullable String declared,
+                                       List<String> sourceTopics,
+                                       String where,
+                                       String name,
+                                       Path file,
+                                       List<String> refusals) {
+        if (declared == null) {
+            if (sourceTopics.size() == 1) {
+                return sourceTopics.get(0);
+            }
+            refuse(refusals, name, file, where + " names no topic, and the topology declares " + sourceTopics.size()
+                    + " sources " + sourceTopics + "; a record may leave its topic to the default only when there is "
+                    + "exactly one source, because with more than one the default would silently decide which side "
+                    + "of a join the record feeds");
+            return null;
+        }
+        if (!sourceTopics.contains(declared)) {
+            refuse(refusals, name, file, where + " names topic " + declared + ", which no source declares; the "
+                    + "topology's sources are " + sourceTopics + ", and a record piped to a topic nothing reads "
+                    + "vanishes without observing anything");
+            return null;
+        }
+        return declared;
+    }
+
+    /** The topics the topology's sources declare, in declaration order; a source whose topic was refused is out. */
+    private static List<String> sourceTopicsOf(List<ConformanceCase.Operation> topology) {
+        return topology.stream()
+                .filter(operation -> operation.kind() == ConformanceCase.OperationKind.SOURCE)
+                .map(ConformanceCase.Operation::topic)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
     }
 
     // --------------------------------------------------------------------------------- the outcome rules

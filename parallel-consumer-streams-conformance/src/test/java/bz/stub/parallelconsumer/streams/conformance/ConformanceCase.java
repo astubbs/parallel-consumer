@@ -354,11 +354,14 @@ public final class ConformanceCase {
 
         private final Instant timestamp;
 
-        InputRecord(@Nullable String key, @Nullable String value, long atMs, Instant timestamp) {
+        private final String topic;
+
+        InputRecord(@Nullable String key, @Nullable String value, long atMs, Instant timestamp, String topic) {
             this.key = key;
             this.value = value;
             this.atMs = atMs;
             this.timestamp = timestamp;
+            this.topic = topic;
         }
 
         @Nullable
@@ -381,9 +384,18 @@ public final class ConformanceCase {
             return timestamp;
         }
 
+        /**
+         * The source topic this record is piped to - always resolved, never absent. A case file may leave it out
+         * only when the topology declares exactly one source, in which case the loader has already filled in that
+         * source's topic; with any other number of sources the loader refuses a record that names none.
+         */
+        public String topic() {
+            return topic;
+        }
+
         @Override
         public String toString() {
-            return "(" + key + ", " + value + ") at +" + atMs + "ms";
+            return "(" + key + ", " + value + ") at +" + atMs + "ms on " + topic;
         }
     }
 
