@@ -82,9 +82,19 @@ The files count separates the two causes in one line:
 | Files, base vs head | **equal** - the flags hold unlike sets, not unlike files | **base is short** by more than the PR adds |
 | Clears when | this lands and master re-uploads | the base moves to a master commit whose run completed |
 
-This note does not fix the second cause and does not close on it. It is recorded here because the
-time it cost was spent attributing its deltas to the first, and the tell above is what would have
-separated them immediately.
+It was recorded here without a fix, because the time it cost was spent attributing its deltas to
+the first cause, and the tell above is what would have separated them immediately.
+
+**The mechanism, and its fix, 2026-09-07.** The cancellation was `maven.yml`'s own `concurrency`
+group, keyed on `github.ref` for push events: any push to master inside the half hour the `build`
+job takes cancelled the previous push's run, and with merges landing in bursts that was roughly
+every other master commit - `gh run list -R astubbs/parallel-consumer --workflow maven.yml --event
+push --branch master` shows the shape, runs of consecutive `cancelled` broken by a lone `success`.
+Push runs are now keyed per SHA, so no master run is superseded and every master commit uploads; the
+`concurrency:` block's comment owns why per-SHA rather than `cancel-in-progress: false`. What is
+still open on this cause is the same shape as the glob's: a PR whose merge-base predates the change
+can still find its base without a report, so the files-count tell above stays in use until every
+open PR's merge-base is a master commit that ran to completion.
 
 <!-- post-merge: checked-end -->
 ## A correction worth keeping

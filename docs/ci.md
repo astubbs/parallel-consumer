@@ -1111,7 +1111,14 @@ which owns the outstanding proof and the condition for closing it.
 uploaded, which leaves Codecov with no report for that base commit and every PR comparing against
 older master data. The files count in the diff block tells them apart - equal on both sides is the
 glob, base short by more than the PR adds is the missing upload - and the inflight note above carries
-the measurement.
+the measurement. **The mechanism was `maven.yml`'s own concurrency group**: keyed on the ref, it
+cancelled master's in-progress `build` whenever another push to master landed inside the half hour
+that job takes, and `gh run list -R astubbs/parallel-consumer --workflow maven.yml --event push
+--branch master` showed that happening to roughly every other master commit. Push runs are now keyed
+per SHA, so no master run is ever superseded; the comment on the `concurrency:` block owns why that
+and not `cancel-in-progress: false`, which only ever holds one pending run and discards the rest. A
+base commit that predates that change can still lack a report, so the files-count tell stays useful
+until the merge-base of every open PR is a master commit that ran to completion.
 
 ### Reading it without a browser
 

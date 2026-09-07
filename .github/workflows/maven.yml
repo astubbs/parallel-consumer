@@ -38,8 +38,27 @@ permissions:
   # the check cannot list them and correctly reports "cannot run" rather than inventing a baseline.
   actions: read
 
+# A PUSH TO MASTER GETS ITS OWN GROUP, KEYED BY SHA, SO NO MASTER RUN IS EVER CANCELLED. The
+# `build` job below is the only thing that uploads coverage for master, and Codecov compares every
+# pull request against the report for its merge-base commit. Keyed on the ref, a second push to master
+# inside the ~30 minutes that job takes cancelled the first one's run - `gh run list --event push
+# --branch master` showed roughly half of them `cancelled`, in bursts of up to five - and a cancelled
+# run uploads nothing, so Codecov held no report for that commit and every PR based on it was
+# compared against OLDER master data. That read as a coverage drop the branch had not made; the
+# files count in the diff block was the tell (docs/ci.md -> "Codecov"). The commit that shipped the
+# coverage-glob fix (astubbs/parallel-consumer#414) was itself cancelled this way.
+#
+# Per-SHA rather than `cancel-in-progress: false`, because a concurrency group does not queue: it
+# keeps one run in progress and at most ONE pending, and discards the rest (docs/ci.md -> "Why a
+# `concurrency` group is not a mutex", measured). A burst of three merges would still lose the
+# middle commit's upload. `repo-hygiene.yml` already keys its push runs on `github.sha` for the same
+# reason. The cost is concurrent GitHub-hosted `build` jobs during a merge burst, which is what they
+# are for; nothing here runs on the self-hosted box.
+#
+# Pull requests keep superseding their own older runs, keyed on the head ref as before. A
+# `workflow_dispatch` on master keys on the ref and no longer shares a group with push runs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
