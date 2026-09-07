@@ -393,17 +393,15 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * under extreme churn, not a PC bug — all PC-internal issues have been fixed.
      * If the pass rate drops materially, reassess: a new PC bug may have been introduced.
      * <p>
-     * <b>Corollary, and read it before backing the parameters off: the paragraph above is asserted,
-     * never measured.</b> No experiment separates "the group coordinator cannot converge at this
-     * churn rate" from "PC has a defect that only appears at this churn rate" — both look identical
-     * from outside, as instances alive with an empty assignment and no progress. That matters
-     * because the obvious response to a flaky stress test is to reduce the churn until it passes,
-     * and if any part of the residual is PC's, that <em>hides</em> a defect rather than removing a
-     * confound. It is the same shape that let the confluentinc#857 deadlock survive four months:
-     * astubbs#68 gave every test an uncontended broker, the suite went green, and the defect was
-     * untouched. What would settle it is a control arm — the same churn against a plain
-     * KafkaConsumer group with no PC in the path. Until then, do NOT reduce this profile's churn:
-     * its residual failure rate is the baseline that investigation measures against.
+     * <b>Measured, 2026-09-05 - and the paragraph above was right.</b> For years it was an assertion;
+     * the tracking note below was opened because nobody had measured it. The Linux runner with the
+     * coordinator loggers raised showed, in every failing run, every LeaveGroup answered within 2.8s
+     * and every JoinGroup within 3.0s - no slow request anywhere - and a single JOIN PHASE held open
+     * for 17s while the monkey kept restarting members into it faster than a phase can complete. While
+     * a phase is open {@code consumer.poll()} returns nothing to any member, which is the FLAT count.
+     * Every PC-side candidate (retry-queue lock, CLOSING poll guard, a discharge poll before close) was
+     * refuted by measurement. Do NOT reduce this profile's churn to make it pass: its rate IS the
+     * measurement, and on an M2 desktop it is zero because the timing never lines up.
      * TODO(refactor): settle the residual-failure attribution — see
      * docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md
      * <p>
@@ -425,18 +423,16 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     @Tag("performance")
     @Test
     @Quarantined(
-            reason = "Rebalance stall, mechanism unexplained. The detector returns FLAT - the record count "
-                    + "stops rather than slows - and the ambient probe autopsy reports "
-                    + "ZOMBIE_MEMBER/REBALANCE_BLOCKED with the group dwelling in PreparingRebalance because a "
-                    + "member stopped answering, the whole assignment frozen at comparable lag. Measured at one "
-                    + "failure in ten consecutive runs on an idle Linux box, plus repeated CI failures, always "
-                    + "that same signature. It reproduces on the tree carrying this branch's log-argument fix, so "
-                    + "it is neither the confluentinc#857 revoke deadlock nor the SLF4J argument-evaluation "
-                    + "defect - it is a third thing. QUARANTINED PRE-EMPTIVELY, and the evidence tension is "
-                    + "deliberate rather than overlooked: the ledger was measured while this test was PR-state, "
-                    + "because on master the test is @Disabled and cannot fail there. This PR enables it into a "
-                    + "required lane, so on merge master inherits a gating check that fails about one run in ten. "
-                    + "The quarantine is applied at exactly the moment the failure becomes master-state.",
+            reason = "Rebalance stall, mechanism MEASURED (2026-09-05): the Kafka consumer group protocol under this "
+                    + "profile's churn rate, not a PC defect. The chaos monkey restarts instances faster than a join "
+                    + "phase completes, a LeaveGroup sent while the member's own JoinGroup is pending is answered only "
+                    + "when the phase completes, and under continuous mid-join departures one phase was observed open for "
+                    + "17s - during which consumer.poll() returns nothing to ANY member, which is the FLAT count the "
+                    + "detector fires on at 12s. In every failing run no coordinator request was slow (LeaveGroup <=2.8s, "
+                    + "JoinGroup <=3.0s, same as passing runs). Every PC-side candidate was refuted by measurement or shown "
+                    + "off the path. Rate: 4 in 60 on the Linux runner, 0 in 22 on an M2 desktop - a property of the "
+                    + "hardware's churn timing, which is what this profile measures. Quarantined because a test whose "
+                    + "failures are the protocol's cannot gate merges; where it should live is an open decision.",
             tracking = "docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md",
             flapping = true)
     void largeNumberOfInstances() {
