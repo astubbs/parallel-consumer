@@ -171,6 +171,15 @@ the property the other two candidates both still have to work around: declining 
 transactional action, so nothing new runs on the poll thread and the astubbs#29 hazard is sidestepped
 rather than handled carefully.
 
+**Why not anything that makes the poll thread wait on the control thread.**
+[`docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md)
+owns the AB-BA deadlock behind confluentinc#857 at this exact seam - the poll thread parked in
+`onPartitionsRevoked`, the control thread holding the same monitor inside a blocking commit. It is
+reachable only in `PERIODIC_CONSUMER_SYNC`, so it is not this defect, but it disqualifies a fix shape:
+the second candidate above in its naive form, and the "coordinate with the control-thread drain"
+variant of the first, both put the poll thread in exactly that position. That is a second, independent
+argument for the unconditional decline, which waits on nothing.
+
 **Why transactional mode only.** In consumer-commit mode the revoke commits offsets and nothing
 else; an undrained success is simply not included and its record is redelivered, which is the
 consumer lane's published at-least-once contract doing its job. Nothing was produced inside a
