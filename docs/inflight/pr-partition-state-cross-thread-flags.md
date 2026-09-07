@@ -2,41 +2,44 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-impact: stall -->
-<!-- inflight-state: open -->
+<!-- inflight-impact: coordination -->
 
-Working note for `fix/partition-state-cross-thread-flags`. Deleted when that PR merges; what
-outlives it moves to `docs/solutions/`, and this note says which parts those are.
+<!-- post-merge: checked-begin - every sentence below names astubbs/parallel-consumer#469 rather
+     than "this PR", and reads correctly once that PR has merged and its branch is gone -->
+Working note for astubbs/parallel-consumer#469. The durable knowledge has already moved to
+[`docs/solutions/logic-errors/volatile-is-the-fix-for-a-one-writer-field-not-a-shared-one-2026-09-07.md`](../solutions/logic-errors/volatile-is-the-fix-for-a-one-writer-field-not-a-shared-one-2026-09-07.md)
+and into each field's own javadoc, so what is left here is only what a reviewer of that PR needs
+while it is open. It goes when it merges.
 
-## What this branch inherits, and what it must not undo
+## The decision astubbs#469 takes that the next reader is most likely to reverse on sight
 
-Two `docs/inflight/` notes, both deleted by this branch once their fields are fixed:
-`bug-allowed-more-records-crosses-threads-unfenced.md` and
-`bug-state-changed-since-commit-start-written-from-both-threads.md`. Read them before touching
-either field - they carry a superseded reasoning kept deliberately (the `throughput`-vs-`stall`
-misclassification review caught on astubbs#349) that a tidy-up pass would delete as noise.
-
-**The decision this branch takes that the next reader is most likely to reverse on sight:**
-`stateChangedSinceCommitStart` is *not* fixed with `volatile`, even though the field beside it was.
+**`stateChangedSinceCommitStart` is not fixed with `volatile`, even though the field beside it is.**
 The jcstress arm `CommitWindowLostUpdateProbes.VolatileStateChangedFlagAcrossTheCommitWindow` exists
 solely to hold that line - it is the volatile fix, measured, moving the anomaly by nothing. Re-run it
-before proposing the modifier.
+before proposing the modifier. The two notes astubbs#469 retired
+(`bug-allowed-more-records-crosses-threads-unfenced.md`,
+`bug-state-changed-since-commit-start-written-from-both-threads.md`) carried a superseded reasoning
+kept deliberately - the `throughput`-vs-`stall` misclassification review caught on astubbs#349 - and
+the solution write-up above carries what outlived them.
 
 ## Two things a reviewer should push back on
 
-- **There is no deterministic seam test that is RED on unmodified master for the commit-window
-  defect, and it is not for want of looking.** Master's protocol is correct in program order at every
-  overridable call on the commit path; the defect is an interleaving inside `setClean()`'s
-  check-then-act, and master offers no override point between that read and that write. The
-  redness is shown with a control arm instead - the seam kept, the protocol reverted - which is
-  recorded in the fix commit's body. If a reviewer sees a seam master already has, say so.
+- **The seam the pinning test drives is new production code**, not one master already had. Master's
+  protocol was correct in program order at every overridable call on the commit path; the defect is
+  an interleaving inside `setClean()`'s check-then-act, between a read and a write with nothing
+  between them. So `PartitionState.onCommitWindowClosing()` was added - an overridable no-op - and
+  the redness is shown two ways rather than one: a permanent control arm in
+  `PartitionStateCommitWindowSeamTest` that reverts only the protocol, and a transient revert of the
+  production protocol whose failure output is in astubbs#469's fix commit. **If a reviewer can see a
+  seam master already had, say so** - the added one loses its justification.
 - **The field collapse touches what astubbs#349 measured.** `dirty` stops being a `volatile boolean`
   and becomes a comparison of two counters. The release/acquire edge that PR measured is preserved
-  (an `AtomicLong` RMW is a strictly stronger release than a volatile store), but the modifier
-  tripwire it left had to move rather than be deleted, which is what its own failure message asked
-  for.
+  (an `AtomicLong` RMW is a strictly stronger release than a volatile store), but its modifier
+  tripwire had to move rather than be deleted - which is what that test's own failure message asked
+  for. It is now `PartitionStateCrossThreadFieldFenceTest`.
 
 ## Collisions, noted rather than dodged
 
 Open drafts astubbs/parallel-consumer#410 and astubbs/parallel-consumer#460 both touch
 `PartitionState`. Neither is reshaped around; whichever merges second resolves the overlap.
+<!-- post-merge: checked-end -->

@@ -47,8 +47,9 @@ import static org.openjdk.jcstress.annotations.Expect.FORBIDDEN;
  *
  * <h2>WHAT THESE ARMS CAN AND CANNOT SHOW - read before quoting a number</h2>
  *
- * <b>The harm recorded in {@code docs/inflight/bug-allowed-more-records-crosses-threads-unfenced.md} is
- * NOT measurable here, and no bounded stress run can measure it.</b> That harm is <i>unbounded
+ * <b>The harm recorded in
+ * {@code docs/solutions/logic-errors/volatile-is-the-fix-for-a-one-writer-field-not-a-shared-one-2026-09-07.md}
+ * is NOT measurable here, and no bounded stress run can measure it.</b> That harm is <i>unbounded
  * staleness</i>: a control thread holding a stale {@code false} admits nothing, so nothing succeeds,
  * nothing re-dirties the partition, and {@code tryToEncodeOffsets} never runs again - there is no later
  * write to rescue it. "Never" is not an outcome jcstress can observe; every value the reader sees in a

@@ -144,8 +144,9 @@ number about code that no longer matches it and no reader can see the difference
   other. What remains under the same defect class is deliberately not counted here: regenerate it
   with `./mvnw -o spotbugs:spotbugs -pl :parallel-consumer-core` and read the report.
   [`docs/refactoring.md`](../refactoring.md)'s `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` entry owns the
-  recorded list - and `bug-allowed-more-records-crosses-threads-unfenced.md` records that the entry
-  is currently missing the `PartitionState` fields, so read the report, not just the entry. The
+  recorded list; it was missing every `PartitionState` field until astubbs#469 corrected it and
+  replaced the list with the reproduce command, which is why this line says read the report and not
+  just the entry. The
   tension survives for whatever that leaves, and so does the
   `core-control-thread-contract-debts.md` caution that fixing piecemeal may conflict with the
   shared-nothing rework.
