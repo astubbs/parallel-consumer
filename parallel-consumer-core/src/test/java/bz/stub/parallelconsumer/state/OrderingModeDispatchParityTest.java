@@ -36,6 +36,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * 2026-08-21 and a fix was written, tested and merged on the strength of it, before like-for-like runs
  * showed the two are 0.9% apart and the original comparison had been taken at two different record
  * counts. See docs/inflight/perf-throughput-regression-since-0-3.md.
+ * <!-- file-refs: N/A - that note is carried by perf/throughput-regression-since-0-3 and has not merged -->
  * <p>
  * WHY IT COUNTS RATHER THAN TIMES, WHICH IS THE WHOLE STORY OF THIS TEST. It originally timed both modes and
  * compared them, and it spent a day reporting a regression against code that a bisect then showed had not
