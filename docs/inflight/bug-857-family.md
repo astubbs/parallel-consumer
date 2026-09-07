@@ -90,11 +90,11 @@ established:
 
 - The fleet-scoped `NO_PROGRESS` firings are a **timing proxy** - the backlog drains every time the
   detector fires. Its `## ANSWERED, 2026-08-28` and `## CONFIRMED, 2026-08-28` sections.
-- The per-instance `INSTANCE_STALL/NO_WORK_COMPLETED` firings are **a real wedge that never
-  recovers**: one member stays live, keeps taking work, and returns nothing while the fleet finishes
-  around it. Its `## CLASSIFIED, 2026-09-03` section, and the `What is still open` paragraph under
-  it, which names the next experiment. **Why the workers return nothing is open, and nothing
-  anywhere answers it.**
+- The per-instance `INSTANCE_STALL/NO_WORK_COMPLETED` firings are **a different line from the
+  fleet-scoped one and must not be read with it**: one member stays live, keeps taking work, and
+  returns nothing while the fleet finishes around it. What that member's workers are doing is the
+  churn note's question, not this file's - read from its `## CLASSIFIED, 2026-09-03` section
+  forward, and take the latest dated section as the current reading.
 
 **THE DETECTOR SILENCE PROBLEM IS WITHDRAWN.** This paragraph once reported a third of the
 astubbs#344 arms going red with `NO_PROGRESS` silent, and told readers to settle that before trusting
