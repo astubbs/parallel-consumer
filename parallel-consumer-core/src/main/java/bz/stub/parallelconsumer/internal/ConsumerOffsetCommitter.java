@@ -185,7 +185,16 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * newest request is acknowledged, which costs at most one extra commit and cannot under-report. This is the
      * monotonic-sequence discipline {@code Consumer#commitAsync}'s own javadoc recommends for exactly this
      * reason. In practice the client answers in send order, so the check normally passes; it is here because
-     * "normally" is not a guarantee this class can make.
+     * "normally" is not a guarantee this class can make. Nothing downstream is a second line of defence:
+     * {@code PartitionState.onOffsetCommitSuccess} assigns {@code lastCommittedOffset} unconditionally, so a
+     * stale success reaching it would walk the recorded offset <em>backwards</em>.
+     * <p>
+     * <b>Why supersession is checked BEFORE the exception.</b> The ERROR line for a failure states what the
+     * failure means - that these offsets stay dirty and this cycle re-commits them - and for a superseded
+     * request that claim can be false: a later request has already been sent, so what happens to those offsets
+     * is decided by <em>its</em> answer, not this one. A superseded answer decides nothing either way, success
+     * or failure, so both are reported as supersession rather than as an outcome. The failure half is still
+     * worth a WARN, because a request did fail; it is simply not the ERROR that says a re-commit is in hand.
      *
      * @param sequence  which request this answers - {@link #asyncCommitSequence} as it stood when it was sent
      * @param offsets   the offsets that request carried
@@ -194,6 +203,24 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
     private void onAsyncCommitAnswered(long sequence,
                                        Map<TopicPartition, OffsetAndMetadata> offsets,
                                        Exception exception) {
+        long latest = asyncCommitSequence.get();
+        if (sequence != latest) {
+            if (exception == null) {
+                log.debug("Ignoring the acknowledgement of superseded async commit {} (latest is {}) - the newer " +
+                                "request carries higher offsets and has not been answered yet, so the partitions " +
+                                "stay dirty",
+                        sequence, latest);
+            } else {
+                // Summarised for the same reason the ERROR line below is - astubbs#168 (confluentinc#629). WARN,
+                // not ERROR: a request really did fail, but this one cannot claim the re-commit the ERROR line
+                // promises, because the newer request's answer is what decides these offsets.
+                log.warn("Async offset commit {} failed, and it had already been superseded by commit {} - what " +
+                                "happens to these offsets is decided by that newer request, not by this answer. " +
+                                "Offsets: {}, exception: ",
+                        sequence, latest, RecordBatchSummary.summariseCommit(offsets), exception);
+            }
+            return;
+        }
         if (exception != null) {
             // Every partition and offset stays on this line - astubbs#168 (confluentinc#629) asked for
             // exactly them - and only the metadata string is reduced, to its length: it is PC's encoded
@@ -204,13 +231,6 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                             "next cycle. Offsets: {}, exception: ",
                     RecordBatchSummary.summariseCommit(offsets), exception);
             log.debug("Failed commit in full: {}", offsets);
-            return;
-        }
-        long latest = asyncCommitSequence.get();
-        if (sequence != latest) {
-            log.debug("Ignoring the acknowledgement of superseded async commit {} (latest is {}) - the newer " +
-                    "request carries higher offsets and has not been answered yet, so the partitions stay dirty",
-                    sequence, latest);
             return;
         }
         log.debug("Async commit acknowledged by the broker: {}", RecordBatchSummary.summariseCommit(offsets));

@@ -4,14 +4,11 @@ package bz.stub.parallelconsumer.internal;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
-import bz.stub.parallelconsumer.state.WorkManager;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
-import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetCommitCallback;
 import org.apache.kafka.common.TopicPartition;
@@ -23,18 +20,17 @@ import org.junit.jupiter.api.parallel.ResourceAccessMode;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.mockito.ArgumentCaptor;
 
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
+import static bz.stub.parallelconsumer.internal.AsyncCommitterFixture.GROUP;
+import static bz.stub.parallelconsumer.internal.AsyncCommitterFixture.consumerManagerMock;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static java.util.Collections.nCopies;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -104,12 +100,12 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
         Map<TopicPartition, OffsetAndMetadata> offsets = twoPartitionCommit(metadata);
 
         try (var logs = LogCapture.of(ConsumerOffsetCommitter.class, Level.DEBUG)) {
-            committer.commitOffsets(offsets, new ConsumerGroupMetadata("a-group"));
+            committer.commitOffsets(offsets, GROUP);
 
             completeCallbackWith(consumerMgr, offsets, new RebalanceInProgressException(
                     "Offset commit cannot be completed since the consumer is undergoing a rebalance (mocked)"));
 
-            String errorLine = only(logs.messagesAt(Level.ERROR), TOPIC);
+            String errorLine = logs.onlyMessageAt(Level.ERROR, TOPIC);
             assertThat(errorLine).contains(TOPIC + "-0: offset 1000, " + metadata.length() + " chars of metadata");
             assertThat(errorLine).contains(TOPIC + "-1: offset 5, no metadata");
             assertThat(errorLine).doesNotContain(metadata);
@@ -127,7 +123,7 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
                     .isEqualTo(RebalanceInProgressException.class.getName());
 
             // the unabridged map is still available, one level down, where it has to be asked for
-            assertThat(only(linesMentioning(logs.messagesAt(Level.DEBUG), TOPIC), FULL_MAP_LINE)).contains(metadata);
+            assertThat(logs.onlyMessageAt(Level.DEBUG, TOPIC, FULL_MAP_LINE)).contains(metadata);
         }
     }
 
@@ -147,30 +143,21 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
         Map<TopicPartition, OffsetAndMetadata> offsets = twoPartitionCommit(largestOffsetMapPcWillWrite());
 
         try (var logs = LogCapture.of(ConsumerOffsetCommitter.class, Level.DEBUG)) {
-            committer.commitOffsets(offsets, new ConsumerGroupMetadata("a-group"));
+            committer.commitOffsets(offsets, GROUP);
 
             completeCallbackWith(consumerMgr, offsets, null);
 
-            assertThat(linesMentioning(logs.messagesAt(Level.ERROR), TOPIC)).isEmpty();
-            assertThat(linesMentioning(logs.messagesAt(Level.DEBUG), FULL_MAP_LINE)).isEmpty();
+            assertThat(logs.messagesAt(Level.ERROR, TOPIC)).isEmpty();
+            assertThat(logs.messagesAt(Level.DEBUG, FULL_MAP_LINE)).isEmpty();
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static ConsumerManager<String, String> consumerManagerMock() {
-        return mock(ConsumerManager.class);
-    }
-
     /**
-     * {@code build()} does not validate - {@code validate()} is what needs a real consumer, and nothing here calls it.
+     * The success marking is nobody's business here, so the {@code WorkManager} is a bare mock - what happens past
+     * it is {@link ConsumerOffsetCommitterSupersededAsyncCommitTest}'s subject.
      */
     private static ConsumerOffsetCommitter<String, String> committerFor(ConsumerManager<String, String> consumerMgr) {
-        @SuppressWarnings("unchecked")
-        WorkManager<String, String> workManager = mock(WorkManager.class);
-        var options = ParallelConsumerOptions.<String, String>builder()
-                .commitMode(PERIODIC_CONSUMER_ASYNCHRONOUS)
-                .build();
-        return new ConsumerOffsetCommitter<>(consumerMgr, workManager, options);
+        return AsyncCommitterFixture.asyncCommitter(consumerMgr, AsyncCommitterFixture.workManagerMock());
     }
 
     /**
@@ -220,20 +207,6 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
         assertWithMessage("no throwable attached to the %s event - was the exception argument dropped?", level)
                 .that(thrown).isNotNull();
         return thrown.getClassName();
-    }
-
-    /**
-     * @return the one captured line mentioning {@code unique} - asserting there is exactly one, so a second matching
-     * line is a failure rather than something silently discarded by a {@code findFirst()}
-     */
-    private static String only(Collection<String> messages, String unique) {
-        List<String> matches = linesMentioning(messages, unique);
-        assertThat(matches).hasSize(1);
-        return matches.get(0);
-    }
-
-    private static List<String> linesMentioning(Collection<String> messages, String unique) {
-        return messages.stream().filter(message -> message.contains(unique)).collect(Collectors.toList());
     }
 
 }
