@@ -26,7 +26,7 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `claude-code-review.yml` | The review gate. Invokes no Claude and costs nothing. What satisfies it: [`docs/ci.md`](../../docs/ci.md), stated once there. |
 | `claude.yml` | Answers `@claude` comments, and reviews when asked to - the only route that can raise inline review threads. |
 | `dependency-audit.yml` | Scans the **whole** resolved dependency tree for CVEs. On demand and weekly, because a new advisory needs no push to arrive; the per-PR half is the `deps: whole-tree CVE scan` step of `maven.yml`'s `scan: repo`, and the two are the only places OSS Index is switched on. |
-| `maven.yml` | The main build: unit, integration and performance suites, static analysis (Infer and SpotBugs, batched as `static: analysis`), and duplicate detection, dependency review and the whole-tree CVE scan (batched as `scan: repo`), plus PIT. |
+| `maven.yml` | The main build: unit, integration and performance suites, static analysis (Infer and SpotBugs, batched as `static: analysis`), and duplicate detection, dependency review, the whole-tree CVE scan and PR-scoped PIT (batched as `scan: repo`, PIT last and advisory). |
 | `mutation-full-sweep.yml` | The whole-repo PIT mutation sweep - nightly, plus on demand. Too slow for a PR. Self-hosted high-CPU lane, plus a hosted trial arm. |
 | `publish.yml` | Publishes to Maven Central on every push to `master`; the pom version decides snapshot or release. |
 | `quarantine-lane.yml` | Runs the quarantined tests separately, so known-flaky tests neither block nor disappear. |

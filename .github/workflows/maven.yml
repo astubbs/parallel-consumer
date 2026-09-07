@@ -520,61 +520,6 @@ jobs:
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Mutation testing (PIT). ci-mutation-test.sh scopes to the classes CHANGED vs the PR base
-  # (GITHUB_BASE_REF), so it's fast enough for the 2-core hosted runner - the full internal.* sweep would
-  # time out here (which is why it used to be self-hosted-only).
-  #
-  # ADVISORY ABOUT SCORES, NOT ABOUT ITSELF. `continue-on-error: true` stays - it keeps a mutation
-  # result from failing the workflow run, while the check ROW still renders red when the step fails
-  # (measured, see docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md). So red was always
-  # honest here and green never was: measured 2026-08-25 over the last 40 pull_request runs of this
-  # workflow, 40 green ticks and zero mutants scored, because every path out of the script exited 0.
-  # The step below reads bin/ci-mutation-test.sh's exit code instead and reacts to each state
-  # separately - survivors still fail nothing, but a lane that could not run, or ran and measured
-  # nothing, now goes red. The exit-code contract lives in that script's header;
-  # docs/inflight/ci-mutation-testing.md has the measurement.
-  mutation:
-    if: github.event_name == 'pull_request'
-    needs: prepare-deps
-    name: "Mutation Tests (PIT, PR-scoped)"
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    continue-on-error: true      # advisory - never gates merge; a failed STEP still reddens the row
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0          # ci-mutation-test.sh diffs vs the PR base to scope to changed classes
-      - uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      - name: Restore Maven cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.m2/repository
-          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            setup-java-Linux-x64-maven-
-      - name: Self-test the mutation verdict
-        # Ahead of the lane it protects, the same ordering repo-hygiene.yml uses.
-        # Seconds, no maven: it feeds canned PIT logs through the verdict and asserts the exit codes.
-        run: bash bin/test-ci-mutation-test.sh
-
-      - name: Mutation testing (changed classes only)
-        run: |
-          set +e
-          bin/ci-mutation-test.sh
-          rc=$?
-          set -e
-          case "$rc" in
-            0) echo "PIT scored mutants - see the job summary for the survivor list." ;;
-            3) echo "::notice::PIT had nothing in scope: no core main-source class in a decidable package changed." ;;
-            2) echo "::error::PIT could not run, or ran and scored nothing. This is a broken lane, not a clean PR."
-               exit 1 ;;
-            *) echo "::error::PIT exited ${rc}."
-               exit "$rc" ;;
-          esac
-
   # Experimental Kafka 4.x compatibility check. Non-blocking.
   # DISABLED pending the Kafka 4.x migration work: the experimental 4.x build currently fails and just adds
   # a red X of noise to every PR (it is continue-on-error, so it never gated merges). Re-enable by restoring
@@ -635,19 +580,31 @@ jobs:
 
   # ── Scanners (PR-only) ────────────────────────────────────────────────
 
-  # Four scanners that used to be four jobs - `dups: clones`, `dups: similarity`,
-  # `deps: vulnerabilities` and `deps: whole-tree CVE scan` - now run as steps of one. The repo is on
-  # the free plan's 20-concurrent-job cap, so each was a slot the sharded suites queued behind
-  # (ce-optimize run `ci-fewer-jobs`).
+  # Five checks that used to be five jobs - `dups: clones`, `dups: similarity`,
+  # `deps: vulnerabilities`, `deps: whole-tree CVE scan` and `Mutation Tests (PIT, PR-scoped)` - now
+  # run as steps of one. The repo is on the free plan's 20-concurrent-job cap, so each was a slot the
+  # sharded suites queued behind (ce-optimize run `ci-fewer-jobs`).
   #
   # FAIL AT THE END, REPORT EVERYTHING. Every scanner step carries `!cancelled()`, so a red first
   # scanner never hides the ones after it; the job's own conclusion aggregates the step failures,
   # so there is no verdict step and no continue-on-error. Cheapest signal first: dependency review
-  # takes seconds, the two duplication engines take about a minute each, and the whole-tree CVE scan
-  # - the only step that needs a JDK, a Maven cache and a build - goes last.
+  # takes seconds, the two duplication engines take about a minute each, then the whole-tree CVE
+  # scan, and the PIT lane dead last because it is the only step whose runtime is unbounded in
+  # practice (11s when it has nothing to mutate, half an hour when it does).
+  #
+  # THE PIT STEPS ARE THE ONE EXCEPTION TO "NO CONTINUE-ON-ERROR" HERE, and it is not a relaxation:
+  # the mutation lane was a `continue-on-error: true` JOB, so neither its self-test nor its run could
+  # ever gate a merge. `scan: repo` IS a required check, so folding those steps in bare would have
+  # promoted an advisory lane to a gating one by accident. `continue-on-error: true` on the two PIT
+  # steps keeps exactly the old semantics - the step still renders red in the log and in the job's
+  # step list, and still cannot fail the check. docs/ci.md, "A green mutation tick usually means
+  # 'measured nothing' - read the exit code", owns why the exit codes matter and why requiring this
+  # signal is a code change rather than a ruleset edit.
   #
   # One checkout at fetch-depth 0: both duplication tools compare the PR against its base branch
-  # (`compare_with_base`, `max-increase`), which needs the base's history on disk.
+  # (`compare_with_base`, `max-increase`), which needs the base's history on disk, and
+  # bin/ci-mutation-test.sh diffs against the PR base to scope PIT to the changed classes. Do not
+  # narrow it - the mutation lane falls back to the FULL glob when the base ref will not resolve.
   #
   # THE OLD JOB NAMES LIVE ON AS STEP NAMES, so the log reads the same way the checks list used to,
   # and every doc that says "`dups: clones` found ..." still names the thing that found it. What did
@@ -665,9 +622,11 @@ jobs:
     if: github.event_name == 'pull_request'
     name: "scan: repo"
     runs-on: ubuntu-latest
-    # The scanners held 10 and the CVE audit held 20. Sized for the sum with headroom for a cold
-    # Maven cache, without leaving a hung tool sitting for an hour.
-    timeout-minutes: 25
+    # The scanners held 10, the CVE audit 20 and the mutation lane 30. Sized for the sum of the
+    # first two plus the PIT step's OWN 20-minute cap (below), not for the old 30: the step bound is
+    # what stops a mutating run holding the job, and the job bound is only the backstop. 45 leaves
+    # headroom for a cold Maven cache without letting a hung tool sit for an hour.
+    timeout-minutes: 45
     needs: prepare-deps
     # All three no-build tools post PR comments: the two duplication tools through their
     # github-token / github_token inputs, dependency review through comment-summary-in-pr. Same
@@ -821,11 +780,15 @@ jobs:
       # dispatch, which is the half no PR can cover. Read its header before changing anything here;
       # the comments below are only what a reader of THIS job cannot do without.
       #
-      # These five steps are the only ones here that need a JDK, the Maven cache and `needs:
-      # prepare-deps`, so they go last and their setup goes with them - a fork or Dependabot PR
-      # skips the whole block and pays none of it.
+      # THE JDK AND THE CACHE ARE SHARED WITH THE PIT STEPS BELOW, so these two are NOT behind the
+      # credentials guard, while every step that actually talks to OSS Index still is. They were
+      # guarded when the CVE block was the only thing here that built; the mutation lane runs on
+      # every PR including forks and Dependabot ones, so guarding the setup would leave PIT with no
+      # Maven cache on exactly the PRs that get no CVE scan. `server-id: ossindex` is inert when the
+      # audit steps skip: setup-java only writes a settings.xml <server> entry, which nothing reads
+      # unless the Maven audit run happens.
       - uses: actions/setup-java@v5
-        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
+        if: ${{ !cancelled() }}
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -839,8 +802,9 @@ jobs:
 
       # Restore-only, off prepare-deps' rotating key. These steps must not SAVE a cache: it would
       # compete with the key the build lanes own, and it resolves a different (smaller) set.
+      # Unguarded for the same reason as the JDK above - the PIT steps need it on every PR.
       - name: Restore Maven cache
-        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
+        if: ${{ !cancelled() }}
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository
@@ -915,6 +879,58 @@ jobs:
             ossindex-audit.log
             **/target/ossindex-report.json
           if-no-files-found: warn
+
+      # ── Mutation testing, PIT (was the `Mutation Tests (PIT, PR-scoped)` job) ──────────────
+      #
+      # ci-mutation-test.sh scopes to the classes CHANGED vs the PR base (GITHUB_BASE_REF), so it is
+      # fast enough for the 2-core hosted runner - the full internal.* sweep would time out here
+      # (which is why it used to be self-hosted-only, and why mutation-full-sweep.yml still is).
+      #
+      # ADVISORY ABOUT SCORES, NOT ABOUT ITSELF. The `continue-on-error: true` that used to sit on
+      # the JOB now sits on each of these two steps, which is what keeps the semantics: a mutation
+      # result must not fail the check, while a failed step still renders red where a reader sees it
+      # (measured on the old job, see docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md). So red
+      # was always honest here and green never was: measured 2026-08-25 over the last 40
+      # pull_request runs of this workflow, 40 green ticks and zero mutants scored, because every
+      # path out of the script exited 0. The step below reads bin/ci-mutation-test.sh's exit code
+      # instead and reacts to each state separately - survivors still fail nothing, but a lane that
+      # could not run, or ran and measured nothing, now goes red. The exit-code contract lives in
+      # that script's header; docs/inflight/ci-mutation-testing.md has the measurement.
+      #
+      # LAST, AND ON ITS OWN CLOCK. Every check above has already reported by the time this starts,
+      # and `timeout-minutes: 20` on the run step is what stops a mutating PR (up to ~30 minutes of
+      # PIT) leaving the scanner and CVE results waiting behind it. 20 is above the 19m18s scored run
+      # on record while staying under the job's 45; the old lane's 30-minute JOB cap had about a
+      # third headroom over a normal run and was seen to flap on a slow runner
+      # (docs/inflight/test-untracked-ci-flakes.md). A step-level timeout ends the STEP, so the job
+      # still finishes and reports; a cancelled job reported nothing.
+      - name: Self-test the mutation verdict
+        # Ahead of the lane it protects, the same ordering repo-hygiene.yml uses.
+        # Seconds, no maven: it feeds canned PIT logs through the verdict and asserts the exit codes.
+        # `continue-on-error` because the whole lane was advisory before this fold - and the same
+        # self-test runs non-advisory in `repo: hygiene`'s `bin/check-all.sh --with-tests` sweep,
+        # which is a required check, so nothing is lost by not gating on it twice.
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: bash bin/test-ci-mutation-test.sh
+
+      - name: "Mutation Tests (PIT, PR-scoped)"
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          set +e
+          bin/ci-mutation-test.sh
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "PIT scored mutants - see the job summary for the survivor list." ;;
+            3) echo "::notice::PIT had nothing in scope: no core main-source class in a decidable package changed." ;;
+            2) echo "::error::PIT could not run, or ran and scored nothing. This is a broken lane, not a clean PR."
+               exit 1 ;;
+            *) echo "::error::PIT exited ${rc}."
+               exit "$rc" ;;
+          esac
 
   # TWO STATIC ANALYSERS IN ONE JOB. They ran as `static: infer` and `static: spotbugs`: both waited
   # on prepare-deps and both restored the same Maven cache with an identical step, so batching them

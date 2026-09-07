@@ -13,7 +13,11 @@ checklist" below. Three more, `maven.yml`'s no-build scanners `dups: clones`, `d
 build-dependent static analysers `static: infer` and `static: spotbugs`, became steps of one new job,
 `static: analysis` - see "The static-analysis fold" below. A tenth, `dependency-audit.yml`'s
 `deps: whole-tree CVE scan`, became a fourth step of `scan: repo` - see "The CVE fold" below; that
-workflow keeps its `schedule` and `workflow_dispatch` triggers and is not deleted.
+workflow keeps its `schedule` and `workflow_dispatch` triggers and is not deleted. An eleventh,
+`maven.yml`'s `Mutation Tests (PIT, PR-scoped)`, became the fifth and last step of `scan: repo` -
+and is the one of these eleven folds that owes **no** ruleset edit at all; see "The PIT fold owes no
+ruleset edit" below, which exists so a reader diffing the checks list does not go looking for the
+entry that is deliberately absent.
 All ten old names are still **required status-check contexts in the master ruleset**, and the ruleset is repository settings, not tree state - no PR can change it
 ([`docs/ci.md`](../ci.md), "The required list is repository settings, not tree state").
 <!-- file-refs: N/A - copyright.yml and pr-checklist.yml are named as the files this work deleted; the record of each is its deleting commit, `git log --diff-filter=D -- .github/workflows/copyright.yml .github/workflows/pr-checklist.yml` -->
@@ -171,6 +175,57 @@ stops appearing. It read `test("Mutation|spotbugs|racerd|CVE|Quarantine")`, in w
 already been dead since the job became `static: infer`; it now names the live checks,
 `test("Mutation|static: analysis|scan: repo|CVE|Quarantine")`, and carries a comment saying to
 re-read it whenever a job is renamed or folded.
+
+## The PIT fold owes no ruleset edit - and that is the point of this section
+
+`Mutation Tests (PIT, PR-scoped)` is the eleventh check the `ci-fewer-jobs` folds remove from a PR's
+checks list, and the only one whose name is **not** on the removal list above. It was never a required
+context: [`docs/ci.md`](../ci.md)'s "These are deliberately NOT required" table has always carried a
+row for it, because the job was `continue-on-error: true` and a required check reads the *conclusion*
+- which `continue-on-error` makes success even when the step fails. Requiring it would have gated
+nothing. So there is nothing to remove, and nothing to add.
+
+Written down because the absence is indistinguishable from an oversight. Somebody comparing a PR's
+checks list before and after the merge sees eleven rows go and ten names accounted for here; without
+this paragraph the eleventh reads as a missed edit, and the natural repair - adding
+`Mutation Tests (PIT, PR-scoped)` to a ruleset that never had it - fails with a context nothing has
+ever produced.
+
+What the fold had to carry:
+
+- **`continue-on-error: true` moved from the JOB to each of the two steps.** `scan: repo` **is** a
+  required check, so folding an advisory lane into it bare would have promoted a mutation verdict to
+  a merge gate by accident - the single most consequential thing this fold could have got wrong. On
+  the steps, the semantics are identical to before: a red step renders red in the log and the step
+  list, and cannot fail the check. Every exit-code branch of the run step (`0` scored, `3` nothing in
+  scope, `2` broken lane -> `exit 1`, anything else -> `exit "$rc"`) is copied unchanged, `set +e`
+  handling included.
+- **A step-level `timeout-minutes: 20`,** where the job held 30. PIT is ~11s when nothing is in scope
+  and up to half an hour when something is; the job bound is now 45 and is only a backstop. The step
+  bound is the load-bearing one: it stops a mutating run leaving the scanner and CVE results waiting,
+  and a timed-out *step* still lets the job finish and report, where the old timed-out *job* reported
+  nothing at all (the sighting in [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md)).
+- **The JDK and the Maven cache restore came out from behind the credentials guard.** They were
+  guarded because the CVE block was the only thing in the job that built; PIT runs on every PR
+  including fork and Dependabot ones, so leaving them guarded would have handed the mutation lane a
+  cold repository on exactly the PRs that get no CVE scan. Every step that talks to OSS Index is
+  still guarded, and `server-id: ossindex` is inert when those steps skip.
+- **`fetch-depth: 0` was already there** for the two duplication tools, which is what the mutation
+  lane needs to diff against the PR base; it must not be narrowed, because an unresolvable base ref
+  makes `bin/ci-mutation-test.sh` fall back to the *full* glob.
+- **The self-test still runs first,** `continue-on-error` like the run step - it also runs
+  non-advisory inside `repo: hygiene`'s `bin/check-all.sh --with-tests` sweep, which is required, so
+  nothing is lost by not gating on it twice here.
+
+**The name-matching consumer needs a second repair, and it is in `bin/` rather than in a
+workflow**: `bin/check-pr-analysis-surfaces.sh` lists check runs through
+`test("Mutation|static: analysis|scan: repo|CVE|Quarantine")`. After this fold no check run is named
+`Mutation Tests (PIT, PR-scoped)`, so the `Mutation` alternative matches nothing - it is `racerd`
+again, one fold later. Nothing breaks: `scan: repo` is already in the pattern and is now the row
+that carries the PIT job summary, so the surface is still listed, under the batched name. The fix is
+to drop the now-dead `Mutation` alternative, leaving
+`test("static: analysis|scan: repo|CVE|Quarantine")`, and to say in the comment above it that the
+PIT summary now hangs off `scan: repo`.
 
 ## The CVE fold
 

@@ -70,14 +70,16 @@ document. This section is the detail behind it.
   **gating**, like the job they replaced: a chaos RED is a real finding. The **`Integration
   Tests`** lane is likewise two gating shards since astubbs#442 - a named heavy set and a
   catch-all defined by subtraction; see
-  ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). Also carries PR-scoped
-  mutation testing (PIT) and two batched jobs: **`static: analysis`** - Infer then SpotBugs, the
-  cheaper signal first - and **`scan: repo`** - the two duplication scanners, dependency
-  vulnerability review, and the whole-tree CVE scan last because it is the only one that builds.
-  In both, each step keeps the name of the job it used
+  ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). It also carries two
+  batched jobs: **`static: analysis`** - Infer then SpotBugs, the cheaper signal first - and
+  **`scan: repo`** - the two duplication scanners, dependency vulnerability review, the whole-tree
+  CVE scan, and PR-scoped mutation testing (PIT) dead last, the two builds after the three
+  no-build tools. In both, each step keeps the name of the job it used
   to be (`static: infer`, `static: spotbugs`; `dups: clones`, `dups: similarity`,
-  `deps: vulnerabilities`, `deps: whole-tree CVE scan`), so a red step still reads the way the red
-  check did. Push to
+  `deps: vulnerabilities`, `deps: whole-tree CVE scan`, `Mutation Tests (PIT, PR-scoped)`), so a red
+  step still reads the way the red check did. The PIT steps are the only ones in either job carrying
+  `continue-on-error` - the lane was an advisory *job* before the fold, and `scan: repo` is required,
+  so the flag is what stops the fold promoting it to a gate. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
   job - never `setup-java cache: 'maven'`.
@@ -312,7 +314,7 @@ every other PR) and not after (nothing merges). The live instance of this is
 
 | Check | Why not |
 |---|---|
-| `Mutation Tests (PIT, PR-scoped)` | **Requiring it would be vacuous.** The job is `continue-on-error: true`, so its check-run *conclusion* is success even when the step fails - the row reddens, and a required check reads the conclusion. The property worth gating is that the lane could not measure anything, which `bin/ci-mutation-test.sh` signals through its own exit codes rather than by finding survivors. Gating that means removing `continue-on-error` first, which is a code change, not a ruleset edit |
+| `Mutation Tests (PIT, PR-scoped)` | **There is no such check any more, and requiring it would have been vacuous anyway.** The lane is now the last two steps of `scan: repo`, each carrying its own `continue-on-error: true` - so a PIT verdict still cannot fail a check, exactly as when the flag sat on its own job. Requiring the old context is now impossible (nothing produces it) rather than merely pointless. The property worth gating is that the lane could not measure anything, which `bin/ci-mutation-test.sh` signals through its own exit codes rather than by finding survivors. Gating that still means removing `continue-on-error` first, which is a code change, not a ruleset edit - and it would now make `scan: repo` red on a mutation verdict, which is the decision to argue |
 | `Performance (optional)` | The self-hosted lane is dispatch-only, so this context is never produced on a PR. Requiring it would block every PR permanently |
 | `compat: kafka 4.x (experimental)` | Disabled with `if: false` |
 | `full build (master)` | Push-only; never produced on a PR |
@@ -1125,8 +1127,9 @@ never run on our own hardware.
   on-demand benchmark nobody dispatched, so it was not worth a file. Read it at
   `git show 5ae0cbfe4:.github/workflows/pr-highcpu-fast-feedback.yml`.
 - `mutation-full-sweep.yml` - **nightly plus dispatch**: the whole-project PIT sweep
-  (`bin/ci-mutation-test.sh -Dverbose=true -Dthreads=N`). The PR-scoped mutation job in `maven.yml`
-  only covers classes changed against the base; this is its exhaustive counterpart.
+  (`bin/ci-mutation-test.sh -Dverbose=true -Dthreads=N`). The PR-scoped mutation steps in
+  `maven.yml`'s `scan: repo` only cover classes changed against the base; this is its exhaustive
+  counterpart.
 
 ### A green mutation tick usually means "measured nothing" - read the exit code
 
@@ -1135,7 +1138,8 @@ never run on our own hardware.
 producing no statistics / zero mutants), **3** nothing in scope. Measured over the last 40
 `maven.yml` PR runs: 40 passes, zero mutants scored - the lane is correctly narrow, not broken. Only
 a **0** is evidence about test quality. `bin/test-ci-mutation-test.sh` guards the contract and runs
-in the lane ahead of it. The scope, the exclusions and the ranked widening list are in
+in the lane ahead of it - and, since the lane became two steps of `scan: repo`, non-advisory inside
+`repo: hygiene`'s `bin/check-all.sh --with-tests` sweep as well. The scope, the exclusions and the ranked widening list are in
 [`docs/inflight/ci-mutation-testing.md`](inflight/ci-mutation-testing.md); whether a skip should
 render grey rather than green is an open decision in
 [`docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md`](inflight/ci-mutation-lane-skip-reads-as-a-pass.md).

@@ -262,9 +262,10 @@ echo "  Job summaries (PIT survivor table, CVE tables) are not exposed by the RE
 # from this listing silently - nothing fails, the row simply stops appearing, and the reader cannot
 # tell "no summary to read" from "we stopped looking". `racerd` outlived the job that became
 # `static: infer` this way, and was dead here until the 2026-09-07 job folds forced a re-read.
-# Re-check this pattern whenever a job in .github/workflows/ is renamed or folded.
+# Re-check this pattern whenever a job in .github/workflows/ is renamed or folded. The PIT survivor
+# table now hangs off `scan: repo`, which is why no `Mutation` alternative is needed here.
 gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" \
-    --jq '.check_runs[] | select(.name | test("Mutation|static: analysis|scan: repo|CVE|Quarantine")) | "    \(.name): \(.html_url)"' \
+    --jq '.check_runs[] | select(.name | test("static: analysis|scan: repo|CVE|Quarantine")) | "    \(.name): \(.html_url)"' \
     2>/dev/null | sort -u || true
 echo
 echo "  Console-only output: a tool that prints to the Maven log and does not annotate is invisible"
