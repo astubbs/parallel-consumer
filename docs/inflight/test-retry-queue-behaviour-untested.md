@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED partly true: RetryQueue now has RetryQueueTest (removeAll contract), RetryQueueLincheckTest, RetryQueueRequeueWindowTest and RetryQueueIteratorConfinementTest, so "the only coverage is three tests in ShardManagerTest" is stale; bullet 1 is fixed - the last-resort sweep in ProcessingShard.getWorkIfAvailable now calls removeWorkAtOffset then retryQueue.remove, and bullet 4 (revoke) is covered by RetryQueueRequeueWindowTest; bullets 2 (re-add with a different retry-due) and 3 (the two-map unique/sorted invariant) are still unasserted -->
 
 
 The only coverage is three tests in `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/state/ShardManagerTest.java`:

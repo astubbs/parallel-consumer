@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-vetted: 2026-09-07 - still true: both model probes still exist (OutForProcessingCounterDriftProbeTest, Rebalance857CommitSyncDeadlockProbeIT); candidate 1 reads as written (WorkManager.isSufficientlyLoaded now calls sm.getWorkableRecords()), and candidates 2 and 4 still have no probe - no test asserts the offset map against independently computed truth, and no test asserts a revoked epoch reaches its new owner -->
 Candidate work, unowned. Ranked here rather than in `docs/refactoring.md` because it is a testing
 capability rather than a code refactor.
 

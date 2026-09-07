@@ -4,6 +4,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - still true, none of the items resolved so the delete-when condition is NOT met: jcstress-poc still declares no parent and is still absent from the root pom module list (so it is still outside the dependency and SpotBugs lanes), its pom still carries READ THE CALIBRATION BEFORE BELIEVING ANY ZERO as prose with no count assertion, no probe class imports anything from bz.stub.parallelconsumer so nothing detects correspondence drift, PartitionState.dirty is still the one field made volatile, and all four cited notes plus the dated plan doc still resolve -->
 
 `jcstress-poc/` landed in astubbs#348. A review pass over it raised the findings below and that PR
 closed none of them. Its measurements live in
