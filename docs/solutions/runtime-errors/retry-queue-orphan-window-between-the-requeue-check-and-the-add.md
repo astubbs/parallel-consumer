@@ -129,11 +129,11 @@ residency is by **reference**, and nothing ever re-inserts the same container in
 take the claim, then confirm residency, then hand it back if the container has left. The residency
 predicate is now `ProcessingShard.isResident`, shared by both.
 
-## The relationship to astubbs/parallel-consumer#431, which is not merged
+## The relationship to astubbs/parallel-consumer#431, which landed second
 
-**astubbs#431 is an open draft, so master is still shard-first.** Anything describing the declining sweep as
-shipped - including the in-flight note that first recorded this defect - is describing astubbs#431's branch,
-not master. This defect is reachable on master today either way, and was reproduced there.
+**Both changes are now in.** This one merged first, against a shard-first master; astubbs#431 followed with
+the declining sweep and the second queue removal that pairs with it. The defect was reproduced on master
+before either landed, so nothing about its reachability depended on which was in the tree.
 
 **The design constraint astubbs#431 established is not violated by this fix.** That PR keeps the rebalance
 callbacks off any wait on the retry queue's lock - they run on the broker-poll thread inside
@@ -142,11 +142,11 @@ queue under one lock, would reverse that decision. The fix above adds no lock an
 the poll thread's side; the controller does one extra map read and, in the losing case, one extra
 queue removal.
 
-**But astubbs#431's queue-first ordering defeats a one-shot confirmation, and the two changes must meet.**
-To decline the lock safely, astubbs#431 asks the queue first (`tryRemove`, non-blocking) so that a refusal
-abandons the paired shard removal and the pair never splits. `tryRemove` returns true when it
+**astubbs#431's queue-first ordering defeats a one-shot confirmation on its own, which is why it does not
+stop at one.** To decline the lock safely it asks the queue first (`tryRemove`, non-blocking) so that a
+refusal abandons the paired shard removal and the pair never splits. `tryRemove` returns true when it
 acquired the lock, whether or not anything was present - deliberately, since "there was no entry" and
-"I removed the entry" are the same answer to the caller's question. So:
+"I removed the entry" are the same answer to the caller's question. So, with one ask:
 
 1. sweep `tryRemove` - lock acquired, queue empty (the controller has not added yet), returns true;
 2. controller `retryQueue.add(wc)`;
@@ -156,17 +156,19 @@ acquired the lock, whether or not anything was present - deliberately, since "th
 Orphan, through the few instructions between the sweep's two steps - which is precisely the widening
 the original note attributed to astubbs#431, and it turns out to matter more than the note thought.
 
-**What astubbs#431 must add is small: repeat the queue removal AFTER the shard removal.** That closes the
+**What astubbs#431 added is small: it repeats the queue removal AFTER the shard removal.** That closes the
 half where the controller's add lands inside the sweep; the residency confirmation closes the half
 where the add arrives after the sweep has finished. Neither half is redundant and neither closes the
-other.
+other. The second ask cannot abandon the way the first one can - the shard entry has gone by then - so a
+refused second ask puts the container back into its shard instead
+(`ProcessingShard.removeWorkAtOffsetPairedWith`), leaving a whole stale pair rather than an orphan.
 
-`RetryQueueRequeueWindowTest.aQueueFirstSweepDefeatsTheOneShotConfirmation` models the queue-first
-ordering and **asserts the orphan appears** - red-by-design documentation, so the two changes cannot
-pass each other silently; when astubbs#431 lands with the paired removal, that assertion is inverted. Its
-matched control, `aShardFirstSweepIsCaughtByTheConfirmation`, runs the identical steps with only the
-sweep's internal order changed and asserts no orphan. Same magnitude, different position: the pair is
-what establishes the ordering as the responsible term.
+`RetryQueueRequeueWindowTest` carries the three arms that establish it, one term changed between each:
+`aQueueFirstSweepWithoutItsPairedSecondRemovalWouldOrphanTheEntry` asserts the orphan appears when the
+second removal is left out, `aQueueFirstSweepWithItsPairedSecondRemovalKeepsThePairWhole` asserts it does
+not appear when it is there, and `aShardFirstSweepIsCaughtByTheConfirmation` runs the identical steps with
+only the sweep's internal order changed. The first pair establishes the second removal as the responsible
+term; the third establishes the ordering as the reason it is needed at all.
 
 ## How it was established
 
@@ -191,16 +193,29 @@ container in its shard and takes the queue entry with it.
 leaving every other change in place, turns exactly those three arms red again and no others. One term
 changed, outcome flips.
 
-**The sweep-ordering pair, added after review raised the astubbs#431 interaction.** Two further arms run the
-sweep's two removals *around* the controller's re-queue, changing nothing but the order of those two
-removals: queue-first leaves the orphan, shard-first does not. That pair is what turns "astubbs#431 will
-defeat this" from a reading of the diff into a demonstrated result, and it is why the argument on
-`ShardManager.onFailure` now states its precondition instead of reading as ordering-independent.
+**The sweep-ordering arms, added after review raised the astubbs#431 interaction.** They run the sweep's
+removals *around* the controller's re-queue, changing nothing but the order and the presence of the
+second removal: queue-first with one ask leaves the orphan, queue-first with two does not, shard-first
+with one does not. That turned "astubbs#431 will defeat this" from a reading of the diff into a
+demonstrated result, and it is why the argument on `ShardManager.onFailure` states which half it covers
+instead of reading as the whole answer.
+
+**Two seam-driven arms then coupled the models to production**, because every arm above hand-builds the
+sweep and so cannot go red when production moves - the over-claim review caught here.
+`theProductionSweepTakesOutAnEntryTheControllerAddedInsideTheSweep` plants a `ProcessingShard` subclass
+that runs the controller's re-queue at the one instruction between the real sweep's two queue removals,
+and asserts no orphan; `aRefusedSecondRemovalPutsTheContainerBackSoThePairStaysWhole` adds a live retry-queue
+iterator to that seam so the second ask is refused, and asserts the container is resident again with its
+entry and its selection claim intact. Both were checked red - inert second removal, omitted put-back, and
+omitted claim restore each turn exactly the expected arm red and no others.
 
 ## What would reopen it
 
 Any future caller that adds to the retry queue without a residency confirmation *after* the add, or
-that removes a container from a shard without removing it from the queue.
+that removes a container from a shard without removing it from the queue - and, since astubbs#431, any
+sweep that asks the queue only once. Dropping the second ask, or moving it ahead of the shard removal,
+reopens the half the confirmation cannot see; dropping the put-back on a refused second ask creates the
+orphan directly. Both fail loudly, at the two seam-driven arms named above.
 
 **One such site exists today and is a different, unfixed defect**:
 `ProcessingShard.addWorkContainer`'s displacement branch retires the container it displaced and

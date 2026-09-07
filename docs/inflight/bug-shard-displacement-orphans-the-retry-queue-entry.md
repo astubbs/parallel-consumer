@@ -15,10 +15,8 @@ and not fixed by that work.
 `workMap.put` returns a displaced container it retires it from the population and gives back its
 selection claim - anchor `A real replacement after all` - but it does not remove it from the retry
 queue, and **it cannot**: `ProcessingShard` holds no reference to the `RetryQueue`. The queue is
-passed in as a parameter to `getWorkIfAvailable` and nowhere else - on
-astubbs/parallel-consumer#431's branch it is also handed to `removeStaleWorkContainersFromShard`,
-so that clause goes stale when astubbs#431 lands; astubbs#431 owns the rest of what that
-changes.
+passed in as a parameter to `getWorkIfAvailable` and to `removeStaleWorkContainersFromShard`, and
+nowhere else.
 
 So if the displaced container had previously failed and was parked for retry, its queue entry is left
 behind with the container resident in no shard. That is the same pairing gap - but **NOT the same

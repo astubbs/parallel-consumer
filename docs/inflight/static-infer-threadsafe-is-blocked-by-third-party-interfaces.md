@@ -72,15 +72,15 @@ about the code, and adopting the annotation means answering what to do about the
 
 ## Sequencing
 
-The `@Lockless` measurement above and astubbs#431 reach
-`ArchitectureTest.rebalanceCallbacksMustNotBlock` from opposite sides: astubbs#431 closes that
-rule's **method-reference** blind spot and deletes six `KNOWN_BLOCKING_VIOLATIONS`, while
-`@Lockless` is about the rule's other structural blind spot - a `synchronized` block is a
-`MONITORENTER`, not a method call, so widening the walk does not reach it. Neither makes the other
-wrong. `static-archunit-main-code-rules.md` is where the rule's blind spots are enumerated and it
-does not yet name the `MONITORENTER` one; astubbs#431 was rewriting that file at the same time, so
-the entry was deliberately left for whoever touches it next rather than written into a conflict.
-<!-- post-merge: checked -->
+<!-- post-merge: checked-begin -->
+The `@Lockless` measurement above and astubbs/parallel-consumer#431 reached
+`ArchitectureTest.rebalanceCallbacksMustNotBlock` from opposite sides: that PR closed the rule's
+**method-reference** blind spot and deleted six `KNOWN_BLOCKING_VIOLATIONS`, while `@Lockless` is
+about the rule's other structural blind spot - a `synchronized` block is a `MONITORENTER`, not a
+method call, so widening the walk does not reach it. Neither makes the other wrong.
+`static-archunit-main-code-rules.md` is where the rule's blind spots are enumerated; it does not name
+the `MONITORENTER` one, and that entry is still unwritten.
+<!-- post-merge: checked-end -->
 
 ## Done when
 

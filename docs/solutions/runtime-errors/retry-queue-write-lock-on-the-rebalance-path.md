@@ -112,6 +112,17 @@ and those are what gate the poller and time the control loop.
 - `ShardManager.removeWorkFromShardFor` and `ProcessingShard.removeStaleWorkContainersFromShard`
   (now taking the queue, so the pair is maintained in one place) skip their shard removal when
   refused.
+- **The queue is then asked a SECOND time, after the shard removal**, through
+  `ProcessingShard.removeWorkAtOffsetPairedWith`. Asking first is what lets a refusal abandon; it is
+  not sufficient, because `ShardManager.onFailure`'s re-queue can land in the gap between the two
+  removals and its residency confirmation still sees a resident container. That is the window
+  astubbs/parallel-consumer#437 closed from the other side, and the two halves are separately
+  necessary - the write-up
+  [`retry-queue-orphan-window-between-the-requeue-check-and-the-add.md`](retry-queue-orphan-window-between-the-requeue-check-and-the-add.md)
+  owns the interleavings; do not restate them here.
+- **A refused SECOND ask cannot abandon** - the shard entry has already gone - so the shard puts the
+  container back exactly as it was, population and selection claim included. What is left is a whole
+  stale pair rather than an orphan, which is the state the next bullet describes.
 - What is left behind is a container that is already stale - both callers run after
   `PartitionStateManager.onPartitionsRemoved`/`onPartitionsAssigned` has incremented the epoch - and
   staleness is a state the engine is built to tolerate. `ProcessingShard.getWorkIfAvailable`'s
@@ -139,7 +150,11 @@ The abandonment is only ever a delay, and exactly one thing ends it: `Processing
   WAITS, so it is green either way. That is the half that would silently turn the delay into a
   permanent orphan.
 
-`ShardManager.removeWorkFromShardFor`'s javadoc owns the split; do not restate it here.
+`ShardManager.removeWorkFromShardFor`'s javadoc owns the split; do not restate it here. It also owns
+the second reopen condition this fix acquired when it paired its removal with astubbs#437's
+confirmation: dropping the second queue ask, moving it ahead of the shard removal, or dropping the
+put-back on a refused one. All three fail loudly, at `RetryQueueRequeueWindowTest`'s two seam-driven
+arms.
 
 ## Rejected alternatives
 
@@ -153,6 +168,14 @@ The abandonment is only ever a delay, and exactly one thing ends it: `Processing
   `getLowestRetryTime` instead of scanning under the lock). Does not fix anything: the acquire is
   still a wait, and the ArchUnit rule is still red on merit.
 - **A bounded `tryLock(timeout)`.** Still a wait, still spent out of `max.poll.interval.ms`.
+- **Ask the queue only ONCE, after the shard removal, and put the container back on a refusal.** This
+  restores the shard-first ordering `ShardManager.onFailure`'s confirmation was written against, so it
+  needs no second ask at all - genuinely simpler on the page. Rejected on where it puts the cost: the
+  undo then runs on *every* refused removal, and refusals are common exactly when the controller
+  thread is holding the read lock for a whole scan, which is the contention this fix exists to
+  survive. Asking first keeps the cheap answer (do nothing) on the common path and the undo on the
+  rare one - a second ask is only refused when the lock was free a moment earlier and has been taken
+  since. Recorded at `ProcessingShard.removeWorkAtOffsetPairedWith`.
 
 ## How it was verified
 

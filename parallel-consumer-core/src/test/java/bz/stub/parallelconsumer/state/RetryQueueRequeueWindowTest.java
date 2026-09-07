@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.state;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
@@ -14,6 +15,11 @@ import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -105,6 +111,73 @@ class RetryQueueRequeueWindowTest {
     {
         // install the racing double before anything asks the module for a work manager
         module.setWorkManager(wm);
+    }
+
+    /**
+     * A {@link ProcessingShard} that runs the controller's action at one exact instruction INSIDE the production
+     * revoke sweep: after the sweep's first retry-queue removal, and before the shard removal that follows it.
+     * <p>
+     * <b>Why a shard and not another {@link RacingSeamWorkManager} seam.</b> The seams that class provides sit
+     * on the CONTROLLER's side, which is the right place for an add that arrives after a sweep has finished.
+     * The window this catches is the other nesting - the controller's re-queue landing inside the sweep - and
+     * the only production instruction between the sweep's two queue removals belongs to the shard.
+     * {@link ProcessingShard#removeWorkAtOffsetPairedWith} is that instruction.
+     * <p>
+     * <b>One shot</b>, for the same reason {@link RacingSeamWorkManager} gives: the revoke path reaches this
+     * method more than once (the epoch-change sweep follows the revoke sweep) and re-firing a whole re-queue on
+     * each pass models nothing real. Firing is tracked in its own flag rather than inferred from the armed slot
+     * being clear, so a precondition assertion cannot pass on an arm that forgot to arm.
+     */
+    static class SeamShard extends ProcessingShard<String, String> {
+
+        private Runnable interference;
+
+        private boolean raceFired;
+
+        SeamShard(ShardKey key, ParallelConsumerOptions<?, ?> options, PartitionStateManager<String, String> pm,
+                  RecordPopulation population) {
+            super(key, options, pm, population);
+        }
+
+        void arm(Runnable interference) {
+            this.interference = interference;
+        }
+
+        boolean raceHasFired() {
+            return raceFired;
+        }
+
+        @Override
+        WorkContainer<String, String> removeWorkAtOffsetPairedWith(
+                long offset, Predicate<WorkContainer<String, String>> pairedQueueRemoval) {
+            if (interference != null) {
+                Runnable armed = interference;
+                interference = null;
+                raceFired = true;
+                armed.run();
+            }
+            return super.removeWorkAtOffsetPairedWith(offset, pairedQueueRemoval);
+        }
+    }
+
+    /**
+     * Installs a {@link SeamShard} as the real shard for {@code partition}, so the production sweep runs through
+     * it.
+     * <p>
+     * It has to be planted BEFORE any record arrives: {@code ShardManager.addWorkContainer} constructs a plain
+     * {@link ProcessingShard} only when the map has none for the key, so an already-present one is what
+     * production then uses and writes into. The shard is built with the manager's own {@link RecordPopulation},
+     * not a fresh one, or {@code getNumberOfRecordsInShards()} would not see anything this shard holds.
+     */
+    private SeamShard plantASeamShardFor(TopicPartition partition) {
+        Map<ShardKey, ProcessingShard<String, String>> shards = new ConcurrentHashMap<>();
+        wm.getSm().setProcessingShards(shards);
+
+        var anyRecordOnThatPartition = new ConsumerRecord<>(partition.topic(), partition.partition(), 0L, "k", "v");
+        var key = ShardKey.of(anyRecordOnThatPartition, module.options().getOrdering());
+        var seamShard = new SeamShard(key, module.options(), wm.getPm(), wm.getSm().getRecordPopulation());
+        shards.put(key, seamShard);
+        return seamShard;
     }
 
     private WorkContainer<String, String> aFailedRecordTakenAsWork() {
@@ -295,10 +368,14 @@ class RetryQueueRequeueWindowTest {
      * The production sweep does both in one call ({@code removeWorkFromShardFor}); these model it split, with
      * {@code sm.onFailure} landing in the middle - which is the only interleaving either arm is about.
      *
-     * @param queueFirst the order the sweep does its two removals in: {@code true} models
-     *                   astubbs/parallel-consumer#431's ordering, {@code false} models master's
+     * @param queueFirst           the order the sweep does its two removals in: {@code true} models the
+     *                             declining sweep's ordering, {@code false} models the shard-first one it
+     *                             replaced
+     * @param pairTheSecondRemoval whether the sweep repeats its queue removal after the shard removal, which is
+     *                             what production does and what the queue-first ordering needs
      */
-    private void sweepAroundTheRequeue(WorkContainer<String, String> wc, boolean queueFirst) {
+    private void sweepAroundTheRequeue(WorkContainer<String, String> wc, boolean queueFirst,
+                                       boolean pairTheSecondRemoval) {
         var shard = wm.getSm().getShard(wm.getSm().computeShardKey(wc)).get();
         Runnable queueRemoval = () -> {
             // Named rather than discarded, and deliberately NOT asserted: whether an entry was present depends
@@ -320,63 +397,93 @@ class RetryQueueRequeueWindowTest {
         (queueFirst ? queueRemoval : shardRemoval).run();
         wm.getSm().onFailure(wc);
         (queueFirst ? shardRemoval : queueRemoval).run();
+        if (pairTheSecondRemoval) {
+            // production's second ask - see ShardManager.removeWorkFromShardFor. Modelled as the same runnable
+            // run again, because that is exactly what it is: the same removal by the same coordinates, made once
+            // the container has left the shard.
+            queueRemoval.run();
+        }
     }
 
     /**
-     * <b>The fix is ordering-dependent, and this is the arm that says so.</b> Master's sweep removes from the
-     * SHARD first and the queue second, and the argument on {@link ShardManager#onFailure} turns on that: the
-     * departure becomes observable to the residency read <em>before</em> the sweep's queue removal, so either
-     * the controller sees a departed container and undoes its add, or its add landed early enough for the
-     * sweep's queue removal to find it.
+     * <b>The control for the arm below: the same queue-first ordering with the sweep's SECOND queue removal left
+     * out, which is what the declining sweep looked like before astubbs/parallel-consumer#437 landed.</b>
      * <p>
-     * <b>astubbs/parallel-consumer#431 reverses that order</b> - it asks the queue first, declining rather than
-     * waiting, so that a refused lock abandons the paired shard removal and the pair never splits. Against that
-     * ordering a one-shot confirmation is defeated: the sweep's queue removal passes over an empty queue, the
-     * controller then adds and reads residency while the container is still in its shard, and the shard removal
-     * happens afterwards. Neither party removes the entry.
+     * The sweeps ask the retry queue FIRST, declining rather than waiting, so that a refused lock abandons the
+     * paired shard removal and the pair never splits - that is how the broker-poll thread is kept out of a wait.
+     * A one-shot residency confirmation is not enough against that ordering on its own: the sweep's queue
+     * removal passes over an empty queue, the controller then adds and reads residency while the container is
+     * still in its shard, and the shard removal happens afterwards. Neither party removes the entry.
      * <p>
-     * <b>This asserts the orphan APPEARS - it is red-by-design documentation, not an endorsement.</b> It is
-     * green today because astubbs#431 is an open draft and master is still shard-first. When astubbs#431 lands it must pair
-     * the removal - repeat the queue removal AFTER the shard removal, which closes this half while the
-     * residency confirmation closes the half where the controller's add arrives later - and this test must then
-     * be inverted to assert no orphan.
+     * <b>This asserts the orphan APPEARS, and it is a control rather than a description of production.</b>
+     * Production repeats the queue removal after the shard removal; delete that repeat and this is what is left,
+     * which is the whole reason the repeat exists. Same magnitude, one term changed, against
+     * {@link #aQueueFirstSweepWithItsPairedSecondRemovalKeepsThePairWhole()}.
      * <p>
-     * <b>This arm cannot itself detect that moment, and saying it could was the over-claim review caught.</b>
-     * It hand-builds both orderings, so production changing under it moves nothing here.
-     * {@link #theProductionSweepsQueueRemovalIsGatedOnItsShardRemoval()} is what actually goes red when the
-     * production sweep stops being shard-first; this arm is the explanation the reader needs once it does.
+     * <b>This arm cannot detect production changing under it, and saying it could was the over-claim review
+     * caught on astubbs/parallel-consumer#437.</b> It hand-builds the ordering, so nothing here moves when the
+     * sweep does. {@link #theProductionSweepTakesOutAnEntryTheControllerAddedInsideTheSweep()} is what goes red
+     * then; this arm is the explanation the reader needs once it does.
      */
     @Test
-    void aQueueFirstSweepDefeatsTheOneShotConfirmation() {
+    void aQueueFirstSweepWithoutItsPairedSecondRemovalWouldOrphanTheEntry() {
         WorkContainer<String, String> wc = aFailedRecordTakenAsWork();
 
-        sweepAroundTheRequeue(wc, true);
+        sweepAroundTheRequeue(wc, true, false);
 
         assertWithMessage("PRECONDITION: the container must have left its shard, or there is no orphan to make")
                 .that(wm.getSm().getNumberOfRecordsInShards())
                 .isEqualTo(0L);
 
-        assertWithMessage("RED BY DESIGN: with the sweep removing from the QUEUE first, the residency read "
-                + "still sees a resident container and the add is not undone - so the entry is orphaned. When "
-                + "astubbs/parallel-consumer#431 lands it must repeat the queue removal after the shard "
-                + "removal, and this assertion must be inverted to isFalse()")
+        assertWithMessage("CONTROL: with the sweep removing from the QUEUE first and NOT repeating that removal "
+                + "afterwards, the residency read still sees a resident container, the add is not undone, and "
+                + "the entry is orphaned. If this has gone green, either the confirmation has started catching "
+                + "this half on its own - which the argument on ShardManager.onFailure says it cannot - or this "
+                + "arm has stopped modelling the ordering it names")
                 .that(wm.getSm().getRetryQueue().contains(wc))
                 .isTrue();
     }
 
     /**
-     * The matched control for the arm above: the identical steps, with only the sweep's internal order
-     * changed. Master's shard-first ordering keeps the pair whole, because the residency read that follows the
-     * add now observes a container that has already gone.
+     * <b>Production's shape: queue-first, with the queue removal repeated after the shard removal.</b> The
+     * inversion of the control above - one term changed, the second removal - and the half of
+     * {@link ShardManager#onFailure} the residency confirmation cannot reach.
      * <p>
-     * Same magnitude, different position - this pair is what establishes that the ordering is the responsible
-     * term, rather than anything else about the interleave.
+     * The second removal is made once the container has left the shard, so it is the first party to look at the
+     * queue with the departure already visible: whatever the controller added inside the sweep is there to be
+     * found. The confirmation still owns the other half, where the add arrives after the sweep has finished -
+     * neither closes the other.
+     */
+    @Test
+    void aQueueFirstSweepWithItsPairedSecondRemovalKeepsThePairWhole() {
+        WorkContainer<String, String> wc = aFailedRecordTakenAsWork();
+
+        sweepAroundTheRequeue(wc, true, true);
+
+        assertWithMessage("PRECONDITION: the container must have left its shard")
+                .that(wm.getSm().getNumberOfRecordsInShards())
+                .isEqualTo(0L);
+
+        assertWithMessage("the sweep's SECOND queue removal must take out the entry the controller added "
+                + "between the sweep's two removals - otherwise it is a queue-only orphan")
+                .that(wm.getSm().getRetryQueue().contains(wc))
+                .isFalse();
+    }
+
+    /**
+     * The matched control for the ordering itself: the identical steps with only the sweep's internal order
+     * changed, and no second removal. Shard-first keeps the pair whole on the confirmation alone, because the
+     * residency read that follows the add observes a container that has already gone.
+     * <p>
+     * That is the ordering master had before astubbs/parallel-consumer#431, and it is why the confirmation was
+     * enough on its own then. Read with the two arms above, the pair of terms is complete: the ordering decides
+     * whether the confirmation can see the departure, and the second removal is what replaces it when it cannot.
      */
     @Test
     void aShardFirstSweepIsCaughtByTheConfirmation() {
         WorkContainer<String, String> wc = aFailedRecordTakenAsWork();
 
-        sweepAroundTheRequeue(wc, false);
+        sweepAroundTheRequeue(wc, false, false);
 
         assertWithMessage("PRECONDITION: the container must have left its shard")
                 .that(wm.getSm().getNumberOfRecordsInShards())
@@ -389,26 +496,23 @@ class RetryQueueRequeueWindowTest {
     }
 
     /**
-     * <b>The mechanical coupling between the two modelled arms above and the production code they model.</b>
+     * <b>The mechanical coupling between the modelled arms above and the production code they model.</b>
      * <p>
-     * Both arms hand-build the sweep's two removals, because one of them models an ordering production does
-     * not have yet - so neither can fail when production's ordering changes, and on its own that leaves the
-     * promised regression signal resting on a future author remembering to rewrite a test. Raised in review,
-     * and correct. This arm supplies what they cannot: it drives the REAL revoke sweep
-     * ({@code WorkManager#onPartitionsRevoked} -> {@code ShardManager.removeWorkFromShardFor}) and pins the one
-     * property of it that the confirmation on {@link ShardManager#onFailure} depends on - <b>that the queue
-     * removal is gated on the shard removal having found the container</b>, which is only true of a shard-first
-     * sweep.
+     * Those arms hand-build the sweep's removals, so none of them can fail when production's ordering changes -
+     * which on its own leaves the promised regression signal resting on a future author remembering to rewrite a
+     * test. Raised in review on astubbs/parallel-consumer#437, and correct. This arm supplies what they cannot:
+     * it drives the REAL revoke sweep ({@code WorkManager#onPartitionsRevoked} ->
+     * {@code ShardManager.removeWorkFromShardFor}) and pins the ordering the abandon-on-refusal design needs -
+     * <b>that the queue is asked BEFORE the shard is touched</b>, so that a refusal can abandon a removal that
+     * has not started yet.
      * <p>
-     * <b>It goes RED the moment production stops being shard-first</b>, astubbs/parallel-consumer#431 included,
-     * and its message names the pairing that PR has to add. That is the failure the modelled arms describe but
-     * cannot themselves produce.
-     * <p>
-     * The resident container is the arm's own control: without it, "the departed container's entry survived"
-     * would also pass on a sweep that never ran at all.
+     * The container under test has already left its shard when the sweep runs, so a shard-first sweep would
+     * never reach its queue entry and a queue-first one takes it out regardless. The resident container is the
+     * arm's own control: without it, "the departed container's entry went" would also pass on a sweep that
+     * removed everything for the wrong reason.
      */
     @Test
-    void theProductionSweepsQueueRemovalIsGatedOnItsShardRemoval() {
+    void theProductionSweepAsksTheQueueBeforeItTouchesTheShard() {
         var residentPartition = tp;
         var departedPartition = new TopicPartition(TOPIC, 1);
 
@@ -429,7 +533,7 @@ class RetryQueueRequeueWindowTest {
         var departedShard = wm.getSm().getShard(wm.getSm().computeShardKey(willLeaveItsShard)).get();
         var removedByHand = departedShard.removeWorkAtOffset(willLeaveItsShard.offset());
         assertWithMessage("FIXTURE: one container must leave its shard while keeping its queue entry, or this "
-                + "arm has nothing to distinguish gated from ungated")
+                + "arm has nothing to distinguish an unconditional ask from a gated one")
                 .that(removedByHand)
                 .isSameInstanceAs(willLeaveItsShard);
 
@@ -440,16 +544,131 @@ class RetryQueueRequeueWindowTest {
                 .that(wm.getSm().getRetryQueue().contains(stillResident))
                 .isFalse();
 
-        assertWithMessage("PRODUCTION IS SHARD-FIRST, and the confirmation in ShardManager.onFailure depends "
-                + "on it: the sweep's queue removal is reached only through a non-null shard removal, so an "
-                + "entry whose container has already left its shard survives it. If this has gone red, "
-                + "production now removes from the queue unconditionally or first - which is exactly the "
-                + "astubbs/parallel-consumer#431 ordering that defeats a one-shot confirmation. That PR must "
-                + "repeat the queue removal AFTER the shard removal, and this arm plus "
-                + "aQueueFirstSweepDefeatsTheOneShotConfirmation must both be re-stated against the new "
-                + "ordering")
+        assertWithMessage("PRODUCTION ASKS THE QUEUE FIRST, and abandoning a refused removal depends on it: "
+                + "nothing has been taken out of the shard yet when the answer arrives, so a refusal can leave "
+                + "the pair untouched. An entry whose container had already left its shard therefore goes too. "
+                + "If this has gone red, production now gates its queue removal on the shard removal - the "
+                + "shard-first ordering aShardFirstSweepIsCaughtByTheConfirmation models, where a refusal has "
+                + "already split the pair by the time it is refused")
                 .that(wm.getSm().getRetryQueue().contains(willLeaveItsShard))
+                .isFalse();
+    }
+
+    /**
+     * <b>The other half, and the one no hand-built arm can reach: the controller's re-queue landing INSIDE the
+     * production sweep, between its two queue removals.</b>
+     * <p>
+     * {@link SeamShard} runs the controller's {@code sm.onFailure} at the one instruction where the interleaving
+     * matters - after the sweep's first queue removal has passed over an empty queue, and before its shard
+     * removal. The residency confirmation on {@link ShardManager#onFailure} cannot catch this: it reads a
+     * container that is still resident, so the add stands. Only the sweep's SECOND queue removal can, and this
+     * arm asserts it does.
+     * <p>
+     * <b>Red without the second removal</b>, which is how it was checked: the entry survives with the container
+     * in no shard, and the drain figure carries it for good.
+     */
+    @Test
+    void theProductionSweepTakesOutAnEntryTheControllerAddedInsideTheSweep() {
+        var seamShard = plantASeamShardFor(tp);
+        var wc = ModelUtils.registerOneRecordAndTakeIt(wm, tp);
+        wc.onUserFunctionFailure(new RuntimeException("simulated user function failure"));
+
+        assertWithMessage("FIXTURE: the queue must be empty at the sweep's FIRST ask, or that ask removes the "
+                + "entry and this arm says nothing about the second one")
+                .that(wm.getSm().getRetryQueue().contains(wc))
+                .isFalse();
+
+        var theAddStood = new AtomicBoolean();
+        seamShard.arm(() -> {
+            wm.getSm().onFailure(wc);
+            theAddStood.set(wm.getSm().getRetryQueue().contains(wc));
+        });
+
+        wm.onPartitionsRevoked(UniLists.of(tp));
+
+        assertWithMessage("PRECONDITION: the armed re-queue must have fired inside the sweep - without it this "
+                + "arm drives no window at all")
+                .that(seamShard.raceHasFired())
                 .isTrue();
+        assertWithMessage("PRECONDITION: the controller's add must have STOOD - the residency read it makes "
+                + "sees a resident container at that instant, so this is the state the second removal is for. "
+                + "If the confirmation had undone it, this arm would be asserting nothing")
+                .that(theAddStood.get())
+                .isTrue();
+        assertWithMessage("PRECONDITION: the container must have left its shard")
+                .that(wm.getSm().getNumberOfRecordsInShards())
+                .isEqualTo(0L);
+
+        assertWithMessage("the sweep's SECOND queue removal must take out the entry the controller added "
+                + "between the sweep's two removals; without it that entry is a queue-only orphan, held by "
+                + "nothing that any scan reaches, and it keeps a draining close open to its timeout")
+                .that(wm.getSm().getRetryQueue().contains(wc))
+                .isFalse();
+    }
+
+    /**
+     * <b>The refused second removal, which cannot abandon the way the first one can - the shard entry has
+     * already gone by then - so the shard puts the container back and the pair stays whole.</b>
+     * <p>
+     * Same seam as the arm above, with one term added: the interference opens a live {@link RetryQueue}
+     * iterator and leaves it open, so the read lock is held when the sweep asks the second time and
+     * {@code tryLock()} refuses. A {@code ReentrantReadWriteLock} grants no upgrade, so a thread holding the
+     * read lock is refused the write lock even though it is the same thread - which is what makes this
+     * deterministic without a second thread. The controller's {@code add} is made BEFORE the iterator is opened,
+     * because it takes the write lock and would otherwise deadlock against the reader on this thread.
+     * <p>
+     * What is asserted is the whole pair, in all three of its parts: the container is resident again, the queue
+     * still holds its entry, and the shard's selection claim came back with it. <b>Red without the put-back</b>:
+     * the shard holds nothing and the entry stands alone, which is the orphan the second removal exists to
+     * prevent and would have created.
+     */
+    @Test
+    void aRefusedSecondRemovalPutsTheContainerBackSoThePairStaysWhole() {
+        var seamShard = plantASeamShardFor(tp);
+        var wc = ModelUtils.registerOneRecordAndTakeIt(wm, tp);
+        wc.onUserFunctionFailure(new RuntimeException("simulated user function failure"));
+
+        var readLockHeldThroughTheSweep = new AtomicReference<RetryQueue.RetryQueueIterator>();
+        seamShard.arm(() -> {
+            wm.getSm().onFailure(wc);
+            readLockHeldThroughTheSweep.set(wm.getSm().getRetryQueue().iterator());
+        });
+
+        try {
+            wm.onPartitionsRevoked(UniLists.of(tp));
+        } finally {
+            var stillOpen = readLockHeldThroughTheSweep.get();
+            if (stillOpen != null) {
+                stillOpen.close();
+            }
+        }
+
+        assertWithMessage("PRECONDITION: the armed interference must have fired inside the sweep")
+                .that(seamShard.raceHasFired())
+                .isTrue();
+        assertWithMessage("PRECONDITION: the read lock must actually have been taken, or the second removal "
+                + "was never refused and this arm exercises no put-back")
+                .that(readLockHeldThroughTheSweep.get())
+                .isNotNull();
+
+        assertWithMessage("the refused second removal must put the container BACK in its shard - leaving it out "
+                + "is exactly the queue-only orphan the second removal exists to prevent")
+                .that(seamShard.getWorkContainerAtOffset(wc.offset()).orElse(null))
+                .isSameInstanceAs(wc);
+        assertWithMessage("the entry stays too, so what is left is a WHOLE stale pair: the engine tolerates a "
+                + "stale resident and the controller's own sweep retires both halves, which it cannot do to an "
+                + "orphan")
+                .that(wm.getSm().getRetryQueue().contains(wc))
+                .isTrue();
+        assertWithMessage("the population must be conserved by the put-back - RecordPopulation has no clamp, so "
+                + "a retirement that is not matched by a re-admission is a permanent deficit")
+                .that(wm.getSm().getNumberOfRecordsInShards())
+                .isEqualTo(1L);
+        assertWithMessage("and so must the selection claim: the container was awaiting selection when the sweep "
+                + "took it, so it must be awaiting selection again now it is back. A put-back that skipped this "
+                + "would under-report work for as long as the container stayed")
+                .that(seamShard.getCountOfWorkAwaitingSelection())
+                .isEqualTo(1L);
     }
 
     /**

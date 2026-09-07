@@ -332,6 +332,26 @@ public class ShardManager<K, V> {
      * {@link ProcessingShard#getWorkIfAvailable}'s last-resort stale sweep, which runs on the controller thread
      * where waiting for the queue lock is permitted.
      * <p>
+     * <b>THE QUEUE IS ASKED TWICE, and the second ask is what pairs this sweep with
+     * astubbs/parallel-consumer#437's residency confirmation</b> (2026-09-07). Asking first is what lets a
+     * refusal abandon; it is not enough on its own, because {@link #onFailure} can run the controller's re-queue
+     * in the gap between this method's two removals. Then the first ask passed over an empty queue, the
+     * controller's add landed, and its residency read still saw a resident container - so neither party removed
+     * the entry, and the queue-only orphan astubbs#437 closed is back. The second ask, made after the container has
+     * left the shard through {@link ProcessingShard#removeWorkAtOffsetPairedWith}, closes that half; the
+     * residency confirmation closes the half where the add arrives after this sweep has finished. Neither is
+     * redundant and neither closes the other.
+     * <p>
+     * <b>A refused SECOND ask cannot abandon, so the shard puts the container back.</b> By then the shard entry
+     * has gone, and returning would leave exactly the orphan the first ask exists to avoid. Restoring it leaves
+     * a WHOLE pair - a stale shard entry, and the controller's queue entry if it made one - which is the state
+     * the paragraph above says the engine tolerates and the controller's own sweep retires. The undo lives in
+     * {@link ProcessingShard#removeWorkAtOffsetPairedWith}, which is also where the rejected alternative is
+     * recorded: asking the queue only ONCE, after the shard removal, restores master's shard-first ordering and
+     * needs no second ask, but then every refusal is an undo - and refusals are common exactly when the
+     * controller holds the read lock for a scan, which is the contention this whole method is shaped around.
+     * Asking first keeps the cheap answer on the common path and the undo on the rare one.
+     * <p>
      * <b>HOW LONG the delay is, measured 2026-09-03 rather than assumed.</b> "The next work request" is the
      * common case, not a bound. That sweep sits in the else-branch of the shard scan, past the break
      * {@link ProcessingShard#getWorkIfAvailable} takes as soon as it hands out one container under KEY or
@@ -356,6 +376,15 @@ public class ShardManager<K, V> {
      * {@code RetryQueueRebalancePathTest} red, which is how they were checked. What still fails silently is
      * the OTHER half: nothing asserts that the branch is reached often enough for the delay to stay short, and
      * {@code ArchitectureTest.rebalanceCallbacksMustNotBlock} only checks that nothing here WAITS.
+     * <p>
+     * <b>What would reopen the re-queue orphan</b> (2026-09-07): dropping the SECOND queue removal, or moving it
+     * ahead of the shard removal, which is the same thing. That fails loudly -
+     * {@code RetryQueueRequeueWindowTest.theProductionSweepTakesOutAnEntryTheControllerAddedInsideTheSweep}
+     * drives the real revoke path with the controller's re-queue landing between the two removals and goes red
+     * without it. Dropping the put-back on a refused second removal fails loudly too, at
+     * {@code aRefusedSecondRemovalPutsTheContainerBackSoThePairStaysWhole}. What fails silently is the same
+     * blind spot as above - nothing measures how OFTEN the second ask is refused, so a change that made
+     * refusals common would move the cost without moving any assertion.
      */
     private void removeWorkFromShardFor(ConsumerRecord<K, V> consumerRecord) {
         ShardKey shardKey = computeShardKey(consumerRecord);
@@ -371,10 +400,15 @@ public class ShardManager<K, V> {
                 return;
             }
 
-            // remove the work. The container it gives back is not needed: the queue entry is keyed by
-            // topic/partition/offset and has already gone, which also removes the null guard this line used to
-            // need (confluentinc#757 - remove(null) NPE'd when the shard had nothing at this offset).
-            WorkContainer<K, V> ignoredRemovedWC = shardOpt.get().removeWorkAtOffset(consumerRecord.offset());
+            // Remove the work, and ask the queue a SECOND time once it has gone - the controller's re-queue can
+            // land between the two removals and would otherwise stand (see the javadoc). The second ask cannot
+            // abandon like the first: the shard entry is already gone by then, so a refusal is handled by
+            // putting the container back rather than by returning. The container is not needed here either way
+            // - the queue is keyed by topic/partition/offset, which is also what removed the null guard this
+            // line used to need (confluentinc#757 - remove(null) NPE'd when the shard had nothing at this
+            // offset).
+            WorkContainer<K, V> ignoredDepartedWC = shardOpt.get().removeWorkAtOffsetPairedWith(
+                    consumerRecord.offset(), departed -> this.retryQueue.tryRemove(departed));
 
             // remove the shard if empty
             removeShardIfEmpty(shardKey);
@@ -452,51 +486,55 @@ public class ShardManager<K, V> {
      * whole of this method's thread safety. {@link WorkManager#onFailureResult} re-validates the epoch against
      * the live partition map immediately before calling this, but says at the site that no epoch check can ever
      * be atomic with the actions that follow it - so the revoke sweep on the broker-poll thread can complete in
-     * the gap. It removes this container from its shard and then removes it from the retry queue, finding
-     * nothing there yet; under PARTITION or UNORDERED ordering the emptied shard object survives (only KEY
-     * ordering garbage-collects one), so {@link #getShard} still answers present and the add below goes through
-     * anyway. What that used to leave is a <b>queue-only orphan</b>: work is handed out by scanning shards, so a
-     * container in no shard is never selected, never completed and never swept - and every route that removes a
-     * retry-queue entry reaches it THROUGH shard contents, so nothing can ever take it out again.
+     * the gap. It removes this container from the retry queue, finding nothing there yet, and from its shard;
+     * under PARTITION or UNORDERED ordering the emptied shard object survives (only KEY ordering
+     * garbage-collects one), so {@link #getShard} still answers present and the add below goes through anyway.
+     * What that used to leave is a <b>queue-only orphan</b>: work is handed out by scanning shards, so a
+     * container in no shard is never selected, never completed and never swept. The entry outlives the container
+     * but not the instance - {@link RetryQueue} keys by topic, partition and offset, and {@link #onSuccess}
+     * removes by that key before it looks up any shard, so a later container at those coordinates clears it -
+     * and a draining close is exactly the window in which no reassignment can deliver one, which is where the
+     * cost lands.
      * <p>
      * <b>Asking about residency before adding would only narrow the window</b> - it is another check-then-act,
      * and the sweep can land between that answer and the add exactly as it lands between the epoch check and
      * this call. Reversing the order closes it instead, because the last thing to happen is a REMOVAL driven by
      * a read taken after the add, and the sweep's own action is also a removal.
      * <p>
-     * <b>THIS ARGUMENT IS ORDERING-DEPENDENT, and the ordering it depends on is the sweep's, not this
-     * method's.</b> It holds against a sweep that removes from the SHARD first and the queue second - which is
-     * what {@link #removeWorkFromShardFor} and {@link #removeStaleContainers} both do today. That order is what
-     * makes the departure observable to the residency read <em>before</em> the sweep's queue removal happens,
-     * and every case below turns on it:
+     * <b>THIS CONFIRMATION CLOSES ONE HALF, AND THE SWEEP'S SECOND QUEUE REMOVAL CLOSES THE OTHER</b>
+     * (2026-09-07, astubbs/parallel-consumer#431). On its own it catches only an add that arrives after a sweep
+     * has FINISHED. The sweeps are queue-first - they ask {@link RetryQueue#tryRemove} before touching the
+     * shard, so that a declined lock abandons the paired shard removal and the broker-poll thread never waits -
+     * and an add landing between a sweep's two removals is not caught here: the sweep's first ask passed over an
+     * empty queue, and the residency read below still sees a resident container because the shard removal has
+     * not happened yet. That is why {@link #removeWorkFromShardFor} and
+     * {@link ProcessingShard#removeStaleWorkContainersFromShard} ask the queue AGAIN after the shard removal,
+     * through {@link ProcessingShard#removeWorkAtOffsetPairedWith}. Neither half is redundant and neither closes
+     * the other. With both in place every interleaving is covered:
      * <ul>
      * <li>the sweep completes before the add - the residency read below sees a departed container and undoes
      *     the add;</li>
-     * <li>the sweep starts after the residency read - it finds the container in the shard, so
-     *     {@code removeWorkAtOffset} hands it back non-null and the paired queue removal runs;</li>
+     * <li>the sweep starts after the residency read - its first ask finds the entry this method just made, and
+     *     removes it;</li>
      * <li>the sweep lands between the add and the residency read - its shard removal has therefore already
-     *     happened, so the read sees a departed container and undoes the add (and the sweep's queue removal,
-     *     whichever side of the add it falls, is at worst a no-op);</li>
-     * <li>the sweep's queue removal races the add itself - {@link RetryQueue} serialises them under its own
-     *     write lock, which reduces this to one of the above.</li>
+     *     happened, so the read sees a departed container and undoes the add;</li>
+     * <li>the add lands INSIDE a sweep, between its two removals - the sweep's SECOND ask removes it, and if
+     *     that ask is refused the shard puts the container back, so what is left is a whole stale pair rather
+     *     than an orphan;</li>
+     * <li>a queue removal races the add itself - {@link RetryQueue} serialises them under its own write lock,
+     *     which reduces this to one of the above.</li>
      * </ul>
      * Once the read below sees a departed container the answer cannot go stale in the dangerous direction:
      * residency is by reference, and nothing ever re-inserts the same container instance.
      * <p>
-     * <b>A QUEUE-FIRST SWEEP DEFEATS IT, and one is in flight.</b> astubbs/parallel-consumer#431 - an open
-     * draft at the time of writing, so master is still shard-first - reverses the order deliberately: it asks
-     * the queue first with a non-blocking {@code tryRemove} so that a declined lock abandons the paired shard
-     * removal and the pair never splits, which is how it keeps the broker-poll thread out of a wait. Against
-     * that ordering this confirmation is not enough: the sweep's queue removal passes over an empty queue, the
-     * controller then adds and reads residency while the container is still resident, and the shard removal
-     * happens afterwards - so neither party removes the entry and the orphan is back.
-     * <p>
-     * <b>What astubbs#431 must add, and it is small</b>: repeat the queue removal AFTER the shard removal. That closes
-     * the half where the controller's add lands inside the sweep, while the confirmation here closes the half
-     * where the add arrives after the sweep has finished. Neither half is redundant and neither closes the
-     * other. {@code RetryQueueRequeueWindowTest.aQueueFirstSweepDefeatsTheOneShotConfirmation} models the
-     * queue-first ordering and asserts the orphan appears, so the two changes cannot pass each other silently;
-     * its matched control asserts shard-first does not.
+     * <b>The pairing is checked rather than documented.</b>
+     * {@code RetryQueueRequeueWindowTest.theProductionSweepTakesOutAnEntryTheControllerAddedInsideTheSweep}
+     * drives the real revoke sweep with this method's add landing between its two removals and asserts no
+     * orphan. Its matched control
+     * {@code aQueueFirstSweepWithoutItsPairedSecondRemovalWouldOrphanTheEntry} models the same ordering with the
+     * second removal left out and asserts the orphan appears - same magnitude, one term changed - and
+     * {@code aShardFirstSweepIsCaughtByTheConfirmation} models the ordering master had before that PR, where
+     * this confirmation was the whole of the answer.
      * <p>
      * <b>This adds no lock and makes no thread wait.</b> The alternative - moving the shard map and the queue
      * under one lock - would put the broker-poll thread's rebalance callbacks behind the retry queue's fair
