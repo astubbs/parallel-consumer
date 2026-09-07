@@ -279,7 +279,7 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
 ## Relationship to the in-flight lock-up work
 
 - **confluentinc#857 / PR astubbs#29** (`bugs/857-paused-consumption-multi-consumers-bug`) - "Paused consumption after
-  rebalance". Two documented mechanisms (see `docs/BUG_857_INVESTIGATION.md` on that branch): (1) a
+  rebalance". Two documented mechanisms (see `docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; retrieve with `git show 262629aab:docs/BUG_857_INVESTIGATION.md`)` on that branch): (1) a
   `ConcurrentModificationException` when `close()` races the poll thread; (2) the **silent stall** from
   `numberRecordsOutForProcessing` counter drift. Commit message: provisional fixes **do not eliminate the
   stall** (10-20% of chaos runs still stall); **root cause still open**. The **zombie-drainer partition

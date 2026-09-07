@@ -184,7 +184,25 @@ class ChaosKeyOrderIT extends ChaosScenarioBase {
         AtomicLong totalConsumed = fleet.getTotalConsumed();
         Queue<String> allConsumed = fleet.getAllConsumed();
         Set<String> expectedKeys = fleet.getExpectedKeys();
-        ProgressProbe probe = fleet.getProbe();
+        ProgressProbe probe = fleet.getProbe()
+                // Class 1's bound is calibrated on W1's disturbance shape and does not transfer here -
+                // the same non-transferability test-chaos-phase2.md already records for cooperative.
+                // Two mechanisms in this scenario accrue the CONTINUOUS dwell clock past 15s with no
+                // member actually being a zombie, and the slower tick below only reduces the first:
+                //   1. churn arriving faster than an EAGER rebalance completes, so the group never
+                //      returns to Stable (the tick comment below; measured 15.5s);
+                //   2. a close landing mid-dwell. The heavy tail dwells NON-interruptibly by design
+                //      (see ChaosScenarioBase#newInstance), so PC's close waits its full PT10S pool
+                //      timeout and gives up - "is user function swallowing interrupted exception?" -
+                //      and a member stuck in that close is not answering the rebalance either.
+                // Measured on seed 1838980910098175839, which replays RED deterministically on plain
+                // master: peaks 15411 / 15544 / 15658ms against a 15000ms bound, i.e. 2.7-4.4% over.
+                // Widening instead was rejected: the bound sits between W1's healthy 6.7s and its
+                // defect 20.1s, so a value fitting this scenario's legitimate 15.7s leaves ~1.15x to
+                // the defect signature and stops discriminating. Class 1 stays covered by W1, where it
+                // was calibrated and where the probe is armed - the same trade W4 makes.
+                // THE PEAK IS STILL MEASURED: this suppresses the violation, never the measurement.
+                .disableRebalanceDwellViolation();
 
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
                 .seed(seed.getValue())

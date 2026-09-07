@@ -34,6 +34,23 @@ learn about the project", which is what the cramming instinct was really protect
 The roadmap data already exists (`docs/data/roadmap.yaml`, `docs/features/`), so this is a
 publishing decision rather than new work - which is exactly why it can be decided rather than built.
 
+## The date, set 2026-08-24
+
+**Target: Wednesday 26 August 2026**, and it is the fork announcement rather than a routine tag - the
+roadmap publishes alongside it, which is the resolution above being taken rather than deferred. Every
+piece of work in flight now is to be judged against that launch: not "is this good?" but "does this
+have to be in the thing people look at once?"
+
+**It is gated on the bugs that are already open, not on scope.** Anything not fixing one of those is
+arguing to be in a release it does not block - which is the cramming instinct this note exists to
+name. The bar the date sets is therefore narrower than the one under "Still open": those questions
+remain live, but a proposal that cannot point at a currently-open bug does not need them answered to
+be declined.
+
+A date makes the failure mode concrete. Until now the risk was never shipping, with each addition
+individually justified; with a date the risk becomes shipping the date and quietly dropping the
+announcement or the roadmap, which are the parts that make the release cost less than it looks.
+
 ## Still open
 
 - **What is the actual bar for v6?** "Stability release" is stated in `release-0.6.0.0.md` under

@@ -16,6 +16,14 @@
 #
 #     ./mvnw test -pl :parallel-consumer-core -am -Dpc.log.level=debug -Dtest=TheOneTest
 #
+# It reaches FAILSAFE forks as well as surefire ones - observed, not merely argued from the fact that
+# both plugins fork off the same machinery and neither declares systemPropertyVariables: a
+# `bin/ci-integration-test.sh ... -Dpc.log.level=info` run of RegistrationRaceStaleResidentIT emits
+# bz.stub.parallelconsumer INFO lines that the warn default would have swallowed. So the same knob
+# raises an integration test:
+#
+#     bin/ci-integration-test.sh -pl :parallel-consumer-core -am -Dpc.log.level=info -Dit.test=TheOneIT
+#
 # Editing the file to see output is what this replaces - that is how core drifted to root=info while
 # vertx, reactor and mutiny all sat at warn. docs/testing.md, "Seeing test output", owns the how-to.
 #

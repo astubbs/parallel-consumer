@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Queue;
 import java.util.Set;
@@ -61,41 +62,36 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     protected static final Duration QUIET_CAP = Duration.ofMinutes(5);
 
     /**
-     * <b>Diagnostic only - never a way to make this test pass.</b> Set {@code -Dchaos.diagnoseStallRecovery=true}
-     * to answer the one question the gating configuration structurally cannot: when a Class 2 stall
-     * fires, does the frozen partition <b>ever</b> recover, or is it wedged forever?
+     * The Class 2 diagnostic recovery result, recorded here (rather than restated at every call site)
+     * because it is THIS FAMILY's own prior art for {@link ChaosScenarioBase#DIAGNOSE_STALL_RECOVERY}:
+     * the scenario's own arithmetic above asserts that "a REAL Class 2 stall is unbounded", and until
+     * 2026-08-25 that had never been tested, because a gating run destroys the evidence at the moment
+     * of detection - {@code failFast} aborted the wait on the first violation and {@code QUIET_CAP}
+     * gave up at 5 minutes, so every observation ended the instant the finding was confirmed.
      * <p>
-     * The scenario's own arithmetic above asserts that "a REAL Class 2 stall is unbounded", and the
-     * probe's javadoc records RED calibration as still open. Neither has been tested, because the
-     * gating run destroys the evidence at the moment of detection: {@code failFast} aborts the wait on
-     * the first violation and {@code QUIET_CAP} gives up at 5 minutes, so every observation to date
-     * ends the instant the stall is confirmed. Unbounded and merely-slow are indistinguishable from
-     * that data.
-     * <p>
-     * In this mode the quiet phase does not bail on a violation and waits {@link #DIAGNOSTIC_QUIET_CAP}
-     * instead, logging consumption progress each poll. The discriminator is which way the wait ends:
-     * the backlog drains (the stall was bounded - a starvation or fairness defect) or it times out with
-     * consumption flat (unbounded - lost state, a partition paused and never resumed, or a lost wakeup).
-     * <p>
-     * <b>It cannot turn a red run green.</b> {@code assertScenarioSlos} still asserts the probe's
-     * violations are empty after the wait, whichever way the wait ended, so a run that trips the probe
-     * still fails - it just fails having recorded what happened next. Off by default; the gating
-     * configuration is byte-for-byte unchanged when the property is absent.
+     * <b>It has now been run, and the answer was "it recovers".</b> Two replays of the seeds the
+     * sightings ledger nominated as its strongest evidence both crossed the bound and then drained to
+     * {@code inFlight=0} with full key coverage - which is why the Class 2 bound is a non-gating
+     * observation today rather than a violation. Numbers in
+     * {@code docs/inflight/bug-857-family.md}'s 2026-08-25 entry. The mode stays because the question
+     * recurs per seed, not because it is unanswered.
      */
-    private static final boolean DIAGNOSE_STALL_RECOVERY = Boolean.getBoolean("chaos.diagnoseStallRecovery");
+    @Override
+    protected void logDiagnosticContext() {
+        // The prior art nobody greps, delivered at the moment it is about to be repeated: the six
+        // prior-art checks in AGENTS.md search docs, PRs and issues, and none of them reaches a class
+        // javadoc. This exact experiment was run once before at the 90s/45s shape and is recorded
+        // there, and was re-derived in August 2026 by someone who had done the documented checks
+        // correctly.
+        log.warn("=== BEFORE INTERPRETING THIS RUN, read the scenario class's 'Calibration " +
+                "status' javadoc. A recovery diagnostic has been run on this family before " +
+                "and already established that the freeze RESOLVES and the backlog completes " +
+                "at the pre-2026-07-30 shape. If your result is 'it recovers', you have " +
+                "reproduced a known result - the NEW question is whether it still recovers " +
+                "at the current shape, and how long it takes against the {} bound. ===",
+                ProgressProbe.LAG_STAGNATION_BOUND);
+    }
 
-    /**
-     * Quiet cap in {@link #DIAGNOSE_STALL_RECOVERY} mode - long enough that "never recovered" means
-     * something. Override with {@code -Dchaos.diagnosticQuietCapMinutes=<n>}.
-     * <p>
-     * <b>The scenario class's {@code @Timeout} is the real ceiling, and it wins silently.</b> Those
-     * are 600s today, so a quiet cap above about six minutes cannot be reached - JUnit kills the
-     * test first, mid-observation, and the run then looks like one that stopped for its own reasons
-     * rather than one that was cut off. Raise the annotation if you genuinely need a longer watch;
-     * do not just raise this number and believe the result.
-     */
-    private static final Duration DIAGNOSTIC_QUIET_CAP =
-            Duration.ofMinutes(Integer.getInteger("chaos.diagnosticQuietCapMinutes", 20));
     /** Low eviction horizon: a storm-wedged (deadlocked) member stops polling and gets evicted ~30s
      * later, letting pending rebalances resolve and the group re-stabilize for the quiet phase. */
     protected static final int MAX_POLL_INTERVAL_MS = 30_000;
@@ -110,6 +106,26 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     protected static final Duration HEAVY_SLEEP = Duration.ofSeconds(20);
 
     /** The single experimental variable between W4 variants. */
+    /**
+     * The commit mode this scenario runs in. Defaults to {@code PERIODIC_CONSUMER_SYNC} - sync
+     * commits sharpen revoke-versus-commit lock contention, which is the confluentinc#857 deadlock
+     * recipe and why every scenario in this family used it.
+     *
+     * <p><b>Promoted to an accessor so the transactional half of the family is reachable at all.</b>
+     * It was a hardcoded constant, and combined with {@code ManagedPCInstance} never wiring a
+     * producer, that made {@code PERIODIC_TRANSACTIONAL_PRODUCER} unreachable by construction rather
+     * than by decision. The consequence was not academic: astubbs/parallel-consumer#44 - the only
+     * issue upstream ever labelled a verified bug - is in that mode, and so is the unbounded revoke
+     * wait in {@code docs/inflight/bug-857-transactional-revoke-wait.md}. The suite built to hunt
+     * this family could not enter the room they are in.
+     *
+     * <p>Overriding it changes what a scenario measures, so a variant that does should say what it
+     * expects to see that the sync arm cannot - see {@link ChaosRevokeUnderWorkTransactionalIT}.
+     */
+    protected CommitMode commitMode() {
+        return CommitMode.PERIODIC_CONSUMER_SYNC;
+    }
+
     protected abstract boolean useCooperativeAssignor();
 
     /** Short label for topic names and log lines (e.g. "w4" / "w4coop"). */
@@ -189,6 +205,8 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     }
 
     protected void runRevokeUnderWorkScenario() throws Exception {
+        // The @Timeout clock starts here, so the time-remaining sum below has to measure from here too.
+        Instant methodStart = Instant.now();
         ChaosSeed seed = resolveSeed();
         log.info("=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ===",
                 scenarioLabel(), useCooperativeAssignor(), seed.getValue(), seed.replayCommand());
@@ -199,8 +217,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
         Properties quickEviction = new Properties();
         quickEviction.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, MAX_POLL_INTERVAL_MS);
         ManagedPCInstance.Config pcConfig = ManagedPCInstance.Config.builder()
-                // sync commits sharpen revoke-vs-commit lock contention - the confluentinc#857 deadlock recipe
-                .commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)
+                .commitMode(commitMode())
                 .order(processingOrder())
                 .inputTopic(topic)
                 .pollDelayMs(1)
@@ -239,7 +256,13 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
         startRun(probe, conductor);
 
         try {
-            // Phase 1 - storm: revocations under heavy in-flight work; bail early on any violation
+            // Phase 1 - storm: revocations under heavy in-flight work; bail early on any VIOLATION.
+            // Since the Class 2 lag bound became a non-gating observation (2026-08-25) it no longer
+            // trips hasViolations(), so a storm that crosses that bound now runs its full
+            // STORM_DURATION where it used to cut short. That is intended - the bound measures speed,
+            // and ending the disturbance early because the fleet was slow removed exactly the load the
+            // storm exists to apply - but it does lengthen those particular runs, so a wall-clock
+            // comparison against a pre-demotion run is not like-for-like.
             Instant stormEnd = Instant.now().plus(STORM_DURATION);
             while (Instant.now().isBefore(stormEnd) && !probe.hasViolations()) {
                 Thread.sleep(1_000);
@@ -249,47 +272,21 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                     scenarioLabel(), totalConsumed.get());
 
             // Phase 2 - quiet observation: group must settle, evict any storm-wedged member, and FINISH.
-            // The only defect signal that can fire here is the protocol-invisible kind - exactly Class 2.
-            org.awaitility.core.ConditionFactory quiet =
-                    await().alias("backlog drained after the storm settles (quiet phase)")
-                            .pollInterval(Duration.ofSeconds(2));
-            if (DIAGNOSE_STALL_RECOVERY) {
-                // Deliberately no failFast: the whole point is to keep watching AFTER the violation.
-                log.warn("=== chaos.diagnoseStallRecovery ACTIVE - quiet cap {} and no fail-fast. " +
-                        "This is a DIAGNOSTIC run: violations are still asserted at the end, so this " +
-                        "cannot make the test pass. ===", DIAGNOSTIC_QUIET_CAP);
-                // The prior art nobody greps, delivered at the moment it is about to be repeated: the
-                // six prior-art checks in AGENTS.md search docs, PRs and issues, and none of them
-                // reaches a class javadoc. This exact experiment was run once before at the 90s/45s
-                // shape and is recorded there, and was re-derived in August 2026 by someone who had
-                // done the documented checks correctly.
-                log.warn("=== BEFORE INTERPRETING THIS RUN, read the scenario class's 'Calibration " +
-                        "status' javadoc. A recovery diagnostic has been run on this family before " +
-                        "and already established that the freeze RESOLVES and the backlog completes " +
-                        "at the pre-2026-07-30 shape. If your result is 'it recovers', you have " +
-                        "reproduced a known result - the NEW question is whether it still recovers " +
-                        "at the current shape, and how long it takes against the {} bound. ===",
-                        ProgressProbe.LAG_STAGNATION_BOUND);
-                quiet = quiet.atMost(DIAGNOSTIC_QUIET_CAP);
-            } else {
-                quiet = quiet.atMost(QUIET_CAP).failFast("probe violation", probe::hasViolations);
-            }
-            quiet.until(() -> {
-                boolean done = totalConsumed.get() >= EXPECTED_MESSAGES
-                        && allConsumedCovers(expectedKeys, allConsumed);
-                if (DIAGNOSE_STALL_RECOVERY) {
-                    // Both ends of the user function, because a completion counter alone cannot tell
-                    // "nothing is finishing" from "nothing is happening": a fleet all sitting inside
-                    // HEAVY_SLEEP reads as a flat line while it is fully busy. inFlight is the
-                    // difference, and it is what makes a flat consumed count interpretable.
-                    long started = totalStarted.get();
-                    long consumed = totalConsumed.get();
-                    log.info("[diagnose] quiet phase: consumed={}/{} started={} inFlight={} violations={} done={}",
-                            consumed, EXPECTED_MESSAGES, started, started - consumed,
-                            probe.getViolations().size(), done);
-                }
-                return done;
-            });
+            // The protocol-invisible signals are the ones that can still fire here. Since 2026-08-25 the
+            // Class 2 lag bound is a non-gating OBSERVATION, so what can fail this phase is
+            // INSTANCE_STALL - which watches completions and cannot fire on slow-but-progressing - plus
+            // the fleet watermark and the end-of-run ledger. INSTANCE_STALL is per-instance, so a
+            // single wedged shard beside busy siblings fails nothing here: see
+            // docs/inflight/test-per-shard-liveness-has-no-gate.md.
+            diagnosableWait("backlog drained after the storm settles (quiet phase)", methodStart, QUIET_CAP,
+                    "probe violation", probe)
+                    .until(() -> {
+                        boolean done = totalConsumed.get() >= EXPECTED_MESSAGES
+                                && allConsumedCovers(expectedKeys, allConsumed);
+                        logDiagnosticProgress("quiet phase", EXPECTED_MESSAGES, totalStarted, totalConsumed,
+                                probe, done);
+                        return done;
+                    });
         } finally {
             settleRun(conductor, probe, fleet.getProducerThread(), fleet.getPcExecutor(), totalConsumed);
         }

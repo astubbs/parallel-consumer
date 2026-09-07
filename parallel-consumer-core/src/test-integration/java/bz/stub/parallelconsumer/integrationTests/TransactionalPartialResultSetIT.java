@@ -22,6 +22,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
@@ -81,6 +82,11 @@ import static org.awaitility.Awaitility.await;
  * @author Antony Stubbs
  * @see ProducerManager#produceMessages
  */
+// Per-method timeout, following DrainingMemberRebalanceIT and the rest of this package. Without one, a thread
+// blocked on a broker call or a lock becomes a job that runs to the CI-level timeout with no failing test to
+// point at. Comfortably above this class's own budget: two SETTLE_TIMEOUT windows plus the 120s no-retry wait, on
+// top of broker and topic setup.
+@Timeout(600)
 @Tag("transactions")
 @Slf4j
 class TransactionalPartialResultSetIT extends BrokerIntegrationTest<String, String> {

@@ -188,10 +188,11 @@ a restart - happens to rebalance that partition.
 ### Follow-up 1: availableWorkContainerCnt on the replacement path
 
 The comment "`availableWorkContainerCnt` stays the same since we're replacing, not adding"
-(`ProcessingShard.java:70`) asserts an invariant the code does not have. It holds only if the stale
-occupant was still counted as available. It is not, if it was taken as work while fresh and then went
-stale - `getWorkIfAvailable` decrements at `ProcessingShard.java:195` but leaves the container in
-`entries` until success. That is exactly the in-flight-across-a-rebalance case this bug is about.
+(in `ProcessingShard.addWorkContainer`'s stale-replacement branch) asserts an invariant the code does
+not have. It holds only if the stale occupant was still counted as available. It is not, if it was
+taken as work while fresh and then went stale - `getWorkIfAvailable` decremented via
+`dcrAvailableWorkContainerCntByDelta` but leaves the container in `entries` until success. That is
+exactly the in-flight-across-a-rebalance case this bug is about.
 
 Replacing such an entry yields a genuinely available fresh container that is never counted, so
 `getNumberOfWorkQueuedInShardsAwaitingSelection()` and `workIsWaitingToBeProcessed()` undercount -
@@ -202,6 +203,17 @@ become true (`if (!existing.isInFlight())`) or be corrected.
 The worse version of this does **not** bite: a stale in-flight container completing would call
 `entries.remove(offset)` and delete the fresh replacement by offset, but `WorkManager.handleFutureResult`
 short-circuits stale results before reaching `sm.onSuccess`.
+
+> **Citation repair and status flag, 2026-08-26.** The two `file:line` citations above were replaced
+> with greppable anchors, per [`docs/citations.md`](../../citations.md). Both anchors have since been
+> deleted from the code: the quoted comment and `dcrAvailableWorkContainerCntByDelta` were removed
+> when the shard's available count stopped being adjusted by inference and started being spent by the
+> winner of a compare-and-set. Read them as this document read them with
+> `git log -S'dcrAvailableWorkContainerCntByDelta' -- parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ProcessingShard.java`,
+> then `git show <sha>^:<path>`. **The claim above is left exactly as written** - it was true of the
+> code it describes. What it asked for ("the comment should either become true ... or be corrected")
+> was done differently: the branch now accounts for the replacement explicitly, guarded by
+> `ShardAvailableCountOwnershipTest`.
 
 ### Follow-up 2: the test's javadoc describes the wrong mechanism
 

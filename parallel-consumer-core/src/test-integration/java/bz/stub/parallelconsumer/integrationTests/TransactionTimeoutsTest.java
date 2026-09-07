@@ -12,6 +12,8 @@ import bz.stub.parallelconsumer.FakeRuntimeException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.ProvesClaim;
+import bz.stub.parallelconsumer.TransactionalClaim;
 import bz.stub.parallelconsumer.integrationTests.utils.BrokerCommitAsserter;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.ProducerManager;
@@ -175,6 +177,7 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
     @SneakyThrows
     @ParameterizedTest()
     @MethodSource("commitTimeoutParams")
+    @ProvesClaim(TransactionalClaim.COMMIT_LOCK_TIMEOUT_FAILS_FAST)
     void commitTimeout(int multiple, int expectedHighestSucceededCommittedOffset, List<Integer> expectedIncompletes) {
         var options = createOptions()
                 .shutdownTimeout(Duration.ofSeconds(5))
@@ -287,6 +290,7 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
      */
     @SneakyThrows
     @Test
+    @ProvesClaim(TransactionalClaim.PRODUCE_LOCK_TIMEOUT_RETRIES_RECORD)
     void produceTimeout() {
         final int OFFSET_TO_PRODUCE_SLOWLY = NUMBER_TO_SEND + 2;
 

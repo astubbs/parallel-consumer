@@ -18,6 +18,7 @@ import io.micrometer.core.instrument.Gauge;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -26,6 +27,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static java.util.Optional.empty;
@@ -72,6 +74,16 @@ public class ShardManager<K, V> {
 
 
     /**
+     * How many records the shards are currently holding, derived by conservation rather than counted.
+     * <p>
+     * Shared with every {@link ProcessingShard} this manager creates, so that the admissions and retirements of
+     * all shards reduce to one figure that can be read in O(1) from the control thread.
+     *
+     * @see #getNumberOfRecordsInShards()
+     */
+    private final RecordPopulation recordPopulation = new RecordPopulation();
+
+    /**
      * Shared by every shard this manager creates, so it survives the removal of emptied shards.
      *
      * @see DispatchScanMeter
@@ -92,6 +104,7 @@ public class ShardManager<K, V> {
     private Optional<ShardKey> iterationResumePoint = Optional.empty();
 
     private Gauge shardsSizeGauge;
+    private Gauge shardsMaxSizeGauge;
     private Gauge numberOfShardsGauge;
 
     private final PCMetrics pcMetrics;
@@ -128,17 +141,157 @@ public class ShardManager<K, V> {
         // all available container count - (still pending for running retry containers count)
         // => all_available_count - (retryCnt - all_expired_retry_cnt)
         // order matters as there is a race between getting those numbers and state updates - we should err on the higher
-        // number - so read retry queue size before shards size (as normally retry queue is updated before shard counters are on work taken).
+        // number - so read retry queue size before shards size.
+        //
+        // The write order this reads against CHANGED when the shard counter stopped being adjusted in one batch at
+        // the end of ProcessingShard#getWorkIfAvailable and started being released per container inside its selection
+        // loop: the shard counter now drops FIRST and retryQueue.removeAll runs afterwards, so the window a reader
+        // can land in spans the rest of the shard scan rather than two statements. The read order above is still the
+        // right one, but no longer for the reason previously written here ("retry queue is updated before shard
+        // counters"). Re-derived for a previously-failed container being taken, where S is the shard sum, Q the retry
+        // size and r the ready-to-retry count: a reader that sees the retry queue still holding it and the shard sum
+        // already without it computes (r+1) + max(0, S-(Q+1)), which equals the settled r + max(0, S-Q) when
+        // S-Q >= 1, and exceeds it by one otherwise. So the skew is either nil or high - never low, which is the
+        // direction that matters, because reading low is what closes drain() early.
         // it can still be negative due to race between marking containers inflight, updating counters in shards and updates to retryQueue
         // this value should not be used in isolation though - but as part of overall buffer size calculation - which takes into account
         // this number and number of work containers queued in work thread pool.
         // it is safe though to set it to 0 for negative value of shards size - retry queue size portion.
 
         ParallelConsumer.Tuple<Integer,Long> retryQueueSizeAndNumberReadyToBeRetried = retryQueue.getQueueSizeAndNumberReadyToBeRetried();
-        long diffBetweenShardsAndRetrySize= -retryQueueSizeAndNumberReadyToBeRetried.getLeft() + processingShards.values().stream()
+        long diffBetweenShardsAndRetrySize = -retryQueueSizeAndNumberReadyToBeRetried.getLeft() + sumOfShardAvailableCounters();
+        return retryQueueSizeAndNumberReadyToBeRetried.getRight() + (diffBetweenShardsAndRetrySize < 0 ? 0 : diffBetweenShardsAndRetrySize);
+    }
+
+    /**
+     * How many records the shards currently hold - selectable, out at a worker, or waiting out a retry delay.
+     * <p>
+     * Derived by conservation ({@code admitted - retired}) rather than counted, so it cannot disagree with the
+     * shards' contents the way a separately maintained running total can, and it is O(1) to read.
+     *
+     * @see RecordPopulation
+     */
+    public long getNumberOfRecordsInShards() {
+        return recordPopulation.getInSystem();
+    }
+
+    /**
+     * How many records the shards hold that are parked waiting out a retry delay, and so cannot be worked on yet
+     * however much capacity there is.
+     * <p>
+     * Subtracted from {@link #getNumberOfRecordsInShards()} to get the figure that gates record intake: a
+     * consumer whose entire buffer is in retry back-off should keep fetching, or it would idle its workers
+     * waiting on delays.
+     */
+    public long getNumberOfRecordsParkedForRetry() {
+        var sizeAndReady = retryQueue.getQueueSizeAndNumberReadyToBeRetried();
+        return sizeAndReady.getLeft() - sizeAndReady.getRight();
+    }
+
+    /**
+     * The record-intake gate's figure, together with the two operands it is derived from, taken as close together
+     * as the two structures holding them allow.
+     * <p>
+     * The subtraction lives here because both operands do: {@link WorkManager} reaching across for
+     * {@link #getNumberOfRecordsInShards()} and {@link #getNumberOfRecordsParkedForRetry()} to do the arithmetic
+     * itself only spread one figure's definition across two classes. The operands come back as well as the
+     * difference so that the diagnostic in {@link WorkManager#isSufficientlyLoaded()} can print the equation the
+     * decision was actually made on, rather than re-reading and printing one that never held.
+     * <p>
+     * <b>This is NOT an atomic snapshot, and no arrangement of these two reads makes it one.</b>
+     * {@link #getNumberOfRecordsInShards()} reduces two {@link java.util.concurrent.atomic.LongAdder}s in
+     * {@link RecordPopulation}; {@link #getNumberOfRecordsParkedForRetry()} reads {@link RetryQueue} under that
+     * queue's own fair read/write lock. No lock spans both, and adding one would put the broker-poll thread's
+     * admission path behind the retry queue's fair lock - a redesign, not a tidy-up, and one this figure does not
+     * need. What follows is what the skew actually is.
+     * <p>
+     * <b>Retry-queue movement in the window costs nothing.</b> Parking a record for retry, and its delay
+     * expiring, both leave the population untouched - the container stays in its shard throughout. So a retry
+     * queue that moves between the two reads does not make the difference wrong: it is exactly right as of the
+     * later read.
+     * <p>
+     * <b>Population movement in the window is the whole of the skew.</b> Reading the population first makes it the
+     * stale operand, by however many records another thread admits or retires while the retry-queue read is in
+     * progress - a fair read-lock acquisition plus a scan of the queue's head, O(n) in the worst case. An
+     * admission missed this way reads the figure <em>low</em>, which fetches sooner than needed. A retirement
+     * missed this way reads it <em>high</em>, which is the direction that matters: high is what pauses the poller,
+     * and a poller that stays paused is the silent stall of confluentinc#857.
+     * <p>
+     * <b>It cannot accumulate, which is what makes it tolerable.</b> The gate is resampled every control-loop
+     * tick, and once mutation stops both figures are exact - so a skewed sample can only bring one fetch forward
+     * or hold it back by one tick, and never at a threshold distance that a tick of real work would not have
+     * crossed anyway. That is the difference between this and the defect this figure replaced: separately
+     * maintained counters drifted <em>permanently</em>, so the gate could sit wrong forever with nothing to
+     * reconcile it.
+     */
+    public WorkableRecords getWorkableRecords() {
+        // Population FIRST, retry queue second - see the class javadoc above for why the order is the one that
+        // makes retry-queue movement free rather than merely cheap.
+        long inShards = getNumberOfRecordsInShards();
+        long parkedForRetry = getNumberOfRecordsParkedForRetry();
+        return new WorkableRecords(inShards, parkedForRetry);
+    }
+
+    /**
+     * The load gate's figure and its two operands, from one call to {@link #getWorkableRecords()}.
+     * <p>
+     * It exists so a caller that needs the difference <em>and</em> the operands - the gate, which decides on one
+     * and logs the others - gets them from a single read rather than reading each twice.
+     */
+    @Value
+    public static class WorkableRecords {
+
+        /**
+         * @see ShardManager#getNumberOfRecordsInShards()
+         */
+        long inShards;
+
+        /**
+         * @see ShardManager#getNumberOfRecordsParkedForRetry()
+         */
+        long parkedForRetry;
+
+        /**
+         * @return records held that work capacity can actually advance - the figure the intake gate compares
+         *         against its threshold
+         */
+        public long getWorkable() {
+            return inShards - parkedForRetry;
+        }
+    }
+
+    /**
+     * The conservation counters themselves, for tests that need to assert on both sides of the balance.
+     */
+    // visible for testing
+    RecordPopulation getRecordPopulation() {
+        return recordPopulation;
+    }
+
+    /**
+     * Counts the shards' contents by scanning them - O(n), and deliberately independent of the conservation
+     * counters, so a test can hold {@link #getNumberOfRecordsInShards()} against it.
+     * <p>
+     * Read on the debug-only under-served-retrieval path in {@link #getWorkIfAvailable}; the O(1) conservation
+     * figure is what anything on a hot path should be reading.
+     */
+    long countRecordsInShardsByScan() {
+        return processingShards.values().stream()
+                .mapToLong(ProcessingShard::getCountOfWorkTracked)
+                .sum();
+    }
+
+    /**
+     * The raw sum of the per-shard available-work counters, with no flooring applied.
+     * <p>
+     * {@link #getNumberOfWorkQueuedInShardsAwaitingSelection()} floors its result, which hides both directions of
+     * counter drift from any test that reads it. This is the unfloored figure that method starts from, exposed
+     * so drift can be asserted on directly.
+     */
+    long sumOfShardAvailableCounters() {
+        return processingShards.values().stream()
                 .mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection)
                 .sum();
-        return retryQueueSizeAndNumberReadyToBeRetried.getRight() + (diffBetweenShardsAndRetrySize < 0 ? 0 : diffBetweenShardsAndRetrySize);
     }
 
     public boolean workIsWaitingToBeProcessed() {
@@ -166,10 +319,12 @@ public class ShardManager<K, V> {
     private void removeWorkFromShardFor(ConsumerRecord<K, V> consumerRecord) {
         ShardKey shardKey = computeShardKey(consumerRecord);
 
-        if (processingShards.containsKey(shardKey)) {
+        // single read - a check-then-get pair here tears against removeShardIfEmpty racing on the control thread
+        // (KEY ordering removes empty shards), NPE-ing out of the rebalance listener into consumer.poll
+        Optional<ProcessingShard<K, V>> shardOpt = getShard(shardKey);
+        if (shardOpt.isPresent()) {
             // remove the work
-            ProcessingShard<K, V> shard = processingShards.get(shardKey);
-            WorkContainer<K, V> removedWC = shard.remove(consumerRecord.offset());
+            WorkContainer<K, V> removedWC = shardOpt.get().removeWorkAtOffset(consumerRecord.offset());
 
             // remove if in retry queue
             // check null to avoid race condition
@@ -180,6 +335,8 @@ public class ShardManager<K, V> {
             // remove the shard if empty
             removeShardIfEmpty(shardKey);
         } else {
+            // covers both already-removed-before-the-sweep and removed-against-this-read; the third null
+            // on this path, after the shard's own long-standing guard and confluentinc#757's retryQueue one
             log.trace("Shard referenced by WC: {} with shard key: {} already removed", consumerRecord, shardKey);
         }
 
@@ -189,22 +346,42 @@ public class ShardManager<K, V> {
         var wc = new WorkContainer<>(epochOfInboundRecords, aRecord, module);
         ShardKey shardKey = computeShardKey(wc);
 
-        // don't need to synchronise on /adding/ elements, as the iterator would just stop early
-        var shard = processingShards.computeIfAbsent(shardKey,
-                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm(), dispatchScanMeter));
-        shard.addWorkContainer(wc);
+        // Choosing the shard and writing to it have to be ONE step, not two.
+        //
+        // computeIfAbsent followed by shard.addWorkContainer() hands the caller a shard and then lets go of
+        // the map: under KEY ordering removeShardIfEmpty() can garbage-collect that very shard in between,
+        // on the control thread, and the record is then admitted into a shard no scan will ever reach. The
+        // record is lost either way - that part is not new - but the admission is not, and nothing ever
+        // retires it, so getNumberOfRecordsInShards() reads permanently high and eventually holds the
+        // broker poller paused for good. The old gate summed only the shards still IN this map, so an
+        // orphan simply disappeared from it; a conservation figure cannot forget.
+        //
+        // compute() here and computeIfPresent() in removeShardIfEmpty() take the same per-key lock, so a
+        // shard can no longer be dropped between being chosen and being written to.
+        processingShards.compute(shardKey, (ignore, existingShard) -> {
+            var shard = (existingShard == null)
+                    ? new ProcessingShard<>(shardKey, options, wm.getPm(), recordPopulation, dispatchScanMeter)
+                    : existingShard;
+            shard.addWorkContainer(wc);
+            return shard;
+        });
     }
 
     void removeShardIfEmpty(ShardKey key) {
-        Optional<ProcessingShard<K, V>> shardOpt = getShard(key);
-
         // If using KEY ordering, where the shard key is a message key, garbage collect old shard keys (i.e. KEY ordering we may never see a message for this key again)
         // If not, no point to remove the shard, as it will be reused for the next message from the same partition
-        boolean keyOrdering = options.getOrdering().equals(KEY);
-        if (keyOrdering && shardOpt.isPresent() && shardOpt.get().isEmpty()) {
-            log.trace("Removing empty shard (key: {})", key);
-            this.processingShards.remove(key);
+        if (!options.getOrdering().equals(KEY)) {
+            return;
         }
+        // The emptiness test and the removal are one step, against the same per-key lock addWorkContainer()
+        // takes - see there for what a shard dropped mid-insertion costs.
+        processingShards.computeIfPresent(key, (ignore, shard) -> {
+            if (shard.isEmpty()) {
+                log.trace("Removing empty shard (key: {})", key);
+                return null;
+            }
+            return shard;
+        });
     }
 
     public void onSuccess(WorkContainer<?, ?> wc) {
@@ -225,7 +402,70 @@ public class ShardManager<K, V> {
     }
 
     /**
-     * Idempotent - work may have not been removed, either way it's put back
+     * Idempotent - work may have not been removed, either way it's put back.
+     * <p>
+     * <b>The queue entry is added FIRST and its shard residency confirmed SECOND</b>, and that order is the
+     * whole of this method's thread safety. {@link WorkManager#onFailureResult} re-validates the epoch against
+     * the live partition map immediately before calling this, but says at the site that no epoch check can ever
+     * be atomic with the actions that follow it - so the revoke sweep on the broker-poll thread can complete in
+     * the gap. It removes this container from its shard and then removes it from the retry queue, finding
+     * nothing there yet; under PARTITION or UNORDERED ordering the emptied shard object survives (only KEY
+     * ordering garbage-collects one), so {@link #getShard} still answers present and the add below goes through
+     * anyway. What that used to leave is a <b>queue-only orphan</b>: work is handed out by scanning shards, so a
+     * container in no shard is never selected, never completed and never swept - and every route that removes a
+     * retry-queue entry reaches it THROUGH shard contents, so nothing can ever take it out again.
+     * <p>
+     * <b>Asking about residency before adding would only narrow the window</b> - it is another check-then-act,
+     * and the sweep can land between that answer and the add exactly as it lands between the epoch check and
+     * this call. Reversing the order closes it instead, because the last thing to happen is a REMOVAL driven by
+     * a read taken after the add, and the sweep's own action is also a removal.
+     * <p>
+     * <b>THIS ARGUMENT IS ORDERING-DEPENDENT, and the ordering it depends on is the sweep's, not this
+     * method's.</b> It holds against a sweep that removes from the SHARD first and the queue second - which is
+     * what {@link #removeWorkFromShardFor} and {@link #removeStaleContainers} both do today. That order is what
+     * makes the departure observable to the residency read <em>before</em> the sweep's queue removal happens,
+     * and every case below turns on it:
+     * <ul>
+     * <li>the sweep completes before the add - the residency read below sees a departed container and undoes
+     *     the add;</li>
+     * <li>the sweep starts after the residency read - it finds the container in the shard, so
+     *     {@code removeWorkAtOffset} hands it back non-null and the paired queue removal runs;</li>
+     * <li>the sweep lands between the add and the residency read - its shard removal has therefore already
+     *     happened, so the read sees a departed container and undoes the add (and the sweep's queue removal,
+     *     whichever side of the add it falls, is at worst a no-op);</li>
+     * <li>the sweep's queue removal races the add itself - {@link RetryQueue} serialises them under its own
+     *     write lock, which reduces this to one of the above.</li>
+     * </ul>
+     * Once the read below sees a departed container the answer cannot go stale in the dangerous direction:
+     * residency is by reference, and nothing ever re-inserts the same container instance.
+     * <p>
+     * <b>A QUEUE-FIRST SWEEP DEFEATS IT, and one is in flight.</b> astubbs/parallel-consumer#431 - an open
+     * draft at the time of writing, so master is still shard-first - reverses the order deliberately: it asks
+     * the queue first with a non-blocking {@code tryRemove} so that a declined lock abandons the paired shard
+     * removal and the pair never splits, which is how it keeps the broker-poll thread out of a wait. Against
+     * that ordering this confirmation is not enough: the sweep's queue removal passes over an empty queue, the
+     * controller then adds and reads residency while the container is still resident, and the shard removal
+     * happens afterwards - so neither party removes the entry and the orphan is back.
+     * <p>
+     * <b>What astubbs#431 must add, and it is small</b>: repeat the queue removal AFTER the shard removal. That closes
+     * the half where the controller's add lands inside the sweep, while the confirmation here closes the half
+     * where the add arrives after the sweep has finished. Neither half is redundant and neither closes the
+     * other. {@code RetryQueueRequeueWindowTest.aQueueFirstSweepDefeatsTheOneShotConfirmation} models the
+     * queue-first ordering and asserts the orphan appears, so the two changes cannot pass each other silently;
+     * its matched control asserts shard-first does not.
+     * <p>
+     * <b>This adds no lock and makes no thread wait.</b> The alternative - moving the shard map and the queue
+     * under one lock - would put the broker-poll thread's rebalance callbacks behind the retry queue's fair
+     * lock, which is the wait astubbs/parallel-consumer#431 exists to keep off that thread. Nothing here
+     * touches the poll thread's side of the interleaving at all.
+     * <p>
+     * <b>What else would reopen it.</b> A future caller that adds to {@link #retryQueue} without a residency
+     * confirmation after the add, or one that removes a container from a shard without removing it from the
+     * queue. {@link ProcessingShard#addWorkContainer} is the second shape and is a KNOWN separate orphan route -
+     * it displaces a stale resident with no queue removal, because the shard has no handle on the queue. That is
+     * its own defect, not this one, and is tracked rather than fixed here.
+     *
+     * @see ProcessingShard#isResident(WorkContainer)
      */
     public void onFailure(WorkContainer<?, ?> wc) {
         log.debug("Work FAILED");
@@ -234,8 +474,28 @@ public class ShardManager<K, V> {
         var shardOptional = getShard(key);
 
         if (shardOptional.isPresent()) {
-            shardOptional.get().onFailure();
+            var shard = shardOptional.get();
+            shard.onFailure(wc);
             this.retryQueue.add(wc);
+
+            // Confirm residency AFTER the add, and undo it if the container has left - see the javadoc for why
+            // this order closes the window that asking first only narrows.
+            if (!shard.isResident(wc)) {
+                // The removal's answer is LOGGED rather than dropped, because a bare call here cannot be told
+                // from a forgotten check - and it says which of the two racing removals won, which is the only
+                // interesting thing about this branch. BOTH answers are correct and neither is actionable:
+                // false means the sweep's own paired removal reached the entry first, which is the outcome this
+                // method is arranging for, and true means this call is the one that kept the pair whole. The
+                // argument above needs only that AT LEAST ONE of the two removals observes the entry, never
+                // which. (Logged rather than assigned to an ignored local: a dead store in main code trades one
+                // static-analysis finding for another - see docs/inflight/static-error-prone-rule-registry.md,
+                // `ReturnValueIgnored`.)
+                boolean thisCallRemovedIt = this.retryQueue.remove(wc);
+                log.debug("Failed work left its shard while it was being re-queued (its partition was revoked); " +
+                        "taking the retry queue entry back out so it cannot be orphaned - this call removed it: " +
+                        "{} (false means the revoke sweep's own paired removal got there first). {}",
+                        thisCallRemovedIt, wc);
+            }
         }
 
     }
@@ -288,9 +548,9 @@ public class ShardManager<K, V> {
         // requested even though work is still tracked in the shards. Break down WHY so a stall can be told
         // apart from normal back-pressure. See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
         if (log.isDebugEnabled() && workFromAllShards.size() < requestedMaxWorkToRetrieve) {
-            long tracked = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkTracked).sum();
+            long tracked = countRecordsInShardsByScan();
             if (tracked > 0) {
-                long awaitingSelection = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection).sum();
+                long awaitingSelection = sumOfShardAvailableCounters();
                 long inFlight = processingShards.values().stream().mapToLong(ProcessingShard::getCountWorkInFlight).sum();
                 var retry = retryQueue.getQueueSizeAndNumberReadyToBeRetried();
                 // Interpretation guide:
@@ -328,11 +588,29 @@ public class ShardManager<K, V> {
         }
     }
 
+    /**
+     * Per-shard queue depths, as a fresh stream. Only {@code SHARDS_MAX_SIZE} needs it: the total is the
+     * conservation figure, which is O(1) and cannot disagree with the shards the way a scan of drifting
+     * per-shard counters can.
+     */
+    private LongStream shardEntryCounts() {
+        return processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkTracked);
+    }
+
     private void initMetrics() {
         shardsSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_SIZE,
-                this, shardManager -> shardManager.processingShards.values().stream()
-                        .mapToInt(processingShard -> processingShard.getEntries().size()).sum());
+                this, ShardManager::getNumberOfRecordsInShards);
+        // TODO(refactor): walks every shard queue, and ConcurrentSkipListMap.size() is O(n), so each
+        // scrape is O(total queued records). SHARDS_SIZE above no longer pays that - it reads the O(1)
+        // conservation figure - so this is now the only scan per scrape rather than one of two.
+        // Triaged as negligible; docs/refactoring.md owns the assessment and the fix under
+        // "state/ShardManager.java", with the upstream shard-count-caching design under "Performance".
+        // Do not restate the fix here - two copies of it had already drifted apart once.
+        shardsMaxSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_MAX_SIZE,
+                this, shardManager -> shardManager.shardEntryCounts().max().orElse(0));
+
+
         numberOfShardsGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.NUMBER_OF_SHARDS,
-                this, shardManager -> shardManager.processingShards.keySet().size());
+                this, shardManager -> shardManager.processingShards.size());
     }
 }

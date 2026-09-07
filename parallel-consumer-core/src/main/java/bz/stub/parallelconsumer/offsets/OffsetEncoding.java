@@ -11,6 +11,7 @@ import lombok.ToString;
 
 import java.util.Arrays;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -62,21 +63,45 @@ public enum OffsetEncoding {
     private static final Map<Byte, OffsetEncoding> magicMap = Arrays.stream(values()).collect(Collectors.toMap(OffsetEncoding::getMagicByte, Function.identity()));
 
     /**
-     * The metadata field of a committed offset is free-form - a consumer group previously used by another framework, or
-     * by operator tooling, may hold bytes that match none of our magic numbers. That is a decoding failure, not a fatal
-     * condition: callers drop the offset map and resume from the committed offset. Throwing {@link OffsetDecodingError}
-     * (rather than a bare {@link RuntimeException}) is what routes it to that recovery path instead of letting it
-     * escape the rebalance listener and take the consumer down.
+     * Resolves a magic byte to its encoding, without deciding what to do when it resolves to nothing.
+     * <p>
+     * An empty result is the forward-compatibility case: metadata written by a newer version of Parallel Consumer,
+     * using an encoding that did not exist when this version was built. The caller is the one that knows the
+     * configured {@link bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy},
+     * so the caller - not this method - decides whether that is fatal.
      *
-     * @see OffsetMapCodecManager#loadPartitionStateForAssignment
+     * @param magic the leading byte of an offset metadata payload
+     * @return the encoding that claims this magic byte, or empty if no encoding known to this build does
+     * @see EncodedOffsetPair#decodeToIncompletes
+     */
+    public static Optional<OffsetEncoding> maybeDecode(byte magic) {
+        return Optional.ofNullable(magicMap.get(magic));
+    }
+
+    /**
+     * Resolves a magic byte to its encoding, or fails.
+     * <p>
+     * <b>Keeps the declared {@link OffsetDecodingError} contract deliberately.</b> An earlier revision of this change
+     * dropped the {@code throws} clause and sneaky-threw a checked {@link UnknownOffsetMetadataMagicException} instead,
+     * reasoning that the narrower signature was the source-compatible choice. That was backwards: this method already
+     * declared {@code OffsetDecodingError}, so removing it stopped existing {@code catch} clauses compiling, left
+     * already-compiled callers unable to see the replacement at runtime, and made the new type uncatchable because
+     * javac saw no declaration that it could be thrown.
+     * <p>
+     * The policy-aware path does not come through here - it uses {@link #maybeDecode} and lets
+     * {@link EncodedOffsetPair#decodeToIncompletes} apply
+     * {@link bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy}. So this method
+     * staying exactly as it was costs the new behaviour nothing.
+     *
+     * @throws OffsetDecodingError if no encoding known to this build claims this magic byte
+     * @see #maybeDecode for the policy-aware decode path, which production decoding uses instead
      */
     public static OffsetEncoding decode(byte magic) throws OffsetDecodingError {
-        OffsetEncoding encoding = magicMap.get(magic);
-        if (encoding == null) {
+        Optional<OffsetEncoding> encoding = maybeDecode(magic);
+        if (!encoding.isPresent()) { // Optional#isEmpty is Java 11 - this module compiles against the Java 8 API
             throw new OffsetDecodingError("Unexpected magic: " + magic, null);
-        } else {
-            return encoding;
         }
+        return encoding.get();
     }
 
     public String description() {

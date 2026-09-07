@@ -9,6 +9,8 @@ import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import bz.stub.parallelconsumer.internal.utils.WireMockUtils;
 import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.FakeRuntimeException;
 import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -33,6 +35,7 @@ import pl.tlinkowski.unij.api.UniMaps;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -42,6 +45,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static pl.tlinkowski.unij.api.UniLists.of;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 @Isolated
 @Slf4j
@@ -110,6 +114,59 @@ class VertxTest extends VertxBaseUnitTest {
                 .allSatisfy(msg -> assertThat(msg).contains("connection refused"));
     }
 
+    /**
+     * A send failure whose bookkeeping throws still redelivers the record.
+     *
+     * <p><b>Read the limitation before trusting this test.</b> It pins the observable contract and it does
+     * <em>not</em> discriminate the guard in {@code addVertxHooks}: it passes with the guard, without it, and with
+     * both it and {@code WorkContainer.onUserFunctionFailure}'s {@code finally} reverted. Measured, all three ways.
+     * So it is a regression guard on the behaviour, not evidence that either fix is load-bearing here.
+     *
+     * <p>That matters because a review round rated the unguarded vert.x handler P1, reasoning that
+     * {@code FutureImpl}'s listener array iterates with no per-listener try/catch, so an escape strands the record
+     * in flight forever. The reasoning may well be right about vert.x's dispatch; the <em>consequence</em> does not
+     * reproduce - the record comes back regardless, so something downstream recovers it. Nobody has established
+     * what, and until someone does, the severity is unproven rather than confirmed.
+     *
+     * <p>The guard was kept anyway: it costs nothing, it matches what core, Reactor and Mutiny do, and an engine
+     * that silently differs from its siblings is how the next round finds this file again. But it is
+     * defence-in-depth, not a demonstrated fix.
+     *
+     * <p>Driven through {@code vertxFuture} with an already-failed future - deterministic, no socket, and the
+     * entry point that actually reaches {@code addVertxHooks}. An earlier version used
+     * {@code vertxHttpReqInfoStream}, which takes a different path and did not exercise the handler at all. The
+     * throwing {@code retryDelayProvider} is real user code, reached via {@code updateFailureHistory}, and the
+     * probe below asserts it genuinely fired - without that, the test could pass by never triggering anything.
+     */
+    @SneakyThrows
+    @Test
+    void aSendFailureWhoseBookkeepingThrowsStillRedeliversTheRecord() {
+        var attempts = new AtomicInteger();
+        var providerCalls = new AtomicInteger();
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerSpy)
+                .producer(producerSpy)
+                .retryDelayProvider(ignored -> {
+                    providerCalls.incrementAndGet();
+                    throw new FakeRuntimeException("your retry delay provider is broken");
+                })
+                .build());
+        primeFirstRecord();
+
+        vertxAsync.vertxFuture(rec -> {
+            attempts.incrementAndGet();
+            return Future.failedFuture(new FakeRuntimeException("the send failed"));
+        });
+
+        await().atMost(ofSeconds(30))
+                .untilAsserted(() -> assertWithMessage("the record is redelivered despite the failure handler's "
+                        + "bookkeeping throwing").that(attempts.get()).isAtLeast(2));
+
+        assertWithMessage("the scenario actually happened - the user's provider was invoked and threw. Without "
+                + "this, the test above could pass while exercising nothing")
+                .that(providerCalls.get()).isAtLeast(1);
+    }
+
     // todo how is this different from #failingHttpCall ?
     @SneakyThrows
     @Test
@@ -127,6 +184,13 @@ class VertxTest extends VertxBaseUnitTest {
         awaitLatch(latch);
 
         // verify
+
+        // Read this before closing: it is about the running processor, and closing drains the retries away.
+        long workRemainingWhileRunning = vertxAsync.workRemaining();
+
+        // The result stream is live, so close to end it before collecting. Not drain-first: the queued
+        // work here is a deliberately failing request that would be retried.
+        vertxAsync.closeDontDrainFirst();
         var collect = futureStream.map(JStreamVertxParallelEoSStreamProcessor.VertxCPResult::getAsr).collect(Collectors.toList());
         assertThat(collect).hasSize(1);
         Future<HttpResponse<Buffer>> actual = collect.get(0).onComplete(x -> {
@@ -141,7 +205,7 @@ class VertxTest extends VertxBaseUnitTest {
             tc.completeNow();
         })));
 
-        Assertions.assertThat(vertxAsync.workRemaining()).isEqualTo(1); // two failed requests still in queue for retry
+        Assertions.assertThat(workRemainingWhileRunning).isEqualTo(1); // two failed requests still in queue for retry
     }
 
     @Test
@@ -271,6 +335,8 @@ class VertxTest extends VertxBaseUnitTest {
 
     private List<AsyncResult<HttpResponse<Buffer>>> getResults(
             Stream<JStreamVertxParallelEoSStreamProcessor.VertxCPResult<String, String>> futureStream) {
+        // The result stream is live, so close to end it before collecting.
+        vertxAsync.closeDrainFirst();
         var collect = futureStream.map(JStreamVertxParallelEoSStreamProcessor.VertxCPResult::getAsr).collect(Collectors.toList());
         return blockingGetResults(collect);
     }

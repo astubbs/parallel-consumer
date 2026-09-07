@@ -1,0 +1,122 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# Throughput numbers for master, which nothing else produces.
+#
+# WHY THIS EXISTS AT ALL
+#
+# The performance tests have never run on master. The `test` job in maven.yml - which carries the
+# required "Performance Tests" check - is `if: github.event_name == 'pull_request'`, and master's push
+# build runs bin/ci-build.sh with `-Dexcluded.groups=performance,...`. So every throughput figure this
+# project has ever had came from a PR run, and there is no trunk series any of them can be compared
+# against.
+#
+# That single gap is why three separate things were stuck: no baseline to choose a regression
+# threshold from (docs/inflight/perf-throughput-regression-gate.md), no way to tell a PR's slow number
+# from a slow runner, and no master-side run to put opposite a branch in a like-for-like comparison -
+# which had to be MANUFACTURED with a throwaway PR from a branch at master's tip rather than found in
+# history. This workflow closes it.
+#
+# WHY A SEPARATE WORKFLOW RATHER THAN A LEG OF maven.yml's `build` JOB
+#
+# That job gates SNAPSHOT publishing. Adding an hour of performance tests to it would hold publishing
+# behind a measurement, and a red performance result would block a release for something that is
+# explicitly NOT a gate. Kept apart, this workflow cannot do either: it is not in the required-checks
+# list, so it reports and never blocks.
+#
+# NO `concurrency` GROUP, DELIBERATELY - the same reasoning as chaos-pain.yml and experiments.yml. A
+# group holds one running plus at most one pending and DISCARDS the rest, so on a busy day it would
+# silently drop exactly the measurements this workflow exists to take. Back-to-back master pushes
+# therefore queue rather than cancel. If that turns out to cost more runner time than the numbers are
+# worth, the honest fix is to narrow WHAT runs (see the scope note below), not to start dropping runs
+# without saying so.
+#
+# SCOPE: the whole performance lane, not just the throughput classes. Every performance test gets a
+# trunk series, so a regression in any of them is visible rather than only in the one somebody
+# happened to be investigating. That is the expensive choice and was made deliberately (operator
+# decision, 2026-09-01); narrowing it means passing `-Dit.test=...` to the script below.
+#
+# WHERE THE DATA GOES, AND WHAT THAT DOES NOT GIVE YOU
+#
+# Into a run artifact, retrieved with `gh run download <run-id> -n performance-throughput-master-<n>`.
+# Storing a durable series - a data branch, or a third-party benchmark action - was considered and
+# DECLINED: no data branch, no `contents: write` grant on a public repo (operator decision,
+# 2026-09-01). The consequence is stated rather than hidden: artifacts are per-run and expire, so
+# building a distribution still means downloading several runs by hand, and the throughput gate's
+# precondition is improved by this workflow but not met by it.
+
+name: perf baseline (master)
+
+on:
+  push:
+    branches: [ master ]
+  # Manual re-runs, for when a number looks wrong and the question is whether it repeats. The spread
+  # on identical code has been measured at 1.54x, so one run is never an answer.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The throughput check lists and downloads recent runs of THIS workflow to build its reference.
+  # Without actions: read those calls fail, the check exits 2 ("cannot run"), and continue-on-error
+  # leaves the job green - a permanently dead step that looks like a working one.
+  actions: read
+
+jobs:
+  throughput:
+    name: "perf baseline"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
+      - name: Performance lane
+        run: bin/performance-test.sh
+
+      # On master the check is informational: this lane IS the reference the PR lane compares against,
+      # so failing it here would mean master gating itself on its own median.
+      - name: Throughput regression check
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node bin/check-throughput-regression.mjs
+
+      # `if: always()` and `if-no-files-found: warn` together: a lane that FAILED still produced
+      # numbers worth keeping - ThroughputReport emits on failure as well as success, which is the
+      # whole reason the summary is useful - and a lane that produced none must say so rather than
+      # fail the job for a missing file. bin/performance-test.sh already prints a loud NONE FOUND in
+      # that case, and that distinction is the one this artifact exists to preserve.
+      # THE FAILSAFE XML, not just the throughput summary. It carries <testcase time=> PER METHOD,
+      # where a job log only ever shows the per-class aggregate - and class time folds in container
+      # startup and @BeforeAll, so it moves when infrastructure moves. On one A/B pair the class view
+      # showed the subject +19% against neighbours flat to 1%, and the method view showed +22.5%
+      # against eight control methods flat to 2.7%: same data, cleaner signal, stronger control.
+      # Without this step that precision exists at run time and is thrown away, which is how the
+      # per-class view came to be the only history anyone could mine.
+      - name: Upload failsafe reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-failsafe-xml-master-${{ github.run_number }}
+          path: '**/target/failsafe-reports/*.xml'
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Upload throughput summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-throughput-master-${{ github.run_number }}
+          path: '**/target/performance-throughput.txt'
+          retention-days: 90
+          if-no-files-found: warn

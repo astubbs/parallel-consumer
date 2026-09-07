@@ -9,7 +9,7 @@ package bz.stub.parallelconsumer;
 /**
  * This exception is only used when there is an exception thrown from code provided by the user.
  */
-// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
+// Hand-written ctors (not Lombok @StandardException) - see PCInternalRuntimeException for why.
 public class ExceptionInUserFunctionException extends ParallelConsumerException {
 
     public ExceptionInUserFunctionException(String message, Throwable cause) {

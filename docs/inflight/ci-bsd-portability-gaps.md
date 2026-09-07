@@ -13,17 +13,6 @@ which **owns that knowledge**. This note keeps only what is still open. Delete i
 resolved.
 <!-- post-merge: checked-end -->
 
-## Nothing runs any of this on macOS in CI
-
-**This is the item that matters.** Every lane is ubuntu, so the entire class is caught only when
-somebody happens to be working on a Mac - which is how four live defects survived a deliberate
-sweep, two automated reviews and two human lgtms. The next one will survive the same way.
-
-A `macos-latest` lane running `bin/test-check-*.sh`, `bin/test-rename-packages.sh` and a
-`/bin/bash -n` parse sweep over every tracked script would cost a couple of minutes and close it.
-Not done here because adding a required check is a repo-wide decision, not a side effect of a
-portability fix.
-
 ## A latent instance of the bash 3.2 `source` defect
 
 `bin/check-quarantine-registry.sh`, `bin/quarantine-lane-report.sh` and
@@ -37,17 +26,17 @@ same defect fixed in the two node gates, which now test `[ -r ]` before sourcing
 It is **latent, not live**: `${BASH_SOURCE[0]%/*}` resolves for every ordinary invocation, so the
 first `source` succeeds and the dead fallback is never reached. `bin/test-check-quarantine-registry.sh`
 passes on macOS. It becomes real the moment that path stops resolving - and then it fails silently,
-with an exit code that means something else. Left alone here because these three are master-state
-and nothing on this branch touches them.
+with an exit code that means something else. Nothing has claimed these three yet, and the
+`shell: macos` lane cannot surface it either: the fallback stays unreached on every platform until
+that path breaks.
 
-## Two fixes still have no executing coverage
+## One fix still has no executing coverage
 
-- `bin/check-branch-self-reference.sh` - the pre-fix `mapfile` version was swapped back in and
-  `bin/test-check-branch-self-reference.sh` still passed 31/31. That suite cannot catch a
-  reintroduced `mapfile` bug on any bash 4+ host. It does at least now *run* on bash 3.2, where it
-  previously failed to parse.
-- `bin/check-pr-ready.sh` - `bin/test-check-pr-ready.sh` holds no `stat` or `mtime` reference at
-  all; it greps the script's source text.
+`bin/check-pr-ready.sh` was fixed for BSD `stat`, but `bin/test-check-pr-ready.sh` holds no `stat`
+or `mtime` reference at all - it greps the script's source text. **The `shell: macos` lane does not
+help here**, unlike the other fixes: a source-text grep passes identically on both platforms, so
+running it on macOS asserts nothing new. This one needs a case that actually dates a file and reads
+the result back.
 
 ## The "probe, never fall back" reasoning is stated three times
 

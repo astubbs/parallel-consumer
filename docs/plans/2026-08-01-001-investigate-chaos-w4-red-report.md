@@ -31,7 +31,7 @@ watching that PR's CI). **Updated the same day** after the investigation ran to 
 > (`git log --diff-filter=D -- docs/inflight.md`). Read it as it stood while this report was written
 > with `git show 0de96fc^:docs/inflight.md`. The live successors to this entry are
 > [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md) (Class 2 hunt status) and
-> [`docs/inflight/bug-857-family.md`](../inflight/bug-857-family.md) (the confluentinc#857 family,
+> [`docs/inflight/test-857-revoke-under-work-sightings.md`](../inflight/test-857-revoke-under-work-sightings.md) (the confluentinc#857 family,
 > including the RED-side occurrence this report predicted). Every `docs/inflight.md` named below is
 > that pre-split single file, as it was on the dates given.
 
@@ -221,6 +221,7 @@ It sweeps `conductor.getFleet()`, reads each `ParallelConsumer.getFailureCause()
 ## 4. Evidence: five red runs, five different branches
 
 All on workflow `highcpu` (`.github/workflows/pr-highcpu-fast-feedback.yml`), job "Chaos Pain Suite".
+<!-- file-refs: N/A - that workflow was deleted on 2026-08-26 when chaos moved to the hosted gate; this is a dated record and is left as it read. Recover it with git show 5ae0cbfe4:.github/workflows/pr-highcpu-fast-feedback.yml -->
 
 | time (UTC 2026-07-31) | run id | branch | result |
 |---|---|---|---|
@@ -332,6 +333,7 @@ worse as W-scenarios are added, since each new arm lands in the same job.
 
 ### H1 (pure form): the highcpu lane starves its own chaos SLOs
 
+<!-- file-refs: N/A - that workflow was deleted on 2026-08-26; dated record, left as it read. git show 5ae0cbfe4:.github/workflows/pr-highcpu-fast-feedback.yml -->
 `.github/workflows/pr-highcpu-fast-feedback.yml` sets concurrency **per suite and per ref**:
 
 ```yaml
@@ -363,7 +365,7 @@ This is exactly the confluentinc#857-family behaviour the Class 2 probe was buil
 records the probe as "a calibrated TRIPWIRE - RED-side awaiting a real-world/CI occurrence" (`git
 show 0de96fc^:docs/inflight.md`, grep `calibrated TRIPWIRE`). That was the stance when this was
 written and no live note inherits it: the RED side has since had a real occurrence, recorded in
-[`docs/inflight/bug-857-family.md`](../inflight/bug-857-family.md), so the same wording surviving in
+[`docs/inflight/test-857-revoke-under-work-sightings.md`](../inflight/test-857-revoke-under-work-sightings.md), so the same wording surviving in
 [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md) is stale rather than a
 successor. If the
 load hypotheses are falsified, H2 is the live explanation and this is PC's first RED-side hit - a

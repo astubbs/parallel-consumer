@@ -11,7 +11,7 @@ package bz.stub.parallelconsumer;
  *
  * @author Antony Stubbs
  */
-// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
+// Hand-written ctors (not Lombok @StandardException) - see PCInternalRuntimeException for why.
 public class ParallelConsumerException extends RuntimeException {
 
     public ParallelConsumerException(String message) {

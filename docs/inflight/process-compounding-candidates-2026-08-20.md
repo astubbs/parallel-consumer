@@ -30,7 +30,7 @@ point: it stops the same thing being proposed a third time.
    and the message reads as transient. Also collapses four prose copies of "the job name is an API
    for the ruleset" into one enforced rule. **The only candidate here that DELETES documentation.**
    Medium; the networked half cannot use the `check-` prefix (see `bin/AGENTS.md`).
-4. **Refuse to cut a branch from a stale local base.** The astubbs#322 split was built against a
+4. **Refuse to cut a branch from a stale local base.** The astubbs#322 split was built against a <!-- post-merge: checked -->
    local master 40 commits behind and had to be discarded and rebuilt. `docs/merge-checklist.md`
    already says "fetch first, every time" - but it is injected on merge-prep-shaped prompts, and this
    was a split, so the rule existed and did not reach the moment. Medium.

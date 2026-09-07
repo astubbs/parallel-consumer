@@ -10,10 +10,14 @@ Tune once it exists rather than up front.
 
 ## The failure it targets
 
+<!-- post-merge: checked-begin -->
 astubbs/parallel-consumer#31 merged roughly ten minutes before a background agent finished the
 broker-level reproduction of confluentinc#909 - the exact gap that PR's own description declared open
-under "Known gap". The result: the fix and the evidence proving it are in two PRs
-(astubbs/parallel-consumer#322), and an inflight note was stale on master the moment it landed.
+under "Known gap". The result: the fix and the evidence proving it landed in two separate PRs
+(astubbs/parallel-consumer#31 and astubbs/parallel-consumer#322), and an inflight note was stale on
+master the moment it landed. Both are named as the merged PRs they will be, which is what the
+incident is about.
+<!-- post-merge: checked-end -->
 
 **The agent was not ignorant.** It knew the agent was running and knew the description declared a
 gap. What it lacked was any artefact that outlived the moment the question "are the commits ready?"
@@ -23,7 +27,8 @@ was asked. Knowledge held only in a conversation does not survive the turn it wa
 help: a checklist prompts for the things you remember to check against it, not for the thing you
 have forgotten you are waiting on. `.claude/hooks/check-merge-outstanding-work.sh` (astubbs#324)
 catches the narrow live-background-task case. This proposal is the general form.
-<!-- file-refs: N/A - the hook lands with astubbs#324, the tooling half of the astubbs#322 split -->
+<!-- post-merge: checked -->
+<!-- file-refs: N/A - the hook landed with astubbs#324, the tooling half of the astubbs#322 split -->
 
 ## The mechanism
 
@@ -118,5 +123,7 @@ agent finds a stop with no reason and either guesses or reverses it.
 ## Related
 
 `.claude/hooks/check-merge-outstanding-work.sh` (astubbs#324) and `docs/agent-harness.md` (the
+<!-- post-merge: checked -->
 layers and what each can enforce). The incident write-up lives with astubbs/parallel-consumer#322.
-<!-- file-refs: N/A - the hook lands with astubbs#324, the tooling half of the astubbs#322 split -->
+<!-- post-merge: checked -->
+<!-- file-refs: N/A - the hook landed with astubbs#324, the tooling half of the astubbs#322 split -->

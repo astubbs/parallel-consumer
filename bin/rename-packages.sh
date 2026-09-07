@@ -517,7 +517,7 @@ FREEZE_ID_ERE='freeze-(begin|end)[(]([A-Za-z0-9_.-]+)[)]'
 
 # Excluded from both the rewrite and the completeness check, because they must carry the old spelling
 # as DATA. Matched on BASENAME, not on a hardcoded path, so moving or renaming this script cannot
-# silently switch the exclusion off - the lesson bin/check-shell-sigpipe.sh already learned.
+# silently switch the exclusion off - the lesson the `sigpipe-into-grep-q` rule already learned.
 SELF_BASENAMES="\
 rename-packages.sh
 test-rename-packages.sh"
@@ -1319,7 +1319,7 @@ ensure_modifications_line() { # <path>
     header="$(head -"$HEADER_WINDOW" "$f")"
     # Herestrings, never `printf | grep -q`: grep -q exits at its first match, the writer takes
     # SIGPIPE, and under pipefail the pipeline then reads as FALSE - so a file that DID match is
-    # classified as one that did not. bin/check-shell-sigpipe.sh fails the build over this.
+    # classified as one that did not. bin/lib/source-patterns.mjs fails the build over this.
     grep -q "Copyright (C).*Confluent" <<<"$header" || return 0
     if grep -q "Modifications Copyright (C).*${MODS_HOLDER}" <<<"$header"; then
         MODS_LINE_PRESENT=$((MODS_LINE_PRESENT + 1))
@@ -1873,10 +1873,10 @@ if [ -s "$MANUAL_FOLLOWUPS" ]; then
 fi
 echo
 echo "  NOT covered here, and NOT green merely because this exited 0:"
-echo "   - The mutation lane EXITS 0 when it matches nothing. On the first PR after this lands,"
-echo "     change a class under the decidable packages and read the job summary for a mutation score"
-echo "     and a survivor list. A green tick carrying 'nothing to mutate, skipping' is the FAILURE"
-echo "     mode, not the pass."
+echo "   - The mutation lane no longer exits 0 when its scope matches nothing - it exits 2, and 3"
+echo "     for a genuine skip. Read the exit code, not the tick. On the first PR after this lands,"
+echo "     change a class under the decidable packages and confirm the job summary carries a"
+echo "     mutation score and a survivor list."
 echo "   - ArchUnit rules pin package names as STRINGS and pass vacuously when they select nothing."
 echo "     Break one on purpose and watch it go red before believing the suite still guards anything."
 echo

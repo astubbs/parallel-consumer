@@ -14,6 +14,7 @@ import one.util.streamex.LongStreamEx;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniSets;
 
@@ -199,6 +200,31 @@ class PartitionStateCommittedOffsetTest {
 
         // partition should stay dirty, since the newly completed work could be committed now.
         assertThat(state).isDirty();
+    }
+
+    /**
+     * <a href="https://github.com/confluentinc/parallel-consumer/issues/893">confluentinc#893</a>: the offset to commit must be computed exactly once per commit cycle. The fix threads it
+     * through a tuple returned by {@code tryToEncodeOffsets()} instead of calling
+     * {@code getOffsetToCommit()} a second time in {@code createOffsetAndMetadata()} - closing a
+     * dirty-read window where a concurrent {@code onSuccess} between the two reads could commit an
+     * offset inconsistent with the encoded incompletes payload (risking {@code auto.offset.reset} /
+     * replay on rebalance). A regression to the old two-call flow would make this verify fail.
+     */
+    @Test
+    void offsetToCommitIsComputedOncePerCommit() {
+        final long completedOffset = 1L;
+        final long incompleteOffset = 2L; // stays incomplete so the encode path runs (not the empty early-return)
+
+        final HighestOffsetAndIncompletes offsetData = new HighestOffsetAndIncompletes(Optional.of(incompleteOffset),
+                new TreeSet<>(Arrays.asList(completedOffset, incompleteOffset)));
+        PartitionState<String, String> state =
+                Mockito.spy(new PartitionState<String, String>(0, mu.getModule(), tp, offsetData));
+        state.onSuccess(completedOffset);
+
+        OffsetAndMetadata offsetAndMetadata = state.createOffsetAndMetadata();
+
+        Mockito.verify(state, Mockito.times(1)).getOffsetToCommit();
+        assertThat(offsetAndMetadata).getOffset().isEqualTo(completedOffset + 1);
     }
 
 }

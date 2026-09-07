@@ -95,7 +95,7 @@ class ConsumerManagerCommitRetryBudgetTest {
             }
         };
 
-        var consumerManager = new ConsumerManager<>(mockConsumer,
+        var consumerManager = new ConsumerManager<>(new ThreadConfinedConsumer<>(mockConsumer),
                 COMMIT_BUDGET,
                 Duration.ofSeconds(30), // sasl budget - not under test, kept clear of the commit budget
                 Duration.ofMillis(10));
@@ -146,7 +146,7 @@ class ConsumerManagerCommitRetryBudgetTest {
             }
         };
 
-        var consumerManager = new ConsumerManager<>(mockConsumer, budget,
+        var consumerManager = new ConsumerManager<>(new ThreadConfinedConsumer<>(mockConsumer), budget,
                 Duration.ofSeconds(30), Duration.ofMillis(10));
 
         var thrown = assertThrows(OffsetCommitBudgetExceededException.class,
@@ -180,7 +180,7 @@ class ConsumerManagerCommitRetryBudgetTest {
             }
         };
 
-        var consumerManager = new ConsumerManager<>(mockConsumer,
+        var consumerManager = new ConsumerManager<>(new ThreadConfinedConsumer<>(mockConsumer),
                 Duration.ofMinutes(5), // commit budget, deliberately generous - it must NOT be what ends this
                 saslBudget,
                 Duration.ofMillis(10)); // backoff between SASL retries

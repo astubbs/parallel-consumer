@@ -1,14 +1,33 @@
 # Refactoring backlog
 
-This doc owns the deferred-work backlog - internal refactors, the release-gated breaking-change
-queue, and `TODO`/`FIXME`/`XXX` triage. AGENTS.md routes here and keeps only the one-line rule.
+This doc owns the **lightweight** refactor list - refactors too small to deserve their own
+`docs/inflight/` note - plus the release-gated breaking-change queue and `TODO`/`FIXME`/`XXX`
+triage. AGENTS.md routes here and keeps only the one-line rule.
 
-Deferred internal refactors - improvements noticed while working that are too big
-or too risky to fold into the change at hand, to be picked up **when things are
-quiet**. This is a solo-maintainer backlog, not an issue tracker: entries live
-here (versioned, greppable, zero per-item ceremony) instead of as GitHub issues.
+An entry is a line or two: no owner, no tags, no state. Improvements noticed while working that are
+too big or too risky to fold into the change at hand, to be picked up **when things are quiet**. This
+is a solo-maintainer list, not an issue tracker: entries live here (versioned, greppable, zero
+per-item ceremony) instead of as GitHub issues.
 
-**This is the index for all refactor work.** It also catalogues the abandoned
+**"When things are quiet" is now measurable, for the few entries big enough to be worth measuring.**
+`bin/refactor-candidates.json` lists those files with a per-file threshold, and
+`node bin/inflight.mjs refactor-window` reports whether any large in-flight change stands on one -
+naming the branch to land if the answer is no. Two hooks deliver it unasked, so nobody has to
+remember to ask. Worked example: [`docs/inflight-tool.md`](inflight-tool.md).
+
+**This document stays the editorial owner of *why* each of those should be decomposed**, and its
+entries below carry the full case. The config owns only what the signal needs, plus **the one line
+an agent is shown mid-edit** - that hint is the config's, so the two do not state the same fact
+twice. Adding a candidate there without an entry here leaves a machine that knows to nag and a
+reader who cannot find out what for.
+
+**The axis is weight, not timing.** The moment an entry acquires a decision, a blocker, or evidence
+worth keeping, it has outgrown this file: promote it to a `docs/inflight/` note and delete the line in
+the same commit - neither file may state it twice.
+[`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns that boundary. Being here says nothing about
+*when* the work happens, and work decided to happen later is **not** moved here from a note.
+
+**This is the index for the small refactor work, and for the archive below.** It also catalogues the abandoned
 draft branches and prior closed PRs so their ideas aren't lost - each with what it
 did, whether it's still relevant, and any linked issue. Why so many draft-looking
 branches? This fork was never meant to be the project's primary - it was astubbs's
@@ -57,6 +76,12 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 
 ---
 
+- **`JStreamParallelEoSStreamProcessor`'s javadoc overstates one guarantee.** It says queued results
+  are delivered rather than discarded, which holds for an ordinary close but not for the
+  `shutdownNow()` branch: that can make `isClosedOrFailed()` true while a worker can still enqueue, so
+  a result produced in that window is dropped. Narrow the sentence to the path it actually covers, or
+  make the branch match the claim. From astubbs#116, which stated it in the PR rather than the code.
+
 ## Breaking changes queued for next major version
 
 **The gate is currently OPEN: `0.6.0.0` is that major, it is unreleased, and it is the release being
@@ -73,16 +98,71 @@ These change the public, user-visible surface, so they still may not be folded i
 patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
 refactors below, which are non-breaking and can land at any point in any line.
 
+- **DONE, landed in astubbs/parallel-consumer#267: `InternalRuntimeException` renamed to
+  `PCInternalRuntimeException`.** A user-visible break - it is what arrives from
+  `getFailureCause()`, and it is the type named in upstream's own report text
+  (`...internal.InternalRuntimeException: Timeout waiting for commit response PT30S`,
+  confluentinc#833). Renamed because the old name reads like a JDK type: in a stack trace or an IDE
+  exception picker that prints simple names, `InternalRuntimeException` could belong to anything, and
+  the `PC` prefix says whose it is at a glance. Recorded here rather than only in the commit, because
+  this section is what the release notes are assembled from.
+  [`docs/inflight/core-exception-hierarchy-cleanup.md`](inflight/core-exception-hierarchy-cleanup.md)
+  owns the rest of the naming work - `InternalException` and the two spellings of the PC prefix are
+  untouched, so a later pass will be a second break unless it is done in this same release.
+- **DONE, landing with astubbs/parallel-consumer#201: an inverted `initialLoadFactor` /
+  `maximumLoadFactor` pair is rejected instead of accepted.**
+  `ParallelConsumerOptions#validate()` now throws `IllegalArgumentException` naming both options and
+  both values. A break only for a configuration that never did what it said - today an initial factor
+  above the maximum is accepted and pinned at the initial value, surfacing at best as an inverted
+  `100/10` in the rate-limited saturation warning, so an application carrying the typo starts and
+  runs; after this it fails at construction. Small blast radius, but "started yesterday, will not
+  start today" is what a `=== Breaking` bullet exists for. Recorded here rather than only in the
+  commit, because this section is what the release notes are assembled from.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
   (`public void setCommitInterval`, `private final Duration defaultMessageRetryDelay`,
   `isUsingTransactionalProducer`) **and retire the temporary Kafka-compat work-around flag**
   (`ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck`) - `ParallelConsumerOptions.java`.
-- **Remove the JStream API** (deprecate first) - design ref
-  `origin/refactor/deprecate-jstream` @8a8f6508.
+- **DONE, landing with astubbs/parallel-consumer#116: the `Stream` returned by
+  `pollProduceAndStream` / `vertxHttpReqInfoStream` now blocks until the processor closes.** It used
+  to return almost immediately, because the queue-to-`Stream` bridge ended the stream on the first
+  momentarily-empty poll - which is what `Spliterator.tryAdvance` returning `false` means, and it is
+  the confluentinc#912 OOM: results produced afterwards piled up behind a consumer that had already
+  walked away. A caller that collected on the calling thread and read a size got whatever had been
+  produced so far; the same caller now waits for close. **No compatibility path is offered and none
+  should be** - the old shape did not deliver the caller's results, so there is no correct behaviour
+  to preserve. Callers consume on their own thread, as the Vert.x example now shows. Recorded here
+  rather than only in the commit, because this section is what the release notes are assembled from.
+- ~~**Remove the JStream API** (deprecate first)~~ - **WITHDRAWN 2026-09-03, owner's call.** The
+  removal was queued while the API was broken in the way above; deprecating something because it does
+  not work is a different argument from deprecating something that does. It works now, so it stays,
+  and astubbs#116 removed the deprecation it had added to all four types. Design ref
+  the archive tag `archive/refactor/deprecate-jstream` (branch deleted 2026-09-03) is kept for whoever
+  revisits the question on its merits.
 - **Rename the enum to the standard pattern** (public enum rename) -
   `origin/refactor/minor-changes` @193bbf80.
+- **Rehome `LongPollingMockConsumer` out of `bz.stub.parallelconsumer.internal.utils`.** astubbs#159 /
+  confluentinc#526 moved it from the test-jar into the main artefact, so downstream users get it by
+  deleting a `<classifier>tests</classifier>` dependency. That move left the package alone, but
+  **leaving it alone is no longer an argument for anything**: the fork's `io.confluent.*` ->
+  `bz.stub.*` rename already forces every downstream user to rewrite the import, for reasons that
+  have nothing to do with this class. The FQN-stability case for the current home is spent, and
+  `internal` in the name now says out loud that a supported test-support class is in the wrong place.
+  It should go to `bz.stub.parallelconsumer.testing`, or into its own `parallel-consumer-test-support`
+  module (the `kafka-streams-test-utils` shape). The old plan was to defer it to the
+  confluentinc#271 package restructure so users were not migrated twice - **re-read that against the
+  open gate above**: 0.6.0.0 is the release carrying the `bz.stub` rename, so doing the rehome in it
+  is one migration rather than two, and deferring it past 0.6.0.0 is what now costs a second one.
+- **`KafkaTestUtils` is the next thing standing between downstream users and the test-jar.**
+  astubbs#159 moved `LongPollingMockConsumer` into the main artefact, but that was a prerequisite,
+  not a fix: eight poms still declare `<classifier>tests</classifier>` because their test sources
+  still reach for `KafkaTestUtils`, `AbstractParallelEoSStreamProcessorTestBase` and
+  `LongPollingMockConsumerSubject`. The Truth subject is the one that cannot simply move - it
+  extends `com.google.common.truth.Subject`, so publishing it would promote `com.google.truth` from
+  `test` to `compile` for every downstream user, which is the cost astubbs#159 was careful not to
+  incur. `KafkaTestUtils` has no such constraint and is the largest remaining reason the classifier
+  exists, so it is where anyone actually closing confluentinc#162 / confluentinc#861 should start.
 - **Evaluate for breakage at the bump:** adopt `@ParametersAreNonnullByDefault`
   (`origin/improvements/nonnull-default` @684c02a0) and add a JPMS `module-info`
   (`origin/improvements/module-info` @d74f5e8b) - both tighten the published
@@ -125,6 +205,95 @@ diagnosing the mirror rather than while reading the file:
 Large, mostly interdependent, several **undecided**. Most trace to confluentinc#200.
 Do not start one casually.
 
+### `corpusIndex` lists each distinct docs tree with one `ls-tree` - the next lever is unpulled
+
+`bin/lib/notes.mjs` resolves every ref's `docs/` tree in one `cat-file --batch-check` and lists each
+distinct tree once, which is what brought the session-start hook back inside its budget. If a
+measurement ever asks for more, the next lever is parsing the distinct trees through one batched
+`cat-file` per depth instead of one `ls-tree` per tree. Not pulled: `node bin/inflight.mjs --perf docs`
+prints the figures, and none demands it.
+
+### `formatRank` moves to `rank-views.mjs` when a second rank-family command lands
+
+`bin/lib/views.mjs` grew by a third when `rank` arrived, making it the second-largest file in
+`bin/lib`. **The trigger is a second command in the family, not the size.** Its stated boundary -
+render strings, run no git, decide no exit code - is intact, and `refsText`/`scopeLine` are shared
+with `docsShape` on purpose, so moving them would recreate the duplication the file exists to
+prevent. The `docs-views.mjs` split earned its place because docs is *several* formatters; every
+other command's single formatter still lives here, so moving `rank` alone makes it the odd one out.
+When the second one arrives, take `formatRank` with it and import the shared helpers one way.
+
+### The JDK-and-Maven-cache setup block exists six times in `maven.yml`, and no detector can see it
+
+`prepare-deps`, `test`, `test-kafka-compat`, `scan`, `static` and `build` each open with the same
+three steps: `actions/checkout`, `actions/setup-java` on Temurin 17, and an `actions/cache/restore`
+keyed `setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}` with the bare prefix as its
+`restore-keys` fallback. Two of the six arrived with the 2026-09-07 job folds, which gave `scan: repo`
+and `static: analysis` a build dependency they did not have before. `.github/actions/` does not exist,
+so there is no composite action to point them at.
+
+The cost is drift: the cache key and its fallback must agree in all six places, and the file's own
+header forbids `setup-java`'s built-in `cache: maven` because its immutable keys can freeze an
+incomplete cache. Six hand-maintained copies of a rule that must not vary is the shape that produces
+a silently wrong one.
+
+**Neither duplication engine will ever report this, and the reason is worth keeping.** `dups: clones`
+runs two engines over the whole repo. PMD CPD's language auto-detect is winner-take-all, Java wins on
+file count, and YAML is not CPD-mappable at all - so CPD never reads a workflow. jscpd *is*
+language-agnostic and does read them: pointed at `.github/workflows` it finds real clones, including
+`claude.yml` against `claude-code-review-dispatch.yml`, which is the single pair it reports at the
+job's own default of 50 minimum tokens. Pointed at `maven.yml` alone it finds **nothing, at any
+threshold down to 20 tokens**, because each copy of the block has *different explanatory comments
+interleaved between its steps*: strip the comments and the six are identical, leave them in and the
+token streams differ. The block is also only about 40 tokens, under the default 50.
+
+That is the capability half of
+[`docs/solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md`](solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md),
+which diagnosed both scope and capability. The scope half was fixed when the scan widened to the
+whole repo; this is the half that survived it.
+
+**A second instance of the same fix**, recorded together because one composite-action decision
+settles both: the five OSS Index audit steps now exist in `maven.yml` (the per-PR run) and in
+`dependency-audit.yml` (the schedule and dispatch), with a "change both, or neither" note in each
+header. That note is an admission that the mechanism is missing.
+
+**Deliberately not done in astubbs/parallel-consumer#457**, which introduced two of the copies. That
+PR already rewrites every workflow and owes ten ruleset edits at merge; its whole risk is a check
+quietly ceasing to run, and introducing a mechanism the repo has never used, in the files it is
+already rewriting, widens exactly that blast radius. The duplication is stable and commented, so it
+keeps.
+
+### The portable-mtime probe exists three times
+
+`hook_file_mtime` in `.claude/hooks/lib/hook-common.sh`, `_mtime` in
+`.claude/hooks/check-merge-outstanding-work.sh`, and `_mtime` in `bin/check-pr-ready.sh` are the same
+GNU-vs-BSD `stat` probe. The shared one was added for the two push hooks; the other two predate it.
+
+**The trap, so a consolidation does not introduce a bug while removing a duplicate:**
+`check-merge-outstanding-work.sh` runs under `set -e`, where a failing `stat` without `|| true`
+aborts the script instead of reaching its documented fail-closed branch. `hook_file_mtime` already
+carries `|| true` on both arms for exactly this, so it is safe to point the other two at - but point
+them, do not copy them back.
+
+### JUnit tag resolution is implemented twice, in two languages, from one rule
+
+`bin/lib/compiled-classes.mjs` (the integration shard's completeness guard) and
+`TransactionalClaimCoverageTest.effectiveTagsOf` (the transactional claim register) both answer "which
+tags would JUnit apply to this test?", and both had to get the same three cases right: a tag on the
+method, a tag on the class, and a tag reached only through a meta-annotation such as `@Quarantined`,
+which is a `@Tag` carrier rather than a `@Tag`. They arrived independently, days apart, and agree.
+
+**Not a consolidation candidate, which is why it is written down rather than queued.** One reads
+`javap` output from Node before any JVM starts; the other resolves annotations inside a running test
+JVM through JUnit's own `AnnotationSupport`. Neither can call the other, and re-deriving the rule in a
+shared place would produce a third implementation rather than removing one.
+
+What is worth doing, if either is ever changed: change both, or record why not. The rule they encode
+is JUnit's, not this repo's, so it moves only when JUnit's does - but a fix applied to one and not the
+other leaves two answers to one question, and each is load-bearing for a different gate. The failure
+is silent in both directions: a guard that under-reads tags reports coverage it does not have, and one
+that over-reads them excuses a test that really runs.
+
 ### Thread model: eliminate the separate poller thread (MASSIVE, UNDECIDED)
 *Mirror: [#142](https://github.com/astubbs/parallel-consumer/issues/142) · orphaned implementation in [confluentinc PR #270](https://github.com/confluentinc/parallel-consumer/pull/270), closed unmerged in the 2023-06-15 sweep.*
 - **confluentinc#200** - "Consider a shared-nothing architecture, to reduce thread
@@ -140,14 +309,99 @@ Do not start one casually.
   (extract-controller's base - MockConsumer-with-PC demonstration; missed by every earlier
   catalogue, added by the 2026-08-17 branch audit), `origin/refactor/infinite-retry` @80feb470
   (move timeout-retry into the controller; poller just forwards the error),
-  `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt).
+  `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt),
+  `origin/move-cons-to-pc` @9dc92e51c ("Move consumer back to PC wrapped for thread safety, so commits
+  are in line with control" - 2020-12-03, **the earliest attempt**, three weeks after the mode split;
+  comments out `BrokerPollSystem`'s `committer`, `maybeCloseConsumer` and `isResponsibleForCommits` so
+  control commits directly. Surfaced by the 2026-08-18 archaeology; missed by the 2026-08-17 branch
+  audit. The record does not say why it stopped).
   Registered in the manifest as `refactor-thread-model-god-class` (this doc stays the editorial owner).
 
-### Decompose the God class - `AbstractParallelEoSStreamProcessor` (1533 lines)
+### Annotate every fixed race with `@GuardedBy`, as you fix it
+
+- **Owned by
+  [`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`](../parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md)**,
+  which arrives automatically when you edit a file in the engine - the moment the rule applies. A
+  backlog entry is consulted; that one fires. Kept here as a pointer only, because this list is where
+  somebody browsing debt will look for it.
+- The short version: Error Prone's `GuardedBy` check is on at ERROR and examines nothing, because the
+  codebase contains no annotation. Every detector here is discovery and none prevents regression, so
+  the annotation is what makes a fix permanent - write it with the fix.
+
+### `ProducerManager.ProducingLock` is the retry-queue iterator's shape, undeclared (SMALL, but establish the premise first)
+
+- Found by the defect-class sweep at astubbs#433's merge prep, which declared and asserted the same
+  shape on `RetryQueue.RetryQueueIterator`. `ProducingLock` wraps a `ReentrantReadWriteLock.ReadLock`
+  taken in `acquireProduceLock` and released by whoever calls its `unlock()`, so the same constraint
+  applies: a read lock may only be released by its holder, and an escaped one cannot be released at
+  all - which its own javadoc already describes the cost of, "the same permanent block on the next
+  commit's write-lock acquisition".
+- The recipe is `@ThreadConfined(ThreadConfined.ANY)` plus an owning-thread assertion, per
+  `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`. **Do not apply it
+  blind**: the premise is that the acquirer is always the releaser, and that is exactly what was
+  wrong about `lastCommitTime`. The lock is taken on a worker thread in
+  `ParallelEoSStreamProcessor`, stored on the `PollContextInternal`, and released through that
+  context - so establish which thread performs the release before declaring anything. If it can
+  differ, that is a defect and not a tidy-up, and it becomes a note rather than this line.
+
+### Make the commit/close ownership polymorphism official - an interface, not a rename (SMALL, do any time)
+*Independent of the thread-model work below/above. No behaviour change, but do not file this as
+cosmetic - see the last bullet.*
+- `isResponsibleForCommits()` exists on **both** `BrokerPollSystem` and
+  `AbstractParallelEoSStreamProcessor`, with identical javadoc, and they are an **XOR over commit
+  mode**: `committer.isPresent()` is true iff consumer-commit mode, `committer instanceof
+  ProducerManager` is true iff transactional. Exactly one thread closes the consumer.
+- **Both ask the same question** - "am I the component that commits, and therefore closes the
+  consumer?" - and only the answer differs per component. That is polymorphism, expressed as two
+  unrelated private methods that happen to share a name. Nothing declares them halves of one decision.
+- **Fix: give them a common interface** - one method, one javadoc, two implementors - so the
+  relationship is declared rather than inferred. A rename alone only documents the trap more loudly.
+- **Then enforce the invariant instead of describing it**: with a shared type, "exactly one
+  implementor returns true for a given configuration" becomes assertable at construction. Today it is
+  a property nobody can state, which is precisely how it survived unexamined since 2020.
+- **Why this is not cosmetic.** A 2026 investigation read the two as contradictory, concluded the
+  subsystems disagreed, and proposed "reconciling" them - a fix to a non-bug. They have never
+  disagreed and neither has been edited since 2020. Names are the interface that humans *and coding
+  agents* read to infer intent; a misleading one produced a wrong plan before any code was touched.
+- Background and the full commit record:
+  `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
+
+### Decompose the God class - `AbstractParallelEoSStreamProcessor`
 - Control loop + lifecycle/state machine + commit orchestration + threading +
   rebalance listener + deprecated options in one class. Design ref: draft
-  `confluentinc#488`. Branch `origin/refactor/state-machine` @8f90da8a (extract the lifecycle
-  state machine). Do alongside the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) work; high risk.
+  `confluentinc#488`. Do alongside the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) work; high risk.
+- **Size is deliberately not written down here.** It was recorded as 1533 lines and was still being
+  cited as that after the class had grown by most of a thousand - a stale figure reads as current
+  state forever, and nothing goes red. Ask instead:
+  `wc -l parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java`
+- **And one argument built on that figure is now falsified, which is worth more than the figure.**
+  `docs/ideation/2026-08-17-actor-collection-revival-ideation.html` reasons from "the file has moved
+  one line in 3.5 years, which is the clearest evidence that branch-shaped goals don't move it", and
+  proposes tracking progress by that line count. Measured 2026-09-03: the class was 1534 lines at
+  that ideation's own date and is over a thousand lines larger now - it moved in a fortnight what the
+  argument said it had not moved in three and a half years. The dated record is left as written, per
+  `docs/citations.md`; the correction belongs here, where the live decision is. It does not weaken the
+  case for decomposing - it inverts the reason. The class is not inert, it is accreting, and a
+  line-count target measures growth this section did not predict rather than progress against it.
+- **Two branches already attempted it, and one of them got much further** (both catalogued in
+  `branch_accounting` in `src/docs/development/upstream-map.yaml`; `bin/inflight.mjs branch <name>`
+  answers from any checkout):
+  - `origin/refactor/state-machine` @8f90da8a - extracts the lifecycle state machine only.
+  - `origin/refactor/control-loop` @c3a0f28ae - **the furthest any attempt reached**: it compiles,
+    with tests migrated and a review pass. It cuts along **`ControlLoop` / `Controller` /
+    `StateMachine` / `PCWorkerPool` / `WorkMailbox`**. Those five names are the useful part: this
+    section argues about *whether* to split without recording what a working split actually cut
+    along, and someone starting fresh would re-derive the seams rather than start from a set that
+    was shown to compile. `origin/refactor/controller-extract-base` was a marker for this work and
+    was deleted 2026-09-03 (an ancestor of master, nothing lost).
+- **Landing this unblocks whole-FILE static analysis, and it can be taken piecemeal.** The
+  new-code analysis profile is scoped to changed *lines* rather than changed *files* purely because
+  of size: touching a class this large would otherwise inherit every latent finding in it. Line
+  scoping is the weaker choice - it misses a finding reported away from the edit that caused it - so
+  each file that comes down to a reviewable size can be promoted to file scoping on its own, without
+  waiting for the whole decomposition.
+  [`docs/inflight/static-analysis-rule-profiles.md`](inflight/static-analysis-rule-profiles.md) owns
+  the profiles and carries the promotion list.
 
 ### Actor / IPC message bus for commits & results
 - Replace shared-state coordination with a lightweight actor/mailbox. Design refs:
@@ -202,9 +456,46 @@ Do not start one casually.
     `onPartitionsAssigned(Collection<TopicPartition> partitions)` and
     `onPartitionsLost(Collection<TopicPartition> partitions)`) and `ConsumerManager`'s
     `noWakeups`, `erroneousWakups`, `correctPollWakeups` counters.
-  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (3) - primitive written in one thread may not
-    be visible to another: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`,
-    `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (2) - primitive written in one thread may not
+    be visible to another: `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+    Was 3: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` is now
+    `volatile` (astubbs#201), and SpotBugs no longer reports it.
+    **`RetryQueue.closed` is now a FALSE POSITIVE and stays listed for that reason.** The
+    iterator that owns it is `@ThreadConfined(ANY)` with a runtime guard
+    (`assertOnOwningThread`), so there is no second thread to be stale for - it never
+    could be, because the iterator holds a read lock only its opener can release.
+    SpotBugs reads no confinement annotation and will keep reporting it; do not "fix" it
+    with `volatile`, which would assert a sharing that does not exist.
+  - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
+    on the astubbs#119 branch:**
+    `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
+    thread in `updateCache()` and read from other threads via `groupMetadata()`, with **no `volatile`
+    and no other happens-before edge**. Its two neighbours in the same class *are* volatile
+    (`pausedPartitionSizeCache`, and `assignmentSizeCache` which astubbs#29 adds), so the omission
+    reads as an oversight rather than a decision. The SpotBugs entry above is
+    `AT_STALE_THREAD_WRITE_OF_**PRIMITIVE**`, which cannot fire on an object reference - which is
+    exactly why this one was never listed.
+    **Why it matters more than the primitives:** `ConsumerGroupMetadata` carries the generation and
+    member IDs, and the control thread passes it to `producer.sendOffsetsToTransaction(...)`, where
+    the broker uses it for **zombie fencing**. A stale generation is the wrong answer to "is this
+    member still legitimate?". In practice the two threads synchronise incidentally through the
+    commit queues and locks, so an edge usually exists - but it is not guaranteed by design.
+    Pre-existing on `master` (from `a3378ed58`, 2021, the AK 2.7 concurrent-access fix); **not**
+    introduced by astubbs#29. Fix is one `volatile`; worth its own small change rather than riding
+    an unrelated PR.
+  - **No SpotBugs rule can be turned on to catch the object-reference case - checked, not assumed.**
+    The full `AT_*` family in spotbugs 4.10.3 is `AT_NONATOMIC_OPERATIONS_ON_SHARED_VARIABLE`,
+    `AT_OPERATION_SEQUENCE_ON_CONCURRENT_ABSTRACTION`, `AT_UNSAFE_RESOURCE_ACCESS_IN_THREAD` and
+    `AT_STALE_THREAD_WRITE_OF_PRIMITIVE`; there is no `..._OF_REFERENCE`. `IS2_INCONSISTENT_SYNC`
+    needs the field to be synchronised *some* of the time (it never is here, so there is no
+    inconsistency to find) and `UG_SYNC_SET_UNSYNC_GET` needs a synchronised setter. Raising
+    `<threshold>` from `Medium` to `Low` cannot surface a detector that does not exist, and
+    `<effort>` is already `Max`. For object references SpotBugs cannot separate "shared across
+    threads, unsynchronised" from an ordinary single-threaded field without escape analysis.
+    **Enforcement option that would work here: an ArchUnit rule** - e.g. every non-final instance
+    field of a class whose values are published for cross-thread reads must be `volatile`, `final`,
+    or an atomic type. The repo already runs ArchUnit (`ArchitectureTest`, `TestConventionRules`), so
+    this is the cheap way to make the invariant fire instead of documenting it.
 - Fix = `AtomicInteger`/`AtomicLong` for the counters and `volatile` for the flags -
   **or** let the thread-model rework above absorb them, since several sit in exactly
   the poll/control-thread coordination it reshapes. Fixing piecemeal now may conflict.
@@ -236,6 +527,17 @@ Do not start one casually.
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
   missing `max-uncommitted < Short.MAX` bound.
 
+- **The cached-and-shared instance is still only safe by the schedule, not by construction.**
+  Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition
+  `PartitionState.om` for encoding; one `PartitionStateManager.offsetMapCodecManager` for
+  decode). The `encodingCounters` cache - a final reference - is now a `ConcurrentHashMap`
+  populated with a single `computeIfAbsent`, so its check-then-act no longer depends on the
+  schedule, and the discriminator that made the class safe (`commitLock`, not the identity of any
+  one thread) is recorded on that field. The fields that still do depend on it are the non-final
+  ones: `offsetEncodingTimer`, and the two mutable statics `DefaultMaxMetadataSize` and
+  `forcedCodec` - the last of which the encode path reads on every commit. Re-audit those three if
+  confluentinc#200 parallelises encoding.
+
 ### offsets/OffsetSimultaneousEncoder.java
 - `TODO VERY large offset ranges is slow`: large offset ranges (→ `Integer.MAX_VALUE`) are slow -
   scans could be skipped by passing in the known incompletes map (draft:
@@ -258,14 +560,6 @@ Do not start one casually.
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
 
-### state/ShardKey.java
-
-- **`KeyOrderedKey`'s javadoc contradicts its constructor.** The doc describes topic-only scoping,
-  but the constructor builds `new TopicPartition(rec.topic(), rec.partition())` and the field is even
-  named `topicName`. The behaviour is the correct one - partition-scoped keys are what keep the
-  offset-keyed `entries` map free of cross-partition collisions in KEY ordering mode - so this is a
-  doc fix plus a field rename, not a behaviour change.
-
 ### state/ProcessingShard.java
 
 - **`getWorkIfAvailable`'s inline stale removal orphans the `retryQueue` entry.** It does
@@ -282,11 +576,26 @@ Do not start one casually.
   which test ordering only. Nothing asserts shard/retryQueue consistency after a stale removal by
   either path.
 
+### state/RetryQueue.java
+
+- **Four `// visible for testing` accessors that no test calls.** `RetryQueue`'s `unique`, `sorted`
+  and `comparator` Lombok `@Getter(AccessLevel.PACKAGE)`s, and `ShardManager`'s `retryQueue` one,
+  have zero callers anywhere in the tree - main, test or integration. Delete them; the comment is
+  documenting an access route nobody uses, and an ArchUnit rule policing a dead accessor would pass
+  vacuously forever (see `docs/inflight/static-archunit-main-code-rules.md`).
+
 ### state/PartitionState.java (715 lines)
 - `Needs to be concurrent because`: concurrent commit-data collection exists only because
   control/poller threads share state - removed under shared-nothing (confluentinc#200).
   `todo refactor use of null shouldn't be needed`: `null` passed to the codec manager
   (confluentinc#233). `visible for legacy testing`: visibility widened for legacy tests.
+- **Draft astubbs#410 reintroduces the publish-then-register order astubbs#370 removed.** Its
+  `restoreCompletedButUncommittedWork` replay loop calls `getShardManager().addWorkContainer(...)`
+  before `addNewIncompleteRecord(record)`, the same order the register-then-publish swap in
+  `maybeRegisterNewPollBatchAsWork` took out - latent for the same reason (control thread, under the
+  producer write lock), and the same defect the moment there is a second selector. Swap the two lines
+  when that PR lands over astubbs#370; the invariant and why it holds are on
+  `maybeRegisterNewPollBatchAsWork`.
 
 ### state/PartitionStateManager.java
 - There was a throwaway `OffsetMapCodecManager` per assignment
@@ -294,10 +603,30 @@ Do not start one casually.
   cached it (the `confluentinc#859` leak site), but the broader [confluentinc#233](https://github.com/confluentinc/parallel-consumer/issues/233)
   (mirror astubbs#117) refactor remains.
 
+### state/ShardManager.java
+- The confluentinc#905 `SHARDS_MAX_SIZE` gauge walks every shard queue
+  (`getCountOfWorkTracked()` is `entries.size()`, O(n) on a `ConcurrentSkipListMap`), so each metrics scrape
+  is O(total queued records). It used to duplicate a traversal `SHARDS_SIZE` did as well; `SHARDS_SIZE` now
+  reads the O(1) conservation figure, so this is the only scan left.
+  Negligible now; if it ever matters, a max cannot be conserved the way the total is, so it needs its own
+  design - see
+  **Shard-count caching** under [Performance](#performance) above for the upstream design draft
+  (`confluentinc#530`) and the three abandoned branches that attempted it.
+
 ### state/WorkContainer.java
 *Mirror: [#143](https://github.com/astubbs/parallel-consumer/issues/143) - and see the index above: the field is read by nobody, so deletion beats an enum.*
 - `Instance reference to otherwise static state`: instance field working around static state -
   folds into static-state removal.
+
+### state/WorkManager.java
+- **Rename the `pm` and `sm` fields to `partitionManager` and `shardManager`** - raised by Antony in
+  review on astubbs/parallel-consumer#346. Two-letter names for the two collaborators the class
+  delegates almost everything to, and `pm` is ambiguous across core: it abbreviates
+  `PartitionStateManager` here and `ProducerManager` in `ParallelEoSStreamProcessor`. Not folded into
+  the PR that raised it, because both carry `@Getter(PUBLIC)`, so the rename changes `getPm()`/
+  `getSm()` too and reaches main, unit and integration sources - far outside the one-seam concurrency
+  fix under review there. Do it as its own change, where the diff is legible as a rename.
+  `// TODO(refactor):` markers sit on both fields.
 
 ### internal/AbstractParallelEoSStreamProcessor.java
 - God class (see cross-cutting). `todo move into {@link WorkManager}` (misplaced
@@ -312,26 +641,12 @@ Do not start one casually.
   `DEFAULT_TIMEOUT` into the timeout message, so every such error misstates the wait
   (reports `PT30S` for an actual 10s). Tiny standalone fix + unit test.
 
-### Double-release of the produce lock (transactional poll-and-produce) - OPEN QUESTION
-- `WorkContainer#onPostAddToMailBox` (via `finishProducing`) and
-  `AbstractParallelEoSStreamProcessor#cleanUpContext` (`private void cleanUpContext`) both
-  unconditionally
-  unlock the *same* `PollContextInternal#producingLock`, and nothing resets that
-  `Optional` between them - `cleanUpContext` runs in the enclosing `finally`
-  immediately after the success path already released it. By JDK contract a
-  same-thread second `unlock()` on a `ReentrantReadWriteLock.ReadLock` with zero held
-  read locks throws `IllegalMonitorStateException` - yet no such exception appears in
-  any run, so *something* prevents it and **we do not know what**. Pre-existing, but
-  astubbs#110's fix now drives this path for real (the old mock-context test never did), so
-  it is more exposed than before. Establish which release actually fires and why the
-  second is harmless - or, if it is not, what is swallowing it.
-
 ### internal/ProducerManager.java
 - `private synchronized void syncBeginTransaction` locks on `this` -
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
   fix); low priority, separate concern. `alternatives to this brute force approach`:
   brute-force transaction-commit retry.
-- **`InternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
+- **`PCInternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
   rediscovery. `sendCallback` throws it when a send fails in non-transactional mode, but that is an
   **expected operational state**, not an internal fault. Two different questions decide the scope
   here, and conflating them has been the recurring error:
@@ -354,15 +669,15 @@ Do not start one casually.
   before they can conclude it is ordinary failure handling. It was verified from source and
   kafka-clients bytecode during astubbs#261 review, and nothing in the code records the answer.
   - **Preferred, non-breaking:** throw a specific subclass - e.g. `RecordPublishFailedException
-    extends InternalRuntimeException` - so existing `catch (InternalRuntimeException)` keeps
-    working while the type states the situation. Renaming `InternalRuntimeException` itself would
+    extends PCInternalRuntimeException` - so existing `catch (PCInternalRuntimeException)` keeps
+    working while the type states the situation. Renaming `PCInternalRuntimeException` itself would
     be user-visible and belongs in
     [Breaking changes](#breaking-changes-queued-for-next-major-version) instead; the subclass avoids
     needing that.
     - **The subclass alone is not enough, and this is the part that is easy to get wrong.** A
       synchronous callback failure escapes `produceMessages` into
       `ParallelEoSStreamProcessor#processAndProduceResults`, whose `catch (Exception e)` immediately
-      rethrows `new InternalRuntimeException("Error while waiting for produce results", e)`. The
+      rethrows `new PCInternalRuntimeException("Error while waiting for produce results", e)`. The
       specific type would survive only as a nested cause, so a caller still could not catch it and
       the observable failure type would be exactly as generic as today. The refactor has to preserve
       the subtype through that outer wrapper too - rethrow it unchanged, or introduce the specific
@@ -386,13 +701,18 @@ but not this.*
 ### internal/DynamicLoadFactor.java
 - `private synchronized boolean doStep` locks on `this` - same lock-hygiene note as
   ProducerManager; low priority.
+- The warm-up and cool-down `Duration`s are hard-coded fields with no seam, so
+  stepping to the ceiling for real costs one cool-down per step (minutes for the
+  default 2 -> 100). `LoadFactorCeilingReportingTest` has to assert the terminal
+  state via a subclass because of it. Injecting them (through `PCModule`, with the
+  module's `Clock`) would make the stepping schedule itself testable.
 
 ### internal/ExternalEngine.java
 - `TODO optimise thread usage`: avoid the extra thread (go straight from the control thread).
   `is this method redundant`: method may be redundant now that modules don't use the internal
   threading system.
 
-### ParallelConsumerOptions.java (573 lines)
+### ParallelConsumerOptions.java (627 lines)
 - Accreting deprecated fields (`public void setCommitInterval`,
   `private final Duration defaultMessageRetryDelay`, `isUsingTransactionalProducer`) and the
   `ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck` temporary
@@ -421,6 +741,26 @@ but not this.*
   asserts a null failure cause, which a scenario that expects PC to die must override. Doing this
   means re-verifying the six classes already on the base, which is why it is here rather than folded
   into the PR that noticed it (astubbs#204).
+
+### Test infrastructure - the `state` package's white-box harness is copied per class
+
+- **The base class now exists; three classes still open with the same lines instead of extending it** -
+  `ShardManagerTest`, `ProcessingShardStaleReplacement909Test`, `ShardAvailableCountOwnershipTest`; grep
+  `PCModuleTestEnv module = mu.getModule()`. `BrokerlessWorkManagerTestBase` holds that wiring once - it
+  lives in `bz.stub.parallelconsumer` with protected fields, so the `state` package extends it fine - and
+  `ShardManagerStaleContainerTest` and `EpochAndRecordsMapRaceTest` are on it (astubbs#375). The three left
+  are not deletions: `ShardAvailableCountOwnershipTest` names its topic constant `TOPIC`, and
+  `ShardManagerTest` also builds a `PartitionState` and declares no `sm`/`pm`, so each needs its own small
+  reconciliation (noticed on astubbs#373).
+
+- **The `ConsumerRecords` / `EpochAndRecordsMap` / `registerWork` idiom is hand-rolled per test** -
+  `git grep -l "new EpochAndRecordsMap" parallel-consumer-core/src/test` lists the state and internal
+  package classes doing it. `ModelUtils#registerOneRecordAndTakeIt` is not a drop-in: it builds its own
+  record and takes the work after `registerWork` returns, which a test whose subject is the ordering
+  *inside* registration cannot use. What is wanted is a `registerOneRecord`-shaped sibling that takes a
+  supplied record and stops at registration, with the take left to the caller. Pre-existing clone class,
+  not one any single branch introduced, which is why the astubbs#370 simplify pass left it here rather
+  than folding it into that PR.
 
 ### Test infrastructure - timing-based waits
 
@@ -540,20 +880,26 @@ Only the items needing a decision are listed here - do not restate the inventory
   `LoadTest` stays at 4,000: it is untagged, so it runs in the gating lane, and it is already a
   listed member of the load-tightness flake family at that volume.
 
-Not listed as work: `largeNumberOfInstances` is owned by open PR astubbs#29. The three
+Not listed as work: `largeNumberOfInstances` stays in `docs/quarantined-tests.md` as an unowned entry -
+astubbs#29 merged on 2026-09-02 fixing one confluentinc#857 mechanism without lifting this quarantine, so it
+is tracked by the registry, not here. The three
 `@Timeout(60000L)` annotations (`MockConsumerEarlyCloseTest`, `MockConsumerSaslAuthenticationTest`,
 `MockConsumerCommitTimeoutTest`) are owned by open PR astubbs#206, which replaces them with
 `@Timeout(120)` on a shared `MockConsumerTestBase` and adds the assertion
 `MockConsumerEarlyCloseTest` was missing - and **`@Timeout(60)` would have been wrong**, because two
 of those tests wait 45s and 50s internally, so it would have raced them rather than fixing them.
-`ProgressBarTest.width` is a deliberate manual check. Five of the ten deleted stubs (§4 of the audit)
+`ProgressBarTest.width` was a deliberate manual check, and has since been **deleted** - it was the
+last `@Disabled` test on master and the release gate made that the deciding factor (the
+"Release gate: no disabled tests" section of [`docs/inflight/release-0.6.0.0.md`](inflight/release-0.6.0.0.md)
+records why deletion won over the split that was proposed).
+Five of the ten deleted stubs (§4 of the audit)
 are already covered by named enabled tests, and `truncationOnCommit` is obsolete - on-commit
 truncation is structurally unreachable, and the truncation that does exist happens on the bootstrap
 poll and is covered by `PartitionStateCommittedOffsetTest`.
 
 A generated `docs/INACTIVE_TESTS.md` with a `--check` gate (the `bin/todo-index.sh` shape) was
 considered and **deliberately not built**: the previous audit was lost to invisibility, not drift, and
-such a gate would fail the PR Checklist job on any open PR touching a test annotation. Worth
+such a gate would fail the `repo: hygiene` job on any open PR touching a test annotation. Worth
 revisiting once the audit has been in use.
 <!-- file-refs: N/A - names a generated file this entry records as NOT built -->
 
@@ -578,6 +924,27 @@ rather than fixed there so the gate's scope stayed one decision.
   CI coverage ever looks wrong, this is the first suspect - give each fork its own exec
   file (`destFile` with `${surefire.forkNumber}`) and add `jacoco:merge` before the report.
 
+### `internal/utils/LongPollingMockConsumer.java` - `NN_NAKED_NOTIFY`
+
+- SpotBugs flags `wakeup()`'s `notifyAll()` as naked. It is a false positive: the loop's guard **is**
+  set immediately before, but as an `AtomicBoolean`, which SpotBugs does not count as a field write.
+- **Moving the class into `src/main` (astubbs#159) does not surface this - it is already visible.**
+  The original reading was that SpotBugs analyses main sources only, so shipping the class in the
+  main artefact would make the finding new. `includeTests` in the root pom's `spotbugs-maven-plugin`
+  configuration ended that. Measured on master with the class still under `src/test`:
+  `./mvnw -pl :parallel-consumer-core -am -DskipTests test-compile spotbugs:spotbugs` reports
+  `NN_NAKED_NOTIFY` at `LongPollingMockConsumer.wakeup`. The move changes the file's source root,
+  not whether it is analysed, so nothing about the finding's visibility is astubbs#202's doing.
+- Fix = demote `statePretendingToLongPoll` to a plain `boolean`. Every read and write of it already
+  happens while holding `this` (`poll`, `wakeup` and `addRecord` are all `synchronized`), so the
+  `AtomicBoolean` buys nothing and misleadingly implies lock-free access. Kept out of astubbs#159 so
+  that it stayed a pure relocation - rewriting the wait/notify state of the mock consumer every unit
+  test depends on, in the same change, would make any later flake ambiguous between the two.
+- Clean up the redundant nesting in the same pass: `poll()` and `wakeup()` are both already
+  `synchronized` methods and each opens a further `synchronized (this)` block inside itself, which
+  locks the monitor it already holds. Harmless (the lock is reentrant) but it is what makes the
+  guard/notify pairing hard to read, and is probably why the `AtomicBoolean` looked necessary.
+
 ### `MockConsumer.groupMetadata()` workaround, duplicated x4
 
 - `CoreAppTest`, `CoreAppMetricsIntegrationTest`, `ReactorAppTest` and `VertxAppTest` each stub
@@ -585,6 +952,29 @@ rather than fixed there so the gate's scope stayed one decision.
   defect, copy-pasted four times. Not ours to fix, but the duplication is: fold it into one shared
   test helper so it has a single home and disappears in one edit. Re-check on the Kafka 4.x upgrade -
   the behaviour may already have changed.
+
+### The offset-decode test helper, copy-pasted x7
+
+- `deserialiseIncompleteOffsetMapFromBase64` is wrapped by a near-identical private `decode` helper in
+  seven test files across two packages: `OffsetEncoderWidenedRangeRaceTest`,
+  `PartitionStateCommitEncodeShift894Test`, `PartitionStateCommitShiftCompounding894Test`,
+  `PartitionStateLincheckTest`, `OffsetEncodingBackPressureTest`,
+  `WorkManagerOffsetMapCodecManagerTest` and `CommitHistory`. Each is a call plus a debug log. Fold
+  into one shared helper. Surfaced by the duplicate-code bot flagging one pair of them; the pair is
+  not the finding, the seven are. Related but distinct from the racing-double unification tracked in
+  `docs/inflight/bug-torn-read-family.md`, which is about the two `Racing*State` doubles rather than
+  this helper.
+
+### The logback `ListAppender` dance, still inline in `SubmitWorkToPoolShutdownRaceTest`
+
+- **`LogCapture` is the shared helper for capturing a class's log output; convert the last two
+  inline copies onto it and treat it as the only way to do this.**
+  `bz.stub.parallelconsumer.internal.utils.LogCapture` attaches the appender, raises the level for
+  the duration and restores both on close - and its javadoc owns the two hazards of raising a
+  JVM-shared logger, which an inline copy silently reproduces without them.
+  `SubmitWorkToPoolShutdownRaceTest` still builds its own twice (grep `new ListAppender` there); its
+  `getThrowableProxy()` filtering is already covered by `LogCapture.events()`, so no widening of the
+  helper is needed.
 
 ### Cross-module test clones (the file-similarity backlog behind astubbs#40)
 
@@ -595,8 +985,8 @@ different and much larger job, because deduplicating them means a generified tes
 test-jar that each module parameterises with its own processor type. Ranked, with a verdict, so the
 next reader does not re-derive the list.
 
-Every figure below is **measured**, off the `duplicate-code-detection-tool` report this PR's own CI
-posted, and quoted as a band for the same reason the `MockConsumer*Test` figures are: the measure is
+Every figure below is **measured**, off the `duplicate-code-detection-tool` report CI posted on
+astubbs/parallel-consumer#206, and quoted as a band for the same reason the `MockConsumer*Test` figures are: the measure is
 corpus-relative, so decimals drift on merges that touch none of these files. Nothing here is
 estimated from reading the source - an earlier draft of this section was, and every one of its five
 numbers was wrong, by 7 to 48 points.
@@ -689,8 +1079,10 @@ astubbs#228 (confluentinc#24, distributed rate limiting); ideation:
   make sense to have a producer facade." Don't revisit.
 - `origin/features/consumer-interface` @e67833f8, `origin/refactor/interface` @400643c8 - Consumer /
   interface naming (→ cohesive-API draft `confluentinc#303`).
-- `origin/refactor/deprecate-jstream` @8a8f6508 - deprecate the JStream API (breaking removal is
-  queued under *Breaking changes queued for next major version*).
+- `archive/refactor/deprecate-jstream` @8a8f6508 (branch deleted 2026-09-03) - deprecate the JStream
+  API. **The queued removal was withdrawn on 2026-09-03** - see the struck-through entry under *Breaking changes queued for next
+  major version* for why. The branch is kept as the design record for whoever argues the case on the
+  API's merits rather than on the defect astubbs#116 fixed.
 - `origin/move-cons-to-pc` @f25256cf - move the consumer into PC (old/new styles verified equal).
 - `origin/refactor/minor-changes` @193bbf80 - rename enum to the standard pattern (breaking; see
   *Breaking changes queued for next major version*).
@@ -713,7 +1105,8 @@ astubbs#228 (confluentinc#24, distributed rate limiting); ideation:
 - `origin/refactor/empty-tests` @5f8b3dba - **the removal half already landed** on master via
   upstream `confluentinc#493`, which deleted `ParallelEoSStreamProcessorTest.avro`,
   `WorkManagerOffsetMapCodecManagerTest.truncationOnCommit`, `WorkManagerTest.maxPerPartition` and
-  `.maxPerTopic`. What this branch (draft `confluentinc#496`) still holds is the *implement* half:
+  `.maxPerTopic`. What `origin/refactor/empty-tests` (draft `confluentinc#496`) still holds is the
+  *implement* half:
   restoring them as `NotImplementedException` stubs so the debt is visible rather than absent. Never
   merged; no PR on the fork.
 - `origin/improvements/test-perf` @932210b6, `.../multi-topic-test` @dd3ad77b - test perf / multi-topic.

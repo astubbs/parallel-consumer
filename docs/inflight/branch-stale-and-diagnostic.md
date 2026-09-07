@@ -7,9 +7,13 @@
 **Diagnostic-only, investigations landed:** `debug/committedoffset-firstpoll-stall` and
 `debug/chaos-w4-red-commit-response-stall` (astubbs#80 and astubbs#100, both with write-ups in `docs/solutions/`).
 
-**Superseded:** `cherry-pick/893-offset-reset`, `cherry-pick/905-max-shard-metric`, `upstream-pr-893`,
-`upstream-pr-905`, `pr-909-temp`, `bugs/859-pcmetrics-leak-v2` - all folded into astubbs#57. Plus
-`ci/reenable-parallel-tests` and `backup/*`.
+<!-- post-merge: checked-begin -->
+**Superseded:** `cherry-pick/905-max-shard-metric`, `upstream-pr-905`, `pr-909-temp`,
+`bugs/859-pcmetrics-leak-v2` - all folded into astubbs#57. `cherry-pick/893-offset-reset` and
+`upstream-pr-893` were folded in there too until 2026-08-24, when the confluentinc#893 cherry-pick
+was split out to astubbs#337, so their work is that PR's now. Plus `ci/reenable-parallel-tests` and
+`backup/*`.
+<!-- post-merge: checked-end -->
 
 **`refactor/test-hardening` - superseded now, but it was not when this list first said so.** It held
 the only copy of a 455-line audit of disabled, kneecapped and weakened tests, committed "not yet
@@ -26,8 +30,12 @@ should not simply be cherry-picked: those same diagnostics show it OOMs as writt
 it properly is in [`docs/refactoring.md`](../refactoring.md). Take that commit before deleting the
 branch.
 
-**Do not delete `master-confluent`** (pinned at pre-rebrand `7f290122`): it is ruleset-protected and
-is the base of astubbs#29 and astubbs#31 - retarget those first. `dev-cc` is pinned at the same commit.
+<!-- post-merge: checked -->
+**Do not delete `master-confluent`** (pinned at pre-rebrand `7f290122`): it is ruleset-protected.
+<!-- post-merge: checked -->
+It was the base of astubbs#29 and astubbs#31; both have since been retargeted onto `master`, so the
+retarget-first caveat no longer applies to them - check for any newer PR still based on it before
+deleting. `dev-cc` is pinned at the same commit.
 
 **Salvage or abandon: `astubbs/orca`** - CI/tooling (Claude review + PR-assistant workflows,
 PR-dependency check, CI matrix tweaks) from before master grew its own versions of most of it. Badly

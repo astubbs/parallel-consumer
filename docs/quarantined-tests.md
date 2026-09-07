@@ -40,14 +40,23 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
    and what shows it is master-state rather than PR-state). What stays banned is quarantining on a
    hunch - "it's red sometimes" is not evidence, and a single failure is a sighting, not a ledger.
 
+   **A ledger does not have to be assembled by hand from logs that expire.**
+   `node bin/inflight.mjs codecov test <name>` prints that test's recorded outcome per commit, and
+   `codecov flaky` lists every test ever recorded with more than one outcome - Codecov keeps this far
+   longer than a CI log is retained. It reports **candidates and never a verdict**: two outcomes
+   across two commits fits a regression that landed between them just as well as a flake, which is
+   the distinction this rule exists to make, so it informs the ledger rather than writing it.
+   [`docs/inflight-tool.md`](inflight-tool.md) owns those commands.
+
    The rule used to demand a diagnosis outright. That was wrong in a way worth recording: it
    conflated *"we don't know the mechanism"* with *"we don't know whether it's ours"*, and only the
    second justifies blocking. A test with a sighting ledger **is** a finding - it is known
    master-state flaky - it simply has no root cause yet. Demanding one before quarantine leaves an
    undiagnosed red blocking every unrelated PR, which trains everyone to read red as normal; this
    repo already deleted surefire retries for hiding flakes, and a permanently-red gate destroys the
-   same signal more thoroughly. The tell that the old default was miscalibrated: its escape hatch was
-   an owner-granted exception, and the exception had become the routine path.
+   same signal more thoroughly. The tell that the old default was miscalibrated: its only escape
+   hatch was an owner-granted exception, so every undiagnosed red had to be escalated to the owner
+   or left blocking - the rule had no path a contributor could take on the evidence they had.
 
    The bar it does NOT lower: quarantine still defers rather than forgives. The lane keeps running
    the test, the registry keeps it loud, and rule 5 still blocks a release while the list is
@@ -73,41 +82,86 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-Every entry below is a timing flake rather than a deterministic failure, so all carry
-`flapping = true`: a pass proves nothing and the lane reports it without demanding action. All
-were hidden by the surefire retry until astubbs#224 removed it.
+The entries below are of two opposite kinds, and the checklist is the inventory - not this paragraph.
+`RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`
+and `MultiInstanceRebalanceTest.largeNumberOfInstances` are **unreliable failures**, so both carry
+`flapping = true`: a pass proves nothing and the lane reports it without demanding action.
+`MultiInstanceRebalanceTest` was never hidden by the surefire retry astubbs#224 removed, because the
+test did not run in a gating lane until the PR that quarantines it.
+`ProducerManagerTest.aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced` is the other
+kind - **deterministic**, so it is left at the annotation's default `flapping = false` and a PASS is
+strict-xfail: the lane will open a merge-blocking thread demanding the annotation and this entry be
+deleted, which is correct, because the only way it passes is the defect being fixed.
 
-- [ ] `PCMetricsTest.metricsRegisterBinding` - asserts `PARTITION_LAST_COMMITTED_OFFSET` equals a
-  **completion counter** while the suite runs `UNORDERED`. Commits are contiguous and bounded by the
-  lowest incomplete offset; completions are not ordered, and workers call `latch.await()` *before*
-  `counter.incrementAndGet()`, so a latched worker's offset never completes and the gap is
-  **permanent**. The 120s `atMost` cannot close it - it only makes the failure cost 140s of every CI
-  run. Quarantined on a **diagnosed mechanism**, which is the stronger half of rule 1, not on a
-  sighting ledger. The fix is one comparand -
-  `PARTITION_HIGHEST_SEQUENTIAL_SUCCEEDED_OFFSET` is the contiguous high-water mark the commit metric
-  actually tracks - but the sibling assertions on `PARTITION_HIGHEST_COMPLETED_OFFSET` and
-  `PARTITION_INCOMPLETE_OFFSETS` derive from the same counters and want reading as a set first, so it
-  is not a one-line change. Diagnosis in
-  `docs/inflight/bug-pcmetrics-committed-offset-vs-completion-count.md`. No Owner yet.
+**The other entry that stood here has gone, and not by a lapse.**
+`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is astubbs#262's rule-3
+re-enable: astubbs#265 deleted the wall-clock assertion that flaked, and astubbs#262, its owner,
+deletes the annotation and its entry together.
+(`OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` went
+earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it had itself frozen.)
 
-- [ ] `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - fails inside
-  the shared `BlockedThreadAsserter#assertUnblocksAfter` helper rather than in the test's own
-  assertions, so the same signature can surface from any test that uses it. The unblocker is
-  scheduled *before* the elapsed clock starts, so the measured window begins later than the delay it
-  is compared against and is systematically short by however long arming the scheduler takes;
-  `isAtLeast(unblocksAfter)` then fails by a millisecond or two under load. Seen as `getElapsed()
-  expected to be at least PT20S but was PT19.998S` - 2ms short on a 20s bound - on a PR whose diff
-  contained no Java at all, which is what rules out PR-state under rule 2. Diagnosis in
+- [ ] `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`
+  - times out on its own SETUP GUARD, so a failure proves nothing about the defect it reproduces. The
+  awaited condition is the control thread reaching the mid-loop pause point (offset 25) that saturates
+  the pipeline, not the confluentinc#909 signature assertion the test exists to make. Every recorded
+  failure carries that identical message and sits at the 30s timeout, against passes that complete in
+  about 10s - the shape of a precondition the test cannot force under load rather than a wrong answer.
+  `flapping = true`: it passes most runs, so a pass is report-only.
+
+  Master-state on a recorded ledger rather than on a diagnosis, which rule 1 allows.
+  `node bin/inflight.mjs codecov test RegistrationRaceStaleResidentIT` is that ledger and outlives any
+  CI log: failures land on unrelated branches minutes apart while sibling branches pass in the same
+  window, including branches touching core. It has failed on heads whose only content was a dependency
+  bump and on heads whose only content was documentation, which is what rules out PR-state. The
+  standing prose ledger is
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
-  Owner: PR astubbs#262, which anchors the measurement to a nanos stamp taken just before
-  `schedule()`, leaving the residual error sub-millisecond and in the safe direction.
 
-- [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
-  **UNDIAGNOSED, quarantined on its sighting ledger (rule 1)**: at 4/45 it is the
-  most frequent tracked flake and blocked every PR. Fails as `ConditionTimeout` at the
-  `getHighestSeenOffset()` assertion - the committed high-water mark never reaches
-  `expectedHighestSeen` (139), with a different actual each run (136 and 132 seen). An earlier
-  quarantine attributed it to the retry-delay sleep and was reverted: that code runs *after* the
-  failing assertion, so it cannot be the cause. No owner - diagnosing it is the open task; the
-  unverified hypothesis and its falsification path are in
-  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
+  Unowned - no fix PR exists, because no diagnosis does. What would produce one: the guard waits for a
+  pause point driven through `PausableInsertShardManager`, so the question is whether the control
+  thread never reaches offset 25 under contention or reaches it after the wait expired. Separate those
+  before touching any timeout - the rule that governs the load-tightness family governs this one too,
+  and a test failing under load may be exposing a real product bug.
+
+- [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is now
+  **measured**: the Kafka consumer group protocol under this profile's churn rate, not a PC defect. The
+  chaos monkey restarts members faster than a join phase completes, a LeaveGroup sent mid-join is
+  answered only when the phase completes, and one phase was observed open for 17s during which
+  `consumer.poll()` returns nothing to any member - the `FLAT` count. In every failing run no
+  coordinator request was slow. Every PC-side candidate was refuted by measurement. 4 in 60 on the Linux
+  runner, 0 in 22 on an M2 desktop. Full chain, instruments and the refuted hypotheses:
+  [`docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md`](inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md).
+  Stays quarantined because a test whose failures are the protocol's cannot gate merges; where it
+  should live instead is `docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md`.
+
+  **Rule 2 is satisfied prospectively rather than retrospectively, and that is worth stating plainly
+  rather than letting a later reader find it.** The ledger was measured while this test was
+  PR-state: on master it is `@Disabled`, so it cannot fail there and no master-state ledger for it
+  can exist. The PR carrying this entry enables it into the required `Performance Tests` lane, which
+  is exactly the act that makes its failures master-state - master would otherwise inherit a gating
+  check that fails about one run in ten. The quarantine lands in the same change as the enablement,
+  so the test never spends a day blocking merges on an unexplained stall. If the enablement were
+  ever reverted, this entry should go with it.
+
+- [ ] `ProducerManagerTest.aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced` - a
+  **diagnosed, deterministic** exactly-once defect on the revoke path, red 5/5 with no broker, no
+  load and no timing involved. The revoke-time commit
+  (`AbstractParallelEoSStreamProcessor#tryCommitOffsetsOnRevoke`) collects offsets without first
+  draining the controller's work mailbox, and `PartitionState#onSuccess` - the only thing that marks
+  a partition dirty on a success - is reachable from `processWorkCompleteMailBox` and nowhere else in
+  main. So the commit publishes a transaction containing a record whose source offset it omits:
+  output committed, input not, and the next owner reprocesses it. Observed: it sends offset 1 where 2
+  is required. Its sibling `#aRevokeTimeCommitIncludesThatOffsetWhenTheMailboxIsDrainedFirst` is the
+  control arm - identical but for a `processWorkCompleteMailBox` call inserted before the revoke -
+  and passes, so the drain is the responsible term. Master-state and older than the branch that found
+  it: `onPartitionsRevoked` has never drained. Diagnosis, the disproved unreachability argument, and
+  the candidate fixes:
+  [`docs/inflight/core-revoke-commit-skips-the-work-mailbox-drain.md`](inflight/core-revoke-commit-skips-the-work-mailbox-drain.md).
+  Unowned - no fix PR exists, deliberately.
+
+  **Why this is quarantined rather than fixed, which is unusual for a defect this well understood.**
+  The obvious one-line fix - drain from `onPartitionsRevoked` - runs on the broker-poll thread and
+  mutates control-thread-confined `WorkManager` state. That is the same shape of change that
+  corrupted `numberRecordsOutForProcessing` in astubbs#29, measured at `-8, -16, -20, -20, -20`
+  against a truth of 0. The fix is a thread-ownership decision at the commit seam, wanting its own
+  change and its own reviewer; the note lists the candidates and what each one costs. Quarantine
+  keeps the proof executing in the meantime, which `@Disabled` would not.

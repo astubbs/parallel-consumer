@@ -23,7 +23,7 @@ package bz.stub.parallelconsumer;
  *
  * @author Antony Stubbs
  */
-// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
+// Hand-written ctors (not Lombok @StandardException) - see PCInternalRuntimeException for why.
 public class OffsetCommitBudgetExceededException extends ParallelConsumerException {
 
     public OffsetCommitBudgetExceededException(String message, Throwable cause) {

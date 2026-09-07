@@ -49,6 +49,16 @@ assert "a task with no impact is rejected"    fail '# T\n\n<!-- inflight-type: t
 # the cosmetic ones. The tag exists to make work fall out in priority order.
 assert "a feature WITH an impact passes"       pass '# T\n\n<!-- inflight-type: feature -->\n<!-- inflight-impact: crash -->\n'
 assert "a feature with a task impact passes"   pass '# T\n\n<!-- inflight-type: feature -->\n<!-- inflight-impact: reliability -->\n'
+
+# LABELS - the third axis. The closed set is the whole value of the field, so the rejecting arms
+# matter more than the accepting one: a label field that silently accepts anything is tag soup with
+# a gate in front of it, which is worse than no field at all.
+assert "a valid label passes"                  pass '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-labels: concurrency -->\n'
+assert "no label at all passes"                pass '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n'
+assert "a misspelt label is rejected"          fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-labels: concurency -->\n'
+# Per-VALUE validation, not per-field: a good label must not launder a bad one sitting beside it.
+assert "one good and one bad label rejected"   fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-labels: concurrency bogus -->\n'
+assert "two label markers are rejected"        fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-labels: concurrency -->\n<!-- inflight-labels: concurrency -->\n'
 assert "a feature with a BOGUS impact fails"   fail '# T\n\n<!-- inflight-type: feature -->\n<!-- inflight-impact: nonsense -->\n'
 # the new impacts, one of each partition, so a typo in the lib is caught here rather than in a note
 assert "bug/crash passes"                      pass '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: crash -->\n'
@@ -85,21 +95,32 @@ dry_assert() { # <name> <caught|missed>
 # legitimately grows.
 dry_dir=$(mktemp -d); mkdir -p "$dry_dir/bin/lib" "$dry_dir/docs/inflight"
 cp bin/check-inflight-tags.sh "$dry_dir/bin/"
-cp bin/lib/inflight-tags.sh "$dry_dir/bin/lib/"
+# The shell library is a wrapper over the Node file, which imports repo.mjs: all three travel, or the
+# copy's gate fails on a missing module and both directions below read that as "caught".
+cp bin/lib/inflight-tags.sh bin/lib/inflight-tags.mjs bin/lib/repo.mjs "$dry_dir/bin/lib/"
 cp docs/inflight/AGENTS.md "$dry_dir/docs/inflight/"
 
 # Not `sed -i`: GNU takes the suffix attached (-i.bak), BSD takes it as the NEXT argument, so the one
 # spelling cannot mean in-place on both. On BSD this read the script as the suffix and the file as the
 # script - "sed: 1: invalid command code f" - leaving the fixture unedited, so both directions of this
 # doc-and-lib agreement check silently tested nothing and reported the gate as broken.
-sed 's/^INFLIGHT_TASK_IMPACTS="\(.*\)"$/INFLIGHT_TASK_IMPACTS="\1 undocumented-value"/' \
-    "$dry_dir/bin/lib/inflight-tags.sh" > "$dry_dir/inflight-tags.tmp"
-mv "$dry_dir/inflight-tags.tmp" "$dry_dir/bin/lib/inflight-tags.sh"
+#
+# The value is appended to the task impacts in the NODE file, which is where the vocabulary lives;
+# the anchor is the last task impact, and the fixture is asserted to carry the edit before the gate
+# runs, because a mutation that missed its anchor leaves an intact copy that passes for the wrong
+# reason.
+sed "s/'process', 'deps-debt',/'process', 'deps-debt', 'undocumented-value',/" \
+    "$dry_dir/bin/lib/inflight-tags.mjs" > "$dry_dir/inflight-tags.tmp"
+mv "$dry_dir/inflight-tags.tmp" "$dry_dir/bin/lib/inflight-tags.mjs"
+if ! grep -q "undocumented-value" "$dry_dir/bin/lib/inflight-tags.mjs"; then
+    echo "FAIL: the lib mutation did not apply - its anchor in bin/lib/inflight-tags.mjs has moved" >&2
+    failures=$((failures + 1))
+fi
 out=$( cd "$dry_dir" && bash bin/check-inflight-tags.sh 2>&1 )
 case "$out" in *undocumented-value*) dry_got=caught ;; *) dry_got=missed ;; esac
 dry_assert "a lib value the doc never explains is caught" "$dry_got"
 
-cp bin/lib/inflight-tags.sh "$dry_dir/bin/lib/"
+cp bin/lib/inflight-tags.mjs "$dry_dir/bin/lib/"
 printf '| `bogus-impact` | task | nonsense |\n' >> "$dry_dir/docs/inflight/AGENTS.md"
 out=$( cd "$dry_dir" && bash bin/check-inflight-tags.sh 2>&1 )
 case "$out" in *bogus-impact*) dry_got=caught ;; *) dry_got=missed ;; esac

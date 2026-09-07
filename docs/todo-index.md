@@ -90,7 +90,7 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerManager.java`**
 
-- TODO(refactor): InternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
+- TODO(refactor): PCInternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
 - todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
 - TODO talk about alternatives to this brute force approach for retrying committing transactions
 
@@ -105,7 +105,7 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/EncodedOffsetPair.java`**
 
-- throw new InternalRuntimeException("Invalid state"); // todo why is this needed? what's not covered?
+- throw new PCInternalRuntimeException("Invalid state"); // todo why is this needed? what's not covered?
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/OffsetBitSet.java`**
 
@@ -136,8 +136,6 @@ that line, leave it in the code - it will show up here.
 
 - TODO: optimisation - inline this into the partition iteration loop in {@link WorkManager}
 - TODO: optimisation - could double the run-length range from Short.MAX_VALUE (~33,000) to Short.MAX_VALUE * 2
-- TODO VERY large offset ranges is slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
-- todo refactor this loop into the encoders (or sequential vs non sequential encoders) as RunLength doesn't need
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionState.java`**
 
@@ -148,7 +146,11 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionStateManager.java`**
 
 - todo remove static
-- OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(module); // todo remove throw away instance creation - confluentinc#233
+- TODO(refactor): decode-only + single-threaded today, so sharing one instance is safe; NOT
+
+**`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ShardManager.java`**
+
+- TODO(refactor): walks every shard queue, and ConcurrentSkipListMap.size() is O(n), so each
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkContainer.java`**
 
@@ -157,7 +159,13 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkManager.java`**
 
 - todo make private
+- TODO(refactor): rename to partitionManager - `pm` also abbreviates ProducerManager elsewhere in core
 - todo make private
+- TODO(refactor): rename to shardManager - see the note beside `pm`; both getters are public API
+
+**`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/AmbientProbeExtension.java`**
+
+- TODO(refactor): distinguish "never sampled a group" from "sampled and saw nothing" rather
 
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/BrokerIntegrationTest.java`**
 
@@ -179,6 +187,10 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/MultiInstanceHighVolumeTest.java`**
 
 - todo multi commit mode, multi partition count, multi instance count? 2,3,10,100? more instances than partitions, more partitions than instances
+
+**`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/MultiInstanceRebalanceTest.java`**
+
+- TODO(refactor): settle the residual-failure attribution — see
 
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/MultiTopicTest.java`**
 

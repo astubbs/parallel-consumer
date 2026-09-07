@@ -74,7 +74,7 @@ away.
   `upstream-map.yaml`; `confluentinc#242` is not sweep-affected, having been closed as completed by
   astubbs in 2022.
 - **The send failure's own exception is misnamed**, which costs a rediscovery every time: the
-  non-transactional path throws `InternalRuntimeException` for what is an expected operational
+  non-transactional path throws `PCInternalRuntimeException` for what is an expected operational
   state. Tracked in `docs/refactoring.md` under `internal/ProducerManager.java`; naming only, no
   behaviour change, and it does not wait on the retry work.
 - **The failure-history control is inert.** See `bug-max-failure-history-is-inert.md` - a related

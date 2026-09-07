@@ -26,8 +26,11 @@ view against an independently computed truth** - not against itself, and not aga
 
 ## Candidates, roughly by how much they gate behaviour
 
-1. **Shard and queue depth** - `getNumberOfWorkQueuedInShardsAwaitingSelection()` feeds
-   `isSufficientlyLoaded()` alongside the counter that already drifted. Same failure mode available.
+1. **Shard and queue depth** - `getNumberOfWorkQueuedInShardsAwaitingSelection()` no longer feeds
+   `isSufficientlyLoaded()`, which reads the conservation figure `getWorkableRecords()` instead, but it
+   still sums the per-shard counters for the `WAITING_RECORDS` metric and the shutdown drain check, and
+   the aggregate still nets the shard counters against the retry queue rather than a shard doing so. Same
+   failure mode available, one consumer of it removed.
 2. **Incomplete-offset tracking** - the offset map decides what gets committed and therefore what is
    redelivered. Truth is derivable from what the harness produced and what the user function saw.
 3. **Paused-partition state** - now derived from the consumer rather than mirrored, so a probe would
@@ -45,4 +48,4 @@ internal number before it was visible in behaviour.
 Background:
 `docs/solutions/workflow-issues/prove-the-problem-exists-before-writing-the-fix.md`,
 `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
-<!-- file-refs: N/A - both write-ups arrive with astubbs/parallel-consumer#29, which this branch was split out of; they resolve once it merges -->
+<!-- file-refs: N/A - both write-ups belong to the astubbs/parallel-consumer#29 line of work and resolve wherever that work is present --> <!-- post-merge: checked -->

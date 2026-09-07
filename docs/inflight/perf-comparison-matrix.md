@@ -32,7 +32,7 @@ and pinned-hardware headline numbers.
   has no dependency on the Kafka Streams spike branch.
 - Corrected during the ideation's verification pass: the performance suite is a **required PR gate**
   in `maven.yml` today, not "excluded from CI" as widely repeated;
-  `pr-highcpu-fast-feedback.yml` itself records that accurate benchmarking belongs in a separate
+  the now-deleted self-hosted PR lane itself recorded that accurate benchmarking belongs in a separate
   isolated/on-demand run.
 
 **Cross-track boundary, agreed 2026-08-17 with the polyglot-demo ideation track**

@@ -65,7 +65,7 @@ trap 'stop_load' EXIT INT TERM
 # would dominate the wall clock of every run.
 echo "SOAK: building first (unloaded)"
 ./mvnw -q -pl parallel-consumer-core -am test-compile \
-  -Dlicense.skip -Dcopyright.skip=true -Djacoco.skip=true >"${SOAK_DIR}/build.log" 2>&1 \
+  -Dcopyright.skip=true -Djacoco.skip=true >"${SOAK_DIR}/build.log" 2>&1 \
   || { echo "SOAK: build FAILED - see ${SOAK_DIR}/build.log"; exit 1; }
 
 [ "$LOAD" -gt 0 ] && start_load
@@ -78,7 +78,7 @@ for n in $(seq 1 "$RUNS"); do
   if ./mvnw -o -pl parallel-consumer-core -am verify \
       -Dit.test="$TEST" -Dtest=SKIPNONE \
       -Dsurefire.failIfNoSpecifiedTests=false -Dfailsafe.failIfNoSpecifiedTests=false \
-      -Dlicense.skip -Dcopyright.skip=true -Djacoco.skip=true \
+      -Dcopyright.skip=true -Djacoco.skip=true \
       "$@" >"$LOG" 2>&1; then
     PASS=$(( PASS + 1 )); echo "SOAK: run ${n}/${RUNS} PASS  (${PASS} pass / ${FAIL} fail)"
   else

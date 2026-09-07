@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 name: review gate
 
 # The REVIEW GATE. It does not review anything, and it costs nothing to run - no Claude

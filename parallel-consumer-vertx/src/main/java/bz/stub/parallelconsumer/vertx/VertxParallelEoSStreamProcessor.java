@@ -5,10 +5,14 @@ package bz.stub.parallelconsumer.vertx;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
+import bz.stub.parallelconsumer.internal.MdcPropagation;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -19,6 +23,7 @@ import io.vertx.ext.web.client.HttpRequest;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.client.WebClientOptions;
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
@@ -39,6 +44,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 
 /**
@@ -67,14 +74,34 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
     private static final String VERTX_TYPE = "vert.x-type";
 
     /**
-     * The Vertx engine to use
+     * The Vertx engine to use.
+     * <p>
+     * Package-private getter, not protected: the only readers are same-package tests observing whether close
+     * released the engine this processor built, and PROTECTED would put a test-only seam on the extension surface
+     * of a public class.
      */
+    @Getter(AccessLevel.PACKAGE)
     private final Vertx vertx;
 
     /**
-     * The Vertx webclient for making HTTP requests
+     * Whether {@link #vertx} was built by this processor rather than supplied by the caller - and so is this
+     * processor's to close. Decided once, in the constructor that does the building, and read only by
+     * {@link #releaseOwnedVertxEngine(Duration)}.
      */
+    private final boolean ownsVertx;
+
+    /**
+     * The Vertx webclient for making HTTP requests. Package-private getter for the same reason as {@link #vertx}.
+     */
+    @Getter(AccessLevel.PACKAGE)
     private final WebClient webClient;
+
+    /**
+     * Whether {@link #webClient} was built by this processor. Independent of {@link #ownsVertx}: a caller may share
+     * their {@link Vertx} and still leave the {@link WebClient} for this processor to build, and then only the
+     * client is this processor's to close.
+     */
+    private final boolean ownsWebClient;
 
     /**
      * Extension point for running after Vertx {@link io.vertx.core.Verticle}s finish.
@@ -82,22 +109,29 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
     private Optional<Runnable> onVertxCompleteHook = Optional.empty();
 
     /**
-     * Simple constructor. Internal Vertx objects will be created.
+     * Simple constructor. This processor builds its own Vertx engine and {@link WebClient}, owns both, and closes
+     * both when it closes.
      */
     public VertxParallelEoSStreamProcessor(ParallelConsumerOptions options) {
-        this(Vertx.vertx(), null, options);
+        this(null, null, options);
     }
 
     /**
      * Provide your own instances of the Vertx engine and it's webclient.
      * <p>
-     * Use this to share a Vertx runtime with different systems for efficiency, or to customise configuration.
+     * Use this to share a Vertx runtime with different systems for efficiency, or to customise configuration. An
+     * instance you supply here stays yours: this processor leaves it running when it closes, for you to close when
+     * every system sharing it is done. Pass {@code null} for either argument and this processor builds that one
+     * itself, owns it, and closes it when it closes.
      * <p>
      * By default Vert.x's {@link WebClient} uses quite small connection limits to servers. PC overrides this to {@link
      * ParallelConsumerOptions#getMaxConcurrency()}. You can configure these yourself by providing a configured Vert.x
      * {@link WebClient} with {@link WebClientOptions} set to how you please. Consider also looking at other options
      * below.
      *
+     * @param vertx     the engine to run on, or {@code null} to have this processor build and own one
+     * @param webClient the client to make requests with, or {@code null} to have this processor build and own one on
+     *                  {@code vertx}
      * @see WebClientOptions#setMaxPoolSize
      * @see WebClientOptions#setMaxWaitQueueSize(int)
      * @see WebClientOptions#setPipelining(boolean)
@@ -121,12 +155,12 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 .setHttp2MaxPoolSize(maxConcurrency) // defaults to 1
                 ;
 
-        if (vertx == null)
-            vertx = Vertx.vertx(vertxOptions);
-        this.vertx = vertx;
-        if (webClient == null)
-            webClient = WebClient.create(vertx, webClientOptions);
-        this.webClient = webClient;
+        // Ownership follows construction: what this processor builds, it closes; what the caller supplied, the caller
+        // closes. Decided here and nowhere else, so the teardown cannot disagree with the constructor about it.
+        this.ownsVertx = vertx == null;
+        this.vertx = ownsVertx ? Vertx.vertx(vertxOptions) : vertx;
+        this.ownsWebClient = webClient == null;
+        this.webClient = ownsWebClient ? WebClient.create(this.vertx, webClientOptions) : webClient;
     }
 
     /**
@@ -167,10 +201,16 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
 
             Future<HttpResponse<Buffer>> send = call.send(); // dispatches the work to vertx
 
+            // the user's callback runs on the vert.x event loop, which is a second thread boundary - carry the
+            // diagnostic context of this (worker) thread over it
+            var eventLoopContext = getMdcPropagation().capture();
+
             // hook in the users' call back for when the web request gets a response
-            send.onComplete(ar ->
-                    onWebRequestComplete.accept(ar)
-            );
+            send.onComplete(ar -> {
+                try (var mdcScope = getMdcPropagation().enter(eventLoopContext)) {
+                    onWebRequestComplete.accept(ar);
+                }
+            });
 
             return send;
         }, onSend);
@@ -201,25 +241,91 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
     }
 
     private void addVertxHooks(final PollContextInternal<K, V> context, final Future<?> send) {
+        // called on the worker thread, where the caller's context is established - these handlers however run on the
+        // vert.x event loop, so the context has to be carried explicitly
+        final MdcPropagation mdc = getMdcPropagation();
+        final Map<String, String> eventLoopContext = mdc.capture();
+
         context.streamWorkContainers().forEach(wc -> {
             // attach internal handler
             wc.setWorkType(VERTX_TYPE);
 
             send.onSuccess(h -> {
-                log.debug("Vert.x Vertical success");
-                wc.onUserFunctionSuccess();
-                addToMailbox(context, wc);
+                try (var mdcScope = mdc.enter(eventLoopContext)) {
+                    log.debug("Vert.x Vertical success");
+                    wc.onUserFunctionSuccess();
+                    addToMailbox(context, wc);
+                }
             });
             send.onFailure(h -> {
-                log.error("Vert.x Vertical fail: {}", h.getMessage());
-                wc.onUserFunctionFailure(h);
-                addToMailbox(context, wc);
+                // master's MDC scope, this branch's guards: the handlers run on the vert.x event loop, so
+                // the caller's diagnostic context has to be carried explicitly, and everything below has to
+                // happen inside it or the failure is logged without the context that identifies it.
+                try (var mdcScope = mdc.enter(eventLoopContext)) {
+                    // Record the failure BEFORE rendering it. Logging a throwable hands it to the logging binding,
+                    // which walks the cause chain itself to build a stack trace - unbounded, and running the
+                    // throwable author's overrides. If that throws, everything after it is skipped, and what would be
+                    // skipped here is the work container's own completion: the record would stay marked in flight
+                    // forever, stalling ordering and draining. The failure is the thing that must be recorded; the
+                    // log line is the thing that can be lost.
+                    // Each step guarded separately, because vert.x will NOT contain a throw for us: FutureImpl's
+                    // listener array iterates its listeners with no per-listener try/catch, so anything escaping this
+                    // handler skips every remaining listener - including the sibling containers' own handlers, which
+                    // strands their records in flight forever. Core, Reactor and Mutiny all guard this; this was the
+                    // last engine that did not.
+                    try {
+                        wc.onUserFunctionFailure(h);
+                    } catch (Throwable bookkeepingThrew) {
+                        // Logged, not fatal, and bounded: what threw is USER code - the retryDelayProvider, reached via
+                        // updateFailureHistory - and onUserFunctionFailure records the verdict in a finally, so the
+                        // container leaves its in-flight state even on this path. What is lost is retry METADATA for
+                        // this one record (attempt count, retryDueAt), not the record: it is still mailboxed on the
+                        // next lines. Making it fatal would let a user callback stop the consumer, which is the whole
+                        // defect class this handler exists to close.
+                        log.error("Failed to record the send failure against {} - the record is still returned to the " +
+                                "mailbox below. Cause: {}", wc, describeWithRootCause(bookkeepingThrew));
+                    }
+                    try {
+                        addToMailbox(context, wc);
+                    } catch (PCInternalRuntimeException pcInvariantBroke) {
+                        // The EXPECTED shape - one of PC's own invariants. It was reachable here as
+                        // ProduceLockNotHeldException from the produce-lock release inside addToMailbox until
+                        // astubbs#257 made cleanUpContext the single release point. Terminal, per
+                        // the operator ruling: if the record cannot be posted, PC can no longer account for it, and
+                        // continuing risks a silent skip. Escalation only records the reason and moves the state,
+                        // because throwing would skip vert.x's remaining listeners and strand the sibling containers,
+                        // and blocking would hold the event loop.
+                        failFatallyOnUnmailboxableRecord(wc, pcInvariantBroke);
+                    } catch (Throwable nothingElseIsExpected) {
+                        // Backstop for a route nobody has enumerated. Broad on purpose, for the same reason the arm
+                        // above must not rethrow.
+                        failFatallyOnUnmailboxableRecord(wc, nothingElseIsExpected);
+                    }
+
+                    // the throwable rather than its message: this is the only record of why a send failed, and
+                    // getMessage() alone drops the type, the cause chain and the stack - and reads "fail: null"
+                    // for anything thrown without a message. Guarded, because h is the user's throwable and the
+                    // logging binding walks its cause chain unbounded.
+                    logWithoutEscaping(h, () -> {
+                        // DEBUG for a retriable failure, ERROR otherwise: PCRetriableException is the user's documented
+                        // way of saying "this one is expected, hand it back to me later", so it is a normal step in a
+                        // working retry loop rather than a fault. Logged at ERROR it would report healthy operation as
+                        // broken, and at the rate a retry loop runs it would bury the failures that are.
+                        if (PCRetriableException.isPresentIn(h)) {
+                            log.debug("Vert.x Vertical fail", h);
+                        } else {
+                            log.error("Vert.x Vertical fail", h);
+                        }
+                    });
+                }
             });
 
             // add plugin callback hook
             send.onComplete(ar -> {
-                log.trace("Running plugin hook");
-                this.onVertxCompleteHook.ifPresent(Runnable::run);
+                try (var mdcScope = mdc.enter(eventLoopContext)) {
+                    log.trace("Running plugin hook");
+                    this.onVertxCompleteHook.ifPresent(Runnable::run);
+                }
             });
         });
     }
@@ -326,17 +432,73 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
     }
 
     /**
-     * Close the concurrent Vertx consumer system
+     * Close the concurrent Vertx consumer system.
+     * <p>
+     * This is the single method every {@link bz.stub.parallelconsumer.internal.DrainingCloseable} entry
+     * point resolves to: the no-argument {@code close()}, {@code closeDrainFirst()} and
+     * {@code closeDontDrainFirst()} default methods call {@code close(DrainingMode)} directly, and
+     * {@link AbstractParallelEoSStreamProcessor#close(Duration, DrainingMode)} records the caller's timeout
+     * in a field and then delegates to {@code close(DrainingMode)} too - so overriding only this overload,
+     * rather than the {@link Duration}-taking one, is what makes every entry point release the Vert.x
+     * engine. (Overriding both would double-run this teardown: the base class's {@code close(Duration,
+     * DrainingMode)} calls {@code close(drainMode)} internally, which dispatches virtually back to
+     * whichever override is more derived.)
+     * <p>
+     * The Vert.x teardown runs whether or not {@code super.close(...)} threw, so a failing shutdown still releases
+     * what this processor owns rather than stranding it - but never at the price of the diagnosis. A teardown
+     * failure while {@code super.close(...)} is already failing is attached to that failure as suppressed, so the
+     * caller sees the real shutdown error with the teardown's underneath it; only when there is no close failure
+     * to outrank it is the teardown's own exception thrown. That is the guard
+     * {@link AbstractParallelEoSStreamProcessor}'s own {@code doClose} puts around each step of its
+     * {@code finally}, applied one level up - written as a sequence rather than a {@code finally} because a throw
+     * from a {@code finally} is exactly the replacing shape it exists to prevent.
      *
-     * @param timeout   how long to wait before giving up
      * @param drainMode wait for messages already consumed from the broker to be processed before closing
      */
     @SneakyThrows
     @Override
-    public void close(Duration timeout, DrainingMode drainMode) {
+    public void close(DrainingMode drainMode) {
         log.info("Vert.x async consumer closing...");
-        super.close(timeout, drainMode);
-        webClient.close();
+        Throwable closeFailure = null;
+        try {
+            super.close(drainMode);
+        } catch (Throwable closeThrew) {
+            closeFailure = closeThrew;
+        }
+
+        try {
+            releaseOwnedVertxEngine(getShutdownTimeout());
+        } catch (Throwable teardownThrew) {
+            if (closeFailure == null) {
+                throw teardownThrew;
+            }
+            log.warn("Releasing the Vert.x engine failed while close was already failing - attached to the close " +
+                    "failure as suppressed, so it does not replace it. Cause: {}", describeWithRootCause(teardownThrew));
+            closeFailure.addSuppressed(teardownThrew);
+        }
+
+        if (closeFailure != null) {
+            throw closeFailure;
+        }
+    }
+
+    /**
+     * Releases whatever Vert.x resources this processor built - see {@link #ownsVertx} and
+     * {@link #ownsWebClient} - and leaves anything the caller supplied running for them to close. The wait for the
+     * engine to close is bounded by {@code timeout}: the caller's own {@link Duration} when they closed through
+     * {@link AbstractParallelEoSStreamProcessor#close(Duration, DrainingMode)}, and the configured
+     * {@link ParallelConsumerOptions#getShutdownTimeout()} otherwise.
+     */
+    private void releaseOwnedVertxEngine(Duration timeout) throws InterruptedException, TimeoutException {
+        if (ownsWebClient) {
+            webClient.close();
+        } else {
+            log.debug("The WebClient was supplied by the caller - leaving it open for them to close");
+        }
+        if (!ownsVertx) {
+            log.debug("The Vertx engine was supplied by the caller - leaving it running for them to close");
+            return;
+        }
         Future<Void> close = vertx.close();
         var timer = Time.SYSTEM.timer(timeout);
         while (!close.isComplete()) {
@@ -344,7 +506,7 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
             Thread.sleep(100);
             timer.update();
             if (timer.isExpired()) {
-                throw new TimeoutException("Waiting for system to close");
+                throw new TimeoutException("Timed out after " + timeout + " waiting for the Vert.x engine to close");
             }
         }
     }

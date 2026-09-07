@@ -31,7 +31,7 @@ on a fleet-wide `NO_PROGRESS` stall - while the cited test had actually finished
 `probe violations=[]`. The error was caught only because a second session re-pulled the log through a
 different route before writing the ledger entry. The full account, including both seeds and the job
 run link, is recorded as the fifth sighting in
-[`docs/inflight/bug-857-family.md`](../../inflight/bug-857-family.md), under the heading
+[`docs/inflight/test-857-churn-storm-async-stalls.md`](../../inflight/test-857-churn-storm-async-stalls.md), under the heading
 **"Correction worth recording: a truncated log misattributed this sighting before it was written."**
 
 **It happened again the same day, to someone who had this document available and did not read it**,
@@ -45,11 +45,47 @@ command, same failure mode, same class of wrong claim, two days after this file 
 prevent exactly it. **Prior-art checks are the fix, not more documentation** - the entry was written
 without running the greps `AGENTS.md` requires before investigating anything.
 
+**A third instance, 2026-08-25, and this one indicts the remedy rather than the reader.** Diagnosing
+a `Chaos Pain Suite` red on astubbs#357, the job-log route returned 990 lines of a ~5000-line log -
+cutting inside a passing test and then appending the post-job steps, so the file *ended with a
+cleanup step* and passed the completeness check this document prescribes. Zero `Tests run:` and zero
+`BUILD FAILURE` in it read as a killed process, and a runner-load kill was written into
+`docs/inflight/ci-disabled-jobs-and-runner-load.md` before the artifact contradicted it: eight chaos
+ITs green, `ChaosChurnStormIT` red on probe violations, seed recoverable. Two things follow. The
+terminal-marker check needs the marker to belong to **the step you care about**, not merely to the
+job. And the fix this document's *Related* section named - `docs/ci.md` still recommending the
+job-level route with no completeness warning - had sat undone since 2026-08-18, so the reader who
+followed the topic doc was routed straight into the trap. That has now been fixed; the fourteenth
+sighting in `bug-857-family.md` carries the corrected diagnosis.
+
 This is a sibling of an earlier trap in the same file's fourth sighting: there, GitHub truncated the
 log **stream** itself server-side, so neither `--log` nor `--log-failed` contained the
 `AMBIENT PROBE AUTOPSY`  block at all, and the autopsy had to be recovered from the uploaded
 test-report artifact (see that entry's `**Retrieval note`). Two different truncation mechanisms,
 same failure mode: a log that looks complete but isn't, feeding a diagnosis that inherits the gap.
+
+**Third instance, 2026-08-19, on astubbs#57** - and the shape did not vary. Diagnosing another
+`Chaos Pain Suite` failure ([job 95906973285](https://github.com/astubbs/parallel-consumer/actions/runs/32198410456/job/95906973285)),
+`gh run view --job --log` returned nothing usable, and so did two further attempts. Only then was
+this file opened; the archive endpoint produced the full 12,015-line log immediately and the
+diagnosis followed in minutes. The seed, `7964289159858266180`, is recorded
+in `docs/inflight/bug-857-family.md` - grep the seed rather than an ordinal. It was the *eleventh*
+sighting when this was written and is the *twelfth* since astubbs#57 merged astubbs#325, which
+interleaved entries from two branches and renumbered from that point on; the ordinals in that ledger
+are positions in a list two branches append to, so they are not stable citation anchors.
+
+**What all three share is timing, not knowledge.** Each person had this document available. Each
+reached for the obvious command, then a variant, then a third, and searched `docs/solutions/` only
+after running out of ideas - because the first command feels too simple to have a known trap. That
+is the wrong instinct for this class specifically: **a tool returning *less* than expected - empty
+output, a suspiciously short log, a clean result where a failure was expected - is a stronger signal
+of a known trap than a loud error is**, because a loud error tends to explain itself. Silence is the
+signature of a swallowed limit.
+
+`.claude/hooks/inject-recorded-knowledge.sh` (SessionStart) now puts this document's title into
+every session, so "never learned it existed" is no longer the gap. What remains is matching a title
+already in context to the symptom in front of you - which for this one is easy, since the title
+names the command.
 
 ## Guidance
 
@@ -119,7 +155,7 @@ wrong.
 - When `docs/testing.md`'s ambient-probe section is the next thing you'd check for a broker
   integration-test failure. It used to state that every such failure **log** includes the
   `AMBIENT PROBE AUTOPSY` block; both truncation incidents in this repo (fourth and fifth sightings
-  of `docs/inflight/bug-857-family.md`) showed that needed a scope correction rather than a
+  of `docs/inflight/test-857-churn-storm-async-stalls.md`) showed that needed a scope correction rather than a
   retraction - the autopsy is reliably **emitted** on failure, but the console **log** you fetch it
   from is not a reliable place to find it; the artifact and archive routes above are. **That
   correction has landed**: the section now says "emits" and defers the retrieval routes to this
@@ -165,12 +201,13 @@ implicated.
 
 ## Related
 
-- [`docs/inflight/bug-857-family.md`](../../inflight/bug-857-family.md) - fourth sighting
+- [`docs/inflight/test-857-churn-storm-async-stalls.md`](../../inflight/test-857-churn-storm-async-stalls.md) - fourth sighting
   (`**Retrieval note`, server-side stream truncation, artifact recovery) and fifth sighting
   (`**Correction worth recording`, this incident, archive-zip recovery, both seeds).
 - [`docs/testing.md`](../../testing.md) - ambient-probe section (`AMBIENT PROBE AUTOPSY`), which
   now carries the corrected "emits" wording and points here for the retrieval routes rather than
   restating them.
-- [`docs/ci.md`](../../ci.md) - "Reading a failed job's log", the topic doc for CI log retrieval;
-  currently documents the job-level `actions/jobs/$jid/logs` API route only, not the run-level
-  archive-zip endpoints or the terminal-marker completeness check this incident established.
+- [`docs/ci.md`](../../ci.md) - "Reading a failed job's log", the topic doc for CI log retrieval. It
+  now leads with the artifact and archive routes, names both failure modes of the job-level API call,
+  and carries the terminal-marker completeness check; it defers to this document for the incidents.
+  Keep the two consistent if either moves.

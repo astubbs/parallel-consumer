@@ -1035,6 +1035,7 @@ mkdir -p "$FZ/docs"
 cat > "$FZ/docs/upgrade-notes.adoc" <<'ADOC'
 // rename-packages: freeze-begin(migration) - migration instructions must name the old package
 Move from io.confluent.parallelconsumer to the new package.
+# hazard-ok: fixture text describing a command, not an invocation
 Run: sed -i 's/io\.confluent\.parallelconsumer/NEW/g'
 // rename-packages: freeze-end(migration)
 See io.confluent.parallelconsumer.ParallelConsumer, an ordinary reference that MUST be rewritten.

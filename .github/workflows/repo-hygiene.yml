@@ -1,180 +1,742 @@
-# Cheap, repo-wide static checks: things that need no JDK, no broker and no build.
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# Cheap, repo-wide static checks: things that need no broker and no build.
 #
-# Separate from copyright.yml deliberately: these checks are not about copyright and never were,
-# and bolting them there left a job called "Copyright header check" doing two unrelated things.
+# THREE STANDALONE GATE JOBS WERE FOLDED IN HERE, and each was already running here before it was
+# deleted: `Copyright header check` (the whole of copyright.yml), and maven.yml's `quarantine: audit`
+# and `docs data: audit`. The sweep below globs bin/check-*.sh, so check-copyright-headers.sh,
+# check-quarantine-registry.sh, check-quarantine-owners.sh and check-docs-data.sh - and each one's
+# self-test - ran in this job on every PR alongside the dedicated jobs, which were a second copy with
+# a second checkout each. The one thing each dedicated job carried that this lane did not is now an
+# explicit step or env line below (the fork-point strictness, the PyYAML check), so nothing was lost
+# in the fold; and the quarantine OWNER check keeps its authenticated run in quarantine-lane.yml,
+# whose `tests` check is required, because this lane's shell sweep deliberately sees no token (see
+# PR_NUMBER).
 #
-# ONE JOB PER CONCERN, named `<area>: <check>` to match the context convention already in the master
-# ruleset (`quarantine: audit`, `dups: clones`, `deps: vulnerabilities`). Each appears as its own
-# required-status-check candidate instead of hiding inside a shared green tick - and a job renamed
-# here silently stops satisfying that ruleset, so treat these names as an API.
+# A FOURTH, `PR Checklist` (the whole of pr-checklist.yml), FOLLOWED. It was not a duplicate of the
+# sweep - its five github-script gates read the PR body and the PR's file list, which no bin/check-*
+# gate can do without a credential - but it checked out the same tree with the same read-only scope
+# on the same trigger, and three of its self-test steps (bin/test-check-issue-refs.sh,
+# bin/test-check-file-refs.sh, bin/test-todo-index.sh) were already swept here by glob. Its steps
+# are the tail of the `hygiene` job below, comments intact, guarded so a push run (which has no PR)
+# skips the PR-reading ones. What the fold changed about THIS workflow, each justified at the point
+# it appears: the `edited` trigger, the concurrency key, the `pull-requests: read` scope, and
+# `persist-credentials: false` on the checkout. Why this host and not `Check PR Dependencies` or a
+# review gate: docs/inflight/ci-fewer-jobs-ruleset-edits.md records the pairing reasoning.
+# The four retired names are required contexts in the master ruleset until it is edited - that same
+# note carries the edit and its ordering.
+#
+# ONE LANE, DISCOVERED - and this replaced one-job-per-concern deliberately. That shape gave each
+# gate its own required-status-check candidate and its own red tick, which reads well, and cost
+# something that mattered more: every gate and every self-test had to be NAMED here to run at all.
+# A gate added to bin/ ran nowhere until somebody remembered to wire it, and that is not
+# hypothetical - the shallow-clone hook's self-test was added and was the only self-test in bin/
+# that no workflow named. The failure is silent by construction: nothing goes red to tell you a
+# check is not running.
+#
+# `bin/check-all.sh --with-tests` globs `bin/check-*.{sh,mjs}` and `bin/test-*.{sh,mjs}`, so the set
+# cannot drift
+# from what exists. It does not stop at the first failure - every check runs, and the summary names
+# each one that failed with the tail of its output - so a single lane loses no attribution against
+# the previous per-job layout. It runs the gates concurrently and finishes in about a minute, which
+# is why splitting them across runners bought little: the wall-clock was dominated by ten checkouts,
+# not by the checks.
+#
+# WHAT IS INTENTIONALLY NOT HERE: anything needing a broker, Docker or Infer. Those lanes live in
+# maven.yml with their own setup. A JDK IS set up, because one self-test fails rather than skips
+# without it - see the step below. Keep the dependency list short and explicit; the failure mode this
+# guards against is a lane that passes only because of what the runner image happens to ship.
+#
+# THE JOB NAME IS AN API. It is a required status check in the master ruleset, and renaming it
+# silently stops satisfying that ruleset - the same trap the per-job names carried. If you rename it,
+# update the ruleset in the same change.
 
 name: Repo Hygiene
 
-# push scoped to master (matching copyright.yml and maven.yml) so PR-branch commits run once via
-# the pull_request event instead of twice.
+# push scoped to master (matching maven.yml) so PR-branch commits run once via the pull_request
+# event instead of twice. copyright.yml ran on push to master too, so its fold into this workflow
+# keeps that cadence.
+#
+# `edited` IS NOT A DEFAULT pull_request TYPE, and it is here for the folded PR Checklist gates: the
+# checklist gate, the issue-reference gate and the changelog gate all read the PR BODY, so a body edit
+# must re-evaluate them - otherwise the fix for a bare `#200` in the description would need a push,
+# which is the round trip the `edited` trigger was added to remove. The other three are the
+# defaults, spelled out because naming any type replaces the default set. The cost is that the whole
+# workflow, macOS lane included, re-runs on a body edit: a per-job `if` that skipped the shell lanes
+# on `edited` would, under cancel-in-progress, leave a cancelled run's check as "skipped", which a
+# required check does not accept (docs/ci.md, "A skip does not satisfy a required check").
 on:
   push:
     branches: [ master ]
   pull_request:
+    types: [opened, edited, synchronize, reopened]
   workflow_dispatch:
 
+# Keyed on the PR NUMBER, not the ref: an `edited` event has the same head ref as the push before it,
+# and a body edit that arrives mid-run should supersede that run's read of the body, which the
+# number-keyed group does by cancelling it. The fallback is the SHA, not the ref, so two pushes to
+# master in quick succession each keep their own run: a master run is the record of what master's
+# gates said at that commit, and a ref-keyed group would cancel the earlier one - the previous key
+# here did exactly that.
 concurrency:
-  group: repo-hygiene-${{ github.head_ref || github.ref }}
+  group: repo-hygiene-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
+# Both READ. `pull-requests: read` is for the folded gates' `pulls.listFiles` and the PR body via
+# the payload; `contents: read` is the checkout plus `repos.getContent` at base and head for the
+# file-scoped opt-out and the roadmap gate. Nothing in this workflow writes to the repository,
+# a check, or a comment, and nothing here may be given a scope that could - the shell sweep runs
+# PR-authored scripts, and a write grant in the same job is a write grant to the PR.
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
-  sigpipe:
-    name: "shell: sigpipe"
+  hygiene:
+    name: "repo: hygiene"
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Shallow is fine: these checks read the working tree, not history.
-      - uses: actions/checkout@v6
-
-      # The self-test runs BEFORE the guard it protects, the same way copyright.yml sequences
-      # bin/test-check-copyright-headers.sh ahead of the scanner. A guard nobody has proven can
-      # fail is a guard nobody should trust.
-      - name: Self-test the SIGPIPE guard
-        run: bash bin/test-check-shell-sigpipe.sh
-
-      # `writer | grep -q` under `set -o pipefail` reports failure exactly when it MATCHES: grep
-      # exits on the first hit, the writer takes EPIPE, and pipefail promotes 141 to the pipeline's
-      # status. It only bites once the writer has more than one pipe buffer (64 KiB) left, so it
-      # passes every small fixture and surfaces in production. shellcheck does not catch it.
-      - name: No SIGPIPE-prone pipes in bin/
-        run: bash bin/check-shell-sigpipe.sh
-
-  agent-hooks:
-    name: "agents: hook self-tests"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Reads .claude/hooks/* and docs/merge-checklist.md from the working tree; no history needed.
-      - uses: actions/checkout@v6
-
-      # The hooks in .claude/hooks/ enforce repo conventions on every agent session, and they are
-      # the one layer with no CI behind it - a broken hook either blocks work or silently stops
-      # checking, and both look like nothing happening. docs/agent-harness.md rule 3 ("give it a
-      # negative control") applies to the harness itself; this is that control.
-      - name: Self-test the agent hooks
-        run: bash bin/test-check-agent-hooks.sh
-
-  inflight-tags:
-    name: "inflight: tags"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
+    # PR_NUMBER is not a convenience here - without it bin/check-branch-self-reference.sh checks HALF
+    # of what it claims and still exits 0. `gh` in the shell sweep is unauthenticated (no GH_TOKEN is
+    # exported to it, by design - the job's token exists only for the github-script gates below, and
+    # handing it to the sweep would make check-quarantine-owners.sh's advisory arm depend on which
+    # job it ran in), so the script's `gh pr list` fallback fails, the failure is swallowed, and the
+    # `#NNN` / `/pull/NNN` arm is skipped entirely - the gate prints "NO PR NUMBER RESOLVED... were
+    # NOT checked" and still exits 0. That arm is the gate's own motivating incident: a note citing
+    # astubbs#1 by number, with no branch name in it.
+    # Job-level (not step-level) because this lane collapsed nine per-gate steps into one
+    # bin/check-all.sh invocation - there is no single step to attach it to, and check-all.sh's
+    # run_capture already passes PR_NUMBER through to every gate harmlessly. The event payload
+    # already carries the number, so this costs nothing and needs no token.
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      # The checkout below fetches full history, so a missing fork point here is a broken checkout,
+      # not an expected shallow clone: make bin/check-copyright-headers.sh hard-fail (exit 2) on it
+      # instead of its default warn-and-skip exit 0, which the sweep would count as a pass.
+      COPYRIGHT_CHECK_REQUIRE_FORK_POINT: "1"
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Gates that read history must not see a truncated graft. A shallow clone does not error
+          # on `git log` or `git merge-base` - it answers, wrongly, which is the exact class
+          # .claude/hooks/check-shallow-history.sh exists to stop locally. The copyright scanner
+          # also classifies provenance from the fork-point commit, which only full history holds.
+          fetch-depth: 0
+          # No credential left in the checkout - nothing here consumes one, and this job runs
+          # PR-authored scripts. Checked before adding: the sweep's only network git call is
+          # check-quarantine-owners.sh's `preview_fetch` of the public origin URL into a scratch
+          # git dir, which is anonymous; `gh` reads GH_TOKEN, not the checkout credential; and the
+          # file-reference gate below has run its `git fetch origin <base>` under this same flag on
+          # every PR since it was written. bin/test-check-agent-hooks.sh reads origin/master from
+          # the full-history checkout above and fetches nothing.
+          persist-credentials: false
 
-      # Same self-test-then-gate sequencing as the sigpipe job: prove the tag checker can fail, then
-      # run it. The session-start index already LISTS a note no group claimed, but only to whoever
-      # starts the next session - which may not be whoever mistyped the tag, and may be days later.
-      # This fails the commit that made the mistake.
-      - name: Self-test the inflight tag checker
-        run: bash bin/test-check-inflight-tags.sh
+      # ubuntu-latest ships shellcheck, but an image change that removed it must fail rather than
+      # silently pass - bin/check-shell-lint.sh exits 2 for "cannot run", and check-all counts an
+      # exit 2 as CANNOT rather than a pass, so this makes the dependency explicit at the point a
+      # reader looks.
+      - name: Confirm shellcheck is present
+        run: shellcheck --version
 
-      - name: Inflight notes carry valid tags
-        run: bash bin/check-inflight-tags.sh
+      # Same shape for PyYAML: bin/check-docs-data.sh fails CLOSED without it, exit 2 "cannot run".
+      # ubuntu-latest ships it; the dedicated docs-data job used to pip-install it explicitly, and
+      # this is that dependency made visible rather than inherited from the image.
+      - name: Confirm PyYAML is present
+        run: python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
 
-      - name: "Self-test the branch self-reference gate"
-        run: bash bin/test-check-branch-self-reference.sh
+      # A JDK IS REQUIRED, and the requirement is not obvious from the job name. The self-test
+      # `bin/test-check-infer.sh` FAILS rather than skips when no JDK resolves and `CI` is set - by
+      # design, since on a hosted runner an unresolvable JDK means the fixture is wrong, not that the
+      # check is unnecessary. Without this step the lane passes only because ubuntu-latest happens to
+      # ship a default JDK, which is an undocumented dependency on the runner image and exactly the
+      # kind of thing that breaks on an image bump with no code change to blame.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # No `cache: maven` - see the caching strategy note at the top of maven.yml
 
-      # PR_NUMBER is not a convenience here - without it the gate checks HALF of what it claims and
-      # still exits 0. `gh` on a runner is unauthenticated (no GH_TOKEN in this workflow, by design -
-      # nothing else here needs one), so the script's `gh pr list` fallback exits 4, `2>/dev/null ||
-      # true` swallows it, and the `#NNN` / `/pull/NNN` arm is skipped entirely. That arm is the
-      # gate's own motivating incident: a note citing astubbs#1 by number, with no branch name in it.
-      # The event payload already carries the number, so this costs nothing and needs no token.
-      - name: "A doc that mentions this branch must read correctly after the merge"
+      # --strict: a CANNOT (exit 2) fails the sweep here. Without it check-all exits 0 with a CANNOT
+      # as long as something else ran - right for a laptop with no `gh` credential, wrong on a hosted
+      # image where a CANNOT is only ever a missing tool or a shallow checkout. The two "Confirm ..."
+      # steps above name the dependencies; this is what turns a third one nobody named into a red.
+      - name: Every gate and every self-test, discovered rather than listed
+        run: bash bin/check-all.sh --with-tests --strict
+
+      # The sweep above deliberately does NOT reach Codecov: check-integration-shard-balance.mjs
+      # exits 3 unless SHARD_BALANCE_NETWORK is set, because `check-*` is blanket-granted to the PR
+      # reviewer and auto-run by check-all.sh's glob, and bin/AGENTS.md forbids that prefix a
+      # network read beyond `gh`. This job is the one place that opts in - so the gate still runs,
+      # and the grant still cannot reach the network.
+      #
+      # ADVISORY MEANS THE JOB STAYS GREEN WHEN CODECOV DOES NOT. This job is a REQUIRED check, and
+      # the script exits 2 when api.codecov.io is unreachable and 3 when the corpus is empty - both
+      # "could not measure", neither a finding. Run bare, either would block every merge in the repo
+      # for the duration of a Codecov hiccup, which is the opposite of advisory. So 2 and 3 become a
+      # warning annotation and exit 0; only 1 (drift over a --fail-over bound, unused here) fails.
+      # Same shape as maven.yml's throughput step.
+      - name: Integration shard drift, the one place the Codecov read is opted into
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: bash bin/check-branch-self-reference.sh
+          SHARD_BALANCE_NETWORK: '1'
+        run: |
+          set +e
+          node bin/check-integration-shard-balance.mjs
+          rc=$?
+          set -e
+          case "$rc" in
+            0) ;;
+            2|3) echo "::warning title=Integration shard drift::could not measure (exit $rc) - advisory, not failing the required check" ;;
+            *) exit "$rc" ;;
+          esac
 
-      # Self-test only. check-pr-ready.sh reads a live PR, so running the gate itself in CI would be
-      # a network call with an answer that changes by the minute; what must not rot is its refusal to
-      # ever conclude "ready".
-      - name: Self-test the PR-readiness reporter
-        run: bash bin/test-check-pr-ready.sh
-
-  test-log-config:
-    name: "tests: log config"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-
-      # Same sequencing again. This one guards a default that fails SILENTLY: a logback-test.xml
-      # committed at debug does not go red, it floods the log and slows the run - and the volume alone
-      # broke three tests when measured (see the script header). Nobody attributes a latch timeout to a
-      # logging default, which is why it is a gate and not a note.
-      - name: Self-test the test log config checker
-        run: bash bin/test-check-test-log-config.sh
-
-      - name: Test log config is flag-driven, not edited
-        run: bash bin/check-test-log-config.sh
-
-  rename:
-    name: "tooling: package rename"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Needs to build fixture git repositories and make commits in them, but only in a temp dir -
-      # it never touches this checkout, so shallow is fine.
-      - uses: actions/checkout@v6
-
-      # bin/rename-packages.sh is run by hand, once per branch, on master and on ~29 open PRs. That
-      # is exactly the shape of tool that rots unnoticed: nobody exercises it between the day it is
-      # written and the day the whole rename depends on it, and by then a regression costs a
-      # conflict storm across every open PR. Seconds to run, so it runs on every PR.
+      # ---- Folded from pr-checklist.yml, in its original order. ----
       #
-      # The self-test includes three NEGATIVE CONTROLS (a stale reference, a misspelt one, and the
-      # escaped-regex form the habitual `grep -rn "io\.confluent"` cannot see) plus the paired
-      # commit-shape experiment whose result set the script's default. See its header.
-      - name: Self-test the package-rename tool
-        run: bash bin/test-rename-packages.sh
+      # FAIL AT END. Every step from here down carries `!cancelled()`, so a red sweep above - or a red
+      # step here - does not stop the rest from running and reporting; the job's own conclusion is
+      # the aggregate, since a step failure fails the job whatever runs after it. The standalone
+      # workflow stopped at the first failure, which meant one failing self-test hid the verdicts of
+      # five gates. The three tree checks run on push too - they read nothing from the PR, and a
+      # master run is one more place a stale marker index or a Node syntax error gets caught. The
+      # five github-script gates are additionally gated on the event: a push run has no
+      # `context.payload.pull_request`, and every one of them dereferences it on its first line.
 
-  actions:
-    name: "workflows: action versions"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-
-      # Dependabot bumps what is already there; it cannot notice a NEW workflow authored at an old
-      # version, which is how repo-hygiene.yml itself shipped at actions/checkout@v4 while 21 other
-      # uses were on @v6. The rule is "one version everywhere", not "checkout must be vN" - the
-      # latter rots on the next bump, the former survives it, because Dependabot raises every use of
-      # an action in one grouped PR.
-      - name: One version per action
-        run: bash bin/check-action-versions.sh
-
-  cve-exclusions:
-    name: "deps: CVE exclusion expiry"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-
-      # Self-test first, as everywhere else here. This one has a control arm: two fixtures that
-      # differ only by a single day either side of the limit, so a pass on one and a fail on the
-      # other shows the expiry rule is what decides, and not something incidental.
-      - name: Self-test the exclusion-expiry guard
-        run: bash bin/test-check-cve-exclusions.sh
-
-      # The root pom's `excludeVulnerabilityIds` is what keeps the whole-tree CVE scan from going
-      # permanently red on a finding nobody can act on, and some of those entries are TEMPORARY -
-      # parked only until an upstream release carries a fix that is already merged. Nothing was
-      # going to tell us when it landed: the two ids this was written for are in no advisory
-      # database, so no Dependabot alert can fire, and the retirement condition lived in a pom
-      # comment addressed to whoever happened to read it. After 90 days the entry stops being a note
-      # and becomes a red check that names itself.
+      # COMPILE EVERY NODE SCRIPT BEFORE RUNNING ANY OF THEM. `node --check` parses without executing,
+      # so a syntax error in a script that only runs on some branches - or only when a rule matches -
+      # is caught here rather than by the unlucky PR that first reaches it. Shell had the same hole and
+      # bin/check-shell-lint.sh closed it; Node arriving in bin/ (bin/AGENTS.md, "Write it in Node")
+      # would otherwise have reopened it in a new language.
       #
-      # HERE rather than in dependency-audit.yml, which is where the exclusion list is otherwise
-      # read: that job is skipped for fork PRs and dies early on a token expiry or a Sonatype
-      # outage, so the list would rot unwatched for exactly as long as the lane was broken. This
-      # check needs no JDK, no secrets and no network - the charter of this workflow.
-      - name: Temporary CVE exclusions must expire
-        run: bash bin/check-cve-exclusions.sh
+      # NOT static analysis, and it is not sold as one: it is a compile. Real analysis for JavaScript
+      # means either an npm toolchain this repo has deliberately never had, or adding
+      # javascript-typescript to CodeQL's default setup - which is a repository SETTING rather than a
+      # file, and is tracked in docs/inflight/ci-javascript-is-the-one-language-nobody-analyses.md.
+      - name: Compile-check every Node script
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r f; do
+            found=$((found + 1))
+            node --check "$f"
+          done < <(git ls-files '*.mjs' '*.js' ':!:**/node_modules/**')
+          # A loop that matched nothing exits 0 and looks identical to a clean pass - the failure this
+          # repo has hit repeatedly. Say the count, and fail if the glob went stale.
+          echo "compile-checked $found Node script(s)"
+          [ "$found" -gt 0 ] || { echo "no Node scripts matched - the glob is wrong" >&2; exit 1; }
+
+      # The gates' own logic is subtle enough to have shipped two real misjudgements already, so each
+      # is unit tested and the tests run before the gates do.
+      #
+      # DISCOVERED, NOT LISTED - the same property bin/check-all.sh exists to hold, for the same
+      # reason. This was four named steps, one per gate, so a module added to .github/scripts/ with a
+      # `.test.js` sibling ran nowhere until somebody remembered to wire it here, and its gate looked
+      # tested. `sticky-report-comment.test.js` was the fifth and would have been the first to find
+      # out. The count assertion is the other half, copied from the compile-check above: a loop that
+      # matched nothing exits 0 and is indistinguishable from a clean pass.
+      #
+      # The standalone workflow also ran bin/test-check-issue-refs.sh, bin/test-check-file-refs.sh
+      # and bin/test-todo-index.sh as named steps here. All three match `bin/test-*.sh`, so the
+      # `--with-tests` sweep above already runs them; naming them again would be the hand-kept list
+      # this lane exists to avoid. bin/todo-index.sh --check below still runs AFTER its self-test,
+      # per bin/AGENTS.md, because the sweep precedes it.
+      - name: Self-test every gate module in .github/scripts
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r t; do
+            found=$((found + 1))
+            echo "--- $t"
+            node "$t"
+          done < <(git ls-files '.github/scripts/*.test.js')
+          echo "ran $found gate self-test(s)"
+          [ "$found" -gt 0 ] || { echo "no gate self-tests matched - the glob is wrong" >&2; exit 1; }
+
+      # docs/todo-index.md is generated from the markers in the tree, so it can silently stop
+      # matching them. Entries are keyed by marker TEXT, not line number, so this only fires when a
+      # marker is actually added, removed or reworded - editing above one no longer churns the file.
+      # Not a check-*.sh gate, so the sweep cannot reach it: run bare, bin/todo-index.sh REGENERATES
+      # the index, and a read-only sweep may not mutate the tree (docs/inflight/ci-hygiene-gaps.md).
+      - name: Verify the marker index matches the tree
+        if: ${{ !cancelled() }}
+        run: bin/todo-index.sh --check
+
+      # PR Checklist gate - makes .github/PULL_REQUEST_TEMPLATE.md's checklist actually binding.
+      #
+      # The template is only a passive nudge (and `gh --body-file` PRs skip it entirely), so this check
+      # enforces it two ways for human-authored PRs:
+      #   1. The checklist must be PRESENT - a human PR with zero task-list items fails (otherwise dropping
+      #      the template is a silent bypass: no boxes -> nothing to be "unchecked" -> vacuous pass).
+      #   2. Every box present must be resolved - ticked `[x]`, or left `- [ ] ... N/A - <reason>`.
+      # Real bot PRs (Dependabot/Renovate etc., GitHub user type "Bot") don't use the template and are
+      # exempt entirely. Re-runs on body edits.
+      - name: Verify checklist is present and resolved (checked or N/A)
+        if: github.event_name == 'pull_request' && !cancelled()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+
+            // Real bots (Dependabot/Renovate) don't use the template - exempt them.
+            // This is a GitHub-assigned account type, not something a fork PR can spoof via its body.
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - checklist gate skipped.`);
+              return;
+            }
+
+            const body = pr.body || "";
+            let boxes = 0;
+            const offenders = [];
+            for (const line of body.split(/\r?\n/)) {
+              // Match a markdown task-list item: "- [ ] text" / "- [x] text"
+              const m = line.match(/^\s*[-*]\s*\[( |x|X)\]\s*(.*)$/);
+              if (!m) continue;
+              boxes++;
+              const checked = m[1].toLowerCase() === "x";
+              const text = (m[2] || "").trim();
+              const naMarked = /\bN\/?A\b/i.test(text);
+              if (!checked && !naMarked) offenders.push(text || "(empty item)");
+            }
+
+            // A human PR with no checklist at all is a template bypass, not an exemption.
+            if (boxes === 0) {
+              core.setFailed(
+                "No PR checklist found - paste the checklist from .github/PULL_REQUEST_TEMPLATE.md and " +
+                "resolve each box (tick `[x]` or mark `N/A - <reason>`). Bots are exempt; humans are not."
+              );
+              return;
+            }
+
+            if (offenders.length) {
+              core.setFailed(
+                "Incomplete PR checklist - tick each box [x] or mark it 'N/A - <reason>':\n" +
+                offenders.map(o => `  - [ ] ${o}`).join("\n")
+              );
+            } else {
+              core.info(`PR checklist OK (${boxes} box(es), all checked or marked N/A).`);
+            }
+
+      # A user-visible changelog entry should say WHICH reported problem or request it addresses, so
+      # a reader can follow it back. Fork and upstream issues both count.
+      #
+      # This replaces an earlier rule requiring the entry to cite its own PR. That was a nuisance by
+      # construction: the PR number does not exist until the PR is opened, so every PR needed a
+      # second push purely to add the reference - which in turn double-triggered the review workflow
+      # (astubbs#109). An issue number is known before the work starts.
+      #
+      # Build & CI is exempt - see SECTIONS_REQUIRING_AN_ISSUE in the gate module for why.
+      # Issue references: below #1000 a reference must name its repo - `astubbs#NN` for this fork,
+      # `confluentinc#NN` for the original (AGENTS.md -> Issue references). The fork's numbers sit
+      # inside confluentinc's range, so a bare number there resolves against whichever repo the reader
+      # happens to be in - and often resolves to a real but unrelated issue, which looks fine and is
+      # not. Every confluentinc issue is mirrored here, so there is almost always a fork number to
+      # cite instead.
+      #
+      # Deliberately narrow: added lines only, and the files in EXEMPT_PATHS are skipped because a
+      # bare number legitimately means confluentinc there. A naive sweep rewrote three of them
+      # wrongly, which is why they are named in the gate module rather than left to judgement.
+      #
+      # THE PR BODY IS CHECKED TOO. It is the surface humans actually read, and a bare `#200` renders
+      # there as a working link to the wrong issue - the failure mode this gate exists for, on its
+      # most visible page. `gate.prBodyEntry` presents the body to the SAME suspectRefs call as a
+      # synthetic file, so there is no second copy of the matching rule; it only drops fenced code
+      # blocks, which GitHub does not autolink. The `edited` trigger above already re-runs this job
+      # when a body changes, so a body-only fix does not need a push.
+      - name: Verify issue references name their repo (diff and PR body)
+        if: github.event_name == 'pull_request' && !cancelled()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const gate = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/issue-ref-gate.js`);
+            const pr = context.payload.pull_request;
+
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - issue reference gate skipped.`);
+              return;
+            }
+            if (gate.findOptOut(pr.body || "")) {
+              core.info("issue-refs: N/A opt-out present - skipping.");
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...context.repo, pull_number: pr.number, per_page: 100,
+            });
+
+            let hits = gate.suspectRefs([...files, gate.prBodyEntry(pr.body)]);
+
+            // File-scoped opt-out (`issue-refs: exempt-file`) is judged against file CONTENT, not
+            // the patch, so it holds however small the diff. Fetched only for files that actually
+            // have hits - usually none. The control flow lives in the gate module (NO SECOND COPY
+            // OF THE RULE); this caller supplies the contents-API reader and the logging.
+            hits = await gate.dropFileOptedOutHits(hits, async (path) => {
+              const res = await github.rest.repos.getContent({
+                ...context.repo, path, ref: pr.head.sha, mediaType: { format: "raw" },
+              });
+              return String(res.data);
+            }, {
+              onDrop: (path) => core.info(`${path}: issue-refs: exempt-file present - its hits dropped.`),
+              onError: (path, e) => core.info(`${path}: file opt-out check unavailable (${e.message}) - hits kept.`),
+            });
+
+            if (hits.length === 0) {
+              core.info(
+                `No unqualified references below #${gate.QUALIFY_BELOW} on added lines or in the PR body.`);
+              return;
+            }
+
+            core.setFailed(gate.formatFailure(hits, {
+              repo: `${context.repo.owner}/${context.repo.repo}`,
+            }));
+
+      # AGENTS.md -> "Cite by anchor, never by line number" tells authors to cite a path plus a
+      # greppable string, and to run the grep first. Nothing ran it, and docs/citations.md said so:
+      # "nothing in CI checks any of this". The bill came in as bin/check-review-gate-contract.sh -
+      # cited by docs/ci.md as the check to run, never written, and unnoticed through every review
+      # since. A path that looks right reads as right, which is why review does not catch this class.
+      #
+      # WHOLE TREE, RATCHETED AGAINST THE BASE. Deleting a file does not change one line in the documents
+      # that cite it, so a diff-scoped gate is blind to the commonest way a citation breaks - and
+      # that is not a corner case: two moves account for 59 of the 87 references this repo had to
+      # repair. So this reads every citing file in the checkout, not `pulls.listFiles`, which also
+      # removes the "GitHub omits `patch` on a very large diff" hole its sibling gate has to live
+      # with. It is affordable only because the tree is clean and this gate keeps it clean: a red
+      # result means THIS branch broke something, not that it inherited something.
+      #
+      # The matching lives in the gate module and is unit tested above; what is here is the plumbing
+      # that hands it this tree. The checkout in this job is full-depth, so the base ref is usually
+      # already present; the fetch is kept because it costs one round trip and makes the gate
+      # independent of that setting.
+      - name: Verify cited file paths exist
+        if: github.event_name == 'pull_request' && !cancelled()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const { execFileSync } = require("child_process");
+            const gate = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/file-ref-gate.js`);
+            const pr = context.payload.pull_request;
+
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - file reference gate skipped.`);
+              return;
+            }
+            if (gate.findOptOut(pr.body || "")) {
+              core.info("file-refs: N/A opt-out present - skipping.");
+              return;
+            }
+
+            const ws = process.env.GITHUB_WORKSPACE;
+            const tracked = execFileSync("git", ["ls-files"], { encoding: "utf8", cwd: ws })
+              .split("\n").filter(Boolean);
+
+            const docs = tracked.filter((f) => gate.CITING_FILE.test(f)).map((filename) => ({
+              filename,
+              lines: fs.readFileSync(`${ws}/${filename}`, "utf8").split("\n"),
+            }));
+
+            // The BASE tree, so this PR is answerable only for what it added. Fetch the base ref
+            // first - one commit is enough, we only read its tree.
+            const base = pr.base.ref;
+            execFileSync("git", ["fetch", "--no-tags", "--depth=1", "origin", base],
+                         { cwd: ws, stdio: "ignore" });
+
+            // Same reader as bin/check-file-refs.sh, from the gate module - the byte-exact
+            // `cat-file --batch` slicing is not something to keep two copies of.
+            const baseTree = gate.readTreeDocs("FETCH_HEAD", (args, opts = {}) =>
+              execFileSync("git", args, {
+                encoding: opts.encoding || "utf8", input: opts.input,
+                cwd: ws, maxBuffer: 512 * 1024 * 1024,
+              }));
+            if (!baseTree) {
+              core.setFailed(`Could not read the base tree (${base}) - cannot tell new findings ` +
+                             "from inherited ones, so this gate is not making a judgement.");
+              return;
+            }
+
+            const inherited = gate.danglingRefs(baseTree.docs, gate.treeFrom(baseTree.names));
+            const dangling = gate.newFindings(gate.danglingRefs(docs, gate.treeFrom(tracked)), inherited);
+
+            if (dangling.length === 0) {
+              core.info(
+                `No new dangling file references (${docs.length} citing file(s), whole tree, ` +
+                `${inherited.length} inherited from ${base} ignored).`);
+              return;
+            }
+
+            core.setFailed(gate.formatFailure(dangling));
+
+      - name: Verify new changelog entries cite an issue
+        if: github.event_name == 'pull_request' && !cancelled()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const gate = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/changelog-ref-gate.js`);
+            const pr = context.payload.pull_request;
+
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - changelog reference gate skipped.`);
+              return;
+            }
+
+            // Escape hatch, mirroring the checklist's own N/A convention: a PR that touches the
+            // changelog WITHOUT adding an entry of its own (fixing a typo in an older entry, say)
+            // can opt out with `changelog-ref: N/A - <reason>` on its own line in the PR body.
+            const optOut = gate.findOptOut(pr.body);
+            if (optOut) {
+              core.info(`Opted out via PR body: "${optOut}"`);
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+            });
+
+            const changelog = files.find(f => f.filename === "CHANGELOG.adoc");
+            // No patch also covers GitHub omitting it for very large diffs - accepted gap: a giant
+            // changelog rewrite would skip the check rather than fail it.
+            if (!changelog || !changelog.patch) {
+              core.info("No CHANGELOG.adoc change in this PR - nothing to check.");
+              return;
+            }
+
+            // The section comes from the CHANGELOG itself, not the patch: git has no funcname
+            // pattern for asciidoc, so a hunk header here reads `endif::[]` rather than the
+            // heading, and entries are too long for three lines of context to reach one.
+            const fs = require("fs");
+            const changelogText = fs.readFileSync(
+              `${process.env.GITHUB_WORKSPACE}/CHANGELOG.adoc`, "utf8");
+            const missing = gate.entriesMissingIssue(changelog.patch, changelogText);
+
+            if (missing.length === 0) {
+              core.info("Changelog OK - every new entry that needs an issue reference has one.");
+              return;
+            }
+
+            core.setFailed(
+              `New CHANGELOG.adoc entr${missing.length === 1 ? "y does" : "ies do"} not cite an issue.\n` +
+              `Entries under ${gate.SECTIONS_REQUIRING_AN_ISSUE.join(" / ")} should say which reported problem or request they address.\n` +
+              `Link the issue explicitly - a bare #NN is ambiguous, since issues and PRs share one number sequence:\n` +
+              `  fork:     (https://github.com/${context.repo.owner}/${context.repo.repo}/issues/NN[#NN])\n` +
+              `  upstream: (upstream https://github.com/confluentinc/parallel-consumer/issues/NN[#NN])\n` +
+              `If there genuinely is no issue, put "changelog-ref: N/A - <reason>" on its own line in the PR body.\n\n` +
+              `Entr${missing.length === 1 ? "y" : "ies"} missing one:\n` +
+              missing.map(l => `  ${l.trim().slice(0, 160)}`).join("\n")
+            );
+
+      # The roadmap's stage ladder says how real each entry is, and its own rule is that the PR
+      # advancing a track moves the stage in the same change (docs/data/roadmap.yaml, `stages`
+      # block). This step is what catches a miss: when the BASE branch's roadmap names this PR as
+      # an entry's carrier (`pull_request: astubbs#NNN`), that ENTRY's stage block must differ
+      # between base and head - touching the file elsewhere does not count - or the PR opts out
+      # with `roadmap-stage: N/A - <reason>` in its body. Base is read deliberately: master is the
+      # authority on which entries currently claim this PR.
+      - name: Verify a roadmap-carrying PR moves its entry's stage
+        if: github.event_name == 'pull_request' && !cancelled()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const gate = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/roadmap-stage-gate.js`);
+            const pr = context.payload.pull_request;
+
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - roadmap stage gate skipped.`);
+              return;
+            }
+            const optOut = gate.findOptOut(pr.body || "");
+            if (optOut) {
+              core.info(`Opted out via PR body: "${optOut}"`);
+              return;
+            }
+
+            const fetchRoadmap = async (ref) => {
+              const res = await github.rest.repos.getContent({
+                ...context.repo, path: gate.ROADMAP_PATH, ref,
+                mediaType: { format: "raw" },
+              });
+              return String(res.data);
+            };
+
+            let baseText = "";
+            try {
+              baseText = await fetchRoadmap(pr.base.sha);
+            } catch (e) {
+              core.info(`No ${gate.ROADMAP_PATH} on the base ref (${e.message}) - nothing to check.`);
+              return;
+            }
+
+            const claims = gate.entriesClaimingPr(baseText, pr.number);
+            if (claims.length === 0) {
+              core.info("No roadmap entry names this PR as its carrier - nothing to check.");
+              return;
+            }
+
+            // A missing head file means the roadmap was deleted or moved - every claiming entry's
+            // snapshot then differs from base, which is the accountable-change signal we want.
+            let headText = "";
+            try {
+              headText = await fetchRoadmap(pr.head.sha);
+            } catch (e) {
+              core.info(`${gate.ROADMAP_PATH} unreadable at head (${e.message}) - treating as changed.`);
+            }
+
+            const unmoved = claims.filter((c) => !gate.stageMoved(baseText, headText, c.id));
+            if (unmoved.length === 0) {
+              core.info(
+                `Roadmap entr${claims.length === 1 ? "y" : "ies"} ` +
+                `${claims.map(c => c.id).join(", ")} name this PR and the stage block moved - OK.`);
+              return;
+            }
+
+            core.setFailed(gate.formatFailure(unmoved, pr.number));
+
+  # WHY THIS LANE EXISTS. Every other job in this file is ubuntu, so the shell harness was only ever
+  # exercised against GNU coreutils and bash 5, while contributors run it on macOS with BSD userland
+  # and bash 3.2. Four live defects survived a deliberate portability sweep, two automated reviews
+  # and two human lgtms, and were found only because somebody happened to be working on a Mac
+  # (astubbs/parallel-consumer#341). The class, its four instances and the constructs to reach for
+  # instead are written up in
+  # docs/solutions/workflow-issues/gnu-only-constructs-fail-silently-on-bsd-2026-08-25.md, which
+  # OWNS that knowledge - this comment says only why there is a job here.
+  #
+  # The damaging shape is not a flag that errors on BSD; that exits non-zero and somebody fixes it.
+  # It is the construct BSD ACCEPTS with a different meaning, so the script keeps running and
+  # reports a confident wrong answer - check-inflight-tags.sh extracted 0 of 17 impacts and printed
+  # "valid", rename-packages.sh printed "already applied, nothing to do" over an untouched tree.
+  macos:
+    name: "shell: macos"
+    runs-on: macos-latest
+    # The suite builds throwaway git fixture repos; 101s on an M-series laptop, and hosted macOS
+    # runners are slower. Generous ceiling, not an expected duration.
+    timeout-minutes: 20
+    steps:
+      # Full history, for the same reason as the Linux lane above: bin/test-check-agent-hooks.sh
+      # now exercises the session-start hook against THIS checkout, and that hook's corpus index
+      # needs origin/master as its baseline; its equivalence case also pins a master commit. On the
+      # default shallow checkout the index answered "neither origin/master nor master resolves",
+      # the hook failed open to silence, and seven cases went red on this lane only - reproduced in
+      # a depth-1 clone locally, and cleared by fetching origin/master into it. The fixture-building
+      # suites never needed history; the one that reads the real clone does.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # PATH bash decides what is actually under test: 60 of the 62 tracked scripts are
+      # `#!/usr/bin/env bash`, and each self-test invokes the gate it protects as a bare `bash`.
+      # Pinning it to the system 3.2 makes "this lane exercises bash 3.2" true by CONSTRUCTION
+      # rather than an assumption about the runner image. If an image ever put a newer bash first
+      # on PATH, the bash-3.2 half of this job would quietly stop testing anything and stay green -
+      # which is precisely the failure mode the lane exists to catch, one level up.
+      # The self-test suites are not self-contained: bin/check-docs-data.sh needs PyYAML and
+      # fails CLOSED without it, exit 2 "cannot run". ubuntu-latest ships it, hosted macOS does
+      # not, so the lane's first run reported 17 suites with 1 failed and every docs-data case
+      # returning 2 - including the baseline, which is the tell that it is an environment gap
+      # rather than a finding. Installing it is what makes the lane test the SCRIPTS rather than
+      # the runner image.
+      - name: Install the self-tests' Python dependency
+        run: python3 -m pip install --break-system-packages --quiet pyyaml
+
+      - name: Confirm PyYAML is importable, so a docs-data exit 2 means a real defect
+        run: python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
+
+      # Same environment gap, second instance, surfaced when master's newer suites arrived here:
+      # bin/check-shell-lint.sh wraps ShellCheck, and bin/test-check-shell-lint.sh exits 2 "cannot
+      # run" without the binary. ubuntu-latest ships it, hosted macOS does not.
+      # bin/check-all.sh already names this exact pair as a hole it cannot close on such a machine -
+      # "the broken gate exits 2 and the linter exits 2, both land in cannot, and the sweep reports
+      # zero failures - a false green produced by two skips agreeing" - so installing it here is
+      # what gives that gate any BSD coverage at all, rather than a skip wearing a tick.
+      - name: Install the self-tests' shell-lint dependency
+        run: brew install shellcheck
+
+      - name: Confirm shellcheck runs, so a shell-lint exit 2 means a real defect
+        run: shellcheck --version
+
+      - name: Pin bash to the system 3.2
+        run: |
+          mkdir -p "$RUNNER_TEMP/bash32"
+          ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+          echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
+
+      # And prove the pin took, because a pin that silently did not apply is the same defect again.
+      # macOS ships bash 3.2.57 (2007) - everything later is GPLv3 - and that shell has no `mapfile`
+      # and a `$( ... )` parser that does not skip `#` comments. Both are things this lane is here
+      # to notice.
+      - name: The bash under test really is 3.2
+        run: |
+          bash --version
+          v="$(bash -c 'echo "${BASH_VERSINFO[0]}"')"
+          [ "$v" = 3 ] || {
+              echo "::error::bash on PATH is major version $v, expected 3 - this lane is no longer exercising the bash 3.2 parser. If the runner image changed deliberately, update the pin step above and say so."
+              exit 1
+          }
+
+      # The whole self-test set by glob, not a hand-kept list: a suite added later gets macOS
+      # coverage without anyone remembering this file exists, and a hand-listed lane is exactly how
+      # the blind spot grows back. Runs all of them and reports every failure rather than stopping
+      # at the first - on a platform nobody develops on, one run should say everything that is
+      # broken.
+      #
+      # The count guard is not ceremony: a glob that matched nothing would otherwise be a green tick
+      # over zero tests, which is the "reports success having scanned nothing" result this workflow
+      # is written against.
+      #
+      # A SKIP IS NOT A PASS, and it is not a failure either - it is its own result, the house rule
+      # bin/check-all.sh states and this loop originally ignored. A bare `if bash "$t"` collapses
+      # every non-zero into one bucket, so bin/test-check-shell-lint.sh exiting 2 for a ShellCheck
+      # that is not installed was reported as "self-test fails on macOS": a suite that never ran,
+      # described as a suite that ran and found a defect. That is this lane's own subject matter -
+      # a confident wrong answer - reproduced in the lane, which is why the counts are split rather
+      # than the dependency merely installed above.
+      #
+      # Exit 2 still FAILS the job, deliberately. On a dedicated portability lane a suite that could
+      # not run is missing coverage, and the remedy is to install the tool in this job (PyYAML and
+      # ShellCheck above are both that remedy). Letting it pass is how the lane quietly stops
+      # testing anything while staying green - the failure mode the bash-3.2 pin assertion guards
+      # against one step up. The distinction bought here is ATTRIBUTION: the log now says which of
+      # the two happened, so nobody debugs a BSD defect that does not exist.
+      # SHELL ONLY, AND DELIBERATELY - do not "fix" this glob to include bin/test-*.mjs. This job
+      # exists to catch BSD userland differences: bash 3.2, BSD sed and awk, the things that behave
+      # differently here from a Linux runner. A Node self-test has no such exposure, so running it
+      # twice buys nothing, and the .mjs self-tests are already swept on Linux by the
+      # `bin/check-all.sh --with-tests` step above, whose globs cover both suffixes. Widening this loop
+      # would look like closing a gap and would actually just be duplicate coverage.
+      - name: Shell self-tests on BSD userland
+        run: |
+          ran=0; failed=0; cannot=0
+          for t in bin/test-*.sh; do
+              [ -f "$t" ] || continue
+              ran=$((ran + 1))
+              rc=0; bash "$t" || rc=$?
+              case "$rc" in
+                  0)
+                      echo "ok:     $t" ;;
+                  2)
+                      echo "::error file=$t::CANNOT RUN on macOS (exit 2) - the suite refused to measure, almost always a tool missing from the runner image. Install it in this job, as the PyYAML and ShellCheck steps do; do not let the lane count this as tested."
+                      cannot=$((cannot + 1)) ;;
+                  *)
+                      echo "::error file=$t::self-test FAILS on macOS (exit $rc)"
+                      failed=$((failed + 1)) ;;
+              esac
+          done
+          echo "macOS self-tests: $ran run, $failed failed, $cannot could not run"
+          [ "$ran" -gt 0 ] || { echo "::error::no self-tests matched bin/test-*.sh - this step checked nothing"; exit 1; }
+          [ "$failed" -eq 0 ] && [ "$cannot" -eq 0 ] || exit 1
+
+      # Catches the bash 3.2 PARSER class across every tracked script, including the ones that have
+      # no self-test at all: an apostrophe or an unbalanced paren inside a `#` comment inside
+      # `$( ... )` stops 3.2 reading the file. bin/test-check-branch-self-reference.sh shipped
+      # exactly that and exited 2 before a single case ran, while showing 31 green on ubuntu - so a
+      # passing self-test suite is not evidence this sweep is redundant. Seconds to run.
+      - name: Every tracked script parses under bash 3.2
+        run: |
+          scanned=0; bad=0
+          while IFS= read -r f; do
+              scanned=$((scanned + 1))
+              /bin/bash -n "$f" || { echo "::error file=$f::does not parse under bash 3.2"; bad=$((bad + 1)); }
+          done < <(git ls-files -- '*.sh')
+          echo "parse sweep: $scanned scanned, $bad failed"
+          [ "$scanned" -gt 0 ] || { echo "::error::no scripts matched - the sweep checked nothing"; exit 1; }
+          [ "$bad" -eq 0 ] || exit 1

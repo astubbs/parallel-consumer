@@ -36,9 +36,25 @@ echo "=== Quarantine audit (entries are diagnosed, or recorded rule-1 exceptions
 quarantined_audit || echo "(no @Quarantined tests - this lane is empty)"
 echo "==================================================================================================="
 
+# WHY -Dmaven.test.failure.ignore=true, AND WHY ITS ABSENCE WAS A SILENT HOLE.
+#
+# This lane exists to RUN known-failing tests, so a failing test must not stop the run - but by
+# default a surefire failure fails the module and the reactor never reaches failsafe. With only
+# quarantined UNIT tests that was invisible: surefire ran them, the build failed, and everything the
+# lane needed had already been recorded. Add one quarantined INTEGRATION test and the hole opens -
+# `ProducerManagerTest` fails in surefire, `parallel-consumer-core` goes FAILURE, and failsafe never
+# executes, so the integration test runs NOWHERE while the job still reports success (the workflow
+# step is continue-on-error). That is `@Disabled` with extra steps, which is the exact outcome
+# quarantining is meant to prevent, and nothing goes red to say so.
+#
+# Ignoring failures makes both surefire and failsafe run to completion and write their XML, which is
+# what the verdict is actually read from - bin/quarantine-lane-report.sh parses the reports, and the
+# workflow's own comment already says a green tick here does not mean the tests passed. So the exit
+# code was never the verdict for this lane; it is now explicitly not one.
 ./mvnw --batch-mode \
   -Pci \
   clean verify \
   -Dincluded.groups=quarantined \
   -Dexcluded.groups= \
+  -Dmaven.test.failure.ignore=true \
   "$@"

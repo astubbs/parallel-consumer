@@ -43,6 +43,15 @@ onto the PR and re-surfaces as a new-findings warning on every push until fixed 
 job itself is report-only - `spotbugs:spotbugs`, not `spotbugs:check` - so this is recurring review
 noise rather than a hard merge block.)
 
+> **Reference repair, 2026-08-25 - the claim above stands, the machinery it names is gone.** The
+> `spotbugs-baseline` job and `.spotbugs-baseline.xml` were retired; suppression is now a checked-in
+> `spotbugs-exclude.xml` keyed by RULE, with every entry justified in
+> `docs/inflight/static-spotbugs-rule-registry.md`. Read the mechanism as this document read it with
+> `git show 4480fcf89^:.github/workflows/maven.yml`, then grep `spotbugs-baseline`. Nothing about
+> the finding or its analysis changes - only the address of the CI machinery described.
+> Why it was retired, and the failure class that motivated it:
+> [`../workflow-issues/an-inert-analysis-config-reads-as-a-clean-codebase.md`](../workflow-issues/an-inert-analysis-config-reads-as-a-clean-codebase.md).
+
 The catch-broadly-and-dispatch-on-type structure follows the shared-handler design of PR
 astubbs#207 (open, unmerged as of this writing), which proposed one handler for the whole class of
 unreadable-metadata decode failures; the structure itself entered this tree in PR astubbs#306's own

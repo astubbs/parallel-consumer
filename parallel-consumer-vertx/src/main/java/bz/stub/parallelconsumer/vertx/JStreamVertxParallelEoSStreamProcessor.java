@@ -19,7 +19,9 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Optional;
-import java.util.concurrent.ConcurrentLinkedDeque;
+
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -32,32 +34,37 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
         implements JStreamVertxParallelStreamProcessor<K, V> {
 
     /**
-     * The stream of results, constructed from the Queue {@link #userProcessResultsStream}
+     * The stream of results, drained from {@link #userProcessResultsStream} as they arrive and ending when
+     * this processor closes.
      */
     private final Stream<VertxCPResult<K, V>> stream;
 
     /**
-     * The Queue of results
+     * The queue of results, filled by the worker threads and drained by whoever consumes the stream.
      */
-    private final ConcurrentLinkedDeque<VertxCPResult<K, V>> userProcessResultsStream;
+    private final BlockingQueue<VertxCPResult<K, V>> userProcessResultsStream;
 
     /**
      * Provide your own instances of the Vertx engine and it's webclient.
      * <p>
-     * Use this to share a Vertx runtime with different systems for efficiency.
+     * Use this to share a Vertx runtime with different systems for efficiency. An instance you supply stays yours
+     * to close - this processor leaves it running when it closes; pass {@code null} for either and this processor
+     * builds, owns and closes that one itself. The full contract is on
+     * {@link VertxParallelEoSStreamProcessor#VertxParallelEoSStreamProcessor(Vertx, WebClient, ParallelConsumerOptions)}.
      */
     public JStreamVertxParallelEoSStreamProcessor(Vertx vertx,
                                                   WebClient webClient,
                                                   ParallelConsumerOptions<K, V> options) {
         super(vertx, webClient, options);
 
-        this.userProcessResultsStream = new ConcurrentLinkedDeque<>();
+        this.userProcessResultsStream = new LinkedBlockingQueue<>();
 
-        this.stream = Java8StreamUtils.setupStreamFromDeque(this.userProcessResultsStream);
+        this.stream = Java8StreamUtils.setupStreamFromQueue(this.userProcessResultsStream, this::isClosedOrFailed);
     }
 
     /**
-     * Simple constructor. Internal Vertx objects will be created.
+     * Simple constructor. This processor builds its own Vertx engine and web client, owns both, and closes both when
+     * it closes.
      */
     public JStreamVertxParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> options) {
         this(null, null, options);

@@ -11,7 +11,7 @@ package bz.stub.parallelconsumer.offsets;
  *
  * @author Antony Stubbs
  */
-// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
+// Hand-written ctors (not Lombok @StandardException) - see PCInternalRuntimeException for why.
 public class RunLengthV1EncodingNotSupported extends EncodingNotSupportedException {
 
     public RunLengthV1EncodingNotSupported(String message) {

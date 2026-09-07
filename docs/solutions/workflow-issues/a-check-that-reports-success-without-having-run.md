@@ -60,6 +60,7 @@ the prompt to add a working one.
 | `bin/check-copyright-headers.sh` | Exits 0 with a warning when there is no fork point (shallow clone) | `COPYRIGHT_CHECK_REQUIRE_FORK_POINT: "1"` in CI |
 | Maven's own model validation | Degrades a plugin declared without a version to a `[WARNING]` that scrolls past in a long log | `requirePluginVersions` enforcer rule (astubbs/parallel-consumer#259) |
 | GitHub's managed *Automatic Dependency Submission (Maven)* | Failed on every run it ever made, `master` included - repo-wide, not any one PR's doing - and went unnoticed because it is not a required check | Turned back off, with the re-enable trigger written down |
+| `bin/lincheck-test.sh`'s did-anything-run guard | Counted surefire reports left in `target/` by **any previous run**, so a lane that selected zero classes scored a healthy count. A nonexistent test class "passed" | Reports deleted before the run, and the count asserted against the exact expected roster (astubbs#347) |
 
 The first six fail open. The last fails closed and was ignored anyway, which is the same outcome by a
 different route: **a check nobody gates on is a check nobody reads.**
@@ -208,6 +209,35 @@ Not every instance gets a guard script.
   `.github/workflows`. It was switched back off rather than left permanently red-and-ignored, with the
   condition for re-enabling it written down.
 
+### 7. A count is only evidence if this run produced the thing being counted
+
+The guards in sections 2-3 answer *did this actually happen* from the artifacts the tool leaves
+behind. That works only while the artifacts are this run's. Point the same guard at a **shared,
+persistent location** and it can no longer tell *"this run produced nothing"* from *"a previous run
+produced something"* - and those are the two states the whole guard exists to separate.
+
+The OSS Index client cache in section 5 is one instance; a build output directory is the more common
+one, because nobody thinks of `target/` as a cache. `bin/lincheck-test.sh` shipped counting
+`surefire-reports/TEST-*Lincheck*.xml` to prove the lane had selected classes, which is exactly the
+right *kind* of evidence - structural, from the artifact - and it read files from whatever ran last.
+A deliberately misspelt test class produced a confident green.
+
+Two fixes, and the second is the one usually skipped:
+
+- **Delete the artifacts before the run**, so a non-zero count can only mean this run wrote them.
+  `clean` would do it too, at the cost of rebuilding every time; deleting just the reports the guard
+  reads keeps the lane incremental and is a narrower claim anyway.
+- **Assert the expected count, not merely a non-zero one.** Zero is the loud failure; a *short* count
+  is the quiet one. If three of five harnesses stop being selected - a rename, a dropped tag, a
+  changed include pattern - a `-gt 0` guard still passes and the summary still prints a healthy
+  number, which is this same class one step in. Pinning the roster means adding a harness fails until
+  the expected number is updated; that friction is the check, because a harness the lane silently
+  stopped running is indistinguishable from one that never existed.
+
+The generalisation worth carrying: **a guard reading a location it does not own needs to establish
+provenance, not just presence.** `bin/check-review-posted.sh` gets this right by construction - it
+matches *this run's* id in the posted comment rather than asking whether any comment exists.
+
 ## Why This Matters
 
 A silent-green check does two kinds of damage, and the second is the expensive one:
@@ -233,6 +263,7 @@ observable is identical:
 - The mirror image, one line away in a workflow: `mvn ... | tee log` **without** `set -o pipefail`
   takes `tee`'s exit status, so a Maven `BUILD FAILURE` leaves the step green. Piping a build's
   output anywhere is enough to lose its verdict.
+<!-- file-refs: N/A - names bin/check-shell-sigpipe.sh, retired 2026-09-01 when its single rule became a row in bin/lib/source-patterns.mjs. This is a dated record of what was true then and docs/citations.md forbids rewriting it to match today's tree. -->
 
 ## When to Apply
 
@@ -301,3 +332,11 @@ A guard for this class has to say *which* kind of red it is.
   guard beside it.
 - astubbs/parallel-consumer#281 - retiring the standing backlog, which is what let findings become
   fatal.
+
+## Related
+
+[`an-inert-analysis-config-reads-as-a-clean-codebase.md`](an-inert-analysis-config-reads-as-a-clean-codebase.md) owns the neighbouring case this doc's model has no slot for: the tool **ran**, and
+enforced faithfully, against a configuration that never reached it - so there is no "could not run"
+state to detect. Its instances are a SpotBugs filter that matched nothing, a compiler flag in a dead
+Maven profile, a control arm that reddened on an unrelated rule, and a mutation lane green on 40 runs
+having scored nothing. The piped `$?` trap this doc closes on is shared between them.
