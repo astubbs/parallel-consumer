@@ -144,6 +144,6 @@ The commit only added a null-epoch guard. The range `2020-2022` was correct. The
 
 - [`docs/copyright.md`](../../copyright.md) - the codified rules (authoritative source)
 - `bin/check-copyright-headers.sh` + `bin/test-check-copyright-headers.sh` - the enforcement and its self-tests (PR astubbs#90)
-- `.github/workflows/copyright.yml` - CI enforcement
+- CI enforcement - a dedicated copyright workflow when this was written, since folded into the `repo: hygiene` sweep (2026-09-07); the file as this document read it: `git show c668acbfa:.github/workflows/copyright.yml`
 - `NOTICE` file at repo root - legal attribution structure
 - `pom.xml` - binds the scanner to the `validate` phase behind `<copyright.skip>`; the mycila license plugin it used to configure was removed in PR astubbs#124
