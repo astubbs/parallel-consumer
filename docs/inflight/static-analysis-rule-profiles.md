@@ -145,8 +145,8 @@ Every suppressed rule was *meant* to carry a `profile:` marker - `old` or `new` 
 the Error Prone one, whose Tier 2 table (`| Check | Count | Why off | Turns back on when |`) has no
 such column; only its ranked top three are classified. Finish that before wiring anything, or the
 gate will have nothing to read for the largest suppressed set in the repo. Nothing about enforcement
-changed: the engines still run whole-tree with the same suppressions, so this PR's
-behaviour is identical with and without the markers. What the markers buy is that the split is
+changed: the engines still run whole-tree with the same suppressions, so enforcement
+is identical with and without the markers. What the markers buy is that the split is
 recorded **while somebody has the context to make it**, which is the perishable half. Deciding that
 `EI_EXPOSE_REP` is wrong-for-this-codebase while `CT_CONSTRUCTOR_THROW` is merely blocked-by-legacy
 takes knowing why each was switched off; wiring a diff filter does not.

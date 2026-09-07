@@ -57,6 +57,122 @@ call. astubbs#175 has no decision left in it; its one live strand is the AB-BA w
 <!-- post-merge: checked - names that PR as the work the strand belonged to, in the past tense, so it reads the same once it has landed -->
 astubbs/parallel-consumer#29 carried.
 
+## Proposals from the 2026-09-07 vetting sweep, ranked by how little input each needs
+
+The first grooming sweep ([`docs/grooming.md`](../grooming.md)) re-read every open note against the
+tree. Where a note was owner-gated - a `bug` at `stall` or worse, a `release-` note, a public-API
+contract - the agent wrote what it found into the note's `inflight-vetted` marker as `PROPOSED` and
+changed nothing else. `grep -l 'inflight-vetted:.*PROPOSED' docs/inflight/*.md` is the live list;
+each marker carries the evidence in full, so this section is only the order and the ask. Accepting
+one means applying the outcome and replacing the marker with a plain stamp; declining means a stamp
+saying so. Like the section above, the order is cost of the reply, not importance.
+
+**Yes/no, the evidence is complete and the outcome is mechanical:**
+
+1. **Close** `ci-merge-guard-fails-open-on-bsd-stat.md` - both halves shipped (the hook probes the
+   platform and fails closed; `repo-hygiene.yml` has a macOS lane).
+2. **Close** `ci-the-coverage-uploads-still-use-the-inert-glob.md` - its own delete-when holds: the
+   two flags now report different figures on master.
+3. **Close** `bug-shared-collections-across-the-poll-boundary.md` - both named defects fixed on
+   master; the branch it tracks is far behind with no PR.
+4. **Correct the counts** in `static-sneaky-throws-blind-the-analysers.md`, title included - the
+   marker holds today's figures and the command that yields them.
+5. **Rewrite Blocker 2** of `static-infer-threadsafe-is-blocked-by-third-party-interfaces.md` - the
+   method it rests on no longer exists; the map is installed once at construction.
+6. **Shrink** `test-retry-queue-behaviour-untested.md` to its two unasserted bullets - four
+   `RetryQueue*` test classes now exist and the first bullet is fixed.
+7. **Shrink** `bug-torn-read-family.md` to the racing-double unification and the next hunt - every
+   candidate it tracks is fixed and verified in the tree.
+8. **Shrink** `bug-177-commit-response-timeout-unreproduced.md` and
+   `bug-857-mirror-attributions-unconfirmed.md` to their astubbs#175 halves - astubbs#177 closed on
+   2026-09-01 with no comment naming both candidates, which is the outcome both notes warned about.
+9. **Shrink** `ci-codecov-flags-not-like-for-like.md` - the first item is discharged and the two-band
+   jumps stopped after astubbs#464; the mechanism is still unproven, which is what remains.
+10. **Shrink** `ci-bsd-portability-gaps.md` - item 3 landed as `gnu-bsd` rows in the shell-hazards
+    gate; items 1 and 2 stand.
+11. **Shrink** `bug-stale-sweep-iterator-evicts-fresh-replacement.md` - the remove-by-key defect is
+    live; the iterator half was closed by astubbs#336 and the note's middle section contradicts it.
+12. **Shrink** `bug-857-transactional-revoke-wait.md` - the defect is intact; "no open PR addresses
+    it" is false (astubbs#408, draft), the named branch is gone, and both `file:line` citations are
+    wrong.
+13. **Shrink** `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the defect is intact; "not
+    started, no design agreed" is false, astubbs#431 is the open fix and `RetryQueue.remove`'s own
+    javadoc names it.
+14. **Shrink** `upstream-173-revocation-duplicate-processing.md` to the unposted draft - the adoc
+    misdirection it was filed against has already been corrected to REFUTED.
+15. **Shrink** `core-unmailboxed-container-recovery.md` - the "where it surfaces" half is overtaken
+    (`failFatallyOnUnmailboxableRecord` shipped); the recovery blind spot itself is still real.
+16. **Shrink** `test-chaos-teardown-double-close.md` - item 2 is half fixed (`markStopRequested()`
+    is called; `closePending` is still never set for a drain).
+
+**A judgement, not a yes/no:**
+
+17. **Merge** `bug-wedged-after-poisoned-transaction.md` into
+    `bug-poisoned-transaction-not-aborted-while-running.md` - its own question is answered in-file
+    and the residue duplicates the sibling. Which note survives is the call.
+18. **Shrink** `bug-857-family.md` (astubbs#29 merged with its fix; the fourth and fifth strands are
+    still unexplained) **and decide its type** - it describes itself as a register and is typed
+    `bug`, which is load-bearing for the owner gate.
+19. **Re-premise** `core-139-public-api-thread-safety-contract.md` - `state` is volatile now, so the
+    note's central claim moved; what remains is the non-atomic pause/resume transitions and the
+    absent per-method contract, which is the 1.0 blocker proper.
+20. **Shrink** `release-0.6.0.0.md` and `release-0600-blockers.md` - the mirror paragraph is stale
+    (only astubbs#161 and astubbs#181 still need a reply), astubbs#444 has merged, and the quarantine
+    registry is the enforced copy of what still blocks; one plainly false line was corrected in
+    place.
+
+## What gates v6, as the sweep read it
+
+[`release-when-is-v6-good-enough.md`](release-when-is-v6-good-enough.md) set the bar as "the bugs
+that are already open". Six area sweeps each named what they read as gating; this is the union,
+ordered by user-visible consequence, with the confidence each agent stated. The mechanical gate
+comes first because nothing else matters until it clears.
+
+- **The quarantine registry is non-empty, and every entry is unowned.** `release.yml` refuses the
+  cut while [`docs/quarantined-tests.md`](../quarantined-tests.md) lists anything; read that file,
+  not this line.
+- **Verified defects, in the code as written today:**
+  1. `bug-857-transactional-revoke-wait.md` - the unbounded wait inside the revoke callback; a user
+     report with upstream's verified-bug label; fix drafted as astubbs#408.
+  2. `core-revoke-commit-skips-the-work-mailbox-drain.md` - a deterministic exactly-once break on a
+     reachable commit path, with a quarantined red proof and `TransactionalClaim` C9 at REFUTED
+     while the README promises otherwise.
+  3. `bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md` - in the default commit
+     mode, a dead poll thread holds its partitions for `max.poll.interval.ms`; traced end to end,
+     untested, unfixed.
+  4. `pr-431-must-pair-its-queue-removal-with-the-shard-removal.md` with
+     `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the retry-queue orphan window; master
+     is still shard-first and astubbs#431 is a draft.
+  5. `bug-unvalidated-batchsize.md` - `batchSize(0)` silently processes nothing; one `validate()`
+     bound closes all three shapes (astubbs#311). The cheapest real fix in the set.
+  6. `bug-max-failure-history-is-inert.md` - a public option that does nothing; removing it is
+     breaking, so it is settled before the major or carried forever.
+  7. `bug-offset-commit-timeout-does-two-jobs.md` - the default makes a retry unreachable; the fix is
+     a design choice among three.
+  8. `bug-162-offset-state-truncation.md` - a WARN operators alert on, firing falsely for every new
+     group; decision 5 in the section above.
+  9. `bug-unbounded-log-lines.md` - record keys and values printed at WARN on a line that asks to be
+     pasted into a public issue; cheap to fix.
+- **Contract and compatibility, where a major is the only window:**
+  `core-139-public-api-thread-safety-contract.md` (see proposal 19),
+  `core-bytearray-encodings-have-no-codec.md` (two magic bytes),
+  `core-pc-owns-the-clients-it-uses.md` (the consumer-instance option).
+- **Instruments the release decision is read through, currently lying or unproven:**
+  `test-chaos-autopsy-omits-fleet-violations.md` (a clean autopsy after a fleet-violation kill,
+  confirmed in code), `test-perf-lane-asserts-a-deadline-on-a-varying-machine.md` (a required check
+  that fails on arithmetic), `test-no-progress-window-may-not-transfer-to-w1.md` (sightings at the
+  bound, none replayed), `ci-codecov-flags-not-like-for-like.md` (proposal 9),
+  `ci-broker-container-exit-126-is-undiagnosable.md`.
+- **Decisions, not engineering:** the astubbs#161 and astubbs#181 replies (items 1 and 2 at the top
+  of this file); the "is it enough?" call, whose own target date has passed; and astubbs#257's
+  changelog wording, which has one window because the section is generated from the log.
+- **Read as not gating, by the agent that vetted each:** the new modules (astubbs#271, astubbs#269,
+  astubbs#268 - capabilities, not defects); the `deps-` majors; every `issue-response-*` draft; the
+  `static-` registers (advisory lanes); the `branch-` notes; the `test-debt` and feature notes; the
+  unfenced `PartitionState` booleans and the plain-int counter (real, unmeasured, possibly absorbed
+  by the shared-nothing rework); and the poisoned-transaction pair, where today's behaviour is
+  strictly better than what it replaced.
+
 ## Ready picks
 
 Collisions are in `pr-blockers-and-collisions.md`. The ranked backlog and full verdicts live in

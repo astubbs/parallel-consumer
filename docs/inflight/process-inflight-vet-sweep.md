@@ -1,38 +1,38 @@
-# The v6 vetting sweep of these notes - what is in flight and how it lands
+# The 2026-09-07 vetting sweep - what is left after it landed
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
 
-**One tooling branch, six area branches stacked on it, merged in that order.** `process/inflight-vet`
-carries `bin/inflight.mjs vet`, the `inflight-vetted` marker and the "Vetting a note" section of
-[`AGENTS.md`](AGENTS.md). Each `process/inflight-vet-<area>` branch is one agent's sweep of one
-filename-prefix area (`ci`, `test`, `core`, `bug`, `rest` = static/branch/upstream/pr, `rest2` =
-issue/release/process/perf/deps and the singletons), cut from the tooling branch so the marker and
-the gate exist when they stamp. One file per note is what lets six sweeps run at once without a
-conflict; the area branches touch no shared file except by migration into `docs/refactoring.md` or
-`docs/solutions/`, which a reader resolves by hand when two do.
+The first grooming sweep of these notes ran on 2026-09-07: one tooling branch, six area branches
+stacked on it (one agent per filename-prefix area), merged back one at a time. The procedure it
+followed and the traps it met are in [`docs/grooming.md`](../grooming.md), which owns them; this
+note holds only what the sweep left open. `node bin/inflight.mjs vet` is the progress view and this
+note does not repeat its counts.
 
-`git branch --list 'process/inflight-vet*'` and `bin/worktree-status.sh` are the live state; this
-note does not repeat them.
+## What is left
 
-## What the sweep produces, and where each result goes
-
-- **A stamped or re-stated note** stays where it is. `bin/inflight.mjs vet` is the progress view:
-  the unvetted count is what is left.
-- **`PROPOSED` markers on owner-gated notes** - a `bug` at `misdirection` through `stall`, every
-  `release-` note - are the decisions the sweep could not take.
-  `grep -l 'inflight-vetted:.*PROPOSED' docs/inflight/*.md` lists them. When the area branches have
-  merged, those proposals are consolidated into
-  [`process-candidate-ranking.md`](process-candidate-ranking.md)'s "Decisions waiting on the
-  maintainer" section, ranked by how little input each needs - the same rule that section already
-  states - and the markers are then resolved one way or the other.
-- **The v6 gating list** - which still-open bugs the release waits on - is the last output. It is
-  written into the ranking register, not into a new note, and not into
-  [`release-when-is-v6-good-enough.md`](release-when-is-v6-good-enough.md), whose job is the
-  "is it enough?" question rather than the blocker list.
+- **The owner's pass over the proposals.** Every owner-gated note the sweep read as anything but
+  "still true" carries a `PROPOSED` marker; they are consolidated and ranked in
+  [`process-candidate-ranking.md`](process-candidate-ranking.md) under "Proposals from the
+  2026-09-07 vetting sweep". Accepting one applies the outcome and replaces the marker with a
+  plain stamp; declining replaces it with a stamp saying so. Until then the markers stand, and
+  `grep -l 'inflight-vetted:.*PROPOSED' docs/inflight/*.md` is the list.
+- **The v6 gating reading** is in the same register, under "What gates v6, as the sweep read it".
+  It is the agents' reading, stated with their confidence, not a decision.
+- **Three shape questions the sweep raised and did not settle**, each the owner's call because it
+  changes what the gate or the index does with the note:
+  - `next-transactional-register-hardening.md` keeps a `next-` prefix the directory's rules retired;
+    renaming breaks citations, which is why the sweep left it.
+  - `bug-857-family.md` calls itself a register and is typed `bug` (proposal 18 in the register).
+  - `static-guardedby-is-inert-on-readwritelock-guarded-state.md` is a `register` carrying
+    `misdirection`, an impact the vocabulary table lists for `bug` only; the gate accepts it.
+- **`issue-index.md` cannot be regenerated safely**: `bin/issue-index.sh`'s header template lacks
+  the hand-added "the inverse failure is real too" paragraph, so a run would delete it. The index
+  was stamped with its drift recorded instead. Fold the paragraph into the script's template before
+  the next regeneration.
 
 ## Delete when
 
-The six area branches have merged, the `PROPOSED` markers have been consolidated into the register
-and resolved, and the v6 gating list is in the register. Then this note has nothing left that a
-command or the register does not say.
+The proposals above have all been accepted or declined, the three shape questions are answered,
+and the issue-index template carries its paragraph. Then everything here is either in the register
+or answered by a command.
