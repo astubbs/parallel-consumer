@@ -64,9 +64,9 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
 <!-- post-merge: checked-begin -->
 - **The rest of astubbs#197's triage list**, minus the ones that have since been picked up (an
   `OffsetEncoding` magic-byte hazard in astubbs#217, the "Max loading factor steps reached" WARN in
-  astubbs#201). Still open: MDC context is not captured at submit time, so a caller's `trace_id` is
-  lost into the worker pool and the vert.x event loop; and `release.yml` publishes an empty GitHub
-  Release body, so the curated changelog never reaches the release page.
+  astubbs#201, MDC propagation in astubbs#205). Still open: `release.yml` publishes an empty GitHub
+  Release body, so the curated changelog never reaches the release page - astubbs#199 is the fix,
+  and the tracker's checklist box for MDC on astubbs#197 is still unticked though the work landed.
 <!-- post-merge: checked-end -->
 - **After it ships:** ~11 mirrored issues describe 0.6.0.0 in the future tense and need the real
   coordinate; astubbs#186, astubbs#188 and astubbs#195 close with a pointer to the release.

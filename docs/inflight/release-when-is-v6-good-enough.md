@@ -1,4 +1,4 @@
-# When do we ship v6? The "enough is enough" decision, not the blocker list
+# When do we ship v6? Decided: a bug release, overdue - and the burn-down to cut it
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: release-gate -->
@@ -11,59 +11,259 @@ a note gets its own line in the session-start index. This question needs to be *
 The other two release notes answer different questions and neither answers this one:
 [`release-0.6.0.0.md`](release-0.6.0.0.md) is the content and the breaking-change record;
 [`release-0600-blockers.md`](release-0600-blockers.md) is correctness of the artefacts we are about
-to publish. **Both answer "is it ready?". This one asks "is it enough?"** - which is a judgement, not
-a checklist, and no gate will ever go red for it.
+to publish. **Both answer "is it ready?". This one asks "is it enough?"** - and, since 2026-09-08,
+it also carries the burn-down that gets from here to the tag, because the answer to "is it enough"
+turned out to be "yes, once the fixes already built are merged", and that is a list.
 
-## The tension, stated so it can be argued with
+## The decision, 2026-09-08
 
-**People are more likely to look at a first release than a second.** For a revived fork that is
-sharper than usual: the attention comes once, when the project visibly comes back to life. A second
-release does not get a second launch.
+**v6 is a bug release. It is overdue. The bar is the one already stated** in
+[`release-0.6.0.0.md`](release-0.6.0.0.md) under *"This release is a stability release, and that is
+the point"* - nothing else has to be true. The three questions the previous version of this note
+left open are answered:
 
-Which creates real pressure to cram v6 - to make the one release anyone definitely looks at carry
-everything worth seeing. That pressure is why this note exists rather than a bare "ship when the
-blockers close": the failure mode is not shipping something broken, it is **never shipping**, with
-each addition individually justified.
+- **What is the bar?** Stability release, and that is the whole bar.
+- **Which open items are genuinely v6?** The merge queue below, and only it. Everything that is
+  finished but does not fix a currently-open defect follows in a later release. A thing being ready
+  is not a reason to ship it in this one.
+- **Does the roadmap announcement have to be simultaneous?** No. Its plan is astubbs#446; it can
+  land before the tag and take pressure off sooner. The announcement is what lets the first release
+  be a bug release without being the only thing anyone sees.
 
-## What resolves it
+**The mental hurdle, named so it stops steering.** The owner's instinct is that the first fork
+release has to be impressive. The record says otherwise: the delta since 0.5.3.3 is the largest
+this codebase has ever shipped in one version - the confluentinc#857 commit deadlock, the torn-read
+family, the metrics leak, offset accuracy on assignment, the async-commit acknowledgement, the
+package rename, MDC propagation, the log-noise fixes, and the chaos and Lincheck lanes that guard
+them. A second release gets a smaller launch, but the roadmap announcement is what people read for
+"what is coming", and that is decoupled from the tag. Perfect is what has kept this release from
+shipping since the 26 August date passed; the previous version of this note said the failure mode
+was never shipping, and that is the failure mode that occurred.
 
-**Announce the roadmap alongside the release.** If people hear what is coming, the first release
-does not have to be the only thing they see. That decouples "what ships in v6" from "what people
-learn about the project", which is what the cramming instinct was really protecting.
+**"Draft" on a fork PR means "needs the owner to review and merge", not "unfinished".** Every PR in
+the queue below is implemented, tested and green on everything except the human-LGTM gate and, where
+it stacks, the dependency gate. `gh pr list -R astubbs/parallel-consumer` shows near enough every
+PR as a draft, so the state flag carries no information here; what a PR still needs is written
+against it below, because that is the part `gh` cannot say.
 
-The roadmap data already exists (`docs/data/roadmap.yaml`, `docs/features/`), so this is a
-publishing decision rather than new work - which is exactly why it can be decided rather than built.
+## Proposed cut-off and order of work
 
-## The date, set 2026-08-24
+**Proposal, for the owner to confirm or amend:** the merge queue closes today. Nothing joins it that
+is not already a fix for an open defect with a PR. Anything astubbs#471's soak or a chaos lane finds
+after today is a 0.6.0.x unless it is data loss on a default configuration, and then it joins tier 1.
+Tag when tier 3 is done, not when the "can follow" list is empty.
 
-**Target: Wednesday 26 August 2026**, and it is the fork announcement rather than a routine tag - the
-roadmap publishes alongside it, which is the resolution above being taken rather than deferred. Every
-piece of work in flight now is to be judged against that launch: not "is this good?" but "does this
-have to be in the thing people look at once?"
+The order is chosen so that every merge is independently shippable - if the queue stops anywhere,
+what is on master is still a release.
 
-**It is gated on the bugs that are already open, not on scope.** Anything not fixing one of those is
-arguing to be in a release it does not block - which is the cramming instinct this note exists to
-name. The bar the date sets is therefore narrower than the one under "Still open": those questions
-remain live, but a proposal that cannot point at a currently-open bug does not need them answered to
-be declined.
+### Tier 1 - self-contained fixes, any order, each blocked only on LGTM
 
-A date makes the failure mode concrete. Until now the risk was never shipping, with each addition
-individually justified; with a date the risk becomes shipping the date and quietly dropping the
-announcement or the roadmap, which are the parts that make the release cost less than it looks.
+Data-shaped and stall-shaped, no design question open, no stack. These are the release.
 
-## Still open
+- [ ] **astubbs#470** - an async commit counts as committed when the broker answers, not when it is
+  sent. Silent loss on the shipped default commit mode. Closes the
+  [`bug-async-commit-marked-successful-before-broker-ack.md`](bug-async-commit-marked-successful-before-broker-ack.md)
+  note; serves astubbs#248.
+- [ ] **astubbs#466** - the revoke-path commit drains the work mailbox first. In transactional mode a
+  rebalance could publish a transaction whose offsets omitted records it contained - duplicates on
+  the next owner. Fixes what astubbs#436 diagnosed and quarantined; **its merge is what clears the
+  last quarantine entry**, which the release guard blocks on.
+- [ ] **astubbs#468** - the stale sweep removes only the container it inspected, never a fresh
+  replacement racing in from the controller. Rebalance-shaped.
+- [ ] **astubbs#469** - the two remaining `PartitionState` flags that cross threads, measured and then
+  fenced or redesigned. The follow-on astubbs#349 deliberately left.
+- [ ] **astubbs#431** - the rebalance callbacks decline the retry queue's write lock instead of waiting
+  for it. A stall from the confluentinc#857 defect-class sweep; its three prerequisites merged
+  2026-09-07.
+- [ ] **astubbs#473** - clears the other two quarantine entries by fixing what they were about. Merge
+  after astubbs#466 so the registry empties in one direction.
 
-- **What is the actual bar for v6?** "Stability release" is stated in `release-0.6.0.0.md` under
-  *"This release is a stability release, and that is the point"*. Is that the whole bar, or does
-  something else have to be true?
-- **Which currently-open items are genuinely v6, and which are v6 only because they are finished?**
-  A thing being ready is not a reason to ship it in this release.
-- **Does the roadmap announcement have to be simultaneous with the release**, or can it precede it
-  and take some of the pressure off sooner?
+### Tier 2 - the producer-recovery stack, bottom-up, in this order
 
-Nothing here is blocked on engineering. It is blocked on the call.
+astubbs#225 (survive producer fencing rather than dying) is a feature, but two open **defects** are
+stacked on it and cannot land without it: the poisoned-transaction wedge and the transactional
+revoke wait that carries upstream's verified-bug label. That is why the stack is in a bug release.
+Each rung was re-cut on 2026-09-07 so it can be reviewed against pieces already reviewed.
 
-**High priority, and it needs a conversation rather than a PR.** Flagged as needing discussion by
-the owner on 2026-08-19, explicitly NOT as work to fold into whatever PR is open at the time - a
-scope judgement decided in passing, inside a branch about something else, is exactly how the
-cramming happens. Take it on its own.
+- [ ] **astubbs#472** - the vocabulary and plumbing: what the broker reports, how PC builds another
+  producer. Changes no behaviour.
+- [ ] **astubbs#474** - keep every completed record until the commit that carries it succeeds. The
+  exactly-once argument of recovery, on its own.
+- [ ] **astubbs#410** - recovery itself. Closes astubbs#225.
+- [ ] **astubbs#434** - abort a transaction poisoned by a terminal send failure. The wedge in
+  [`bug-wedged-after-poisoned-transaction.md`](bug-wedged-after-poisoned-transaction.md) and
+  [`bug-poisoned-transaction-not-aborted-while-running.md`](bug-poisoned-transaction-not-aborted-while-running.md).
+- [ ] **astubbs#408** - a revocation declines the transaction lock instead of waiting on it. Closes
+  astubbs#44 (confluentinc#803). **The one PR in the queue with real reds** - checklist, hygiene,
+  the macOS shell lane and the heavy integration shard - so it needs work, not just a merge. Its
+  design question was settled by stacking on astubbs#410.
+- **astubbs#420** - derive the `transactional.id`, the enforced factory, config redaction. Producer
+  ownership polish stacked above recovery. **Proposed: after v6.** It fixes no open defect.
+
+### Tier 3 - release plumbing, then tag
+
+- [ ] **astubbs#199** - publish the curated changelog section as the GitHub Release body. Without it
+  the release page is empty.
+- [ ] **astubbs#446** - lift the announcement plan onto master, so the announcement is not being
+  written from a branch nobody merges.
+- [ ] The artefact checks in [`release-0600-blockers.md`](release-0600-blockers.md) - regenerate the
+  changelog and confirm the breaking bullet still names both the `groupId` and the packages; re-read
+  the maturity wording now that the critical-defect gate has moved.
+- [ ] Amend the release claim, not the standard, for what is still open in the confluentinc#857
+  family below. The claim is "every known **critical** defect resolved and evidenced", and the
+  family is not closed - say which mechanisms are, and which sightings remain unattributed.
+- [ ] Post the drafted issue responses (`ls docs/inflight/issue-response-*.md` and
+  [`release-0.6.0.0-issue-response-drafts.md`](release-0.6.0.0-issue-response-drafts.md)) in the
+  pre-release sweep [`docs/releasing.md`](../releasing.md) describes.
+- [ ] Tag. Then the after-it-ships items in `release-0600-blockers.md` and astubbs#197.
+
+### Can follow - finished or nearly, and deliberately not v6
+
+Named so nobody re-argues them in: astubbs#352 (commit-failure seam - a feature, even though
+confluentinc#833's reporter patched the library for it), astubbs#226 (health check), astubbs#306
+(offset density), astubbs#360 (virtual threads), astubbs#471 and astubbs#405 (soak and torture
+harnesses - test infrastructure, unless a run finds a data-loss defect), and every Streams, proxy,
+perf, rate-limiting and dashboard stack.
+
+## What v6 must say about the confluentinc#857 family
+
+[`bug-857-family.md`](bug-857-family.md) owns the evidence; its retirement rule is that every
+mechanism is individually explained or closed, so the family does not close with the release.
+What v6 ships, and what the release note has to be honest about:
+
+**Closed on master** (each with its guard): the poll/control commit deadlock (astubbs#29), the
+poller death on `RebalanceInProgressException` (astubbs#100), the draining busy-spin (astubbs#80),
+the orphaned retry entry (astubbs#346), the poll-thread NPE (astubbs#345), the load-gate phantom
+counts (astubbs#336), the sign-reversed shard count (astubbs#373), the retry-queue orphan window
+(astubbs#437), a revoke surviving a failed assignment (astubbs#451). The lag-stagnation line was
+demoted to a timing proxy, and astubbs#444 measured the large-instance residual as group-protocol
+churn rather than a PC defect.
+
+**Still open, and the release note names each:**
+
+- The transactional revoke wait, astubbs#44 (confluentinc#803) - astubbs#408 in tier 2.
+- An eager-mode (`PERIODIC_CONSUMER_SYNC`) stall that reproduces on trees carrying astubbs#29's fix
+  (the family note's "fourth open item"). Unattributed.
+- A rebalance stall in async unordered mode from `MultiInstanceRebalanceTest` (the "fifth open
+  item"), blocked on progress-tracker instrumentation that does not exist yet. Unattributed.
+- `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on idle runners, so they read as
+  starvation rather than a wedge. Not a confirmed defect; not ruled out either.
+- A dead broker-poll thread leaves the consumer open in consumer-commit modes, no LeaveGroup until
+  `max.poll.interval.ms` -
+  [`bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md`](bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md).
+  Diagnosed 2026-09, no PR. **Decide: v6 or 0.6.0.x.** Proposed: 0.6.0.x, since the instance does
+  recover once the broker evicts it.
+
+## What v6 must say about data loss and duplicates
+
+- **Fixed in the queue:** the async-commit acknowledgement (astubbs#470); the revoke-path
+  transaction omitting offsets (astubbs#466); the poisoned-transaction wedge (astubbs#434).
+- **Fixed on master:** the torn-read family
+  ([`bug-torn-read-family.md`](bug-torn-read-family.md) - astubbs#337, astubbs#344, astubbs#345,
+  astubbs#346, astubbs#349); a terminally failed send publishing half a result set (astubbs#261);
+  the produce-lock double release (astubbs#257); `InvalidPidMappingException` looping
+  (astubbs#429).
+- **By design, needs a documentation reply, not a fix:** in-flight work at revocation is redelivered
+  (confluentinc#777, [`upstream-173-revocation-duplicate-processing.md`](upstream-173-revocation-duplicate-processing.md)).
+  One chaos cell (cooperative plus draining) was predicted and never run; a revocation grace period
+  is an owner decision.
+- **Open, no PR:** the "reset to earlier offset" replay branch behind confluentinc#546
+  ([`bug-162-offset-state-truncation.md`](bug-162-offset-state-truncation.md)) is an untested
+  hypothesis. **Proposed: 0.6.0.x**, and say so in the release note rather than claim it.
+- **Never reproduced:** the commit-response timeout (confluentinc#809, confluentinc#833). astubbs#471
+  is the first experiment that hunts it, and its first runs found a stall. Not a v6 gate; the
+  release note says the symptom's known causes are fixed and the reports were never reproduced.
+
+## Known unknowns the release note should not paper over
+
+- Whether the six deadlock captures that verified astubbs#29's mechanism ever replay clean **with
+  the fix applied** - the owning solutions doc still says "unproven".
+- Whether the shard-displacement orphan window
+  ([`bug-shard-displacement-orphans-the-retry-queue-entry.md`](bug-shard-displacement-orphans-the-retry-queue-entry.md))
+  is reachable in production.
+- Whether "rejoin" after producer fencing is expressible in PC's lifecycle - flagged in
+  [`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md) as needing
+  investigation; astubbs#410 is the answer under review.
+- Which of the flakes in [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) are
+  load-shaped and which are real - the three module `simpleBatchTest` failures have the most
+  sightings and no diagnosis.
+- The maturity claim itself: `docs/data/module-maturity.yaml` carries a bare `production-use` next
+  to a conditional support posture, and a renderer can lift the bare value without its condition.
+  [`release-0600-blockers.md`](release-0600-blockers.md) owns the recheck.
+
+## Upstream items with no fix PR and no prepared response - surveyed 2026-09-08
+
+Every upstream open issue carries a fork reply from the 2026-08-05 mirror sweep pointing at its
+mirror, so nothing upstream is silent. What follows is what has **no fix PR, open or merged, and no
+draft response beyond that pointer**. Reproduce the survey rather than trusting this list: join
+`gh issue list -R confluentinc/parallel-consumer --state open`, the mirrors
+(`gh issue list -R astubbs/parallel-consumer --state all --label upstream-mirror`), fork PRs citing
+`confluentinc#N` (`gh pr list -R astubbs/parallel-consumer --state all --json title,body`), the
+manifest `src/docs/development/upstream-map.yaml`, and `scripts/upstream-sweep.sh --audit`.
+[`upstream-coverage-completeness.md`](upstream-coverage-completeness.md) owns the standing
+obligation; this section is one dated pass at it, kept here because the pre-release sweep is when
+these get answered.
+
+**Bugs with no fix PR:**
+
+- confluentinc#843 (astubbs#178) - same key on two threads across a rebalance. A contract question,
+  wait-for-info; [`core-178-key-order-across-a-rebalance.md`](core-178-key-order-across-a-rebalance.md).
+- confluentinc#546 (astubbs#162) - truncating state; the replay branch above.
+- confluentinc#551 (astubbs#164) - batching not as expected; the fork verified the over-request as
+  astubbs#311, no PR.
+- confluentinc#887 (astubbs#189) - a poison record re-forms the identical batch on every retry;
+  manifest says none.
+- confluentinc#777 (astubbs#173) - settled as by-design; the documentation reply and the grace-period
+  decision are what remain.
+- confluentinc#597 (astubbs#166, mirror closed as fixed) - the poller-death residual above.
+- confluentinc#803 (astubbs#44) - has astubbs#408, addressed on paper only until it merges.
+
+**Feature requests with nothing behind them** (no branch, PR or note beyond the mirror):
+
+- API surface: confluentinc#78 executor customisation, confluentinc#170 `CompletableFuture`,
+  confluentinc#520 safe consumer-API exposure, confluentinc#782 seek to offset, confluentinc#860
+  managed-executor params, confluentinc#879 no-commit option.
+- Error handling: confluentinc#304, confluentinc#391 and confluentinc#550 - deserialization failures,
+  the largest cluster of user asks with no design;
+  [`core-163-poll-path-has-no-error-seam.md`](core-163-poll-path-has-no-error-seam.md) confirms there
+  is no seam. confluentinc#718 terminate processing.
+- Batching and ordering: confluentinc#314 combine queues across partitions, confluentinc#560 min
+  batch plus max wait (roadmap: ideated), confluentinc#902 freshest record per key, confluentinc#321
+  large-message chunking.
+- Performance: confluentinc#322 disk-backed produce queue, confluentinc#394 least-loaded broker,
+  confluentinc#540 per-partition backpressure.
+- Docs and examples: confluentinc#171 Spring Boot example, confluentinc#178 fan-out with DLQ,
+  confluentinc#180 vert.x POST, confluentinc#115 tombstones javadoc.
+
+Two mirror labels overstate coverage: confluentinc#314 and confluentinc#394 carry `pr-available` on
+their mirrors, and no fork PR cites either.
+
+**Upstream open PRs with no fork action or comment:**
+
+- confluentinc#915 batch construction strategy - manifest none; the roadmap's batch-composition
+  decision is pending. A contributor is waiting on this one.
+- confluentinc#867 Vert.x 5 major - nothing in the fork.
+- confluentinc#908 virtual threads - the fork went its own way in astubbs#360 and replied on the
+  issue, never on the contributor's PR.
+- confluentinc#918, confluentinc#919, confluentinc#920, confluentinc#901 - each absorbed by fork work
+  (the log-noise fixes, `docs/building.md`, dropping the licence plugin), and none of the four PRs
+  has a comment saying so.
+
+**Unanswered conversations:**
+
+- confluentinc#894 got a follow-up on 2026-09-01 asking where interactive replay should live. Partly
+  vendor marketing; the only unanswered direct question upstream.
+- Upstream discussions with zero replies - `scripts/upstream-sweep.sh --audit` lists them;
+  [`upstream-discussions-unanswered.md`](upstream-discussions-unanswered.md) defers them to after v6.
+
+**Drafted and waiting, not gaps:** the `issue-response-*.md` drafts and the astubbs#337 drafts for
+confluentinc#894. [`upstream-tell-809-833-the-hang-is-fixed.md`](upstream-tell-809-833-the-hang-is-fixed.md)
+is stale in one respect: both reports already carry the 2026-08-05 fork reply, though neither has
+been told the fixes merged.
+
+## Delete when
+
+The tag is cut. Migrate first: the family and data-loss dispositions above go into the release note
+text and `docs/data/roadmap.yaml`'s `known-defects-cleared` entry; the upstream survey's residue goes
+to [`upstream-coverage-completeness.md`](upstream-coverage-completeness.md) if any of it is still
+unanswered after the sweep.
