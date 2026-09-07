@@ -61,7 +61,12 @@ public enum PCMetricsDef {
     OFFSETS_ENCODING_TIME("offsets.encoding.time", "Time spend encoding offsets", PCMetricsSubsystem.OFFSET_ENCODER, TIMER),
     OFFSETS_ENCODING_USAGE("offsets.encoding.usage", "Offset encoding usage per encoding type", PCMetricsSubsystem.OFFSET_ENCODER, COUNTER, tag("codec", "BitSet|BitSetCompressed|BitSetV2Compressed|RunLength")),
     METADATA_SPACE_USED("metadata.space.used", "Ratio between offset metadata payload size and available space", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY),
-    PAYLOAD_RATIO_USED("payload.ratio.used", "Ratio between offset metadata payload size and offsets encoded", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY);
+    PAYLOAD_RATIO_USED("payload.ratio.used", "Ratio between offset metadata payload size and offsets encoded", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY),
+
+    OFFSETS_RIDER_SIZE("offsets.rider.size", "Size in bytes of the rider your riderSupplier handed over, recorded once for each commit that carried one", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY, topicPartitionTags()),
+    OFFSETS_RIDER_DROPPED("offsets.rider.dropped", "Commits whose rider was shed to fit the offset metadata size limit - either over its own cap or squeezed out by the offset map, which is still committed", PCMetricsSubsystem.OFFSET_ENCODER, COUNTER, topicPartitionTags()),
+    OFFSETS_PAYLOAD_STRIPPED("offsets.payload.stripped", "Commits whose offset map did not fit the metadata size limit, so a bare offset was committed with no payload - the records below it may be replayed on rebalance", PCMetricsSubsystem.OFFSET_ENCODER, COUNTER, topicPartitionTags()),
+    OFFSETS_RIDER_SUPPLIER_FAILED("offsets.rider.supplier.failed", "Commits where your riderSupplier threw, so the commit carried no rider - the only signal that a rider-based feature has silently stopped working", PCMetricsSubsystem.OFFSET_ENCODER, COUNTER, topicPartitionTags());
 
     public static final String PC_INSTANCE_TAG = "pcinstance";
 

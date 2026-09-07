@@ -211,7 +211,9 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
     void ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding encoding) {
         assumeThat(encoding)
                 .as("Codec skipped, not applicable") // byte array not currently used
-                .isNotIn(ByteArray, ByteArrayCompressed, KafkaStreams, KafkaStreamsV2);
+                // RiderEnvelope names no encoder: it is the wrapper the codec puts AROUND whichever of these wins,
+                // so there is nothing here to force it to - OffsetRiderCodecTest owns its round trip instead.
+                .isNotIn(ByteArray, ByteArrayCompressed, KafkaStreams, KafkaStreamsV2, RiderEnvelope);
 
         // todo don't use static public accessors to change things - makes parallel testing harder and is smelly
         OffsetMapCodecManager.forcedCodec = Optional.of(encoding);

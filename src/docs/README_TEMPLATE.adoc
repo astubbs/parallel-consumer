@@ -1173,6 +1173,30 @@ Distribution Summary `pc.payload.ratio.used{subsystem=offsetencoder}`
 
 Ratio between offset metadata payload size and offsets encoded
 
+**Offsets Rider Size**
+
+Distribution Summary `pc.offsets.rider.size{subsystem=offsetencoder, topic="topicName", partition="partitionNumber"}`
+
+Size in bytes of the rider your riderSupplier handed over, recorded once for each commit that carried one
+
+**Offsets Rider Dropped**
+
+Counter `pc.offsets.rider.dropped{subsystem=offsetencoder, topic="topicName", partition="partitionNumber"}`
+
+Commits whose rider was shed to fit the offset metadata size limit - either over its own cap or squeezed out by the offset map, which is still committed
+
+**Offsets Payload Stripped**
+
+Counter `pc.offsets.payload.stripped{subsystem=offsetencoder, topic="topicName", partition="partitionNumber"}`
+
+Commits whose offset map did not fit the metadata size limit, so a bare offset was committed with no payload - the records below it may be replayed on rebalance
+
+**Offsets Rider Supplier Failed**
+
+Counter `pc.offsets.rider.supplier.failed{subsystem=offsetencoder, topic="topicName", partition="partitionNumber"}`
+
+Commits where your riderSupplier threw, so the commit carried no rider - the only signal that a rider-based feature has silently stopped working
+
 === Example Metrics setup steps
 Meter registry that metrics should be bound has to be set using Parallel Consumer Options along with any common tags that identify the PC instance.
 In addition, if desired - Kafka Consumer, Producer can be bound to the registry as well as general JVM metric, logging system and other common binders.

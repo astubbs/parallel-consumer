@@ -48,7 +48,23 @@ public enum OffsetEncoding {
      * <a href="https://github.com/apache/kafka/blob/cc77a38d280657a0e3969b255f103af4d11c7914/streams/src/main/java/org/apache/kafka/streams/processor/internals/TopicPartitionMetadata.java#L33">source from Kafka Streams code</a>
      */
     KafkaStreams(v1, (byte) 1),
-    KafkaStreamsV2(v2, (byte) 2);
+    KafkaStreamsV2(v2, (byte) 2),
+
+    /**
+     * The opaque rider envelope: a payload carrying an embedder's bytes, with an ordinary Parallel Consumer payload
+     * (its own magic byte first) inside it, or nothing inside it at all when the partition has caught up.
+     * <p>
+     * Unlike every other constant here it names no encoder and no decoder - {@link OffsetRiderEnvelope} owns the
+     * format, and {@link EncodedOffsetPair#decodeToIncompletes} unwraps it <em>above</em> the pair, so the inner
+     * encoding is what a pair ever carries. The constant exists so the magic byte is registered in one place: an
+     * encoding added later cannot claim {@code 'X'} without colliding here, and the tests' own
+     * {@code magicByteOfAnEncodingThatDoesNotExistYet} fixture keeps stepping over it.
+     * <p>
+     * The version is {@code v1} because the field is only read by the run-length decoders; for this constant it
+     * appears in {@link #description()} and log lines and nowhere else. The envelope has no version byte of its own -
+     * the magic-byte space is the cheap axis, and the embedder versions its own blob.
+     */
+    RiderEnvelope(v1, OffsetRiderEnvelope.MAGIC_BYTE);
 
 
     public enum Version {

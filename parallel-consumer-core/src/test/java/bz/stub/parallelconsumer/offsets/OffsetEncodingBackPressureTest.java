@@ -8,6 +8,7 @@ package bz.stub.parallelconsumer.offsets;
 import com.google.common.truth.Truth;
 import com.google.common.truth.Truth8;
 import bz.stub.parallelconsumer.FakeRuntimeException;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import bz.stub.parallelconsumer.state.PartitionState;
@@ -32,7 +33,9 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
+import static bz.stub.parallelconsumer.offsets.RiderTestFixtures.riderStateOf;
 import static bz.stub.parallelconsumer.internal.utils.JavaUtils.getLast;
 import static bz.stub.parallelconsumer.internal.utils.JavaUtils.getOnlyOne;
 import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
@@ -65,6 +68,25 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
     @AfterAll
     static void cleanup() {
         PartitionStateManager.setUSED_PAYLOAD_THRESHOLD_MULTIPLIER(USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT);
+    }
+
+    /**
+     * What the rider supplier returns, or {@code null} for "no rider" - which is what every test here except the
+     * rider scenario leaves it as.
+     * <p>
+     * The supplier is always configured, and that is deliberate rather than lazy: a supplier returning
+     * {@code null} is normalised into "no rider" above the envelope, so the payload every other test in this
+     * class sees is byte for byte the one it saw before the rider existed. Wiring it per-test instead would mean
+     * building a second live processor inside a test method and leaking the one {@code @BeforeEach} already
+     * started.
+     */
+    private final AtomicReference<byte[]> riderToCarry = new AtomicReference<>();
+
+    @Override
+    protected ParallelConsumerOptions<Object, Object> getOptions() {
+        return getDefaultOptions()
+                .riderSupplier(context -> riderToCarry.get())
+                .build();
     }
 
     /**
@@ -318,6 +340,117 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
         }
 
 
+    }
+
+    /**
+     * The budget ladder under real back pressure (U2 of the opaque-rider plan): <b>the rider is shed before the
+     * offset encoding is</b>, and the partition still unblocks when work completes.
+     * <p>
+     * <b>Why this fixture, and not the one the test above uses.</b> The rider cap is derived from both mutable
+     * statics - {@code max(0, floor(cap * (1 - multiplier)))} characters - so at the multiplier of 30 the test
+     * above sets, it is zero for every cap and the write-time guard refuses every rider before the ladder is
+     * reached. This scenario therefore leaves the multiplier at its 0.75 default and only lowers the cap, which
+     * is the configuration a deployment actually runs.
+     * <p>
+     * <b>What that buys, and what it costs.</b> With the multiplier at its default, back pressure engages on the
+     * offset map at 75% of the field while the rider is capped at the remaining 25% - so a rider can only be
+     * squeezed out once the offset map has already crossed the threshold. That is the property an embedder
+     * depends on (R9: configuring a rider never costs a partition metadata it would otherwise have committed),
+     * and it is why the assertion here is that the <em>rider</em> goes while the offset map stays, not that
+     * anything is stripped.
+     * <p>
+     * <b>The block point does not move.</b> Back pressure measures the offset encoding alone, never the rider
+     * (R7/KTD4), so this scenario blocks at exactly the payload size the no-rider scenario above blocks at.
+     */
+    @Test
+    @ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ_WRITE)
+    void theRiderIsShedBeforeTheOffsetEncodingIsAndThePartitionStillUnblocks() throws OffsetDecodingError {
+        final int numberOfRecordsToPrimeWith = 1_00;
+        parallelConsumer.setTimeBetweenCommits(ofSeconds(1));
+
+        var realMax = OffsetMapCodecManager.DefaultMaxMetadataSize;
+        OffsetMapCodecManager.DefaultMaxMetadataSize = 40;
+        OffsetMapCodecManager.forcedCodec = Optional.of(OffsetEncoding.BitSetV2);
+        PartitionStateManager.setUSED_PAYLOAD_THRESHOLD_MULTIPLIER(USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT);
+
+        // six bytes: inside the derived rider cap of a 40-character field at the 0.75 multiplier, and large
+        // enough that the room left beside a growing offset map runs out while that map still fits
+        riderToCarry.set(new byte[]{1, 2, 3, 4, 5, 6});
+
+        CountDownLatch releaseTheBlockedRecord = new CountDownLatch(1);
+        AtomicInteger finished = new AtomicInteger();
+        final long offsetToBlock = 0;
+
+        WorkManager<String, String> wm = parallelConsumer.getWm();
+
+        ktu.send(consumerSpy, ktu.generateRecords(numberOfRecordsToPrimeWith));
+
+        parallelConsumer.poll(recordContext -> {
+            if (recordContext.offset() == offsetToBlock) {
+                awaitLatch(releaseTheBlockedRecord, 120);
+            }
+            finished.incrementAndGet();
+        });
+
+        try {
+            waitAtMost(ofSeconds(120))
+                    .failFast("PC died - check logs", parallelConsumer::isClosedOrFailed)
+                    .pollInterval(1, SECONDS)
+                    .untilAsserted(() -> assertThat(finished.get()).isEqualTo(numberOfRecordsToPrimeWith - 1));
+
+            log.debug("// the offset map is small, so the rider rides with it and nothing is blocked");
+            parallelConsumer.requestCommitAsap();
+            awaitForSomeLoopCycles(2);
+            waitAtMost(defaultTimeout).untilAsserted(() -> {
+                OffsetAndMetadata commit = getLastCommit();
+                Truth.assertWithMessage("R3: the rider is committed alongside the offset map")
+                        .that(riderStateOf(commit))
+                        .isEqualTo(OffsetRiderEnvelope.RiderState.PRESENT);
+                Truth.assertWithMessage("R7: the rider does not count towards back pressure, so a partition whose "
+                                + "offset map is under the threshold stays unblocked with one on")
+                        .that(wm.getPm().isAllowedMoreRecords(topicPartition))
+                        .isTrue();
+            });
+
+            log.debug("// grow the offset map until the room left beside it no longer holds the rider");
+            ktu.send(consumerSpy, ktu.generateRecords(Byte.SIZE * 5));
+            awaitForOneLoopCycle();
+            parallelConsumer.requestCommitAsap();
+            awaitForSomeLoopCycles(2);
+
+            waitAtMost(ofSeconds(30)).untilAsserted(() -> {
+                OffsetAndMetadata commit = getLastCommit();
+                Truth.assertWithMessage("R9: the rider is what goes, and it goes FIRST - the offset map is still "
+                                + "committed. Payload was %s", commit.metadata())
+                        .that(riderStateOf(commit))
+                        .isNotEqualTo(OffsetRiderEnvelope.RiderState.PRESENT);
+                Truth.assertWithMessage("R9: and the offset map it was sharing the payload with is untouched")
+                        .that(OffsetMapCodecManager
+                                .deserialiseIncompleteOffsetMapFromBase64(commit.offset(), commit.metadata())
+                                .getIncompleteOffsets())
+                        .contains(offsetToBlock);
+                Truth.assertWithMessage("the partition is blocked on the SIZE OF THE OFFSET MAP, which is what "
+                                + "shrinks when work completes")
+                        .that(wm.getPm().isAllowedMoreRecords(topicPartition))
+                        .isFalse();
+            });
+
+            log.debug("// the blocked record completes, and the partition unblocks as it always has");
+            releaseTheBlockedRecord.countDown();
+
+            waitAtMost(ofSeconds(60)).untilAsserted(() ->
+                    Truth.assertWithMessage("KTD6: a rider must never leave a partition blocked with no work left")
+                            .that(wm.getPm().isAllowedMoreRecords(topicPartition))
+                            .isTrue());
+            waitAtMost(ofSeconds(60)).untilAsserted(() ->
+                    assertThat(getLastCommit().offset()).isGreaterThan(offsetToBlock));
+        } finally {
+            releaseTheBlockedRecord.countDown();
+            riderToCarry.set(null);
+            OffsetMapCodecManager.DefaultMaxMetadataSize = realMax;
+            OffsetMapCodecManager.forcedCodec = Optional.empty();
+            PartitionStateManager.setUSED_PAYLOAD_THRESHOLD_MULTIPLIER(USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT);
+        }
     }
 
     private OffsetAndMetadata getLastCommit() {

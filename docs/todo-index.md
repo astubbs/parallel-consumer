@@ -127,6 +127,7 @@ that line, leave it in the code - it will show up here.
 - todo make package private?
 - todo rename
 - todo this should be controlled for - improve consumer management so that this can't happen
+- TODO(refactor): this class is a flagged hotspot (docs/refactoring.md) - the decode family and the encode
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/OffsetRunLength.java`**
 

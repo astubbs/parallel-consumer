@@ -167,4 +167,30 @@ Each of these outlived this PR and now has its own note, so nothing is restated 
   than failing. `issue-response-118.md` drafts that half; per this directory's rules it is posted only
   on explicit instruction, and it outlives this PR rather than being deleted with it.
 
+## The rule above now has its first customer - the opaque rider (2026-09-06)
+
+"The fix has to ship *before* the encoding that would trigger it" was written here as a general
+constraint. The opaque rider (astubbs#255,
+`docs/plans/2026-09-05-001-feat-offset-metadata-rider-plan.md`) is the first encoding to be shipped
+behind it, and it is the case that turns the constraint into a release decision rather than a
+principle.
+
+- **The minimum-reader-version rule.** A rider must not be configured until every member of the
+  consumer group already runs a Parallel Consumer carrying this policy applied to every unreadable
+  payload. Anything older throws from inside the rebalance callback on the envelope's magic byte
+  before any policy is consulted, and the metadata is durable, so one such member - or a rollback to
+  one - crash-loops on every restart and rebalance. Unsetting the option does not heal it: a
+  partition with nothing outstanding never commits, so nothing overwrites the payload.
+- **The recovery procedure.** Stop the members, then
+  `kafka-consumer-groups --reset-offsets --to-current` against the group. It preserves the committed
+  position; what it costs is the offset map, so records completed beyond the frontier replay. It is
+  stated in full in `docs/features/offset-metadata-rider.yaml`, in the option's own javadoc
+  (`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java`,
+  anchor `riderSupplier`), and once at `INFO` when a supplier is configured. Deliberately no
+  in-product remediation mode: the external route needs no permanent surface for a time-bounded
+  hazard.
+- **The open release question is tracked on its own** - whether the rider's write side ships with
+  its read side or one minor later is a release-owned decision, and this file is the record of a
+  merged PR, so it lives in `release-offset-rider-write-side-split.md` rather than here.
+
 <!-- post-merge: checked-end -->

@@ -527,6 +527,15 @@ cosmetic - see the last bullet.*
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
   missing `max-uncommitted < Short.MAX` bound.
 
+- The rider work added a second decode family and two encode entry points here rather than a new type
+  (`TODO(refactor)` on `deserialiseMetadataFromBase64`): the decode family and the write side both want
+  extracting out of this class, which is the encode/decode split above seen from a third angle.
+
+- `serialiseIncompleteOffsetMapToBase64` has no main-code caller since the rider work: the write side
+  goes through `makeOffsetMetadataPayload` / `assembleMetadataPayload`, and the only remaining call is
+  `WorkManagerOffsetMapCodecManagerTest`, which kept it for its wire-format assertion. Delete it and move
+  that test onto `assembleMetadataPayload`, or fold the method into it.
+
 - **The cached-and-shared instance is still only safe by the schedule, not by construction.**
   Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition
   `PartitionState.om` for encoding; one `PartitionStateManager.offsetMapCodecManager` for
@@ -1166,3 +1175,7 @@ ThreadPoolExecutor), [confluentinc#172](https://github.com/confluentinc/parallel
 _Seeded 2026-07-28 from a code scan (TODO/FIXME + large-class signals) and a
 branch/issue/prior-PR sweep. Keep it pruned: delete items when done, and promote to
 a branch/PR only when you actually start one._
+
+## Tooling and gates
+
+- `.github/scripts/file-ref-gate.js`: the history-pointer grammar is `origin/[\w.-]+`, which stops at the first `/`, so every `git show origin/feats/...:<path>` citation in this repo reads as a live path and needs a `file-refs: N/A` marker instead of the escape `docs/citations.md` prescribes. One-character fix (`origin/[\w./-]+`) plus a case in `file-ref-gate.test.js`; found migrating the opaque-rider write-up.

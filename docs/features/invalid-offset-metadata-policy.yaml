@@ -30,8 +30,12 @@ boundaries:
   - The policy governs every payload this build cannot read - a magic byte no encoding claims, an encoding with no decoder here, metadata recognized as Kafka Streams', and a body that is not something any encoder here could have produced.
   - It does not govern a payload that decodes successfully into a wrong-but-plausible offset map; nothing in such a payload proves it wrong.
   - Under IGNORE the offset map is discarded, not repaired, so records completed but not yet committed before that point are replayed.
+  - An opaque-rider envelope is governed exactly like any other magic byte a build does not know - IGNORE discards it and resumes from the committed offset, FAIL stops the application on assignment. Nothing about a rider gets its own policy value.
+  - The rider is the first encoding this policy was shipped ahead of, and it is why the minimum reader version matters - see offset-metadata-rider.yaml. A group member running a release older than the one that first carries this policy applied to every unreadable payload throws from inside the rebalance callback before any policy is consulted, so it crash-loops on every restart rather than degrading.
 references:
   - label: Offset-metadata policy
     path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
   - label: Where the policy is applied
     path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/EncodedOffsetPair.java
+  - label: The first encoding shipped behind this policy, and its recovery procedure
+    path: docs/features/offset-metadata-rider.yaml

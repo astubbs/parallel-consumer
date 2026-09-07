@@ -57,6 +57,49 @@ public class PCModule<K, V> {
         return brokenRetryDelayProviderWarnLimiter;
     }
 
+    /**
+     * Rate limits the "your riderSupplier threw" warning, on the same terms as
+     * {@link #brokenRetryDelayProviderWarnLimiter} - per instance, not thread-safe, and for the same reasons.
+     * <p>
+     * A supplier that throws is a coding error rather than a transient, so it throws on every commit of every
+     * partition; unlimited, one bad lambda would bury the log under identical lines.
+     */
+    private final RateLimiter brokenRiderSupplierWarnLimiter = new RateLimiter(30);
+
+    public RateLimiter brokenRiderSupplierWarnLimiter() {
+        return brokenRiderSupplierWarnLimiter;
+    }
+
+    /**
+     * Rate limits the "your riderSupplier returned more bytes than it was given room for" warning.
+     * <p>
+     * <b>Separate from {@link #brokenRiderSupplierWarnLimiter} on purpose</b>, though both name the same option:
+     * they are different diagnoses - one is a supplier that failed, the other one that ran and returned too much -
+     * and a shared limiter would let whichever fired first silence the other for its whole window. That is the
+     * same reasoning that keeps this limiter per instance rather than static, applied one level down.
+     */
+    private final RateLimiter oversizedRiderWarnLimiter = new RateLimiter(30);
+
+    public RateLimiter oversizedRiderWarnLimiter() {
+        return oversizedRiderWarnLimiter;
+    }
+
+    /**
+     * Rate limits the budget ladder's two "the rider did not fit this payload" warnings - the rider shed for the
+     * dropped marker, and the marker shed for no envelope at all.
+     * <p>
+     * <b>Separate from {@link #oversizedRiderWarnLimiter} for the reason that one is separate from
+     * {@link #brokenRiderSupplierWarnLimiter}</b>, and here the sharing would actually bite: a rider over its own
+     * derived cap warns through that limiter and then descends the ladder in the same commit, so one limiter would
+     * let the first line silence the second for its whole window - and the second is the one that says what a
+     * reader will see, which the first cannot know.
+     */
+    private final RateLimiter riderBudgetLadderWarnLimiter = new RateLimiter(30);
+
+    public RateLimiter riderBudgetLadderWarnLimiter() {
+        return riderBudgetLadderWarnLimiter;
+    }
+
     public ParallelConsumerOptions<K, V> options() {
         return optionsInstance;
     }
