@@ -5,6 +5,17 @@ ambient probe autopsy. The rule that governs all of it - **never weaken a test t
 until you have established why it fails** - lives in AGENTS.md, because it applies whether or not
 you have read this file.
 
+## Rules that fire while you are writing a test
+
+[`docs/testing-at-write-time.md`](testing-at-write-time.md) **owns that slice** - it is deliberately
+short, and a `CLAUDE.md` bridge in every module's test tree imports it, so it arrives when a test file
+is touched rather than waiting to be opened. This document owns everything else about testing.
+
+Its load-bearing rule, stated here only as a pointer: **before committing a new or changed test,
+sabotage the behaviour it guards and watch the test fail** - manual mutation testing, one test at a
+time. A test that passes whether or not the behaviour is present is worse than no test, because it
+stops anyone looking, and it never goes red to tell you. Three worked examples are in that file.
+
 ## Suites
 
 - **Unit tests**: surefire, sources in `src/test/java/`. Run with `bin/ci-unit-test.sh` (no Docker
@@ -467,3 +478,10 @@ extend them. Duplicating an existing helper is how bugs get reintroduced - a cop
 logic once drifted to a 1-second timeout and became a flaky-CI source (see
 [`docs/solutions/test-issues/`](solutions/test-issues/)). When you must add a helper, put it in the
 shared util, not the test.
+
+The unit-test side has fewer of these, and the one worth knowing is `ForeignThread` - one named,
+daemon, single-threaded executor with `run` (rethrows) and `catching` (returns what was thrown). Every
+thread-confinement guard can only be exercised by a second party, so every test of one needs it, and
+two hand-rolled copies had already drifted apart before it was extracted: only one unwrapped the
+`ExecutionException`, so an assertion failing over there surfaced here as a wrapper naming neither the
+assertion nor the thread.
