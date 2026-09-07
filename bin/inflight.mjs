@@ -55,16 +55,17 @@ import { fileURLToPath } from 'node:url'
 
 import { perfReport, perfStart } from './lib/perf.mjs'
 
-import { INVALIDATING_WARNINGS, baseline, freshnessWarnings, refTips } from './lib/git.mjs'
+import { INVALIDATING_WARNINGS, baseline, firstAddedDates, freshnessWarnings, refTips } from './lib/git.mjs'
 import { cacheClear, cacheStatus, knownCaches } from './lib/cache.mjs'
-import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
+import { corpusIndex, drift, findNotes, numbersByValue, prsByBranch, stranded } from './lib/notes.mjs'
 import { DOC_AREAS, NOTES_DIR } from './lib/repo.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
 import { loadCandidates, refactorWindow } from './lib/refactor-window.mjs'
 import { RANKED_GROUPS, rank, registerBlob, runFailure } from './lib/rank.mjs'
+import { baselineNotes, baselineTree, symbolCandidates, symbolsPresent, vet } from './lib/vet.mjs'
 import {
     formatBranch, formatCache, formatCoverage, formatDrift, formatFind, formatFlakes, formatRefactorWindow, formatSlowest,
-    formatRank, formatStranded, formatTimeline, formatWarnings,
+    formatRank, formatStranded, formatTimeline, formatVet, formatWarnings,
 } from './lib/views.mjs'
 import {
     docsForBranch, docsSummary, docsUsage, forBranchSummary, forBranchUsage, headerSummary, headerUsage, indexDocs,
@@ -558,7 +559,8 @@ value is the reasoning attached to the order, which no computed scheme carries.
             if (!index.ok) return { ok: false, reason: `rank: ${index.reason}` }
             emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
             const prs = prsByBranch()
-            const r = rank(index, { prs, register: registerBlob(index), group })
+            // ONE `git log` for every note's first-added date - the age the rows are ordered by.
+            const r = rank(index, { prs, register: registerBlob(index), ages: firstAddedDates(`${NOTES_DIR}/`), group })
             if (!r.ok) return { ok: false, reason: `rank: ${r.reason}` }
             emit(formatRank(r))
             // EVERYTHING THAT DID RUN IS ALREADY EMITTED, and only then does the run report that it
@@ -567,6 +569,68 @@ value is the reasoning attached to the order, which no computed scheme carries.
             // was dropped" and "a ref was never listed". `runFailure` owns which is which.
             const failed = runFailure(r)
             if (failed) return { ok: false, reason: `rank: ${failed}` }
+            return { ok: true }
+        },
+    },
+    {
+        name: 'vet',
+        summary: 'which open notes on the baseline to re-read first, and what about each looks stale before you open it',
+        when: 'before a vetting sweep of docs/inflight, and before deciding what a release still gates on',
+        usage: `Usage: bin/inflight.mjs vet                   every open note on the baseline, unvetted first
+       bin/inflight.mjs vet --area <prefix>   one area - the filename prefix, e.g. ci, test, core, bug
+       bin/inflight.mjs vet --all             deferred and closed notes too
+
+The worklist for a vetting sweep. Every open note on the baseline, partitioned by whether it carries
+an \`<!-- inflight-vetted: YYYY-MM-DD - what was checked -->\` marker, ordered by the index's group
+order and then OLDEST FIRST by the date the note was first added on any ref - and annotated with the
+cheap staleness signals: every fork number it cites is merged or closed, the number in its filename
+is settled, a cited path or symbol no longer resolves on the baseline, a delete-when line.
+
+A SIGNAL IS A REASON TO OPEN THE NOTE, NEVER A VERDICT. A note cites a merged pull request because
+that is where the problem was found; a symbol is missing because the note proposes it. Nothing here
+closes a note. docs/inflight/AGENTS.md -> "Vetting a note" names the five outcomes and the marker.
+
+Reads the baseline's blobs, never the working tree, and only the baseline: a note that exists only
+on a branch is vetted by that branch's merge. \`rank\` is the every-ref view.
+
+  bin/inflight.mjs vet
+  bin/inflight.mjs vet --area bug`,
+        run: (args, emit) => {
+            const at = args.indexOf('--area')
+            const known = new Set(['--area', '--all'])
+            const unknown = args.filter((a) => a.startsWith('--') && !known.has(a))
+            if (unknown.length) return { ok: false, reason: `vet: unknown option(s): ${unknown.join(', ')} - known: --area <prefix>, --all` }
+            if (at >= 0 && (args[at + 1] === undefined || args[at + 1].startsWith('--'))) {
+                return { ok: false, reason: 'vet: --area needs a filename prefix after it' }
+            }
+            if (args.filter((a) => a === '--area').length > 1) {
+                return { ok: false, reason: 'vet: --area given more than once - which one did you mean?' }
+            }
+            const stray = args.filter((a, i) => a !== '--area' && a !== '--all' && !(at >= 0 && i === at + 1))
+            if (stray.length) {
+                return { ok: false, reason: `vet: takes no positional argument(s): ${stray.join(', ')} - did you mean --area ${stray[0]}?` }
+            }
+            const area = at >= 0 ? args[at + 1].replace(/-$/, '') : null
+            const listed = baselineNotes()
+            if (!listed.ok) return { ok: false, reason: `vet: ${listed.reason}` }
+            emit(formatWarnings(freshnessWarnings(listed.baseline, 1, { invalidatingOnly: true })))
+            const tree = baselineTree(listed.baseline)
+            const symbols = symbolsPresent(listed.baseline, symbolCandidates(listed.notes))
+            const v = vet(listed.notes, {
+                numbers: numbersByValue(),
+                tree,
+                symbols,
+                ages: firstAddedDates(`${NOTES_DIR}/`),
+                area,
+                all: args.includes('--all'),
+                baseline: listed.baseline,
+            })
+            emit(formatVet(v))
+            // THE SIGNALS THAT COULD NOT FIRE ARE A FAILED RUN, after everything that did run is
+            // emitted - the rank shape. An unvetted list with no signals because gh was down reads
+            // exactly like one where nothing is stale, and exit 2 is what tells them apart.
+            if (!v.treeOk || !v.symbolsOk || !v.agesOk) return { ok: false, reason: 'vet: a git read failed - the answer above is incomplete' }
+            if (!v.numbersOk) return { ok: false, reason: `vet: ${v.numbersReason} - the settled-number signals never ran` }
             return { ok: true }
         },
     },

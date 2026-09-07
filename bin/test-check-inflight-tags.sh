@@ -149,6 +149,15 @@ assert "a second inflight-type is rejected"                fail '# T\n\n<!-- inf
 assert "a second inflight-impact is rejected"              fail '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n<!-- inflight-impact: ci -->\n'
 assert "one of each still passes"                          pass '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n<!-- inflight-state: deferred - after v6 -->\n'
 
+# THE VETTED MARKER: a date and what was checked, or nothing. `bin/inflight.mjs vet` reads it with
+# one regex (VETTED_RE in bin/lib/inflight-tags.mjs), and a marker that regex cannot parse reads
+# there as "never vetted" - silently undoing the vet it records. The gate refuses the shape so the
+# person who wrote it finds out, rather than the sweep that re-reads a note somebody already vetted.
+assert "a well-formed vetted marker passes"            pass '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-vetted: 2026-09-07 - re-read against the tree; the race is still there -->\n'
+assert "a vetted marker with no date is rejected"      fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-vetted: re-read, still true -->\n'
+assert "a vetted marker with no reason is rejected"    fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-vetted: 2026-09-07 -->\n'
+assert "a second vetted marker is rejected"            fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-vetted: 2026-09-07 - a -->\n<!-- inflight-vetted: 2026-09-08 - b -->\n'
+
 echo
 if [ "$failures" -eq 0 ]; then echo "All check-inflight-tags self-tests passed"; exit 0; fi
 echo "$failures self-test(s) FAILED"

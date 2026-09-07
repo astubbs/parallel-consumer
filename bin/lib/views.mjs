@@ -540,6 +540,8 @@ export function formatRank(r) {
         for (const row of g.rows) {
             out.push(`      ${row.name}`)
             if (row.title) out.push(`          "${row.title}"`)
+            // The ordering key, on the row, so a reader can see WHY this row is above the next one.
+            out.push(`          first added ${row.age ?? 'on an unknown date - sorted after every dated row'}`)
             out.push(`          ${carriage(row, r)}`)
             // Which side of the delta this row is on, on the row - not only as a count above.
             if (row.ranked) out.push('          the register already names this one')
@@ -639,4 +641,60 @@ function carriage(row, r) {
         : `carried by ${plural(row.carryingRefs.length, 'ref')}, read from ${row.readRef}`
             + `${row.readRefArchival ? ' (an ARCHIVE - the live copies are closed)' : ''}${pr}`
     return `${where} - CARRIES the note, which is not the same as fixing what it describes`
+}
+
+/**
+ * The vetting worklist: unvetted notes first, in the order the sweep should read them, each with
+ * the cheap signals that fired; the vetted ones as a dated list underneath.
+ *
+ * A SIGNAL PRINTS AS A REASON TO LOOK, in words, never as a score - the header of bin/lib/vet.mjs
+ * says why. The counts come first so a reader knows the size of the job before the rows.
+ */
+export function formatVet(v) {
+    const out = []
+    const scope = v.area ? ` in the \`${v.area}-\` area` : ''
+    out.push(`vetting worklist for the open notes on ${v.baseline}${scope}${v.all ? ', deferred and closed included' : ''}:\n`)
+    out.push(`  ${plural(v.total, 'note')}: ${v.unvetted} never vetted, ${v.vetted} carrying an inflight-vetted marker,`
+        + ` ${v.withSignals} with at least one staleness signal`)
+    if (v.excluded.length > 0) {
+        out.push(`  not in this list: ${v.excluded.map((e) => `${e.count} ${e.key}`).join(', ')} - bin/inflight.mjs vet --all includes them`)
+    }
+    if (!v.numbersOk) out.push(`  WARNING: ${v.numbersReason} - the settled-number signals could not fire, so their absence below means nothing`)
+    if (!v.treeOk) out.push('  WARNING: the baseline tree could not be listed - the cited-path signal could not fire')
+    if (!v.symbolsOk) out.push('  WARNING: the source grep did not run - the cited-symbol signal could not fire')
+    if (!v.agesOk) out.push('  WARNING: the first-added dates could not be read - rows are in path order within a group, not by age')
+    out.push('')
+    out.push('  Order: the index\'s group order (registers, then the impact scale), then OLDEST FIRST by the date')
+    out.push('  the note was first added on any ref. A signal is a reason to open the note, never a verdict;')
+    out.push('  docs/inflight/AGENTS.md -> "Vetting a note" names the five outcomes.')
+    out.push('')
+
+    const vettedRows = []
+    for (const g of v.groups) {
+        const unvetted = g.rows.filter((r) => !r.vetted)
+        for (const r of g.rows) if (r.vetted) vettedRows.push(r)
+        if (unvetted.length === 0) continue
+        out.push(`  ${g.label}`)
+        for (const row of unvetted) {
+            out.push(`      ${row.name}`)
+            if (row.title) out.push(`          "${row.title}"`)
+            out.push(`          first added ${row.age ?? 'on an unknown date'}${row.type ? `, ${row.type}` : ''}`)
+            for (const s of row.signals) out.push(`          ${s.key}: ${s.detail}`)
+            out.push(`          bin/inflight.mjs docs show ${row.path}`)
+        }
+        out.push('')
+    }
+    if (v.unvetted === 0) out.push(v.total === 0 ? '  no open note is in scope. That is a result: nothing on the baseline matches.' : '  every note in scope carries a vetted marker.', '')
+
+    if (vettedRows.length > 0) {
+        out.push('  already vetted - the date is when, the rest is what was checked:')
+        vettedRows.sort((a, b) => a.vetted.date.localeCompare(b.vetted.date) || a.path.localeCompare(b.path))
+        for (const r of vettedRows) {
+            out.push(`      ${r.vetted.date}  ${r.name.padEnd(64)} ${r.vetted.what}`)
+            for (const s of r.signals) out.push(`          still fires: ${s.key} - ${s.detail}`)
+        }
+        out.push('')
+    }
+    out.push(`  Read from ${v.baseline}, never the working tree. Ages are first-added dates across every ref.`)
+    return out.join('\n')
 }
