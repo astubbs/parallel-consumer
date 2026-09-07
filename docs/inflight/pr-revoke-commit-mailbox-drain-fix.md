@@ -1,8 +1,8 @@
 # PR: the revoke-path commit drains first, by handing itself to the control thread
 
-<!-- inflight-type: task -->
+<!-- inflight-type: bug -->
 <!-- inflight-impact: data-loss -->
-<!-- inflight-labels: concurrency, transactions -->
+<!-- inflight-labels: concurrency -->
 
 Working note for the fix of the defect astubbs/parallel-consumer#436 diagnosed. The knowledge lives in
 [`docs/solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md`](../solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md);
