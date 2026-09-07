@@ -41,6 +41,45 @@ un-cover anything - which is why this was left alone rather than guessed at. Nar
 per-suite `files` value in the matrix, and three of the five suites (`performance`, `lincheck`,
 `chaos`) would need their report shape established first rather than assumed.
 
+## Sighting, 2026-09-07: the two sides still count different FILE SETS
+
+<!-- post-merge: checked-begin -->
+Observed on astubbs/parallel-consumer#105, check `codecov/project/unit`. That PR is the cleanest
+possible probe for this, and the reason is worth stating before the numbers: **its diff contains no
+Java at all** - a surefire `runOrder` property, one exempt path in a shell script, three documents
+and ten `.surefire-pc-unit-times` data files. So any difference the comparison reports is the
+comparison's, not the change's.
+
+Reproduce the shape from that PR's codecov comment; the figures are deliberately not copied here,
+because they move at every re-upload and a stale one reads as current:
+
+- The base codecov chose was **an ancestor of the PR head**, provable with
+  `git merge-base --is-ancestor <base> <head>`. Everything in the base is therefore in the head.
+- Codecov nonetheless reported the head as carrying **more files and more lines than that base** -
+  double-digit files, hundreds of lines. With no Java in the diff and the base contained in the
+  head, no diff can produce that. **The two sides are measuring different file sets**, which is the
+  same defect as the `default`-versus-suite-flags case above, surviving the flag split.
+- `codecov/patch` passed and the whole-repository `project` number **rose**. Only the flag-scoped
+  `unit` gate was red, and it was red on a PR that changed no code.
+- `integration`, `chaos` and `performance` each showed **no base value at all** - codecov renders
+  them `(?)` - so `unit` was the only flag with two sides to compare.
+
+**Which half of this note that supports.** The first open item - "the fix cannot be verified by the
+change that makes it", expecting red-or-no-data on the first PRs after the split lands. Master has
+since run and uploaded, because `unit` had a base to compare against; `integration` did not, so that
+item is **partly** discharged and partly still live. The prediction that it "clears once master has
+re-uploaded under the new flags" did not hold for `unit`: master re-uploaded, the flag compared, and
+it was still wrong.
+
+**Which half it does NOT test, and must not be read as testing.** The shared-upload-glob mechanism -
+`files:` globbing both jacoco patterns for every suite - remains **unverified**. A file-set
+mismatch is *consistent with* that glob putting files in a PR's `unit` flag that master's `unit`
+upload never carried, but this sighting inspected no uploaded report and identified no specific
+file. It does not establish which side is wrong, whether the glob is the cause, or whether some
+other asymmetry between `ci-unit-test.sh` and `ci-build.sh`'s surefire half explains it. Settling
+that still needs the per-suite `files` work described above, or a diff of the two flags' file lists.
+<!-- post-merge: checked-end -->
+
 ## Delete when
 
 A PR after this has merged shows `codecov/project/unit` and `codecov/project/integration` comparing
