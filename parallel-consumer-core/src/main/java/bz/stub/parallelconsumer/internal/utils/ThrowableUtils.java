@@ -10,6 +10,7 @@ import lombok.experimental.UtilityClass;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.Optional;
 import java.util.function.Predicate;
 
 /**
@@ -216,6 +217,32 @@ public class ThrowableUtils {
      */
     private static boolean isTransparentWrapper(Throwable t) {
         return t instanceof ExceptionInUserFunctionException;
+    }
+
+    /**
+     * The innermost link in {@code t}'s cause chain that {@code match} accepts - the one the broker actually raised,
+     * under whatever wrappers the client put around it - or empty when none does, including for a null {@code t}.
+     * Bounded and cycle-safe the way every walk here is.
+     */
+    public static Optional<Throwable> innermostInCauseChain(Throwable t, Predicate<Throwable> match) {
+        var found = new Throwable[1];
+        walkCauseChain(t, link -> {
+            if (match.test(link)) {
+                found[0] = link; // keep walking: a deeper match wins
+            }
+            return true;
+        });
+        return Optional.ofNullable(found[0]);
+    }
+
+    /** True when any link in {@code t}'s cause chain satisfies {@code match}; false for a null {@code t}. */
+    public static boolean anyInCauseChain(Throwable t, Predicate<Throwable> match) {
+        var hit = new boolean[1];
+        walkCauseChain(t, link -> {
+            hit[0] = match.test(link);
+            return !hit[0]; // stop at the first match
+        });
+        return hit[0];
     }
 
     /**
