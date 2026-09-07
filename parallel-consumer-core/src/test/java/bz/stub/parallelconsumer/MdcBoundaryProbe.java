@@ -26,6 +26,14 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * The engine-specific parts stay in the tests - how many observations to expect, and which thread names the engine is
  * supposed to use - because those are the assertions that stop a test silently degrading into a re-test of the core
  * worker-pool boundary, and they differ per engine.
+ * <p>
+ * <b>The tests using this are known to detect the defect</b>, not merely to pass. Each engine test was run with its
+ * module's {@code initAsyncConsumer(..)} temporarily overridden to build options with
+ * {@code propagateMdc(false)}, and each then fails on its own
+ * {@link #assertCallersContextWasVisible(String)} call, reporting {@code values seen: [null, ...]}. Redo that
+ * override if you change the propagation or isolation logic - a green test here is worth nothing if it cannot be
+ * made to go red. The core worker-pool equivalent of the same check lives on
+ * {@code MdcContextPropagationTest}'s javadoc.
  *
  * @author Antony Stubbs
  * @see bz.stub.parallelconsumer.internal.MdcPropagation

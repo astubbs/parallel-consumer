@@ -106,7 +106,10 @@ public enum TransactionalClaim {
             + "read_committed consumer PT15S later', which also shows the grace window absorbing concurrent "
             + "transaction-marker delivery without swallowing a real violation. VALID ONLY AT batchSize=1: at batchSize>=2 the produce-lock "
             + "double-release stops the instance committing at all, which is recorded under "
-            + "RESULTS_EXACTLY_ONCE_UNDER_FAILURE and in docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md"),
+            + "RESULTS_EXACTLY_ONCE_UNDER_FAILURE and in docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md. "
+            + "A SECOND arm, at the unit seam: ParallelEoSStreamProcessorTest#invalidPidMappingFailsTheBatchInsteadOfMarkingItSucceeded "
+            + "- the produce path's InvalidPidMappingException close used to return the batch as succeeded, so the offset could "
+            + "commit with no records; RED observed before the rethrow (offset committed, record never re-dispatched), GREEN after."),
 
     /**
      * C5 - selecting transactional mode silently changes the commit interval default.
@@ -114,17 +117,25 @@ public enum TransactionalClaim {
     COMMIT_INTERVAL_AUTO_REDUCED(Source.OPTIONS_JAVADOC,
             "gets automatically reduced from the default of 5 seconds to 100ms",
             Status.PROVED, "TransactionalBulkCommitTest#transactionalModeWithNoExplicitCommitIntervalResolvesTo100ms "
-            + "and its two sibling arms, which assert the literal durations after validate() rather than the "
-            + "DEFAULT_* constants, so changing a constant without changing the javadoc still fails. Negative "
-            + "control observed (U11): forcing commitInternalHasNotBeenSet to false in "
-            + "ParallelConsumerOptions#transactionsValidation - one term, everything else identical - failed "
-            + "exactly one of the four arms, 'expected PT0.1S but was PT5S'. The other three still passed, which is "
-            + "what makes the control narrow enough to attribute. Reverted; main is untouched. "
-            + "SEPARATE DEFECT found while proving this, recorded in "
-            + "docs/inflight/bug-commit-interval-identity-check.md: the same gate uses reference identity (==) "
-            + "against DEFAULT_COMMIT_INTERVAL, so a user who explicitly sets Duration.ofSeconds(5) is equals-but-"
-            + "not-identical and gets silently overridden to 100ms - 50x the broker load they configured. Not part "
-            + "of C5's documented sentence, so it is recorded beside the claim rather than asserted as part of it"),
+            + "and its two sibling arms, which cover the unset cases, plus the explicit ones in "
+            + "ParallelConsumerOptionsTest - #explicitFiveSecondsInTransactionalModeIsKept, "
+            + "#explicitDefaultConstantInTransactionalModeIsKept and "
+            + "#clearingTheIntervalThroughTheDeprecatedSetterReturnsItToUnset. All assert the literal durations after "
+            + "validate() rather than the DEFAULT_* constants, so changing a constant without changing the javadoc "
+            + "still fails. Negative control observed (U11) against the PRE-astubbs#422 code: forcing "
+            + "commitInternalHasNotBeenSet to false in ParallelConsumerOptions#transactionsValidation - one term, "
+            + "everything else identical - failed exactly one of the four arms then present, 'expected PT0.1S but "
+            + "was PT5S'. That variable no longer exists, so a fresh control was observed against the new code: "
+            + "making ParallelConsumerOptions#getCommitInterval() return DEFAULT_COMMIT_INTERVAL for the unset case "
+            + "regardless of the commit mode - again one term - failed exactly the two arms that read an unset "
+            + "interval under transactions, #transactionalModeWithNoExplicitCommitIntervalResolvesTo100ms and "
+            + "#clearingTheIntervalThroughTheDeprecatedSetterReturnsItToUnset, both 'expected: PT0.1S but was : "
+            + "PT5S', while the kept-explicit arms and the non-transactional control stayed green. Narrow enough to "
+            + "attribute. Reverted; main is untouched. "
+            + "The identity defect this entry used to record beside the claim - an explicitly passed "
+            + "DEFAULT_COMMIT_INTERVAL treated as unset and silently reduced to 100ms - is fixed by astubbs#422; "
+            + "ParallelConsumerOptionsTest#explicitDefaultConstantInTransactionalModeIsKept is its regression test "
+            + "and was observed red before the fix"),
 
     /**
      * C6 - this one is Kafka's guarantee, not ours. We document it, so we record it and test it once; we do not
@@ -300,13 +311,18 @@ public enum TransactionalClaim {
     PRODUCER_INVALIDATION_RECOVERED(Source.README_TEMPLATE,
             "Where PC built the producer, a producer the broker reports invalid is replaced and the work its aborted transaction discarded is processed again, so processing continues instead of the instance stopping.",
             Status.PROVED, "ProducerFencingRecoveryIT#aFencedProducerIsReplacedAndEveryResultIsStillVisibleExactlyOnce: a "
-            + "rogue producer initialised under PC's own derived transactional.id fences PC's producer three times on a "
+            + "rogue producer initialised under PC's own transactional.id fences PC's producer three times on a "
             + "real coordinator; each time the recovery counter moves, every source record's result is visible exactly "
             + "once at read_committed, and the control - the rogue's next transactional call throwing "
-            + "ProducerFencedException - shows the replacement re-initialised under the same id. Negative control "
-            + "observed at the unit level: ProducerRecoveryTest's fenced-during-commit case was RED before recovery "
-            + "existed (no replacement was ever built) and GREEN after; at the broker level, with canRecover() "
-            + "forced false the IT fails because the instance closes on the first fence");
+            + "ProducerFencedException - shows the replacement re-initialised under the same id. That case fences "
+            + "on an empty ledger, so it proves the replacement half; the replay half is "
+            + "ProducerFencingRecoveryIT#aFenceLandingOnCompletedButUncommittedWorkReplaysItAndEveryResultIsStillVisibleExactlyOnce, "
+            + "where a 10 s commit interval keeps a processed phase uncommitted when the rogue arrives: the broker "
+            + "aborts the transaction that carried its output, every key's user function runs at least twice, and "
+            + "exactly one result per key is visible after a settle poll. Negative control observed at the unit "
+            + "level: ProducerRecoveryTest's fenced-during-commit case was RED before recovery existed (no "
+            + "replacement was ever built) and GREEN after; at the broker level, with canRecover() forced false "
+            + "the IT fails because the instance closes on the first fence");
 
     /**
      * Where a claim is published, and how to find the text that must still contain it.

@@ -8,7 +8,6 @@ package bz.stub.parallelconsumer;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
 import bz.stub.parallelconsumer.internal.MdcPropagation;
-import bz.stub.parallelconsumer.internal.ProducerConfigRedaction;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
@@ -17,7 +16,6 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
 import lombok.experimental.FieldNameConstants;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.Producer;
@@ -42,8 +40,9 @@ import static java.time.Duration.ofMillis;
  * If you want to go deeper, look at {@link #defaultMessageRetryDelay}, {@link #retryDelayProvider} and
  * {@link #commitMode}.
  * <p>
- * Note: The only required option is the {@link #consumer} ({@link #producer} is only needed if you use the Produce
- * flows). All other options have sensible defaults.
+ * Note: The only required option is the {@link #consumer} (a producer - {@link #producerConfig} for PC to build one
+ * from, or a {@link #producer} instance - is only needed if you use the Produce flows). All other options have
+ * sensible defaults.
  *
  * @author Antony Stubbs
  * @see #builder()
@@ -54,7 +53,6 @@ import static java.time.Duration.ofMillis;
 @ToString
 @FieldNameConstants
 @InterfaceStability.Evolving
-@Slf4j
 public class ParallelConsumerOptions<K, V> {
 
     /**
@@ -63,60 +61,32 @@ public class ParallelConsumerOptions<K, V> {
     private final Consumer<K, V> consumer;
 
     /**
-     * The release the {@link #producer} instance option is queued for removal in: the major after the one that ships
-     * its deprecation, so that the option is not removed in the same version that deprecates it.
-     */
-    public static final String PRODUCER_INSTANCE_REMOVAL_RELEASE = "0.7.0.0";
-
-    /**
-     * A finished producer instance for the produce flows.
-     * <p>
-     * Supplying a producer is only needed if using the produce flows, and this is the older of the two ways to do it.
-     * PC cannot read a finished producer's configuration back out, so it cannot build a replacement when the broker
-     * reports the producer invalid - fenced, an expired producer id, a stale epoch, a lost generation - and on this
-     * path those conditions keep their pre-recovery behaviour: a shutdown on the commit path, and on the produce path
-     * whatever the condition's shape produces today. Supply {@link #producerConfig} (and optionally
-     * {@link #producerFactory}) instead, and PC recovers from all of them.
+     * A finished producer instance for the produce flows. Supplying a producer is only needed if using the produce
+     * flows; the alternative is {@link #producerConfig}, from which PC builds the producer itself - and a
+     * replacement, when the broker reports the producer invalid. A finished instance carries no configuration to
+     * rebuild from, so on this path those conditions (fenced, an expired producer id, a stale epoch, a lost
+     * generation) keep their pre-recovery behaviour: a shutdown on the commit path, and on the produce path whatever
+     * the condition's shape produces today.
      *
      * @see ParallelStreamProcessor
-     * @deprecated since 0.6.0.0, in favour of {@link #producerConfig} plus {@link #producerFactory}; removal is queued
-     *         for {@value #PRODUCER_INSTANCE_REMOVAL_RELEASE} (see {@code docs/refactoring.md}, "Remove the
-     *         {@code producer} instance option"). Supplying both this and {@link #producerConfig} fails validation.
      */
-    @Deprecated
     private final Producer<K, V> producer;
 
     /**
-     * Producer configuration for the produce flows, from which PC builds - and, when the broker invalidates it,
-     * rebuilds - its own producer through {@link #producerFactory}. Any {@code ProducerConfig} key, serializers
-     * included, exactly as it would be passed to {@code new KafkaProducer<>(config)}.
+     * Producer configuration for the produce flows, from which PC builds its own producer with
+     * {@code new KafkaProducer<>(config)}: any {@code ProducerConfig} key, serializers included, exactly as it would
+     * be passed to that constructor. In {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} set
+     * {@code transactional.id} here, as you would when building the producer yourself.
      * <p>
-     * In {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} PC sets {@code transactional.id} itself, to a value that
-     * is unique to this running instance and reused by every replacement producer, so a caller-set value does not
-     * take effect and is reported at WARN. The derived id is {@code pc-<L>-<group.id>-<uuid>}, where {@code <L>} is
-     * the decimal length of the consumer's {@code group.id}; the prefix {@code pc-<L>-<group.id>-} is stable for the
-     * group, so one prefixed TransactionalId ACL authorises every id PC derives for it, and the length field keeps one
-     * group's prefix from being a prefix of another's. In every other commit mode PC builds a non-transactional
-     * producer and removes any caller-set {@code transactional.id}.
+     * On this path a producer the broker reports invalid is recovered: PC builds another from this same
+     * configuration, {@code transactional.id} included, and initialising the replacement is what fences the producer
+     * it replaces.
      * <p>
-     * Values are never rendered raw: {@link #toString()} and every PC log line show only an allow-list of non-secret
-     * keys and redact the rest.
-     * <p>
-     * Mutually exclusive with {@link #producer}.
-     *
-     * @see ProducerFactory
+     * The alternative to {@link #producer}; supplying both fails validation. Excluded from {@link #toString()}, as
+     * the map may carry credentials.
      */
     @ToString.Exclude
     private final Map<String, Object> producerConfig;
-
-    /**
-     * Builds the producer from {@link #producerConfig}. Defaults to a plain {@code KafkaProducer}; override it to wrap,
-     * instrument or substitute the producer. See {@link ProducerFactory} for the contract every implementation must
-     * keep.
-     */
-    @Builder.Default
-    @ToString.Exclude
-    private final ProducerFactory<K, V> producerFactory = ProducerFactory.kafkaProducer();
 
     /**
      * Path to Managed executor service for Java EE
@@ -217,9 +187,10 @@ public class ParallelConsumerOptions<K, V> {
          * message replay may cause duplicates in external systems which is unavoidable - external systems must be
          * idempotent).
          * <p>
-         * The default commit interval {@link AbstractParallelEoSStreamProcessor#KAFKA_DEFAULT_AUTO_COMMIT_FREQUENCY}
+         * The default commit interval {@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL}
          * gets automatically reduced from the default of 5 seconds to 100ms (the same as Kafka Streams <a
          * href=https://docs.confluent.io/platform/current/streams/developer-guide/config-streams.html">commit.interval.ms</a>).
+         * The reduction applies only when no interval was set; an interval set explicitly is kept, whatever its value.
          * Reducing this configuration places higher load on the broker, but will reduce (but cannot eliminate) replay
          * upon failure. Note also that when using transactions in Kafka, consumption in {@code READ_COMMITTED} mode is
          * blocked up to the offset of the first STILL open transaction. Using a smaller commit frequency reduces this
@@ -292,10 +263,16 @@ public class ParallelConsumerOptions<K, V> {
      */
     public static final int KAFKA_DEFAULT_AUTO_COMMIT_INTERVAL_MS = 5000;
 
+    /**
+     * The commit interval when none is set and the commit mode is not transactional - Kafka's own auto-commit
+     * interval. See {@link #getCommitInterval()} for how an unset interval resolves.
+     */
     public static final Duration DEFAULT_COMMIT_INTERVAL = ofMillis(KAFKA_DEFAULT_AUTO_COMMIT_INTERVAL_MS);
 
-    /*
-     * The same as Kafka Streams
+    /**
+     * The commit interval when none is set and the commit mode is {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} -
+     * the same as Kafka Streams' {@code commit.interval.ms}. Applies ONLY when no interval was set; a value set
+     * explicitly is kept even when it equals {@link #DEFAULT_COMMIT_INTERVAL} (astubbs#422).
      */
     public static final Duration DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS = ofMillis(100);
 
@@ -329,9 +306,36 @@ public class ParallelConsumerOptions<K, V> {
 
     /**
      * Time between commits. Using a higher frequency (a lower value) will put more load on the brokers.
+     * <p>
+     * Leave it unset to take the default, which depends on the commit mode: {@link #DEFAULT_COMMIT_INTERVAL} normally,
+     * {@link #DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS} under {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER}. A
+     * value you set is always kept - including one equal to either default - because "unset" is the absence of a
+     * value, never inferred from the value itself. (Inferring it by reference identity against the constant treated an
+     * explicit {@code DEFAULT_COMMIT_INTERVAL} as unset; inferring it by {@code equals} would have treated every
+     * explicit five seconds as unset - astubbs#422.)
      */
-    @Builder.Default
-    private Duration commitInterval = DEFAULT_COMMIT_INTERVAL;
+    private Duration commitInterval;
+
+    /**
+     * Never null, and never throws: an unset interval resolves here, from the commit mode, so every reader - the
+     * engine, {@code toString}, a caller inspecting options before constructing a processor - sees the effective value
+     * whether or not {@link #validate()} has run.
+     * <p>
+     * The mode test is written constant-first rather than as {@link #isUsingTransactionCommitMode()} so that a
+     * {@code commitMode} explicitly built as null resolves to the non-transactional default instead of throwing.
+     * Reading options has never been able to fail and must not start now: a null commit mode is a misconfiguration,
+     * but it is {@link #validate()}'s to reject, at the point that already names the option.
+     *
+     * @return the commit interval in effect
+     */
+    public Duration getCommitInterval() {
+        if (commitInterval != null) {
+            return commitInterval;
+        }
+        return PERIODIC_TRANSACTIONAL_PRODUCER.equals(commitMode)
+                ? DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS
+                : DEFAULT_COMMIT_INTERVAL;
+    }
 
     /**
      * @deprecated only settable during {@code deprecation phase} - use
@@ -386,35 +390,40 @@ public class ParallelConsumerOptions<K, V> {
     public static final Duration SASL_AUTHENTICATION_EXCEPTION_RETRY_BACKOFF = Duration.ofSeconds(5);
 
     /**
-     * Error handling strategy to use when <em>recognisably Kafka Streams</em> offset metadata is encountered. This could
-     * happen accidentally or deliberately if the user attempts to reuse an existing consumer group id.
+     * Error handling strategy to use when PC is assigned a partition whose committed offset metadata this build cannot
+     * read - a consumer group previously owned by Kafka Streams, by another framework, by operator tooling, or written
+     * by a <em>newer</em> PC using an encoding that did not exist when this version was built.
      * <p>
-     * This policy applies only to metadata PC can positively identify as Kafka Streams'. Metadata it cannot decode at
-     * all - written by some other framework, by operator tooling, or simply corrupt - is never fatal under either
-     * policy: PC logs it, drops the offset map, and resumes from the committed offset.
+     * The policy governs <em>every</em> such case uniformly. It previously governed only bytes PC could positively
+     * identify as Kafka Streams'; anything else bypassed it, which is what made the option unreachable for the
+     * forward-compatibility case it exists to handle (astubbs#197, release-ledger item 5).
      */
     public enum InvalidOffsetMetadataHandlingPolicy {
         /**
-         * Fails and shuts down the application. This is the default.
+         * Fail and shut down rather than silently discard the offset map. Dropping the map replays records that were
+         * completed but not yet committed, so this is the choice for a deployment that would rather stop than
+         * reprocess. Opt in: it is no longer the default - see {@link #invalidOffsetMetadataPolicy}.
          */
         FAIL,
         /**
-         * Ignore the error, logs a warning message and continue processing from the last committed offset.
+         * Log a warning, discard the unreadable metadata and resume from the last committed offset. The default.
          */
         IGNORE
     }
 
     /**
-     * Controls the error handling behaviour to use when Kafka Streams offset metadata from a pre-existing consumer group
-     * is encountered - the scenario where a consumer group id from a Kafka Streams application is reused.
+     * Controls what happens when PC is assigned a partition whose committed offset metadata it cannot read. See
+     * {@link InvalidOffsetMetadataHandlingPolicy}.
      * <p>
-     * Note this does not govern metadata PC cannot decode at all; that is always recovered from rather than being fatal.
-     * See {@link InvalidOffsetMetadataHandlingPolicy}.
-     * <p>
-     * Default is {@link InvalidOffsetMetadataHandlingPolicy#FAIL}
+     * <b>Default is {@link InvalidOffsetMetadataHandlingPolicy#IGNORE}, changed from {@code FAIL}.</b> Pointing PC at a
+     * consumer group that already has metadata in it is the first thing anyone adopting PC does, and dying during the
+     * rebalance callback is the reported failure of astubbs#118 / confluentinc#326. That was previously survivable only
+     * because undecodable metadata bypassed this option entirely; now that the option genuinely governs every
+     * unreadable path, leaving the default at {@code FAIL} would make that report's exact scenario fatal again for
+     * anyone who configures nothing. {@code FAIL} remains available and now means what it says.
      */
     @Builder.Default
-    private final InvalidOffsetMetadataHandlingPolicy invalidOffsetMetadataPolicy = InvalidOffsetMetadataHandlingPolicy.FAIL;
+    private final InvalidOffsetMetadataHandlingPolicy invalidOffsetMetadataPolicy = InvalidOffsetMetadataHandlingPolicy.IGNORE;
     /**
      * When a message fails, how long the system should wait before trying that message again. Note that this will not
      * be exact, and is just a target.
@@ -529,42 +538,26 @@ public class ParallelConsumerOptions<K, V> {
 
         producerSourceValidation();
         transactionsValidation();
+        loadFactorValidation();
     }
 
     /**
-     * Exactly one way of supplying a producer may be used, and using the deprecated one says so once, here, rather
-     * than on the day the broker invalidates it.
+     * Exactly one way of supplying a producer may be used: two producers cannot be resolved to one silently.
      */
     private void producerSourceValidation() {
         if (producer != null && producerConfig != null) {
-            throw new IllegalArgumentException(msg("Supply either a {} instance or {} for PC to build one from, not both - " +
-                            "they cannot be resolved to one producer silently.",
+            throw new IllegalArgumentException(msg("Supply either a {} instance or {} for PC to build one from, not both",
                     Fields.producer, Fields.producerConfig));
-        }
-        if (producer != null) {
-            log.warn("A {} instance was supplied. PC cannot rebuild a producer it did not build, so when the broker " +
-                            "invalidates this one (fenced, expired producer id, stale epoch, lost generation) PC cannot " +
-                            "recover and keeps its pre-recovery behaviour. Supply {} (and optionally {}) instead and PC " +
-                            "recovers from all of them. The instance option is deprecated and its removal is queued " +
-                            "for {}.",
-                    Fields.producer, Fields.producerConfig, Fields.producerFactory, PRODUCER_INSTANCE_REMOVAL_RELEASE);
         }
     }
 
     private void transactionsValidation() {
-        boolean commitInternalHasNotBeenSet = getCommitInterval() == DEFAULT_COMMIT_INTERVAL;
-
         if (isUsingTransactionCommitMode()) {
             if (!isProducerSupplied()) {
-                throw new IllegalArgumentException(msg("Cannot set {} to Transaction Producer mode ({}) without supplying {} for PC to build a Producer from (or, deprecated, a Producer instance)",
+                throw new IllegalArgumentException(msg("Cannot set {} to Transaction Producer mode ({}) without supplying a Producer instance or {} for PC to build one from",
                         Fields.commitMode,
                         commitMode,
                         Fields.producerConfig));
-            }
-
-            // update commit frequency
-            if (commitInternalHasNotBeenSet) {
-                this.commitInterval = DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS;
             }
         }
 
@@ -576,6 +569,29 @@ public class ParallelConsumerOptions<K, V> {
                         Fields.commitMode,
                         commitMode));
             }
+        }
+    }
+
+    /**
+     * The load factor bounds have only one meaningful ordering: {@link #initialLoadFactor} is where the dynamic load
+     * factor starts, and {@link #maximumLoadFactor} is the ceiling it is allowed to step up to. An inverted pair can
+     * never step, so it is a typo rather than a request. Unchecked it is accepted and pinned at the initial value,
+     * surfacing at best as an inverted {@code 100/10} inside the rate-limited saturation warning - which only fires
+     * under load, and reads as a capacity signal rather than as the misconfiguration it is.
+     * <p>
+     * Checked whether or not {@link #messageBufferSize} is set. A buffer size makes the pair <em>unused</em>, not
+     * sensible, and accepting a nonsensical value is how it survives to the configuration change that starts reading
+     * it again.
+     */
+    private void loadFactorValidation() {
+        if (initialLoadFactor > maximumLoadFactor) {
+            throw new IllegalArgumentException(msg("Cannot set {} ({}) above {} ({}) - the initial load factor is "
+                            + "where the dynamic load factor starts and the maximum is the ceiling it may step up "
+                            + "to, so an inverted pair can never step",
+                    Fields.initialLoadFactor,
+                    initialLoadFactor,
+                    Fields.maximumLoadFactor,
+                    maximumLoadFactor));
         }
     }
 
@@ -595,28 +611,19 @@ public class ParallelConsumerOptions<K, V> {
     }
 
     /**
-     * @return true when the produce flows can be used - a configuration for PC to build the producer from, or the
-     *         deprecated finished instance
+     * @return true when the produce flows can be used - a finished instance, or a configuration for PC to build the
+     *         producer from
      */
     public boolean isProducerSupplied() {
         return producer != null || producerConfig != null;
     }
 
     /**
-     * @return true when the deprecated {@link #producer} instance was supplied - the path on which PC cannot recover
-     *         an invalidated producer
+     * @return true when the {@link #producer} instance was supplied, rather than {@link #producerConfig} - the path
+     *         on which PC cannot recover an invalidated producer
      */
     public boolean isProducerInstanceSupplied() {
         return producer != null;
-    }
-
-    /**
-     * The configuration as it may be shown: allow-listed keys with their values, everything else redacted. This is
-     * what {@link #toString()} carries in place of the raw map.
-     */
-    @ToString.Include(name = "producerConfig")
-    private String producerConfigForDisplay() {
-        return ProducerConfigRedaction.render(producerConfig);
     }
 
     /**
@@ -692,6 +699,18 @@ public class ParallelConsumerOptions<K, V> {
      * Switching this off restores the pre-0.6.0.1 behaviour exactly: no context crosses into the worker pool, and
      * anything your function puts into the MDC is left on the pooled thread for the next, unrelated, record to
      * inherit.
+     * <p>
+     * <b>On by default deliberately, and settled</b> (astubbs#205). Not propagating fails silently for everyone who
+     * has established a context; propagating fails visibly - an unexpected key in a log line - and has this switch.
+     * The pinning described above is the known cost of that choice and was accepted along with it. Flipping the
+     * default is a one-line change, but it takes evidence of the pinning actually biting rather than a re-reading of
+     * the same trade.
+     * <p>
+     * <b>Known gap on the reactive engines.</b> For Reactor and Mutiny this covers the invocation of your function and
+     * Parallel Consumer's own terminal signal handling. It does not follow the operators of the {@code Publisher} /
+     * {@code Uni} you return onto further schedulers - that needs Reactor's own
+     * {@code io.micrometer:context-propagation}, and is your call rather than Parallel Consumer's. It is a gap by
+     * decision, not an oversight.
      *
      * @see MdcPropagation
      */

@@ -64,10 +64,10 @@
 #
 # DEGRADED READS ARE LOUD, NEVER SHORT. An injection hook's correct output on a boring branch is
 # silence, which is byte-identical to being broken - so a section that cannot be built says so by
-# name instead of being omitted. That is not a hypothesis here: `inject-recorded-knowledge.sh` uses
-# GNU-only `xargs -r`, and under a BSD `xargs` its Registers section silently drops from 13 entries
-# to 4 while closed notes get relabelled as mis-tagged. A truncated-but-plausible index is worse
-# than no index.
+# name instead of being omitted. That is not a hypothesis here: `inject-recorded-knowledge.sh` used
+# GNU-only `xargs -r` while its scan was bash, and under a BSD `xargs` its Registers section silently
+# dropped from 13 entries to 4 while closed notes got relabelled as mis-tagged (the scan is
+# `bin/inflight.mjs docs index` now). A truncated-but-plausible index is worse than no index.
 #
 # BSD-CLEAN FROM LINE ONE. No `stat -c`, `mapfile`, `readarray`, `grep -P`, `date -d`,
 # `readlink -f`, `touch -d`, `xargs -r`, no bare `mktemp`, and no `timeout(1)` - that last one is GNU

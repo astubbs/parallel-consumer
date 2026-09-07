@@ -8,12 +8,14 @@ different thing than the other ten: does the PR actually close the issue, and if
 not, is that reasoning anywhere a reader will find it? The companion note for the ten without fixes is
 [`upstream-mirror-bodies-are-stale.md`](upstream-mirror-bodies-are-stale.md).
 
+<!-- post-merge: checked-begin -->
 Three of the four are settled. astubbs#201 now carries `Fixes astubbs/parallel-consumer#155`, and
 astubbs#203 carries `Closes astubbs/parallel-consumer#169. Closes astubbs/parallel-consumer#170.` in
 the qualified form the convention requires - both verified against GitHub's own resolved links, not
 the PR bodies alone. Confirm with `gh pr view <n> -R astubbs/parallel-consumer --json
 closingIssuesReferences` rather than trusting this sentence; the point of recording it is that the
 question was asked and answered, not the answer itself.
+<!-- post-merge: checked-end -->
 
 ## astubbs#204 deliberately does not close astubbs#177, and that is right
 

@@ -8,9 +8,13 @@
 // already shipped one gate that matched nothing and reported success over the defect it was written
 // for. The must-NOT-match half is the half that catches that.
 //
-// It tests the RULES, not the runner: the runner walks git, which a unit test should not.
+// It tests the RULES, not the runner: the runner walks git, which a unit test should not - and
+// bin/lib/added-files.mjs exists so that the one piece of the runner worth testing does not walk
+// git either. Given three lists it is a pure set computation, so it gets control pairs like
+// everything else here instead of a fixture repository.
 
 import { RULES } from './lib/source-patterns.mjs'
+import { addedByBranch } from './lib/added-files.mjs'
 
 let failures = 0
 const check = (desc, actual, expected) => {
@@ -28,6 +32,36 @@ const rule = id => {
 for (const r of RULES) {
   check(`[${r.id}] states a why`, typeof r.why === 'string' && r.why.length > 40, true)
   check(`[${r.id}] states a fix`, typeof r.fix === 'string' && r.fix.length > 10, true)
+}
+
+// --- addedByBranch ----------------------------------------------------------------------------
+// The control pair that matters is the merge commit: a file staged only because `git merge master`
+// put it there is NOT this branch's addition, and treating it as one fired the new-shell rule on
+// seven of astubbs/parallel-consumer#381's scripts and advised --no-verify.
+{
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+
+  check('added: a file this branch committed is added',
+    eq(addedByBranch({ committed: ['bin/mine.sh'], staged: [], alreadyOnBase: [] }), ['bin/mine.sh']), true)
+  check('added: a file staged for its first commit is added',
+    eq(addedByBranch({ committed: [], staged: ['bin/mine.sh'], alreadyOnBase: [] }), ['bin/mine.sh']), true)
+  // The must-NOT half.
+  check('added: a file already on the base is NOT added, however it was staged',
+    eq(addedByBranch({ committed: [], staged: ['bin/theirs.sh'], alreadyOnBase: ['bin/theirs.sh'] }), []), true)
+  check('added: a merge stages both sides - only this branch\'s survives',
+    eq(addedByBranch({
+      committed: ['bin/mine.sh'],
+      staged: ['bin/mine.sh', 'bin/theirs.sh'],
+      alreadyOnBase: ['bin/theirs.sh'],
+    }), ['bin/mine.sh']), true)
+  // A path both sides added independently is grandfathered on the base, so it is not new here.
+  check('added: a path the base also has is NOT added',
+    eq(addedByBranch({ committed: ['bin/same.sh'], staged: [], alreadyOnBase: ['bin/same.sh'] }), []), true)
+  // git's --name-only output ends with a newline, so a naive split leaves an empty entry.
+  check('added: the empty string from a trailing newline is dropped',
+    eq(addedByBranch({ committed: ['bin/mine.sh', ''], staged: [''], alreadyOnBase: [] }), ['bin/mine.sh']), true)
+  check('added: a Set is accepted for the base as well as an array',
+    eq(addedByBranch({ committed: ['a'], staged: [], alreadyOnBase: new Set(['a']) }), []), true)
 }
 
 // --- new-shell-script -------------------------------------------------------------------------

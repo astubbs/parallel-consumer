@@ -531,7 +531,105 @@ assert "...labelled as the session's root in the refusal" labelled "$got"
 wt_out=$(wt_fire "$session_green" "$commit_red" 'git commit --no-verify -m "I have a reason"')
 assert "--no-verify bypasses the OTHER tree's red gate too" 0 "${wt_out%%|*}"
 
-rm -rf "$session_green" "$commit_red" "$session_red" "$commit_green"
+# 7. A CLEAN TREE IS THE WRONG TREE. The payload cwd is the SESSION root, not a subagent worktree; a
+# bare commit resolved to a tree with nothing changed is one git would refuse anyway, so gating it can
+# only report another tree's defects. Three subagents hit this on 2026-09-02. The fixture must be
+# COMMITTED: `make_worktree` leaves .githooks/ untracked, which is dirty, and the check correctly does
+# not fire on a dirty tree - which is how the first version of this test passed for the wrong reason.
+clean_red=$(make_worktree clean-red 1)
+git -C "$clean_red" add -A && git -C "$clean_red" -c user.email=t@t -c user.name=t commit -q -m init
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit -m x')
+assert "a bare commit resolved to a CLEAN tree is refused as the wrong tree" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF clean-red"*) got="gated it: ${wt_out#*|}" ;; *) got=refused_without_gating ;; esac
+assert "...and the RED gate there was NOT run - refusing, not gating" refused_without_gating "$got"
+case "$wt_out" in *"git -C <your-worktree>"*) got=named_the_remedy ;; *) got="${wt_out#*|}" ;; esac
+assert "...and the refusal names git -C as the remedy" named_the_remedy "$got"
+# CONTROL: the same tree, dirtied, gates normally - so the refusal is keyed on cleanliness, not on cwd.
+echo dirty > "$clean_red/f"
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit -m x')
+assert "control: the same tree once dirty goes to the gate, which blocks" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF clean-red"*) got=gated ;; *) got="did not gate: ${wt_out#*|}" ;; esac
+assert "control: ...and the gate actually spoke" gated "$got"
+# And --allow-empty on a clean tree is the one honest case, so it must reach the gate too.
+rm "$clean_red/f"
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit --allow-empty -m x')
+assert "--allow-empty against a clean tree reaches the gate, which blocks" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF clean-red"*) got=gated ;; *) got="refused: ${wt_out#*|}" ;; esac
+assert "--allow-empty against a clean tree reaches the gate rather than being refused" gated "$got"
+# --amend rewrites a commit and legitimately needs no working-tree change, so it must reach the gate
+# too. The first version refused it with a message naming a condition that did not hold and a remedy
+# (git -C the same tree) that reproduced the refusal - found three ways in review of
+# astubbs/parallel-consumer#416.
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit --amend -m x')
+case "$wt_out" in *"GATE OF clean-red"*) got=gated ;; *) got="refused: ${wt_out#*|}" ;; esac
+assert "--amend against a clean tree reaches the gate rather than being refused" gated "$got"
+# ...and the exemption is keyed on the flag the COMMIT carries, not on the text of the command. A
+# message that mentions --allow-empty is still a bare commit against a clean tree - the same
+# distinction commit_bypass_counts already draws for --no-verify.
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit -m "document --allow-empty"')
+assert "--allow-empty inside the message does not exempt a clean-tree commit" 2 "${wt_out%%|*}"
+case "$wt_out" in *"git -C <your-worktree>"*) got=refused_as_wrong_tree ;; *) got="${wt_out#*|}" ;; esac
+assert "...and it is the wrong-tree refusal, not the gate" refused_as_wrong_tree "$got"
+# WHEN CLEANLINESS CANNOT BE READ - the resolved target is not a git repository - the check says
+# nothing and the hook falls through to its pre-existing path: no gate found there, exit 0, the
+# documented fail-open on our own bug. Pinned so a change to that direction is a decision, not a
+# side effect (Codex raised it in review of astubbs/parallel-consumer#416 and it predates the check).
+nogit="$TMP/nogit-$RANDOM$RANDOM"; mkdir -p "$nogit"
+wt_out=$(wt_fire "$nogit" "$nogit" 'git commit -m x')
+assert "a target that is not a git repo is not refused as clean - it falls through" 0 "${wt_out%%|*}"
+case "$wt_out" in *"NO changes"*) got="refused: ${wt_out#*|}" ;; *) got=fell_through ;; esac
+assert "...without the wrong-tree message" fell_through "$got"
+rm -rf "$nogit"
+
+# 8. AN UNEXPANDED SHELL EXPRESSION IN -C IS REFUSED, NOT RESOLVED. The hook reads the command
+# before the shell expands it, so `git -C "$W" commit` arrives with the literal text `$W`, which
+# joined onto the cwd is a path that does not exist. `git status` there ERRORS rather than reporting
+# clean, so case 7 cannot fire; bash then finds no directory and drops to $CLAUDE_PROJECT_DIR - here
+# a RED tree, so pre-fix the wrong gate spoke, under a label claiming the command never said where it
+# runs. Observed three times on 2026-09-03. wt_fire single-quotes the command, so `$W` reaches the
+# hook unexpanded exactly as Claude Code hands it over.
+wt_out=$(wt_fire "$commit_red" "$clean_red" 'git -C "$W" commit -m x')
+assert "git -C with an unexpanded variable is refused" 2 "${wt_out%%|*}"
+case "$wt_out" in *"Literal paths only"*) got=named_the_rule ;; *) got="${wt_out#*|}" ;; esac
+assert "...and the refusal says literal paths only" named_the_rule "$got"
+case "$wt_out" in *'$W'*) got=named_the_value ;; *) got="${wt_out#*|}" ;; esac
+assert "...and names the offending value" named_the_value "$got"
+case "$wt_out" in *"GATE OF"*) got="a gate ran: ${wt_out#*|}" ;; *) got=no_gate_ran ;; esac
+assert "...and NO gate ran - not the session tree it used to fall through to" no_gate_ran "$got"
+# A command substitution is the same class: the shell would run it, the hook only sees its text.
+wt_out=$(wt_fire "$commit_red" "$clean_red" 'git -C `pwd` commit -m x')
+assert "git -C with a backtick substitution is refused" 2 "${wt_out%%|*}"
+case "$wt_out" in *'`pwd`'*) got=named_the_value ;; *) got="${wt_out#*|}" ;; esac
+assert "...and names the substitution" named_the_value "$got"
+# So is a leading tilde - the shell expands it, and the hook refuses rather than guessing HOME.
+wt_out=$(wt_fire "$commit_red" "$clean_red" 'git -C ~/wt commit -m x')
+assert "git -C with a leading tilde is refused" 2 "${wt_out%%|*}"
+case "$wt_out" in *"Literal paths only"*) got=named_the_rule ;; *) got="${wt_out#*|}" ;; esac
+assert "...with the same literal-paths remedy" named_the_rule "$got"
+# CONTROL: a LITERAL absolute -C still resolves and reaches that tree's own gate, with the session
+# tree and the payload cwd both pointing elsewhere - so the refusal is keyed on the value's shape.
+wt_out=$(wt_fire "$session_green" "$clean_red" "git -C $commit_red commit -m x")
+assert "control: a literal absolute -C still reaches the gate" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=gated_the_named_tree ;; *) got="${wt_out#*|}" ;; esac
+assert "control: ...of the tree it names" gated_the_named_tree "$got"
+# CONTROL: a leading cd that names the right tree does not rescue an unreadable -C. git -C beats cd
+# at run time, and the -C is the part the hook cannot read, so it refuses and says so.
+wt_out=$(wt_fire "$session_green" "$clean_red" "cd $commit_red && git -C \"\$W\" commit -m x")
+assert "control: -C \$W is refused even behind a cd that names the right tree" 2 "${wt_out%%|*}"
+case "$wt_out" in *"even when a cd"*) got=said_why ;; *) got="${wt_out#*|}" ;; esac
+assert "control: ...and the refusal says the cd does not help" said_why "$got"
+case "$wt_out" in *"GATE OF"*) got="a gate ran: ${wt_out#*|}" ;; *) got=no_gate_ran ;; esac
+assert "control: ...and the cd tree was not gated in its place" no_gate_ran "$got"
+# The check is scoped to the COMMIT: an unexpanded -C on a neighbouring status is not the commit's,
+# so the bare commit beside it is answered by case 7 (clean cwd), not by this refusal.
+wt_out=$(wt_fire "$commit_red" "$clean_red" 'git -C "$W" status && git commit -m x')
+case "$wt_out" in *"NO changes"*) got=clean_tree_refusal ;; *"Literal paths only"*) got=literal_refusal ;; *) got="${wt_out#*|}" ;; esac
+assert "an unexpanded -C on a NON-commit does not trip the refusal" clean_tree_refusal "$got"
+# And a bypass is still a bypass: a commit that gates nothing has no tree to resolve.
+wt_out=$(wt_fire "$commit_red" "$clean_red" 'git -C "$W" commit --no-verify -m x')
+assert "--no-verify with an unexpanded -C is still honoured" 0 "${wt_out%%|*}"
+
+rm -rf "$session_green" "$commit_red" "$session_red" "$commit_green" "$clean_red"
 
 # ---------------------------------------------------------------------------------------------
 # inject-merge-checklist.sh
@@ -1160,16 +1258,25 @@ registrations = sum(len(g["hooks"]) for groups in cfg["hooks"].values() for g in
 # not failing. A number nobody verifies is a number that rots, so both are verified here rather than
 # trusted to the next editor, and both are needed because one script can be registered against
 # several events.
-# Runs to twenty because a table that stops at the current count turns the next hook into a
+# Ran to twenty because a table that stops at the current count turns the next hook into a
 # self-test failure whose message reads like the doc is wrong - which is how this list ended one
 # short of the number the doc had to state. The literal symptom is worth knowing, because it does
-# not look like a missing entry: "says thirteen registrations; settings.json has 13".
-WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
-         "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+# not look like a missing entry: "says thirteen registrations; settings.json has 13". And then the
+# twenty-first registration arrived, and the table stopping at twenty was the same defect one row
+# later - so the compounds are derived, not listed: "twenty-one" through "ninety-nine" from the tens
+# and units, and the regex admits the hyphen.
+UNITS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+         "eight": 8, "nine": 9}
+WORDS = {**UNITS, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
          "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
-         "nineteen": 19, "twenty": 20}
+         "nineteen": 19}
+for tens_word, tens in (("twenty", 20), ("thirty", 30), ("forty", 40), ("fifty", 50),
+                        ("sixty", 60), ("seventy", 70), ("eighty", 80), ("ninety", 90)):
+    WORDS[tens_word] = tens
+    for unit_word, unit in UNITS.items():
+        WORDS["%s-%s" % (tens_word, unit_word)] = tens + unit
 doc = (root / "docs/agent-harness.md").read_text()
-m = re.search(r"`\.claude/settings\.json`\*\* - ([a-z]+) hook scripts across ([a-z]+) registrations", doc)
+m = re.search(r"`\.claude/settings\.json`\*\* - ([a-z-]+) hook scripts across ([a-z-]+) registrations", doc)
 if not m:
     problems.append("docs/agent-harness.md no longer states the settings.json script and registration counts")
 else:
@@ -1198,10 +1305,21 @@ assert "every registered hook is self-tested, and the disk hook is registered un
 # It runs at session start with no input to parse, so the risks are different from the other three:
 # it must never break a session, and it must actually name the documents. A reminder that silently
 # emits nothing is worse than none - it looks installed.
+#
+# THE FIXTURES ARE GIT REPOSITORIES. The hook renders the three corpus areas through
+# `bin/inflight.mjs docs index`, which reads the REFS and never the working tree - so a directory
+# of files with no commit is a corpus the index cannot see, and a fixture that adds a note has to
+# commit it before the hook can list it. Each fixture below commits what it writes.
 # ---------------------------------------------------------------------------------------------
 
 echo
 echo "--- inject-recorded-knowledge.sh ---"
+
+knowledge_commit() { # <dir> <message> - init on first use, then commit everything in the tree
+    git -C "$1" init -q -b master 2>/dev/null
+    git -C "$1" add -A
+    git -C "$1" -c user.email=selftest@example.invalid -c user.name=selftest commit -q --allow-empty -m "$2"
+}
 
 knowledge_out=$(CLAUDE_PROJECT_DIR="$REPO_ROOT" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
 knowledge_rc=$?
@@ -1215,11 +1333,22 @@ case "$knowledge_out" in
 esac
 assert "names actual document paths" names_paths "$got"
 
-# One line per document, or it is not an index. Compare against the real corpus rather than a
-# hardcoded number, so adding a solution does not fail this test.
-want_count=$(find "$REPO_ROOT/docs/solutions" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
-got_count=$(printf '%s\n' "$knowledge_out" | grep -c 'docs/solutions/.*\.md')
-assert "lists every solution document" "$want_count" "$got_count"
+# One line per document, or it is not an index. EVERY solution the checkout carries is listed - by
+# path, so a renamed or added solution is caught without a hardcoded number - and the index is
+# corpus-scoped now, so it lists MORE than the checkout holds and a count comparison would be wrong
+# in the direction that looks like success.
+missing_solutions=""
+while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    case "$knowledge_out" in *"\`$rel\`"*) ;; *) missing_solutions="${missing_solutions}${rel} " ;; esac
+done <<<"$(git -C "$REPO_ROOT" ls-files -- 'docs/solutions/*.md' | grep -vE '/(AGENTS|CLAUDE|README)\.')"
+assert "lists every solution document the checkout carries (missing: '${missing_solutions}')" "" "$missing_solutions"
+case "$knowledge_out" in *"docs context: session index"*) got=from_the_tool ;; *) got=not_from_the_tool ;; esac
+assert "the corpus areas come from the tool, framed as the session index" from_the_tool "$got"
+case "$knowledge_out" in *"CORPUS-SCOPED"*) got=says_so ;; *) got=silent ;; esac
+assert "the framing says the index is corpus-scoped" says_so "$got"
+case "$knowledge_out" in *"CURRENT BRANCH carries"*) got=old_caveat ;; *) got=gone ;; esac
+assert "the branch-scoped caveat is gone" gone "$got"
 
 # Titles, not slugs: the filename is already in the path, and the title is what makes an agent
 # recognise the document as relevant to the thing in front of it.
@@ -1266,6 +1395,7 @@ printf '# A closed note\n\n<!-- inflight-type: task -->\n<!-- inflight-state: cl
 printf '# A prose mention of the marker\n\nThe gate greps for inflight-state: markers.\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: misdirekshun -->\n' > "$class_tmp/docs/inflight/bug-prose-mention.md"
 printf '# A well-tagged bug\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: misdirection -->\n' > "$class_tmp/docs/inflight/bug-well-tagged.md"
 printf '# A proposed feature\n\n<!-- inflight-type: feature -->\n' > "$class_tmp/docs/inflight/feature-idea.md"
+knowledge_commit "$class_tmp" "fixture"
 unclassified_out=$(CLAUDE_PROJECT_DIR="$class_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
 
 # Grouped by IMPACT across every type, and rendered as REAL markdown headings. Both changed together:
@@ -1308,6 +1438,7 @@ pos_tmp=$(mktemp -d); mkdir -p "$pos_tmp/docs/inflight" "$pos_tmp/docs/solutions
 printf -- '---\ntitle: "s"\n---\n' > "$pos_tmp/docs/solutions/x/s.md"
 printf '# Deferred with the word at the FRONT\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n<!-- inflight-state: deferred - parked -->\n' > "$pos_tmp/docs/inflight/ci-front.md"
 printf '# Deferred with the word in the MIDDLE\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n<!-- inflight-state: parked - deferred, gated on a user base -->\n' > "$pos_tmp/docs/inflight/ci-middle.md"
+knowledge_commit "$pos_tmp" "fixture"
 pos_out=$(CLAUDE_PROJECT_DIR="$pos_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
 def_block=$(sed -n '/^# Deferred/,/^# /p' <<<"$pos_out")
 case "$def_block" in *"word at the FRONT"*) got=found ;; *) got=missing ;; esac
@@ -1319,6 +1450,7 @@ assert "a state with 'deferred' later is equally deferred" found "$got"
 # same section. Before this, `parked` alone matched neither is_open nor is_deferred and fell in with
 # closed and blocked under "not shown", which is how notes went missing on astubbs#323.
 printf '# Parked with no other keyword\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n<!-- inflight-state: parked - nobody has argued for it -->\n' > "$pos_tmp/docs/inflight/ci-parked.md"
+knowledge_commit "$pos_tmp" "a parked note"
 park_out=$(CLAUDE_PROJECT_DIR="$pos_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
 park_def=$(awk '/^# Deferred/{f=1;next} f&&/^# /{exit} f' <<<"$park_out")
 case "$park_def" in *"Parked with no other keyword"*) got=deferred ;; *) got=stranded ;; esac
@@ -1358,6 +1490,102 @@ out_nosol=$(CLAUDE_PROJECT_DIR="$empty_dir" "$HOOKS/inject-recorded-knowledge.sh
 assert "a docs/ with no solutions exits 0" 0 "$?"
 assert "a docs/ with no solutions emits nothing" "" "$out_nosol"
 rm -rf "$empty_dir"
+
+# THE SECTIONS OUTSIDE THE CORPUS ARE STILL THE HOOK'S OWN, read from the working tree exactly as
+# before the migration (the plan's R17): the repo-level registers, the ideation documents and the
+# test-hardening audits. Asserted against the real checkout, by content rather than by count.
+# The register's title carries the marker words themselves, and bin/todo-index.sh indexes any file
+# that spells them out - so the pattern is split around them, matching the same line without the
+# scanner reading a test assertion as a marker.
+case "$knowledge_out" in *'- The deferred-work backlog, and the '*'triage  `docs/refactoring.md`'*) got=listed ;; *) got=missing ;; esac
+assert "the repo-level registers are still listed" listed "$got"
+case "$knowledge_out" in *'# Ideation: ranked directions, and what was already REJECTED and why'*) got=present ;; *) got=missing ;; esac
+assert "the ideation section is still present" present "$got"
+ideation_missing=""
+while IFS= read -r stem; do
+    [ -n "$stem" ] || continue
+    case "$knowledge_out" in *"$stem"*) ;; *) ideation_missing="${ideation_missing}${stem} " ;; esac
+done <<<"$(find "$REPO_ROOT/docs/ideation" -type f \( -name '*.html' -o -name '*.md' \) 2>/dev/null | sed -E 's#.*/docs/ideation/##; s#\.(html|md)$##')"
+assert "every ideation document is still named (missing: '${ideation_missing}')" "" "$ideation_missing"
+case "$knowledge_out" in *'# Dated test-hardening audits'*) got=present ;; *) got=missing ;; esac
+assert "the test-hardening section is still present" present "$got"
+
+# A SMALL COMMITTED CORPUS for the two cases below - its own, because the fixtures above are
+# removed as their cases finish, and a hook pointed at a directory that no longer exists prints
+# nothing and exits 0, which read as "framing missing" the first time these ran.
+nc_tmp=$(mktemp -d); mkdir -p "$nc_tmp/docs/inflight" "$nc_tmp/docs/solutions/x"
+printf -- '---\ntitle: "s"\n---\n' > "$nc_tmp/docs/solutions/x/s.md"
+printf '# A well-tagged bug\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: misdirection -->\n' > "$nc_tmp/docs/inflight/bug-well-tagged.md"
+knowledge_commit "$nc_tmp" "fixture"
+
+# NO `node` ON PATH: the framing and the non-corpus sections, one line saying the three areas are
+# missing and how to get them, exit 0 - and never the old bash scan, which is what a partial index
+# that reads as complete would be. A PATH holding everything the hook uses EXCEPT node - `dirname`
+# included, which is a binary on both platforms and resolves the hook's own directory.
+nonode="$TMP/nonode"; mkdir -p "$nonode"
+for tool in bash git find grep sed sort paste dirname; do
+    ln -s "$(command -v "$tool")" "$nonode/$tool"
+done
+nonode_out=$(PATH="$nonode" CLAUDE_PROJECT_DIR="$nc_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+assert "without node the hook exits 0" 0 "$?"
+case "$nonode_out" in *'# Already solved here'*) got=framed ;; *) got=unframed ;; esac
+assert "without node the framing is still printed" framed "$got"
+case "$nonode_out" in *'DELIVERY FAILED: session index'*) got=noticed ;; *) got=silent ;; esac
+assert "without node the missing areas are announced, not implied" noticed "$got"
+case "$nonode_out" in *'# Open work'*) got=bash_scan_fell_back ;; *) got=no_fallback ;; esac
+assert "without node the old bash scan is NOT fallen back to" no_fallback "$got"
+
+# A RECORDED DELIVERY FAILURE IS PRINTED (the plan's R26). A hook that fails open leaves nothing in
+# the agent's context, so the record in the tool's cache is the only place the failure exists, and
+# the session index is one of the two places that read it back. The cache is pointed at a
+# directory of this test's own through PC_INFLIGHT_CACHE_DIR, and the record is written through
+# the library, so the format is whatever the library says it is.
+failure_cache="$TMP/delivery-cache"; mkdir -p "$failure_cache"
+PC_INFLIGHT_CACHE_DIR="$failure_cache" node -e 'import(process.argv[1]).then((m) => m.recordDeliveryFailure("read-time header", "stub reason for the self-test"))' "$REPO_ROOT/bin/lib/cache.mjs"
+notice_out=$(PC_INFLIGHT_CACHE_DIR="$failure_cache" CLAUDE_PROJECT_DIR="$nc_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+case "$notice_out" in *'DELIVERY FAILED: read-time header - stub reason for the self-test'*) got=noticed ;; *) got=silent ;; esac
+assert "a recorded delivery failure is printed by the session index" noticed "$got"
+# ...and the corpus was rendered beside it: the notice is a line in the index, not a replacement for it.
+case "$notice_out" in *'A well-tagged bug'*) got=rendered ;; *) got=missing ;; esac
+assert "the index is still rendered beside the notice" rendered "$got"
+
+# THE BRANCH-FACTS BLOCK (the plan's R11): after the index, the documents that name the checked-out
+# branch, its PR or its issue numbers, rendered by `docs for-branch` and injected verbatim - once.
+# The fixture's note names the branch by its slug in prose; the PR cache is pointed at an empty
+# directory, so this is also the cache-miss path, and the hook must still find the note by the
+# branch name alone without reaching for `gh`. On master there is nothing to look up and no block.
+printf '# The flange workstream\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nlives on feats/widget-flange until it lands\n' > "$nc_tmp/docs/inflight/ci-flange.md"
+knowledge_commit "$nc_tmp" "a note naming its branch"
+git -C "$nc_tmp" switch -q -c feats/widget-flange
+empty_pr_cache="$TMP/empty-pr-cache"; mkdir -p "$empty_pr_cache"
+facts_out=$(PC_INFLIGHT_CACHE_DIR="$empty_pr_cache" CLAUDE_PROJECT_DIR="$nc_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+assert "on a branch the hook exits 0" 0 "$?"
+facts_blocks=$(grep -c '^docs context: branch facts$' <<<"$facts_out")
+assert "on a branch with a document naming it, the branch-facts block is printed once" 1 "$facts_blocks"
+case "$facts_out" in *'- The flange workstream  docs/inflight/ci-flange.md'*) got=listed ;; *) got=missing ;; esac
+assert "the block lists the document that names the branch" listed "$got"
+case "$facts_out" in *'terms from feats/widget-flange'*) got=named ;; *) got=unnamed ;; esac
+assert "the block says which terms it searched for" named "$got"
+# The block follows the index, never precedes it: the index is the map, the block is the pin.
+index_at=$(grep -n '^docs context: session index$' <<<"$facts_out" | head -1 | cut -d: -f1)
+facts_at=$(grep -n '^docs context: branch facts$' <<<"$facts_out" | head -1 | cut -d: -f1)
+{ [ -n "$index_at" ] && [ -n "$facts_at" ] && [ "$index_at" -lt "$facts_at" ]; } && got=after_index || got=elsewhere
+assert "the branch-facts block comes after the session index" after_index "$got"
+git -C "$nc_tmp" switch -q master
+master_out=$(PC_INFLIGHT_CACHE_DIR="$empty_pr_cache" CLAUDE_PROJECT_DIR="$nc_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+assert "on master the hook exits 0" 0 "$?"
+master_blocks=$(grep -c '^docs context: branch facts$' <<<"$master_out")
+assert "on master there is no branch-facts block" 0 "$master_blocks"
+# ...and no stray line from the command in its place. The hook captures stdout and injects whatever
+# it gets, so the "nothing to look up" sentence `docs for-branch` says for a human at a terminal
+# belongs on stderr: on stdout it opened every master session with it, and the frame check above
+# never noticed because a bare sentence is not a block.
+master_notes=$(grep -c '^docs for-branch:' <<<"$master_out")
+assert "on master the hook injects no docs for-branch note" 0 "$master_notes"
+# ...while the index beside it still rendered - silence on the block is not silence on the session.
+case "$master_out" in *'A well-tagged bug'*) got=rendered ;; *) got=missing ;; esac
+assert "on master the index is still rendered" rendered "$got"
+rm -rf "$nc_tmp"
 
 # check-merge-outstanding-work.sh
 #
@@ -1561,6 +1789,7 @@ printf -- '---\ntitle: "s"\n---\n' > "$def_tmp/docs/solutions/x/s.md"
 printf '# An open bug\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n' > "$def_tmp/docs/inflight/bug-open.md"
 printf '# A deferred bug\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: misdirection -->\n<!-- inflight-state: deferred - after v6 -->\n' > "$def_tmp/docs/inflight/bug-deferred.md"
 printf '# A closed note\n\n<!-- inflight-type: task -->\n<!-- inflight-state: closed - will not do -->\n' > "$def_tmp/docs/inflight/task-closed.md"
+knowledge_commit "$def_tmp" "fixture"
 def_out=$(CLAUDE_PROJECT_DIR="$def_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
 
 case "$(sed -n '/^# Open work/,/^# Deferred/p' <<<"$def_out")" in
@@ -1594,6 +1823,69 @@ rm -rf "$def_tmp"
 rel_out=$( cd "$REPO_ROOT" && bash .claude/hooks/inject-recorded-knowledge.sh 2>/dev/null )
 case "$rel_out" in *"# Open work"*) got=works ;; *) got=silently_empty ;; esac
 assert "the hook works when invoked by a relative path" works "$got"
+
+# EQUIVALENCE WITH THE PRE-MIGRATION HOOK (the plan's KTD8). The hook used to scan the working tree
+# in bash; it now renders `docs index`, which reads the refs. The claim the migration makes is that
+# nothing the old scan listed has gone missing - so the old hook is MATERIALISED at the last commit
+# where it was bash, run against THIS checkout, and every title it lists is looked for in the new
+# hook's output. The old hook sources bin/lib/inflight-tags.sh relative to its own location, which
+# is why it runs from a worktree of its commit rather than from a `git show` of one file.
+#
+# 10ed71c9e84c is the merge-base with master when the migration branch was cut - the last commit ON
+# MASTER at which the hook scanned the tree in bash, and byte-identical to the branch's own
+# pre-migration copy. Pinning a master commit rather than a branch commit is what lets this survive a
+# squash-merge: a squashed branch's SHAs are on no ref afterwards, so a pin to one of them would fail
+# on the first master run. The `cat-file -e` below fails the suite loudly on a missing commit rather
+# than skipping, because a skipped equivalence check reads as a passed one.
+old_hook_sha=10ed71c9e84c
+old_hook_wt="$TMP/old-hook"
+trap 'git -C "$REPO_ROOT" worktree remove --force "$old_hook_wt" 2>/dev/null; rm -rf "$TMP"' EXIT
+if git -C "$REPO_ROOT" cat-file -e "${old_hook_sha}^{commit}" 2>/dev/null \
+    && git -C "$REPO_ROOT" worktree add -q --detach "$old_hook_wt" "$old_hook_sha" 2>/dev/null; then
+    old_out=$(CLAUDE_PROJECT_DIR="$REPO_ROOT" "$old_hook_wt/.claude/hooks/inject-recorded-knowledge.sh" 2>/dev/null)
+    # POSITIVE CONTROL: the old hook ran and produced its index, headings and all. Without this a
+    # broken old hook lists nothing, every title is trivially present, and the check passes vacuously.
+    case "$old_out" in *'# Open work - what it costs you to not know'*) got=present ;; *) got=missing ;; esac
+    assert "positive control: the pre-migration hook prints its open-work heading" present "$got"
+    case "$old_out" in *'# Dated plans and investigations'*) got=present ;; *) got=missing ;; esac
+    assert "positive control: the pre-migration hook prints its plans heading" present "$got"
+    # Every `- ` line before the plans section is a title (its `[type] ` prefix and its trailing
+    # path or state stripped); the plans section is one comma-joined line of stems.
+    old_titles=$(awk '/^# Dated plans and investigations/{exit} /^- /' <<<"$old_out" \
+        | sed -E 's/^- (\[[a-z -]+\] )?//; s/  `[^`]*`$//; s/  _[^_]*_$//' | sort -u)
+    old_stems=$(awk '/^# Dated plans and investigations/{f=1;next} f&&/^# /{exit} f' <<<"$old_out" \
+        | grep -E '^[0-9]{4}-' | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' | sort -u)
+    old_count=$(( $(grep -c . <<<"$old_titles") + $(grep -c . <<<"$old_stems") ))
+    [ "$old_count" -gt 0 ] && got=nonzero || got=zero
+    assert "positive control: the pre-migration hook listed titles (${old_count})" nonzero "$got"
+    # A title the new index does not carry is a regression UNLESS the document's checkout copy
+    # differs from what the refs hold - the index reads the baseline's blob for an on-baseline
+    # document (the plan's KTD16) and no ref at all for an uncommitted one, so those titles are
+    # expected to differ, and each is named so a reader can see the classification was earned.
+    knowledge_baseline=$(git -C "$REPO_ROOT" rev-parse --verify -q origin/master >/dev/null 2>&1 && echo origin/master || echo master)
+    equiv_missing=""; equiv_expected=""
+    while IFS= read -r title; do
+        [ -n "$title" ] || continue
+        case "$knowledge_out" in *"$title"*) continue ;; esac
+        rel=$(grep -rlF -- "$title" "$REPO_ROOT/docs/inflight" "$REPO_ROOT/docs/solutions" 2>/dev/null | head -1 | sed "s#^$REPO_ROOT/##")
+        if [ -n "$rel" ] && git -C "$REPO_ROOT" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 \
+            && git -C "$REPO_ROOT" diff --quiet "$knowledge_baseline" -- "$rel" 2>/dev/null; then
+            equiv_missing="${equiv_missing}[${title}] "
+        else
+            equiv_expected="${equiv_expected}${rel:-$title} "
+        fi
+    done <<<"$old_titles"
+    while IFS= read -r stem; do
+        [ -n "$stem" ] || continue
+        case "$knowledge_out" in *"$stem"*) continue ;; esac
+        equiv_missing="${equiv_missing}[${stem}] "
+    done <<<"$old_stems"
+    [ -n "$equiv_expected" ] && echo "      (differs from the refs, listed as the baseline holds it: ${equiv_expected})"
+    assert "every title the pre-migration hook listed is in the new index (missing: '${equiv_missing}')" "" "$equiv_missing"
+    git -C "$REPO_ROOT" worktree remove --force "$old_hook_wt" 2>/dev/null
+else
+    assert "the pinned pre-migration commit ${old_hook_sha} is present (re-pin after a re-cut)" present missing
+fi
 
 echo
 echo "--- remind-inflight-on-push.sh ---"
@@ -2618,7 +2910,8 @@ assert "repeat reviews by one author are aggregated, not repeated" aggregated "$
 
 # --- DEGRADED READS ARE LOUD, NEVER SHORT ---------------------------------------------------------
 # Measured incident, not a hypothesis: inject-recorded-knowledge.sh's GNU-only `xargs -r` silently
-# shortens its own index under a BSD xargs, and a truncated-but-plausible block is worse than none.
+# shortened its own index under a BSD xargs while its scan was bash, and a truncated-but-plausible
+# block is worse than none.
 bctx_clean_stamps
 ctx="$(bctx_context "$(bctx_fire "$sess_payload" "$stub_broken:$PATH")")"
 case "$ctx" in *'Open PR - UNKNOWN'*) got=loud ;; *) got=quiet ;; esac

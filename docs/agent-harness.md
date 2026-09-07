@@ -112,6 +112,11 @@ containing `@AGENTS.md`, which imports it:
 - `bin/CLAUDE.md` -> imports `bin/AGENTS.md`, arriving when you touch a script
 - `docs/inflight/CLAUDE.md` -> imports `docs/inflight/AGENTS.md`, arriving when you touch a note
 
+A bridge does not have to import an `AGENTS.md`. `<module>/src/test/CLAUDE.md` imports
+`docs/testing-at-write-time.md` - a short slice of `docs/testing.md` holding only what must fire
+while a test is being written - so those rules arrive when a test file is touched rather than when
+someone thinks to open the testing doc. Same mechanism, different source file.
+
 **The nested ones are the interesting half.** They load *at the moment you work in that directory* -
 which is exactly the "inject the right prompt at the right time" that a routing table in a doc
 cannot do. Adding a nested `AGENTS.md` without its `CLAUDE.md` sibling means Claude Code never sees
@@ -221,11 +226,12 @@ So the two hooks are registered differently, on purpose:
 |---|---|---|
 | `check-squash-subject.sh` | **none** - runs on every Bash call | It can only ever allow, or deny a real `gh pr merge`. A `grep` for `merge` in the payload rejects the overwhelming majority before python starts, so the cost is a shell test. |
 | `check-merge-outstanding-work.sh` (astubbs#324) | **none** - runs on every Bash call | Same reasoning as the squash guard, and the same shapes must reach it: `echo ready && gh pr merge ...` is exactly the case a prefix `if` would miss. A cheap `*merge*` pre-filter skips the interpreter on everything else; the decision itself is tokenised with `shlex`, so `gh pr comment --body "run gh pr merge later"` is not a merge. It watches this session's background TASKS only - it deliberately does not scan the process table for builds. |
-| `pre-commit-gate.sh` | `Bash(git commit *)` | It runs the gates and can `exit 2`, so firing it on every Bash call is the outage described above. It no longer gates *the session's* repository: it derives the commit's own working tree from the payload, so a subagent committing in another worktree is gated against that worktree - see its bullet below. **It self-filters as well**, exiting 0 when the payload holds no commit, because the `if` is a belt the script must not hang its trousers on - see below. |
+| `pre-commit-gate.sh` | `Bash(git commit *)` | It runs the gates and can `exit 2`, so firing it on every Bash call is the outage described above. It no longer gates *the session's* repository: it derives the commit's own working tree from the command (`git -C`, a leading `cd`), so a subagent committing in another worktree is gated against that worktree when the command names it **with a literal path** - a `-C "$W"` reaches the hook unexpanded and is refused; a bare commit that resolves to a tree with nothing to commit is refused with that remedy, because the payload's `cwd` is the session's directory, not the subagent's - see its bullet below. **It self-filters as well**, exiting 0 when the payload holds no commit, because the `if` is a belt the script must not hang its trousers on - see below. |
 
-The `git commit` case that `if` therefore misses (`cd sub && git commit`) is covered by
-`.githooks/pre-commit`, which git runs inside the target repository. That is the layering working
-as intended, not a hole - see *Known gaps*.
+The `git commit` case that `if` therefore misses (`cd sub && git commit`) is the git hook's to
+cover - `.githooks/pre-commit` runs inside the target repository - once `core.hooksPath` is set,
+which in this clone it is not. That is the layering as designed, and today a hole - see *Known
+gaps*.
 
 ## What is wired up today
 
@@ -261,16 +267,24 @@ silent misses.
 **What it reads is the working tree, not the index.** That gap is documented in the hook's own
 header and listed under *Known gaps* below; it is an open decision, not an oversight.
 
-**The three `CLAUDE.md` bridges** - `CLAUDE.md`, `bin/CLAUDE.md`, `docs/inflight/CLAUDE.md`, each a
-pure `@AGENTS.md` import. They are **tracked**, which took a `.gitignore` change: a bare `CLAUDE.md`
+**The `CLAUDE.md` bridges** - the ones above plus the package-root bridge under
+`parallel-consumer-core/src/main/java/`, each a pure `@AGENTS.md` import, and the test-tree family
+described below. They are **tracked**, which took a `.gitignore` change: a bare `CLAUDE.md`
 rule there (the one whose comment begins "A `CLAUDE.md` is ignored BY DEFAULT") dated from when
-these were personal scratch files, so all three were ignored and existed only on the author's
+these were personal scratch files, so every one of them was ignored and existed only on the author's
 machine. Everything looked correctly wired locally and would have
-merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three paths are now
-negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
+merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The `@AGENTS.md` bridges are
+now negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - seventeen hook scripts across twenty registrations, and the file is
+**One family is scoped rather than enumerated: `!**/src/test/CLAUDE.md`.** There is one per module
+test tree, they are generated from a single shape, and they all import the same file - so
+enumerating them would silently drop a new module's bridge, which is the very
+everything-looked-wired-up-locally failure above, arriving when somebody is adding a module rather
+than thinking about harnesses. The pattern can only ever match a module's test tree, so it is not
+the blanket negation the enumerated rule rejects. That argument is in `.gitignore` too.
+
+**`.claude/settings.json`** - nineteen hook scripts across twenty-two registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -300,9 +314,10 @@ in-flight tool rather than reimplement what it needs. That migration is
 what this one got wrong was not calling the tool but owning the tool's correctness.
 
 - `PreToolUse` on `Bash`, `if` `Bash(git commit *)`, runs `.claude/hooks/pre-commit-gate.sh`, a
-  wrapper around the same pre-commit script. Belt-and-braces: it catches the agent even in a clone
-  where `core.hooksPath` was never set, which is the likely state of a fresh worktree on a new
-  machine. The wrapper exists so the hook can **read the payload and honour `--no-verify`** - the
+  wrapper around the same pre-commit script. Designed as belt-and-braces, to catch the agent in a
+  clone where `core.hooksPath` was never set - which is not the fresh-machine edge case it sounds
+  like but this clone's standing state, so in practice it is the only gate that fires; *Known gaps*
+  owns that. The wrapper exists so the hook can **read the payload and honour `--no-verify`** - the
   original inline `pre-commit || exit 2` could not see the command it was gating, which left the
   agent with no escape hatch at all while the pre-commit header promises an easy one. It exits 2
   with the failing gate's output on stderr, so the model is told *why* rather than just "no".
@@ -312,9 +327,17 @@ what this one got wrong was not calling the tool but owning the tool's correctne
   **And it decides for itself which working tree to gate**, from the command's `git -C`, a leading
   `cd`, then the payload's `cwd`, with `$CLAUDE_PROJECT_DIR` as a labelled last resort - because that
   variable names the SESSION's root, and a subagent working in another worktree issues a bare
-  `git commit` from a different tree entirely. Its own header owns the incident, both directions of
-  it: a red gate that was not the agent's, and the mirror image where a red tree passes because the
-  session's is green.
+  `git commit` from a different tree entirely. The payload's `cwd` names the session's launch
+  directory too, so a bare commit that resolves to a tree with **nothing to commit** - one git would
+  refuse anyway - is refused with `git -C <worktree>` as the remedy rather than gated against the
+  wrong files; `--allow-empty` and `--amend`, the honest commits against a clean tree, still reach
+  the gate. **The `git -C` has to be a literal path.** The hook reads the command before the shell
+  expands it, so `git -C "$W" commit` arrives as the text `$W` - a path that does not exist, which
+  used to fall through to the session tree under a label saying the command never said where it
+  runs. A `-C` holding a `$`, a backtick or a leading `~` is now refused, naming the value, whether
+  or not a `cd` elsewhere in the command names the right tree. Its own header owns the incident,
+  both directions of it: a red gate that was not the agent's, and the mirror image where a red
+  tree passes because the session's is green.
 - `PreToolUse` on `Bash`, **with no `if`** - it runs on every Bash call and filters itself - runs
   `.claude/hooks/check-squash-subject.sh`, which refuses a `--subject` that would drop or misstate
   the PR number. It carried `if: Bash(gh pr merge *)` until review pointed out that a prefix match
@@ -442,10 +465,65 @@ what this one got wrong was not calling the tool but owning the tool's correctne
   inject the thought at the decision, not to gate anything. Matching is deliberately broad on verbs
   and narrow on nouns: a false positive costs a few hundred tokens, a false negative costs the thing
   it exists to prevent.
+- `UserPromptSubmit` also runs `.claude/hooks/inject-docs-for-prompt.mjs`, the per-prompt delivery
+  of the document context query: when a prompt names a mechanism - a CamelCase class, a snake_case
+  or kebab-case name, a path, a backticked span, an issue number - it puts the titles and paths of
+  the documents carrying that name across every live ref beside the prompt, each marked
+  `(off baseline)` or `(divergent elsewhere)`, ranked frontmatter field first, then heading, then
+  body under a per-term cap, twelve titles at most with a `+N more` tail and the
+  `prior-art --headings` command for the rest. Silent when nothing matches; once per document per
+  divergence state per session. It runs `termsFromPrompt` and, only when a term survives, imports
+  the git-touching modules and runs `matchDocs` - one `git grep` over the live refs, never a
+  corpus-index build (both in `bin/lib/terms.mjs`); the marks come from the same `drift` summary
+  the read-time header uses. Budget 2500 ms cold when it fires and 100 ms on the silent path,
+  measured at about 1550 ms firing on `ProducerManager` and about 65 ms silent; the figures live in
+  its header, with the method and the knob for a slower host. **`UserPromptSubmit` delivering
+  `additionalContext` is already verified above** by `inject-merge-checklist.sh`, which uses the
+  same envelope; this hook adds no new delivery claim.
 
-- `PostToolUse` on `Bash` runs `.claude/hooks/after-push-check-ci.sh`, the only registration on that
-  event. Why it has to be there rather than any earlier layer is above, under `PostToolUse`; it is
-  listed here so the registry is not silent about an event the rest of the file never uses.
+- `PostToolUse` on `Bash` runs `.claude/hooks/after-push-check-ci.sh`. Why it has to be there
+  rather than any earlier layer is above, under `PostToolUse`.
+- `PostToolUse` on `Read|Bash` runs `.claude/hooks/inject-docs-divergence.mjs`, the read-time
+  delivery of the document context query: when the agent has just read a file under
+  `docs/inflight/`, `docs/solutions/` or `docs/plans/` - through the Read tool, or a Bash command
+  whose tokens name the path - it puts the divergence header's summary line beside the read: how
+  many versions of that document exist on other live refs carrying content the baseline has never
+  held, whether this copy is the baseline's, its own branch's, or branch-only, whether the
+  working-tree file has uncommitted edits, and the command for the full header. Once per session
+  per divergence state; it fires again when another branch adds a version, because that is news.
+  It imports `bin/lib/notes.mjs` directly and calls the same `drift` query `note drift` renders,
+  so the hook and the command cannot disagree. Budget 500 ms cold, measured at about 240 ms
+  firing on one path and about 70 ms silent; the figures live in its header, with the method.
+
+  **`PostToolUse` on the Read tool delivers `additionalContext`, verified on 2.1.258 before the
+  hook was written** - the *Settled by testing* entry below has the method. `PostToolUse` was
+  chosen over `PreToolUse` allow-with-context because the context reaches the model at the same
+  moment (with the tool result, before its next action) without putting the query's latency in
+  front of the read and without the fail-closed shape a permission decision carries.
+
+  **Bash coverage is best-effort by path token, and says so.** `cat docs/inflight/x.md` fires;
+  `cat "$f"`, a glob, or a path built by a pipeline does not, for the reason the pre-commit gate
+  refuses `git -C "$W"`: the hook reads the command before the shell expands it. The tree is the
+  one the event names - a leading literal `cd`, then the payload's `cwd`, with
+  `$CLAUDE_PROJECT_DIR` last, per the 2026-08-31 wrong-directory solution - and the shared
+  derivation now lives in `.claude/hooks/lib/hook-common.mjs` with the per-session seen-store,
+  extracted from the solutions hook so there is one copy of each. **A directory change the
+  leading-`cd` rule did not consume keeps only absolute tokens**: after `(cd <wt> && cat
+  docs/inflight/x.md)`, `git -C <wt> diff -- docs/inflight/x.md`, a `pushd`, `--git-dir` or
+  `GIT_DIR=`, a relative path resolved against the payload's `cwd` would describe the session
+  tree's copy of a file the command read in another worktree - every worktree carries the same
+  note paths - so the relative tokens are dropped, silence over a guess. A command naming more
+  than four corpus paths gets headers for the first four and one trailing line naming how many
+  were not checked, with a `docs header` command for each; and on a shallow or never-fetched
+  clone the line opens with `UNRELIABLE (<id> - run: <remedy>):`, because the divergent set is
+  computed against a truncated history and the count that follows is confidently wrong.
+
+  **It fails open, and leaves a record.** Every failure path exits 0 with nothing on stdout; the
+  failure is written to the in-flight tool's cache (`delivery-failures.json`, seven-day policy)
+  and `inflight docs` prints a one-line notice while it exists, because a hook broken for a week
+  is otherwise indistinguishable from one with nothing to say. Self-tested by
+  `bin/test-check-docs-hooks.mjs` against a fixture repository holding every state the header
+  reports, with a mutant control and a git shim proving the silent path makes no git call.
 - `SessionStart` runs `.claude/hooks/inject-recorded-knowledge.sh`, which lists the **titles** of
   every `docs/solutions/` write-up, the open items in `docs/inflight/`, and the size of
   `docs/plans/`. Titles only, once per session, no bodies - the length tracks the corpus, so no
@@ -543,10 +621,10 @@ would miss the subagent row entirely.
 **A degraded read is LOUD, never short.** A section that cannot be built says `COULD NOT BE BUILT` or
 `UNKNOWN` and names the reason, instead of being omitted - because a shorter block that reads
 complete is indistinguishable from a healthy one, which is this hook's own failure signature. That is
-measured here rather than assumed: `inject-recorded-knowledge.sh` uses GNU-only `xargs -r`, and under
-a BSD `xargs` its Registers section drops from 13 entries to 4 while closed notes get relabelled as
-mis-tagged. That defect belongs to astubbs/parallel-consumer#341's class and is fixed there, not
-here. Distinguishing a *confirmed* absence from a failure matters just as much in the other
+measured here rather than assumed: `inject-recorded-knowledge.sh` used GNU-only `xargs -r` while its
+scan was bash, and under a BSD `xargs` its Registers section dropped from 13 entries to 4 while closed
+notes got relabelled as mis-tagged. That defect belonged to astubbs/parallel-consumer#341's class and
+was fixed there, not here; the scan has since moved into `bin/inflight.mjs docs index`. Distinguishing a *confirmed* absence from a failure matters just as much in the other
 direction: `gh` exits non-zero for "this branch has no PR" exactly as it does for offline, so the
 no-PR case is read off stderr and reported as a fact - otherwise every fresh branch prints an alarm,
 and an alarm that is always on gets scrolled past.
@@ -603,11 +681,14 @@ one is a case in that file, and the suite goes red against the old parser.
   **Open decision** - the alternatives are a stash with a robust trap, gating `git diff --cached`
   instead of the tree (which several of these gates cannot do, being whole-tree scans), or leaving
   it as is.
-- **`core.hooksPath` cannot be committed.** A fresh clone has no hooks until someone runs the config
-  command. The `PreToolUse` hook covers Claude Code in that window; nothing covers a human.
+- **`core.hooksPath` cannot be committed, and nothing sets it.** A fresh clone has no git hooks
+  until someone runs the config command, and that window does not close on its own: in this clone
+  it is unset, so `pre-commit-gate.sh` is the only gate that fires, and nothing covers a human. The
+  hook's header owns the consequence - its wrong-tree cases refuse rather than fall open, because
+  there is nothing behind it.
 - **The `PreToolUse` `if` matches the command as written.** `Bash(git commit *)` does not fire on
-  `cd sub && git commit ...`. The git hook covers that case; the Claude-side belt-and-braces does
-  not. **And it does not filter reliably in the other direction either** - verified against 2.1.231,
+  `cd sub && git commit ...`. The git hook would cover that case once wired; until then nothing
+  does. **And it does not filter reliably in the other direction either** - verified against 2.1.231,
   the same registration lets a COMPOUND command through to the hook: a `for` loop with a nested `if`
   and a command substitution reached an always-deny hook and was blocked, while a plain `echo` was
   correctly filtered out. That is the misfire this harness has now been bitten by twice. Treat `if`
@@ -622,7 +703,10 @@ one is a case in that file, and the suite goes red against the old parser.
   exactly how it came to have a blind spot worth fixing.
 - **Nothing enforces that a nested `AGENTS.md` has its `CLAUDE.md` bridge.** A check could;
   see below. Until then the `.gitignore` negation is the only place the question is asked - which is
-  why the three bridges are enumerated there rather than blanket-negated.
+  why the `@AGENTS.md` bridges are enumerated there rather than blanket-negated. **The test-tree
+  bridges are the exception and are not covered by that habit at all**: they are pattern-negated, so
+  adding a module asks nobody anything - a new module's test tree simply has no bridge, and nothing
+  goes red. Same missing check, reached from the other direction.
 - **Tracking `.claude/settings.json` silently overwrites the local one it replaces - once.** Git
   refuses to clobber an *untracked* file and clobbers an *ignored* one without a word, and this file
   was ignored in every clone until it became tracked. So the first pull past that commit replaces
@@ -687,6 +771,19 @@ Until then this is an assumption, and a rule that does not arrive is a rule that
   the same question answered that it had seen nothing. A `PreToolUse` hook on a dispatch therefore
   cannot pre-empt that dispatch - it can only inform what the caller does next. Choose the event for
   *when* it fires, and then be honest in the text about what that instant can and cannot promise.
+- **`PostToolUse` on the Read tool delivers `additionalContext`, and so does `PreToolUse`
+  allow-with-context on it.** **Verified against 2.1.258**, before the read-time divergence hook
+  was written rather than after: two throwaway hooks registered through `claude -p --settings
+  <file>` - one `PostToolUse` on matcher `Read`, one `PreToolUse` on `Read` emitting
+  `permissionDecision: allow` - each carried a distinct passphrase, and a `claude -p` told to Read
+  a small file and report every hook context it received quoted both back, labelled
+  `PostToolUse:Read hook additional context` and `PreToolUse:Read hook additional context`, and
+  described them as arriving beside the tool result. Both hooks also logged their payloads: the
+  `PostToolUse` one carries `tool_name`, `tool_input.file_path`, `cwd`, `session_id` and a
+  `tool_response` with the file's content - so a post-read hook can name the file without reading
+  it again. The registration shape that worked is the one in `.claude/settings.json`: a
+  `PostToolUse` group with `"matcher": "Read|Bash"` and a `node "$CLAUDE_PROJECT_DIR/..."`
+  command. The probe hooks and settings file were deleted after the run.
 - **Injected text that reads like an instruction gets flagged as prompt injection.** Not a harness
   behaviour but a reliable model one, and it shapes how these hooks must be written: probes whose
   `additionalContext` said "repeat this string verbatim" were quoted back with an unprompted warning

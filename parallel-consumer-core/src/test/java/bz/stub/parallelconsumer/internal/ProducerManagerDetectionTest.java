@@ -68,7 +68,7 @@ class ProducerManagerDetectionTest {
         manager.postCommit(); // what AbstractOffsetCommitter's finally does
 
         assertThat(thrown).hasCauseThat().isSameInstanceAs(fenced);
-        assertThat(manager.pendingInvalidation()).hasValue(fenced);
+        assertThat(manager.recovery().pendingInvalidation()).hasValue(fenced);
         assertWithMessage("the write lock is released on the way out, as for any other commit failure")
                 .that(manager.isTransactionCommittingInProgress()).isFalse();
     }
@@ -86,7 +86,7 @@ class ProducerManagerDetectionTest {
         manager.postCommit();
 
         assertThat(thrown).hasCauseThat().isSameInstanceAs(fenced);
-        assertThat(manager.pendingInvalidation()).hasValue(fenced);
+        assertThat(manager.recovery().pendingInvalidation()).hasValue(fenced);
     }
 
     @Test
@@ -95,10 +95,10 @@ class ProducerManagerDetectionTest {
         var second = new ProducerFencedException("second");
         var manager = managerThatCanRecover();
 
-        manager.recordInvalidation(first);
-        manager.recordInvalidation(second);
+        manager.recovery().recordInvalidation(first);
+        manager.recovery().recordInvalidation(second);
 
-        assertThat(manager.pendingInvalidation()).hasValue(first);
+        assertThat(manager.recovery().pendingInvalidation()).hasValue(first);
     }
 
     /**
@@ -119,7 +119,7 @@ class ProducerManagerDetectionTest {
 
         assertThat(thrown).isNotInstanceOf(ProducerInvalidatedException.class);
         assertThat(thrown).hasCauseThat().isSameInstanceAs(fenced);
-        assertThat(manager.pendingInvalidation()).isEmpty();
+        assertThat(manager.recovery().pendingInvalidation()).isEmpty();
     }
 
     @Test
@@ -134,7 +134,7 @@ class ProducerManagerDetectionTest {
         manager.postCommit();
 
         assertThat(thrown).isSameInstanceAs(fenced);
-        assertThat(manager.pendingInvalidation()).isEmpty();
+        assertThat(manager.recovery().pendingInvalidation()).isEmpty();
     }
 
     /**
@@ -162,7 +162,7 @@ class ProducerManagerDetectionTest {
         assertThat(manager.canRecover()).isFalse();
         assertThat(manager.recordIfRecoverable(new ProducerFencedException("fenced"))).isEmpty();
         assertWithMessage("a condition on a path that cannot recover must not be recorded, or the manager waits forever")
-                .that(manager.pendingInvalidation()).isEmpty();
+                .that(manager.recovery().pendingInvalidation()).isEmpty();
     }
 
     @Test

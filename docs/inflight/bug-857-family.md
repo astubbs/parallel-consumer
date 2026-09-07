@@ -82,18 +82,26 @@ assignor arms, the captured seeds opened the window ZERO times. The chaos suite 
 luck; only a purpose-built probe finds it by construction. Two write-ups were retracted the same day
 for reading a green replay as evidence when the mechanism had never executed.
 
-**THE ASYNC LINE NOW HAS A REPLAYABLE SEED - the first this family has ever had.**
-`9086872209853284830` on `ChaosChurnStormIT` reproduces `NO_PROGRESS` in most runs on unmodified
-master, in minutes, on a laptop. Found by RANDOM-SEED HUNTING in CI, not by replaying anything.
-astubbs#344 was the obvious candidate - same commit mode, right symptom shape - and is **refuted**:
-both arms either side of it fail. Details in
-[`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md).
+**THE ASYNC LINE IS TWO LINES, AND NEITHER IS THE OPEN `NO_PROGRESS` QUESTION THIS PARAGRAPH USED
+TO POSE.** [`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md) **owns
+both** - its dated sections are the record, with the seeds, the sample sizes and the rulings-out.
+This file keeps only the shape, so that a reader arriving here is not told the opposite of what is
+established:
 
-**A DETECTOR SILENCE PROBLEM, and it bears on everything below.** Across the astubbs#344 arms, **a
-third of the failures went red with `NO_PROGRESS` not firing at all**. Since the 2026-08-25 demotion
-moved the Class 2 bound to non-gating, the liveness claim rests on `INSTANCE_STALL` and this
-detector. **A detector whose silence cannot be trusted is worse than one that is absent**, because
-the suite goes green on its say-so. Settle it before reading any quiet run from it as evidence.
+- The fleet-scoped `NO_PROGRESS` firings are a **timing proxy** - the backlog drains every time the
+  detector fires. Its `## ANSWERED, 2026-08-28` and `## CONFIRMED, 2026-08-28` sections.
+- The per-instance `INSTANCE_STALL/NO_WORK_COMPLETED` firings are **a different line from the
+  fleet-scoped one and must not be read with it**: one member stays live, keeps taking work, and
+  returns nothing while the fleet finishes around it. What that member's workers are doing is the
+  churn note's question, not this file's - read from its `## CLASSIFIED, 2026-09-03` section
+  forward, and take the latest dated section as the current reading.
+
+**THE DETECTOR SILENCE PROBLEM IS WITHDRAWN.** This paragraph once reported a third of the
+astubbs#344 arms going red with `NO_PROGRESS` silent, and told readers to settle that before trusting
+any quiet run. The observation was a grep counting one detector's name, so a failure caught by a
+different detector read as caught by none. The churn note's
+`## The detector "silence" is EXPLAINED, 2026-08-28` section owns the retraction. Anything below
+that leans on the silence claim predates it.
 
 **THE SYMPTOM IS A BUCKET, and this file only ever covered part of it.** Read from upstream's own
 comments rather than the mirror's summary: at least four distinguishable behaviours are reported,
@@ -2220,6 +2228,264 @@ found `BLOCKED` on the same monitor. None has been replayed, and
 still records its verification status as Unproven. **A seventh capture of this signature is worth
 less than one replay of any of the six**, and this entry exists only because the seed would
 otherwise expire with the log.
+
+## 2026-09-02, `INSTANCE_STALL` fires a second time - and the first seed replay in this file comes back clean
+
+**The gating detector, not the timing proxy.** `Chaos Pain Suite`,
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`, killed by
+`INSTANCE_STALL/NO_WORK_COMPLETED`: *instance 42 holds work (queued=212, outForProcessing=80) but
+has returned no work result for 150s (bound 150s) at 28251 results returned*, at `t=+150797ms`. The
+24 autopsy observations were all `CLASS2_STALL/LAG_STAGNATION` and non-gating; as with the first
+firing, the interesting line is in the run log, not the autopsy list. Instance 42 was in the initial
+fleet (`PERIODIC_CONSUMER_ASYNCHRONOUS`, `UNORDERED`), never touched by the conductor - no
+STOP/RESTART event names it - and at close ten of its worker threads did not answer interrupt
+(*Clean execution pool termination failed ... Threads still not done count: 10*). No thread dump is
+taken on this path, so the log says nothing about what they were in.
+<!-- post-merge: checked-begin - a dated sighting against a job id and a sha, both durable -->
+Seen on astubbs/parallel-consumer#203's CI
+([run 33643246412](https://github.com/astubbs/parallel-consumer/actions/runs/33643246412), job
+100291589476), at head `a615560bc`, a GitHub-hosted runner.
+<!-- post-merge: checked-end -->
+
+**Seed `4088857311712263252`**, and the replay line as the log printed it:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=4088857311712263252
+
+To run only this scenario add `-Dit.test=ChaosChurnStormIT -Dfailsafe.failIfNoSpecifiedTests=false`
+- the *failsafe* property, not surefire's; the `-am` pulls the parent in first and it has nothing
+matching, so without that flag the replay dies before the test starts.
+
+**Replayed the same hour, on the same tree, and it was CLEAN** - the first replay of any seed in this
+file. Same seed, same scenario, a 32-core box at load 0.2 with nothing else running: zero violations,
+zero observations, `consumed=100322`, 102s against CI's 172s. So this seed does not reproduce off the
+runner, which is the reading the first firing's own caveat gives - `INSTANCE_STALL` is re-armed by
+any returned result, so an instance that is merely starved can trip it - and one clean replay does
+not prove that reading either, because a load-shaped stall by definition needs the load. What it
+does establish is that the seed is not a deterministic reproducer, which the first firing left open.
+
+<!-- post-merge: checked-begin - describes the branch's diff and its earlier runs in the past tense -->
+**Not attributable to that branch, on mechanism.** Its main-code diff is log-line formatting behind
+`isDebugEnabled()` guards, a summary type, and comment changes; the chaos suite runs at INFO, so none
+of it executes. Two earlier heads of the same branch passed this suite the same day carrying the same
+astubbs#29 fix, and the head after it - a merge of master and a ledger edit - is the one that fired.
+<!-- post-merge: checked-end -->
+
+**Two corrections to earlier sections, dated rather than edited in.** First, the 2026-08-25 section
+above says `Chaos Pain Suite` is *not* in master's required-checks ruleset and so a red here blocks
+no merge. As of 2026-09-02 it is in the ruleset (`gh api repos/astubbs/parallel-consumer/rules/branches/master`
+lists it), and this firing held a merge until a re-run - so "each red is an asset, not noise" now has
+a cost attached that the section did not have to weigh. Second, the standing prediction asks for
+the Class 2 rate after astubbs#29 and the backlog land; this run had 24 Class 2 observations on the
+tree that carries astubbs#29, which is the rate continuing as predicted, not dropping off.
+
+## 2026-09-02, an `INSTANCE_STALL` firing on astubbs#201's CI - a separate seed, and a control arm that rules the branch out on evidence rather than on mechanism <!-- post-merge: checked -->
+
+**Distinct from the firing recorded in the section above, not a second write-up of it.** That one was
+`ChaosChurnStormIT` on astubbs#203's CI at head `a615560bc`; this one is the same test and the same
+gating detector on astubbs#201's CI at a different head, and it carries its own seed. Neither was a <!-- post-merge: checked -->
+replay of the other, and the ordinal in that section's title is left as written rather than renumbered
+around this one.
+
+The gating violation, as the run log printed it: `INSTANCE_STALL/NO_WORK_COMPLETED: instance 42 holds
+work (queued=873, outForProcessing=140) but has returned no work result for 151s (bound 150s) at 24545
+results returned`. Every autopsy entry was `CLASS2_STALL/LAG_STAGNATION` and non-gating, so again the
+line that matters is in the run log rather than in the autopsy list. Instance 42 is the same instance
+number as the sibling firing, which is a coincidence of fleet numbering and not a shared identity.
+
+<!-- post-merge: checked-begin - a dated sighting against a job id and a sha, both durable -->
+Seen on astubbs/parallel-consumer#201's CI
+([run 33640843680](https://github.com/astubbs/parallel-consumer/actions/runs/33640843680), job
+100283528158), at head `0c5820fae`.
+<!-- post-merge: checked-end -->
+
+**Seed `8458454974018113374`** - the perishable part, recorded because the log and artifact expire:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=8458454974018113374
+
+Add `-Dit.test=ChaosChurnStormIT -Dfailsafe.failIfNoSpecifiedTests=false` to run only this scenario,
+per the sibling section - the *failsafe* property, not surefire's.
+
+**Not attributable to astubbs#201, and the argument here is a control arm rather than a mechanism <!-- post-merge: checked -->
+argument.** The head that fired differs from the immediately preceding head of the same branch by no
+Java at all: `git diff --name-only 976623b86..0c5820fae` names only agent hooks, `bin/` scripts, docs,
+`pom.xml` and `.github/workflows/maven.yml`. The chaos suite passed on that preceding head and failed
+here with library and chaos-test code byte-identical between the two runs, and the workflow edit is a
+post-test Codecov upload step gated `if: always()`, so it cannot reach test timing.
+
+The mechanism argument holds independently and is the weaker of the two only because it needs reading:
+`DynamicLoadFactor`'s `staticFactor` is `initial == maximum`, the defaults are
+`DEFAULT_INITIAL_LOADING_FACTOR` and `DEFAULT_MAX_LOADING_FACTOR` and they differ, and the chaos
+harness configures neither those bounds nor `messageBufferSize` - so `isStaticFactor()` is false
+throughout this suite and `maybeStepUp()` keeps its original path.
+
+**What the control arm cannot do**, stated so nobody reads it as more than it is: a chaos run draws a
+fresh seed each time, so identical code passing on the previous head does not establish that *this*
+seed would have passed there. It establishes that the branch did not introduce the firing, which is a
+narrower claim than the branch being unable to provoke it.
+
+**Replayed the same afternoon, on the tree that fired it, and CLEAN** - the second seed replay in this
+file, and the second clean one. Same seed, same scenario, the same idle 32-core box as the sibling
+replay: zero violations, zero observations, `consumed=100412`, 165.8s. Two firings of the gating
+detector in one afternoon, on sibling trees carrying astubbs#29, and neither seed reproduces off a
+GitHub-hosted runner. That is now the pattern rather than a single data point, and it points the same
+way the first firing's caveat did: `INSTANCE_STALL` is re-armed by any returned result, so what it is
+measuring on those runners is starvation. What would move it back toward a wedge is a firing whose
+seed replays red on an idle box - and both of today's are now known not to be that seed.
+
+
+## 2026-09-03, `INSTANCE_STALL` fires a third time - on a chaos lane running two forks, with control arms dispatched the same hour
+
+**Same detector, same class, a different lane shape.** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`,
+killed by `INSTANCE_STALL/NO_WORK_COMPLETED`: *instance 14 holds work (queued=0, outForProcessing=62)
+but has returned no work result for 150s (bound 150s) at 26465 results returned*. The 46 autopsy
+observations were all `CLASS2_STALL/LAG_STAGNATION` (23 partitions stagnant ~154s), non-gating, as in
+the two sightings above. The class took 326s against a 137-169s baseline that day.
+
+**What was different: the suite ran under `-DforkCount=2 -DreuseForks=true`** - two JVM forks, each
+with its own broker, on one `ubuntu-latest` VM - the first candidate astubbs#421 measured, on a <!-- post-merge: checked -->
+`maven.yml` dispatched against a throwaway ref rather than on a PR. So this is not
+master-state and it is not a sighting against the gate as it runs today; it is recorded because it
+is the same signature, and because the two firings above already say the detector is load-shaped.
+Tree: origin/master `10ed71c9e` plus the dispatch harness astubbs#421 carried (`dae17bf13`) plus <!-- post-merge: checked -->
+the two-line fork-forwarding change; the snapshot commit itself is unreachable now the ref is gone.
+
+<!-- post-merge: checked-begin - a dated sighting against a run id and a job id, both durable -->
+Seen on [run 33697856947](https://github.com/astubbs/parallel-consumer/actions/runs/33697856947),
+job 100470662249, artifact `chaos-suite-reports-2615` (14-day retention; the failing class's XML is
+also kept beside the optimisation run's experiment log).
+<!-- post-merge: checked-end -->
+
+**Seed `1630088991107806597`**, replay line as the failure printed it:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1630088991107806597
+
+**Control arms, dispatched the same hour on the same runner class, prediction stated first.** Two
+seeded replays of the whole suite: one fork (run 33698964025) and two forks (run 33698941244). The
+prediction: if two forks manufacture the stall by starving the control thread, the one-fork arm
+passes and the two-fork arm fails again; if both fail, the seed reproduces a real stall independent
+of the lane shape; if both pass, the seed is not a deterministic reproducer on this runner either,
+which is what the 2026-09-02 replay on a 32-core box found.
+
+**Both predicted branches were refuted.** The two-fork arm PASSED (646s, every class green,
+`ChaosChurnStormIT` 277s). The one-fork arm - the gate exactly as it runs today - FAILED, on the same
+class and the same seed but a *different* gating detector:
+
+    NO_PROGRESS: fleet consumed count stuck at 97726/100000 for 30s (bound 30s)
+
+killed fail-fast at 76s into the class, `consumed=97906` at teardown, four partitions frozen 65s
+with lag 450-1000, peaks `rebalanceDwell=3311ms lagStagnation=66028ms`, zero Class 2 observations
+(the run was too short for that bound). As with every sighting above, the gating line is in the
+failure message and not in the autopsy's violations list.
+<!-- post-merge: checked-begin - a dated sighting against a run id and a job id, both durable -->
+Run 33698964025, job 100473972911, artifact `chaos-suite-reports-2618`; the class's XML is kept
+beside the optimisation run's experiment log as well.
+<!-- post-merge: checked-end -->
+
+**So the seed has real reproducing power on this runner class and the failure is not a property of
+forking**: two reds in three runs of `1630088991107806597` on `ChaosChurnStormIT`, once under two
+forks and once under one, on two detectors (`INSTANCE_STALL` then `NO_PROGRESS`), with a pass in
+between. That is a stronger position than either 2026-09-02 seed reached, both of which replayed
+clean once. Whether the one-fork red would have drained is unknown - `NO_PROGRESS` is fail-fast -
+and `-Dchaos.diagnoseStallRecovery=true` on this seed is the next experiment; the class javadoc says
+a run that stays FLAT is the finding. Recorded here rather than acted on: the lane-speed work that <!-- post-merge: checked -->
+surfaced it (astubbs#421) is the wrong place to chase a product stall.
+
+**And a fourth firing the same day, on the sharded lane's own first PR run.** `Chaos Pain Suite 4/4`
+(the shard carrying `ChaosRevokeUnderWorkIT` and `ChaosChurnStormIT`, one fork, its own VM - the
+gate's configuration exactly), `ChaosChurnStormIT` killed by `INSTANCE_STALL/NO_WORK_COMPLETED`:
+*instance 0 holds work (queued=9, outForProcessing=50) but has returned no work result for 150s
+(bound 150s) at 21059 results returned*; the class ran 201s. A different seed, so not a replay of
+anything above:
+<!-- post-merge: checked-begin - a dated sighting against a run id and a job id, both durable -->
+[run 33701723196](https://github.com/astubbs/parallel-consumer/actions/runs/33701723196), job
+100482453445, artifact `chaos-suite-reports-2634-shard4`, head `2fefcb817`.
+<!-- post-merge: checked-end -->
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=4788502970202706178
+
+**That makes five gating firings of this detector on this class since 2026-08-25, four of them
+between 2026-09-02 and 2026-09-03, on three distinct seeds, every one on a GitHub-hosted runner, and
+all but one under the gate's own one-fork configuration.** The rate is now the property worth
+measuring, not any one seed: it is the quarantine question `docs/quarantined-tests.md` asks a
+sighting ledger to answer, and the recovery diagnostic on any of these seeds is the experiment that
+says whether the wedge is real or a 150s bound meeting load.
+
+**Why it matters beyond the tally.** Three firings on one fork in a month is the rate the gate
+already has. An in-job parallel lane adds CPU contention exactly where this detector is
+load-sensitive, so its stability cannot be read off a single green run - and the sharded
+alternative astubbs#421 measured next gives each shard its own VM, which does not move this rate <!-- post-merge: checked -->
+at all.
+
+## 2026-09-03, `NO_PROGRESS` on a stacked producer-ownership branch, in a scenario the stack does not touch
+
+<!-- post-merge: checked-begin - a dated capture, named by run and seed -->
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` on the `Chaos Pain Suite 4/4` shard of
+[run 33715914092](https://github.com/astubbs/parallel-consumer/actions/runs/33715914092), head
+`646d13eb3` of astubbs#420 (rungs 2-4 of astubbs#225, stacked above recovery). The probe:
+`NO_PROGRESS: fleet consumed count stuck at 98505/100000 for 30s (bound 30s)`, no other detector
+fired, run summary consumed 99254. **Replay seed `980443902370766447`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=980443902370766447
+
+What the branch changes is producer construction and recovery under the transactional commit mode;
+this scenario runs `PERIODIC_CONSUMER_ASYNCHRONOUS` with no producer, so none of it is on the path.
+The recorded history shows the same scenario green one minute later on astubbs#410, which carries
+the identical engine code, and green on the surrounding heads of four other branches. Same reading
+as the 2026-08-26 `NO_PROGRESS` capture: a seed that draws the interleaving, not the branch. The
+seed replay was not run; it is the control arm to run if this seed is ever drawn again.
+<!-- post-merge: checked-end -->
+
+## 2026-09-03, second capture on the same stacked branch, next head - and its seed replays clean
+
+<!-- post-merge: checked-begin - a dated capture, named by run and seed -->
+The same shard on the next head of astubbs#420 (`f75f4ee07`,
+[run 33717741761](https://github.com/astubbs/parallel-consumer/actions/runs/33717741761)), a
+different arm: no probe fired; the `all messages consumed under churn` wait timed out at its five
+minutes with the run summary at 99097 consumed and a non-gating `CLASS2_STALL/LAG_STAGNATION` on one
+partition. **Seed `4706937442040553228`.** The control arm the previous capture named was run: the
+seed replayed on the same tree on the author's box passed in about two and a half minutes, 100409
+consumed, no violation and no observation. So the seed does not reproduce the stall by itself; the
+stall needs the runner as well, which is the shape every earlier replay in this file has had. Two
+consecutive failures on this branch against a pass on astubbs#410's identical engine code the same
+hour is recorded as a rate, not a cause: the scenario's path does not include anything the branch
+changes. Not run: the same seed on astubbs#410's tree, which a clean replay on this tree makes
+uninformative.
+<!-- post-merge: checked-end -->
+
+## 2026-09-03, the `ZOMBIE_MEMBER` arm on a PR whose diff holds no Java at all - a control arm the branch supplies for free
+
+**Same class, the protocol-unresponsive arm.** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`,
+killed by a gating probe violation: *`ZOMBIE_MEMBER/REBALANCE_BLOCKED`: group `group-1-1393237041`
+dwelling in `PreparingRebalance` for 15s (bound 15s) - a member is not answering the rebalance
+(protocol-unresponsive)*. The run settled with `consumed=100618` against the correctness ledger and no
+other violation; peaks `rebalanceDwell=15482ms drainDuration=11394ms lagStagnation=27609ms
+instanceStall=28712ms`, so neither the Class 2 bound nor the `INSTANCE_STALL` detector was anywhere
+near firing. The test took 158s; the class 180s. `Chaos Pain Suite 4/4` on a GitHub-hosted runner, one
+fork, its own VM - the gate's own configuration.
+
+**What makes this sighting worth a line: the branch it fired on changes no Java and no pom.**
+astubbs/parallel-consumer#419 is the docs context query - Node tooling under `bin/`, two hooks, and <!-- post-merge: checked -->
+documents. `git diff --name-only origin/master...HEAD` filtered to `*.java` and `pom.xml` is empty.
+The Java under test is therefore master's at merge base `558fcfbc9`, byte for byte, which is the
+control arm the earlier entries had to dispatch by hand: this is a master-state firing of the
+`ZOMBIE_MEMBER` arm, observed on a PR lane without any change in the product or the harness to
+suspect. It attaches to the unattributed `ZOMBIE_MEMBER` list above - the twentieth sighting's
+question, whether the co-occurrence with any branch is coincidence, gets one more "coincidence" datum.
+<!-- post-merge: checked-begin - a dated sighting against a run id and a job id, both durable -->
+[run 33711378531](https://github.com/astubbs/parallel-consumer/actions/runs/33711378531), job
+100511491045, artifact `chaos-suite-reports-2701-shard4`, head `6e1a19b12`.
+<!-- post-merge: checked-end -->
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=2935533165547308183
+
+Not replayed: the eighth sighting's seed replayed clean and the 2026-09-02 seeds did too, so a single
+replay would settle nothing either way. Recorded so the rate is counted, per the section above.
 
 ## Delete when
 

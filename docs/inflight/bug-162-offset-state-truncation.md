@@ -59,6 +59,7 @@ warning or `maybeTruncateBelowOrAbove` - the other references are javadoc in
 no commit data is never asserted to start quietly. A test wants both cases: first offset 0, and first offset
 above 0.
 
+<!-- post-merge: checked -->
 astubbs#106 (stop walking every offset), astubbs#306 (encoding density) and astubbs#207
 (`invalidOffsetMetadataPolicy` reachability) all touch this area and address neither case. The mirror
 body implies astubbs#106 might; it does not.
@@ -81,9 +82,11 @@ qualified because it is destined for GitHub, where `astubbs#NN` renders as plain
 > A third path, the "reset to an earlier offset" branch, was never diagnosed upstream and is also
 > still open. It causes replay, not loss.
 >
+<!-- post-merge: checked-begin -->
 > `PartitionStateCommittedOffsetIT` covers deliberate truncation only; neither remaining case is
 > tested. The open offset-encoding work (astubbs/parallel-consumer#106,
 > astubbs/parallel-consumer#306, astubbs/parallel-consumer#207) addresses none of it.
+<!-- post-merge: checked-end -->
 
 ## The decision to make
 

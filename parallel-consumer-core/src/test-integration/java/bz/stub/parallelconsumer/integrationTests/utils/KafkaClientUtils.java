@@ -314,7 +314,7 @@ public class KafkaClientUtils implements AutoCloseable {
     /**
      * The configuration this harness would build a transactional producer from, for handing to
      * {@code ParallelConsumerOptions#producerConfig} so that PC builds - and can rebuild - the producer itself. No
-     * {@code transactional.id}: PC derives one, and it would be replaced (with a WARN) if set here.
+     * {@code transactional.id}: the test sets its own, so it knows the id to fence under.
      */
     public Map<String, Object> transactionalProducerConfig(Properties overrides) {
         var props = new Properties();

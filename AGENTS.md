@@ -198,6 +198,7 @@ and the traps that voided earlier experiments.
 | Check | Command |
 |---|---|
 | Plans, solutions and in-flight notes, **on every branch** | `node bin/inflight.mjs prior-art <mechanism> [<mechanism>...]` |
+| **The shape of the docs corpus, and one document's other versions** | `node bin/inflight.mjs docs` - every area, its groups and their counts across every ref, with the commands that drill in; `node bin/inflight.mjs docs header <path>` before acting on a document - the pull form of what the read-time hook shows, for a host without hooks |
 | Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` |
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
@@ -212,8 +213,11 @@ and the traps that voided earlier experiments.
   [`docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md`](docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md).
 - **The titles are already in your context**, injected at session start by
   `.claude/hooks/inject-recorded-knowledge.sh` - so "I did not know it existed" is not available as
-  an excuse. **That index is branch-scoped too**, and says so along with the count it cannot show
-  you; it narrows the search, it does not complete it.
+  an excuse. **That index is corpus-scoped**: it is `bin/inflight.mjs docs index`, rendered from
+  every live ref, with branch-only documents grouped under the branch set carrying them. What it
+  cannot show is a version preserved only in an archival ref (a tag, `refs/backup`) -
+  `bin/inflight.mjs stranded` names those - and it lists titles, not contents; it narrows the
+  search, it does not complete it.
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
 - **A test's own javadoc is prior art, and the commands above will not find it.** The chaos
@@ -577,7 +581,9 @@ Nothing lints commit messages, so all of this is on you.
 root is shared mutable state - several agent sessions run against it at once, so its HEAD can move
 between two of *your own* commands. Work only under `.claude/worktrees/<name>`, and reach a task by
 `cd`-ing into its worktree. `git worktree list` tells you which one holds a branch; create one if
-none does.
+none does. Commit with `git -C <worktree> commit ...` spelled as a **literal path, not a variable**:
+the pre-commit hook reads the command before the shell expands it, and refuses a `-C "$W"` rather
+than gating a tree the command never named (`.claude/hooks/pre-commit-gate.sh` owns the why).
 
 **Reaching for `git checkout <branch>` is the tell that you are in the wrong directory** - and it is
 how the rule gets broken silently. Git refuses to check out a branch another worktree already holds,

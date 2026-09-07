@@ -12,9 +12,11 @@ import bz.stub.parallelconsumer.*;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.PartitionState;
 import bz.stub.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
+import com.facebook.infer.annotation.ThreadConfined;
 import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
@@ -51,6 +53,7 @@ import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUT
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static lombok.AccessLevel.PACKAGE;
 import static lombok.AccessLevel.PRIVATE;
 import static lombok.AccessLevel.PROTECTED;
 
@@ -113,6 +116,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     @Getter(PROTECTED)
     private final Optional<ProducerManager<K, V>> producerManager;
+
+    /**
+     * Present only where recovery can run: a producer this instance built, under the transactional commit mode.
+     */
+    private final Optional<ProducerRecoveryPass<K, V>> producerRecoveryPass;
 
     /**
      * All consumer access goes through ConsumerManager (which wraps with ThreadConfinedConsumer).
@@ -240,9 +248,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private volatile Exception failureReason;
 
     /**
-     * Time of last successful commit
+     * Time of last successful commit.
+     * <p>
+     * <b>volatile, and NOT {@code @ThreadConfined} to the control thread, which is what it looks like.</b> The
+     * obvious reading is that only {@link #commitOffsetsThatAreReady()} writes it and only
+     * {@link #isTimeToCommitNow()} reads it, both on the control thread - and every record of this field
+     * stated exactly that until somebody grepped for it. {@link #tryCommitOffsetsOnRevoke()} writes it too, from
+     * inside {@link #onPartitionsRevoked}, which the broker POLL thread runs. Both writes are under
+     * {@code commitLock}; the read is not, so without this keyword the control thread has no happens-before
+     * edge to the poll thread's write and can miss a commit that did happen, then commit again immediately.
+     * Benign in effect - a redundant commit - but it is a cross-thread field either way, and declaring it
+     * confined would have been a false declaration that RacerD would then have believed.
+     * <p>
+     * Same shape and same fix as {@code lastWorkRequestWasFulfilled} (astubbs#201) and {@link #failureReason}.
      */
-    private Instant lastCommitTime;
+    private volatile Instant lastCommitTime;
 
     @Override
     public boolean isClosedOrFailed() {
@@ -289,6 +309,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private final RateLimiter queueStatsLimiter = new RateLimiter();
 
+    /**
+     * How often, at most, to report that the loading factor is sitting at its ceiling. The condition is a steady state,
+     * and {@link #checkPipelinePressure()} runs on every control loop pass, so without this the report is emitted
+     * thousands of times a minute for as long as the condition holds.
+     */
+    private static final int LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS = 30;
+
+    private final RateLimiter loadFactorAtCeilingLimiter = new RateLimiter(LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS);
+
     @Getter(PROTECTED)
     PCModule<K, V> module;
 
@@ -316,8 +345,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Control for stepping loading factor - shouldn't step if work requests can't be fulfilled due to restrictions.
      * (e.g. we may want 10, but maybe there's a single partition and we're in partition mode - stepping up won't
      * help).
+     * <p>
+     * {@code volatile} records the invariant: this is written by the control thread and read by whoever calls
+     * {@link #checkPipelinePressure()}, with no lock between them, so a plain {@code boolean} gives the write no
+     * visibility guarantee - which is what SpotBugs' {@code AT_STALE_THREAD_WRITE_OF_PRIMITIVE} was already saying
+     * about it on master, where it was one of the non-volatile offenders {@code docs/refactoring.md} tracks. The
+     * field is touched once per control loop pass, so the barrier costs nothing measurable.
      */
-    private boolean lastWorkRequestWasFulfilled = false;
+    // Package-private, not protected: the only caller is a same-package test putting the pressure check into its
+    // guarded branch, and PROTECTED would put a test-only seam on the extension surface of a public class.
+    @Setter(PACKAGE)
+    private volatile boolean lastWorkRequestWasFulfilled = false;
 
     private io.micrometer.core.instrument.Timer userProcessingTimer;
     private Gauge loadFactorGauge;
@@ -380,12 +418,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // a worker parked on the produce lock during a producer outage is released as soon as this instance
             // leaves RUNNING or PAUSED, so a close during the outage does not wait out the shutdown timeout (R15)
             this.producerManager.get().setSuspensionEndsWhen(() -> state != RUNNING && state != State.PAUSED);
-            if (options.isUsingTransactionalProducer())
+            if (options.isUsingTransactionCommitMode()) {
                 this.committer = this.producerManager.get();
-            else
+                this.producerRecoveryPass = Optional.of(new ProducerRecoveryPass<>(this.producerManager.get().recovery(),
+                        () -> state, this::replayWorkDiscardedByAbortedTransaction, this::closeWith));
+            } else {
                 this.committer = this.brokerPollSubsystem;
+                this.producerRecoveryPass = Optional.empty();
+            }
         } else {
             this.producerManager = Optional.empty();
+            this.producerRecoveryPass = Optional.empty();
             this.committer = this.brokerPollSubsystem;
         }
         //Initialize metrics for this class once all the objects are created
@@ -1237,7 +1280,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                             ThrowableUtils.describeWithRootCause(e), e));
         }
 
-        producerManager.ifPresent(x -> x.close(timeout));
+        try {
+            producerManager.ifPresent(x -> x.close(timeout));
+        } catch (Exception e) {
+            ThrowableUtils.logWithoutEscaping(e, () ->
+                    log.warn("Failed to close the Kafka producer - its IO thread, sockets and buffers may be " +
+                            "left running in this JVM until it exits. Shutdown continues; this cannot fail the " +
+                            "close. Cause: {}",
+                            ThrowableUtils.describeWithRootCause(e), e));
+        }
     }
 
     /**
@@ -1391,6 +1442,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Called from {@code poll*} (i.e. on the user's own thread) before any PC thread exists, because that is the only
      * moment at which the user's context is reachable - none of PC's threads inherit it, the SLF4J MDC is not
      * inheritable.
+     * <p>
+     * <b>The INFO line below fires once per instance, and structurally so.</b> Its only caller is
+     * {@link #supervisorLoop(Function, Consumer)}, which throws {@link IllegalStateException} when {@code poll*} is
+     * called more than once - so there is no arrangement of the public API that puts this on a per-poll or per-record
+     * path. Keep it that way: the same line reached per batch would be an INFO log on the hot path.
      *
      * @see MdcPropagation
      */
@@ -1732,6 +1788,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.trace("Sending work ({}) to pool", batch);
         // snapshot at submit time, on the controller thread - which is already running under the caller's context
         final Map<String, String> submittersDiagnosticContext = mdcPropagation.capture();
+        if (options.isUsingTransactionCommitMode()) {
+            // stamped here, on the thread that also runs the replay, so "dispatched before the replay" is a total
+            // order the produce lock can check (ProducerManager#acquireProduceLock); stamping on the worker would
+            // leave a batch queued in the pool across a replay unstamped
+            producerManager.ifPresent(pm -> {
+                long replayGeneration = pm.replayGeneration();
+                batch.forEach(wc -> wc.markDispatchedAtReplayGeneration(replayGeneration));
+            });
+        }
         Future outputRecordFuture;
         try {
             outputRecordFuture = workerThreadPool.get().submit(() -> {
@@ -1852,11 +1917,64 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         if (isPoolQueueLow() && lastWorkRequestWasFulfilled) {
             boolean steppedUp = dynamicExtraLoadFactor.maybeStepUp();
             if (steppedUp) {
+                // Deliberately NOT isDebugEnabled()-guarded, unlike the two sites below. Those allocate on every
+                // control loop pass; this one only fires when a step actually happened, which
+                // DynamicLoadFactor#couldStep() bounds by the cool-down and the factor's own ceiling - tens of times
+                // over a process's life, not thousands a minute. Guarding it would spend the pattern's signal ("this
+                // line is on a hot path") on a line that is not.
                 log.debug("isPoolQueueLow(): Executor pool queue is not loaded with enough work (queue: {} vs target: {}), stepped up loading factor to {}",
                         getNumberOfUserFunctionsQueued(), getPoolLoadTarget(), dynamicExtraLoadFactor.getCurrentFactor());
             } else if (dynamicExtraLoadFactor.isMaxReached()) {
-                log.warn("isPoolQueueLow(): Max loading factor steps reached: {}/{}", dynamicExtraLoadFactor.getCurrentFactor(), dynamicExtraLoadFactor.getMaxFactor());
+                reportLoadFactorAtCeiling();
             }
+        }
+    }
+
+    /**
+     * The queue is below its target but the loading factor cannot grow any further.
+     * <p>
+     * This is a saturation signal, not a failure - so it is reported accordingly, and never on every control loop
+     * pass:
+     * <ul>
+     *     <li>When the factor is <em>fixed</em> (see {@link DynamicLoadFactor#isStaticFactor()}) it goes to debug.
+     *     The state is real - the branch needs the last work request to have been <em>fulfilled</em>, so the buffer
+     *     the user pinned is genuinely what the queue is bounded by - but the ceiling is the number they wrote down,
+     *     and there is no step-up that failed. Reporting it at a level anyone runs at reinstates the noise this
+     *     exists to remove, for a configuration chosen on purpose. If that trade is ever revisited, the lever is a
+     *     rate-limited info through {@link #loadFactorAtCeilingLimiter}, not a return to unlimited warn.</li>
+     *     <li>When the factor is dynamic, having exhausted the step-up range is worth knowing about - but the
+     *     condition persists, so it is rate limited to once per
+     *     {@value #LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS} seconds.</li>
+     * </ul>
+     *
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/155">astubbs#155</a> (confluentinc#402) - the
+     *         unlimited WARN filled users' logs, and read like an error when it was not one
+     */
+    private void reportLoadFactorAtCeiling() {
+        if (dynamicExtraLoadFactor.isStaticFactor()) {
+            // Guarded, unlike the warn below: a fixed factor reaches this branch on EVERY pass for the life of the
+            // process, and four arguments bind SLF4J's varargs overload - an Object[] plus four boxed ints allocated
+            // per pass whether or not anyone is listening. The rate limiter is what stops the warn doing the same.
+            if (log.isDebugEnabled()) {
+                log.debug("Executor pool queue is below its target ({} queued vs {}), and the loading factor is fixed at {} by configuration - " +
+                                "not stepping up, so the in-flight target stays at {} records.",
+                        getNumberOfUserFunctionsQueued(),
+                        getPoolLoadTarget(),
+                        dynamicExtraLoadFactor.getCurrentFactor(),
+                        getQueueTargetLoaded());
+            }
+        } else {
+            loadFactorAtCeilingLimiter.performIfNotLimited(() ->
+                    log.warn("Loading factor has reached its maximum ({}/{}) and the executor pool queue is still below its target " +
+                                    "({} queued vs {}), so the in-flight target of {} records will not grow further. This is a saturation " +
+                                    "signal, not an error: raise ParallelConsumerOptions#maximumLoadFactor or #messageBufferSize to buffer " +
+                                    "more records. Repeats are suppressed for {}s.",
+                            dynamicExtraLoadFactor.getCurrentFactor(),
+                            dynamicExtraLoadFactor.getMaxFactor(),
+                            getNumberOfUserFunctionsQueued(),
+                            getPoolLoadTarget(),
+                            getQueueTargetLoaded(),
+                            LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS));
         }
     }
 
@@ -1871,8 +1989,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         int queueSize = getNumberOfUserFunctionsQueued();
         int queueTarget = getPoolLoadTarget();
         boolean workAmountBelowTarget = queueSize <= queueTarget;
-        log.debug("isPoolQueueLow()? workAmountBelowTarget {} {} vs {};",
-                workAmountBelowTarget, queueSize, queueTarget);
+        // Guarded for the same reason as the ceiling report above, and it is the other instance of that defect on
+        // this pass: three arguments bind SLF4J's varargs overload, so an unguarded call allocates an Object[] and
+        // boxes every pass with debug off. checkPipelinePressure() calls this on every pass.
+        if (log.isDebugEnabled()) {
+            log.debug("isPoolQueueLow()? workAmountBelowTarget {} {} vs {};",
+                    workAmountBelowTarget, queueSize, queueTarget);
+        }
         return workAmountBelowTarget;
     }
 
@@ -1954,16 +2077,49 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         workMailBox.drainTo(results, size);
 
         log.trace("Processing drained work {}...", results.size());
+        // Every drained result is landed before a failure is rethrown. A successful-work listener is user code
+        // that runs inside handleFutureResult; a throw there used to leave the results behind it in this local
+        // queue, unreachable - in flight forever, with no retry and no redelivery. On the ordinary pass the throw
+        // still ends the instance; on the recovery pass, which retries the drain, the results it left behind
+        // would have been the very records the replay exists to put back.
+        RuntimeException firstFailure = null;
         for (var action : results) {
-            if (action.isNewConsumerRecords()) {
-                wm.registerWork(action.getConsumerRecords());
-            } else {
-                WorkContainer<K, V> work = action.getWorkContainer();
-                MDC.put(MDC_WORK_CONTAINER_DESCRIPTOR, work.toString());
-                wm.handleFutureResult(work);
-                MDC.remove(MDC_WORK_CONTAINER_DESCRIPTOR);
+            try {
+                if (action.isNewConsumerRecords()) {
+                    wm.registerWork(action.getConsumerRecords());
+                } else {
+                    WorkContainer<K, V> work = action.getWorkContainer();
+                    MDC.put(MDC_WORK_CONTAINER_DESCRIPTOR, work.toString());
+                    try {
+                        wm.handleFutureResult(work);
+                    } finally {
+                        MDC.remove(MDC_WORK_CONTAINER_DESCRIPTOR);
+                    }
+                }
+            } catch (RuntimeException failure) {
+                firstFailure = (RuntimeException) firstOrSuppress(firstFailure, failure); // first is null or a RuntimeException, so the cast holds
             }
         }
+        if (firstFailure != null) {
+            throw firstFailure;
+        }
+    }
+
+    /**
+     * The step of a recovery that runs under the producer write lock, after the invalidated producer is discarded
+     * (KTD4, KTD5): land every result already in the mailbox - each worker that produced into the aborted transaction
+     * has mailboxed its result, which holding the write lock guarantees - so the ledger is complete, then put the
+     * ledger's records back into processing. The drain is what makes the replay complete: a result still in the
+     * mailbox is a record whose offset would otherwise be committed for output the broker discarded. Package-visible
+     * so the drain-then-replay order is pinned by a test rather than by the one call site's comment.
+     *
+     * @return how many records the replay put back
+     */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
+    int replayWorkDiscardedByAbortedTransaction() {
+        assertOnControlThread("the replay of work an aborted transaction discarded");
+        processWorkCompleteMailBox(Duration.ZERO);
+        return wm.restoreWorkDiscardedByAbortedTransaction();
     }
 
     /**
@@ -1986,7 +2142,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 Duration effectiveRetryDelay = lowestScheduled.toMillis() < retryDelay.toMillis() ? retryDelay : lowestScheduled;
                 Duration result = timeBetweenCommits.toMillis() < effectiveRetryDelay.toMillis() ? timeBetweenCommits : effectiveRetryDelay;
                 log.debug("Not enough work in flight, while work is waiting to be retried - so will only sleep until next retry time of {} (lowestScheduled = {})", result, lowestScheduled);
-                return result;
+                return capAtNextRecoveryAttempt(result); // same cap as the commit path below, for the same reason
             }
         }
 
@@ -2002,7 +2158,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private Duration capAtNextRecoveryAttempt(Duration wait) {
         return producerManager
-                .flatMap(pm -> pm.timeUntilNextRecoveryAttempt(Instant.now()))
+                .flatMap(pm -> pm.recovery().timeUntilNextRecoveryAttempt(Instant.now()))
                 .filter(untilAttempt -> untilAttempt.compareTo(wait) < 0)
                 .orElse(wait);
     }
@@ -2012,82 +2168,38 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
-     * Recovery from a producer the broker reported invalid, on this thread only and at the top of every pass
-     * (KTD4): when a condition is recorded, take the producer write lock, abort and discard the producer, drain the
-     * mailbox so every result of the aborted transaction is accounted for, replay the work that transaction
-     * discarded (KTD5), release the lock, and then - outside it - build and initialise the replacement (KTD7). A
-     * replacement that cannot be built yet is retried on a later pass with backoff; one that can never be built ends
-     * the instance, naming the transactional id. Nothing thrown here may escape: the supervisor treats an exception
-     * escaping {@link #controlLoop} as fatal, which is the outcome this exists to avoid.
-     * <p>
-     * Skipped once the instance is CLOSING or CLOSED: a close during an outage would otherwise wait on a rebuild
-     * that blocks up to {@code max.block.ms} for a producer nobody will use, and {@code ProducerManager.close}
-     * releases the parked workers on its own. DRAINING still recovers, because a drain needs a producer to finish
-     * the work in flight.
-     * <p>
-     * Visible for testing - the state gate is driven directly, because the window between CLOSING and the manager
-     * closing is on this thread only.
+     * The recovery pass, at the top of every control loop pass, where the instance built its own transactional
+     * producer: {@link ProducerRecoveryPass} owns it. Visible for testing - the state gate is driven directly,
+     * because the window between CLOSING and the manager closing is on this thread only.
      */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
     void maybeRecoverProducer() {
-        if (!producerManager.isPresent() || !options.isUsingTransactionCommitMode()) {
-            return;
+        assertOnControlThread("the producer recovery pass");
+        producerRecoveryPass.ifPresent(ProducerRecoveryPass::run);
+    }
+
+    /**
+     * The confinement the recovery pass and the ledger replay declare with {@code @ThreadConfined}, asserted rather
+     * than trusted: once a control thread exists, only it may run them. Before one exists - an instance never
+     * started - nothing runs concurrently, so there is nothing to confine, and a test may drive them directly.
+     */
+    private void assertOnControlThread(String what) {
+        Thread control = blockableControlThread;
+        if (control != null && Thread.currentThread() != control) {
+            throw new IllegalStateException(msg("{} is confined to the control thread '{}' but was called on '{}'",
+                    what, control.getName(), Thread.currentThread().getName()));
         }
-        if (state == State.CLOSING || state == CLOSED) {
-            log.debug("Not recovering the producer: the instance is {}", state);
-            return;
+    }
+
+    /**
+     * How a terminal recovery outcome ends the instance: the failure it closes with, if none is recorded yet, then
+     * CLOSING - which is also what releases the workers parked on the produce lock.
+     */
+    private void closeWith(Exception failure) {
+        if (this.failureReason == null) {
+            this.failureReason = failure;
         }
-        ProducerManager<K, V> pm = producerManager.get();
-        if (!pm.isRecoveryAttemptDue(Instant.now())) {
-            return;
-        }
-        try {
-            if (pm.pendingInvalidation().isPresent()) {
-                boolean entered;
-                try {
-                    entered = pm.beginReplacement();
-                } catch (InterruptedException wokeUp) {
-                    // This thread's own wake-up, not a stop signal: notifySomethingToDo interrupts the control thread
-                    // whenever the write lock is not HELD, and it is not held while this pass is waiting for it - a
-                    // worker holding the produce lock through its user function keeps the wait open for up to the
-                    // commit-lock timeout, and the rebalance that fenced the producer ends with onPartitionsAssigned,
-                    // which notifies. Shutdown travels in `state`, never in the flag. Clear it and return: the
-                    // condition stays recorded, so the next pass retries. Same shape as the mailbox poll's own catch.
-                    Thread.interrupted();
-                    log.debug("Interrupted while waiting for the producer write lock to begin recovery - a wake-up, not a " +
-                            "shutdown; the condition stays recorded and the next pass retries");
-                    return;
-                }
-                if (!entered) {
-                    return; // the wait elapsed; a retry is scheduled and the condition stays recorded
-                }
-                try {
-                    // every worker that produced into the aborted transaction has already mailboxed its result
-                    // (the write lock guarantees it); land those results before the replay so the ledger is complete
-                    processWorkCompleteMailBox(Duration.ZERO);
-                    int ignoredRestored = wm.restoreWorkDiscardedByAbortedTransaction(); // logged inside; nothing in this pass depends on the count
-                } finally {
-                    pm.releaseCommitLockAfterReplacement();
-                }
-            }
-            ProducerManager.ReplacementOutcome outcome = pm.completeReplacement();
-            if (outcome.isTerminal()) {
-                if (this.failureReason == null) {
-                    this.failureReason = outcome.getFailure();
-                }
-                transitionToClosing();
-            }
-        } catch (RuntimeException e) {
-            log.error("Producer recovery pass failed unexpectedly; it will be attempted again on a later pass: {}", describeWithRootCause(e), e);
-        } catch (Error fatal) {
-            // Not retried, and not left to the supervisor either: its catch is Exception, so an Error would leave
-            // the instance RUNNING with every worker parked on the produce lock for good. Leave RUNNING first - that
-            // is what releases them - and record why, then let it go.
-            if (this.failureReason == null) {
-                this.failureReason = new PCInternalRuntimeException("Producer recovery failed with an Error; the instance is closing", fatal);
-            }
-            transitionToClosing();
-            throw fatal;
-        }
+        transitionToClosing();
     }
 
     private boolean isIdlingOrRunning() {
@@ -2202,9 +2314,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // to avoid, reached through a different door. addToMailbox is in a finally for the same
             // reason: returning the record is the part that must happen.
             Throwable bookkeepingFailed = null;
+            // A batch that could not be produced because the producer is being replaced is deferred, not failed:
+            // the producer, not the record, is what stopped it, so no attempt is counted against the record and
+            // no retry delay applies. A user's retry-delay function or dead-letter policy reads that history
+            // through RecordContext, and a record must not be dead-lettered for being in flight during a recovery.
+            boolean deferredForRecovery = e instanceof ProducerInvalidatedException;
             for (var wc : workContainerBatch) {
                 try {
-                    wc.onUserFunctionFailure(e);
+                    if (deferredForRecovery) {
+                        wc.deferForRecovery();
+                    } else {
+                        wc.onUserFunctionFailure(e);
+                    }
                 } catch (Throwable userCodeThrew) {
                     bookkeepingFailed = firstOrSuppress(bookkeepingFailed, userCodeThrew);
                 }
@@ -2240,13 +2361,41 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
 
             logWithoutEscaping(e, () -> {
-                String msg = msg("Exception caught in user function running stage, registering WC as failed, returning to" +
-                        " mailbox. Context: {}", context, e);
+                // Summary, not the whole context: the full render grows with the batch (astubbs#170). Built inside
+                // each arm rather than once above them, because summarising walks the whole batch and the retriable
+                // arm logs at DEBUG only - PCRetriableException is PC's designed retry signal, so a downstream
+                // outage drives this branch at full processing rate, and doing that work for a line nobody reads is
+                // the disabled-level allocation astubbs#201 found elsewhere.
+                String failureLine = "Exception caught in user function running stage, registering WC as failed," +
+                        " returning to mailbox. Context: {}";
                 if (PCRetriableException.isPresentIn(e)) {
-                    log.debug("Explicit " + PCRetriableException.class.getSimpleName() + " caught, logging at DEBUG only. " + msg, e);
+                    if (log.isDebugEnabled()) {
+                        log.debug("Explicit " + PCRetriableException.class.getSimpleName()
+                                + " caught, logging at DEBUG only. " + failureLine, context.summariseForLog(), e);
+                    }
+                } else if (e instanceof ProducerInvalidatedException) {
+                    // not a failure of the user's function: the producer is being replaced and the batch re-queues.
+                    // Summary for the same reason as the arms beside it - recovery re-queues at full rate.
+                    if (log.isDebugEnabled()) {
+                        log.debug("Batch deferred for producer recovery, returning to mailbox without a failure recorded. Context: {}",
+                                context.summariseForLog(), e);
+                    }
                 } else {
-                    log.error(msg, e);
+                    log.error(failureLine, context.summariseForLog(), e);
                 }
+                // Inside the lambda, and LAST, both deliberately. Inside, because rendering the context calls
+                // toString() on user keys and values, which is what logWithoutEscaping exists to contain. Last,
+                // because logWithoutEscaping swallows whatever the lambda throws - moving this above the lines
+                // that report the failure would let a hostile toString() suppress the report itself.
+                //
+                // SLF4J's own parameter substitution is a SECOND, independent layer, not the same one said twice:
+                // logback's LoggingEvent.getFormattedMessage() formats through MessageFormatter.arrayFormat, whose
+                // safeObjectAppend catches Throwable from each argument's toString() and substitutes
+                // "[FAILED toString()]". So a hostile key or value degrades one interpolation rather than the line.
+                // It is deliberately NOT relied on: it only covers the {} arguments, and only once formatting is
+                // reached - a level-enabled check or an appender that renders the object by another route is
+                // outside it. logWithoutEscaping is the layer that holds regardless.
+                log.debug("Full context of the batch that failed in the user function: {}", context);
             });
             throw e; // trow again to make the future failed
         } finally {
@@ -2606,6 +2755,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * gate protects this - {@code ArchitectureTest.rebalanceCallbacksMustNotBlock} matches method
      * calls, and a {@code synchronized} block is a {@code MONITORENTER} instruction it cannot see, so
      * the rule is green here whether the invariant holds or not.
+     * <p>
+     * <b>Amended 2026-09-03:</b> one tool CAN see it. Infer's {@code @Lockless} on
+     * {@link #onPartitionsRevoked} reports this monitor by name, through this method, and does not
+     * report {@code commitLock.tryLock()} - so it agrees with the decline-rather-than-wait rule while
+     * seeing the {@code MONITORENTER} ArchUnit misses. It is still not the gate, because it forbids
+     * the monitor outright rather than the waiting-while-holding this paragraph is about: annotating
+     * the callback leaves a violation standing whether the invariant holds or not, which is the same
+     * complaint made above. Measured, not assumed - see the annotation inventory in
+     * {@code parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md}. Reach for it
+     * as a query when checking this suspicion again, rather than enumerating the monitors by hand.
      */
     private void clearCommitCommand() {
         synchronized (commitCommand) {

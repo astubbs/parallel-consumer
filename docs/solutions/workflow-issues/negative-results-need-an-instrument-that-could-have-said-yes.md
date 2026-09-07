@@ -1,6 +1,7 @@
 ---
 title: Prove the instrument could have said yes before trusting a negative result
 date: 2026-08-11
+last_updated: 2026-09-04
 category: workflow-issues
 module: tooling
 problem_type: workflow_issue
@@ -14,10 +15,13 @@ applies_when:
   - Running a negative control in an experiment, where the expected result is failure
   - Reviewing a diff to judge a branch's scope
   - A cache, a default, or an implicit argument sits between your command and the thing it queries
+  - Filtering a listing by a status field, where the thing you are looking for may carry a different status
+  - Looking for the CI run behind a recorded test failure, and finding none
 symptoms:
   - A reachability experiment succeeds against a deliberately bogus endpoint
   - A branch diff shows files deleted and rewritten that the branch never touched
   - A prior-art search returns nothing for work that demonstrably exists
+  - A recorded test failure has no failed CI run behind it
 tags:
   - false-negative
   - investigation
@@ -26,6 +30,7 @@ tags:
   - prior-art
   - negative-control
   - tooling
+  - status-filter
 ---
 
 # Prove the instrument could have said yes before trusting a negative result
@@ -45,6 +50,7 @@ artefacts of the instrument rather than facts about the world:
 | "Nothing wrong here - the scanner is reachable and the token is valid" | A warm on-disk cache was answering; the endpoint was bogus and the token expired |
 | "No prior art" | The search ran against `confluentinc`, not the fork |
 | "This branch rewrote `README.adoc` and deleted `STRATEGY.md`" | The branch touched neither - the diff was rendering *master's* newer commits as the branch's deletions |
+| "No CI run failed at that commit, so there is nothing to retrieve" | The run was *cancelled* mid-flight, and the listing was filtered to failures |
 
 The first two are negatives - a control that failed to fail, and a search that found nothing - which
 is the dangerous majority case and what this doc is named for. **The third is the mirror image: the
@@ -122,6 +128,32 @@ This one is already written up in full, mechanism and fix, so it is cited rather
 [`compound-tooling-breaks-in-worktrees-and-forks-2026-08-07.md`](compound-tooling-breaks-in-worktrees-and-forks-2026-08-07.md),
 with the one-time `gh repo set-default` fix and the habit that outlives it in `AGENTS.md`.
 
+### 4. A status filter excludes the status the thing actually has
+
+The coverage service records the outcome and wall-clock of every test per commit, and it held a
+failure for a chaos test at a commit whose CI run could not be found. `gh run list` filtered to
+failures returned nothing, and the obvious reading - "the recorded failure has no run behind it, so
+it cannot be chased" - was wrong. **The run was CANCELLED, not failed.** A later push cancelled it by
+concurrency group while the job was still executing, and the coverage upload had already happened, so
+the test's outcome outlived the run's own conclusion.
+
+Nothing about this announces itself: a filtered listing returning no rows looks exactly like a
+listing with nothing in it. The filter was not broken and the query was not malformed - the status
+being filtered for was simply not the status the thing had.
+
+Two transferable pieces:
+
+- **A status filter is an assumption about the thing you are looking for.** Before reading an empty
+  filtered listing as absence, drop the filter and look at what statuses are actually present. Here
+  the unfiltered lookup by full commit SHA showed the run immediately, with `cancelled` on it.
+- **A cancelled run's artefacts survive it.** The log archive still served the run's output, which is
+  where the replay seed was recovered from - the part that expires and cannot be reconstructed. So
+  "the run was cancelled" is not a reason to stop looking; it is a reason to stop using the run
+  *listing* as the index.
+
+The general form is the same as the two-dot diff above: the instrument answered a question that was
+adjacent to, but not, the one being asked.
+
 ### A positive control for each of the prior-art checks
 
 `AGENTS.md` requires six checks before forming a hypothesis, and requires you to report what each
@@ -135,6 +167,7 @@ otherwise. Cheap ways to show it could:
 | `gh issue list -R astubbs/parallel-consumer --state all` | `gh issue list -R astubbs/parallel-consumer --label upstream-mirror --limit 1 --state all` returns a row. Do not read absence out of the *unfiltered* list: `--limit` defaults to 30, so a correct fork result can page every mirror off the end |
 | A branch or PR diff | Diff a file you know the branch touched and confirm it appears |
 | A scanner or audit | The run reports how many components it examined, not just how many were bad |
+| A CI run listing filtered by conclusion | Drop the filter and look up the commit directly - a cancelled or still-running job carries a conclusion your filter excludes, while its artefacts and logs survive |
 
 The last row is the general form: **prefer instruments that report their denominator.** The audit job's
 real output reads *"5 vulnerable component(s) … Scanned 214 resolved components across 9 module(s)"* -
@@ -197,10 +230,12 @@ command did**, or it proves something about a different command.
   - includes a tool whose *probe* was the broken thing while it reported this project as the problem.
 - astubbs/parallel-consumer#278 (merged) - the `gh` default-repo write-up in `AGENTS.md`: the one-time
   `set-default`, and the habits that survive it being local and uncommitted.
+- [`an-inert-analysis-config-reads-as-a-clean-codebase.md`](an-inert-analysis-config-reads-as-a-clean-codebase.md)
+  - the build-configuration case of the same family: the instrument was pointed correctly and ran, but
+  the configuration under test was not the one written, so the negative was real and about the wrong
+  thing. Its remedy is the count assertion this doc calls reporting a denominator, applied to an
+  effective pom. (This entry was a second `## Related` heading at the tail; folded in 2026-09-04.)
+- [`gh-run-view-log-truncation.md`](gh-run-view-log-truncation.md) - the retrieval half of mechanism 4:
+  once you know which run to ask for, that doc owns why the console log is not a reliable way to read
+  it and which archive route is.
 
-## Related
-
-[`an-inert-analysis-config-reads-as-a-clean-codebase.md`](an-inert-analysis-config-reads-as-a-clean-codebase.md) is the build-configuration case of the same family: the instrument was pointed
-correctly and ran, but the configuration under test was not the one written, so the negative was real
-and about the wrong thing. Its remedy is the count assertion this doc calls reporting a denominator,
-applied to an effective pom.

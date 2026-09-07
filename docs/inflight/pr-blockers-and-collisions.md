@@ -30,6 +30,18 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
   astubbs#80 reshaped. Pick parallel work accordingly - and check `gh pr list` for which of these
   are still open, since a merged one's files are simply master's again.
 <!-- post-merge: checked-end -->
+<!-- post-merge: checked-begin -->
+- **`LogCapture` is the only supported way to capture a log line in this suite.**
+  `bz.stub.parallelconsumer.internal.utils.LogCapture` is an `AutoCloseable` appender plus level
+  override, and its javadoc owns the two hazards of raising a JVM-shared logger - reading someone
+  else's lines, and flooding everyone with `DEBUG` - along with the different fix each one takes.
+  Read it before writing a capture; do not open a second way to do this. Still un-converted:
+  `SubmitWorkToPoolShutdownRaceTest`'s two inline `(Logger) LoggerFactory.getLogger(...)` +
+  `ListAppender` blocks (`grep -n ListAppender` finds them). The astubbs#201 / astubbs#203 collision
+  this bullet used to record is settled - astubbs#203's branch is merged into astubbs#201's and the
+  inline copy in `LoadFactorCeilingReportingTest` is converted, so no rival implementation can reach
+  master.
+<!-- post-merge: checked-end -->
 - **astubbs#8 (`features/retry-dlq`, 2022) is an abandoned draft**, kept only because it is the sole
   DLQ code that exists. Close or finish it; it is not in flight.
 
@@ -60,14 +72,6 @@ either an amended note in the release section when 0.6.0.0 is cut, or a follow-u
 
 ### Decisions waiting on a human
 
-- **Two pre-existing main-code holes need their own PR**, written up with fix and test shapes in
-  `bug-eos-swallowed-produce-failures.md`. The `InvalidPidMappingException` one is the serious one: a
-  whole batch is marked *succeeded* and its offsets committed for records whose output was never
-  produced. Same shape as the defect astubbs#261 fixed, and the single exception to the rationale that
-  justified it.
-- **The commit-interval identity check** (`bug-commit-interval-identity-check.md`) - an explicit
-  `Duration.ofSeconds(5)` is silently replaced with 100ms. One-line fix, wants its own change so the
-  behaviour change is visible.
 - **Register hardening** (`next-transactional-register-hardening.md`) - ranked by how much false
   assurance each item buys. The top one is not subtle: `-Dexcluded.groups=transactions` is a
   documented, supported invocation that runs **zero** claim proofs while the register reports every

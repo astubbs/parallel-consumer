@@ -14,6 +14,8 @@ import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -24,8 +26,6 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
 import pl.tlinkowski.unij.api.UniLists;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -64,13 +64,12 @@ public class StreamsApp {
         return new KafkaConsumer<>(p);
     }
 
-    /** What PC builds its own producer from; PC derives the {@code transactional.id} itself. */
-    private Map<String, Object> getProducerConfig() {
-        Map<String, Object> p = new HashMap<>();
+    private Producer<String, String> getKafkaProducer() {
+        Properties p = new Properties();
         p.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         p.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         p.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        return p;
+        return new KafkaProducer<>(p);
     }
 
     // tag::example[]
@@ -108,10 +107,11 @@ public class StreamsApp {
 
     private void setupParallelConsumer() {
         Consumer<String, String> kafkaConsumer = getKafkaConsumer();
+        Producer<String, String> kafkaProducer = getKafkaProducer();
         var options = ParallelConsumerOptions.<String, String>builder()
                 .ordering(ParallelConsumerOptions.ProcessingOrder.KEY)
                 .consumer(kafkaConsumer)
-                .producerConfig(getProducerConfig())
+                .producer(kafkaProducer)
                 .build();
 
 

@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer;
 
 import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.internal.utils.RecordBatchSummary;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.Getter;
 import lombok.ToString;
@@ -15,6 +16,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -124,6 +126,34 @@ public class PollContextInternal<K, V> {
      */
     public List<WorkContainer<K, V>> getWorkContainers() {
         return streamWorkContainers().collect(Collectors.toList());
+    }
+
+    /**
+     * @return the producer replay generation the control thread stamped on this batch at dispatch, for the produce
+     *         lock to compare against; empty when no container carries one - a batch that did not come through the
+     *         control loop's dispatch, which opts out of the check
+     * @see WorkContainer#getDispatchedAtReplayGeneration()
+     */
+    public OptionalLong replayGenerationAtDispatch() {
+        return streamWorkContainers()
+                .mapToLong(WorkContainer::getDispatchedAtReplayGeneration)
+                .filter(generation -> generation != WorkContainer.NEVER_DISPATCHED)
+                .min();
+    }
+
+    /**
+     * A short, <b>bounded</b> description of the records in this context - topic-partitions, record counts and offset
+     * ranges - for log lines that must not grow with the batch size.
+     * <p>
+     * {@link #toString()} renders every record (keys and values included), which made the user-function failure log
+     * long enough for log tooling to truncate it (astubbs#170 / confluentinc#640). Use this in the message, and leave
+     * the full object for {@code DEBUG}.
+     *
+     * @return e.g. {@code 3 records across 2 partitions: my-topic-0: 2 records, offsets 5-6; my-topic-1: 1 record,
+     * offset 9}
+     */
+    public String summariseForLog() {
+        return RecordBatchSummary.summariseOffsets(pollContext.getOffsets());
     }
 
 }

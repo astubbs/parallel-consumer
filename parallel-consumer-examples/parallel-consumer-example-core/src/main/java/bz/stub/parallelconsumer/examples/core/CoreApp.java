@@ -7,7 +7,6 @@ package bz.stub.parallelconsumer.examples.core;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelStreamProcessor;
-import bz.stub.parallelconsumer.ProducerFactory;
 import bz.stub.parallelconsumer.RecordContext;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -21,7 +20,6 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -50,23 +48,6 @@ public class CoreApp {
         return new KafkaProducer<>(new Properties());
     }
 
-    /**
-     * The configuration PC builds its own producer from - what you would otherwise have handed to
-     * {@code new KafkaProducer<>(config)}. No {@code transactional.id}: PC derives one.
-     */
-    Map<String, Object> getProducerConfig() {
-        return new HashMap<>();
-    }
-
-    /**
-     * How PC turns that configuration into a producer. The default is {@code new KafkaProducer<>(config)}; override it
-     * to wrap or instrument the producer - or, as the test for this example does, to substitute a mock - keeping
-     * every key of the configuration it is given.
-     */
-    ProducerFactory<String, String> getProducerFactory() {
-        return ProducerFactory.kafkaProducer();
-    }
-
     ParallelStreamProcessor<String, String> parallelConsumer;
 
     @SuppressWarnings("UnqualifiedFieldAccess")
@@ -90,19 +71,19 @@ public class CoreApp {
     ParallelStreamProcessor<String, String> setupParallelConsumer() {
         // tag::exampleSetup[]
         Consumer<String, String> kafkaConsumer = getKafkaConsumer(); // <1>
+        Producer<String, String> kafkaProducer = getKafkaProducer();
 
         var options = ParallelConsumerOptions.<String, String>builder()
                 .ordering(KEY) // <2>
                 .maxConcurrency(1000) // <3>
                 .consumer(kafkaConsumer)
-                .producerConfig(getProducerConfig()) // <4>
-                .producerFactory(getProducerFactory())
+                .producer(kafkaProducer)
                 .build();
 
         ParallelStreamProcessor<String, String> eosStreamProcessor =
                 ParallelStreamProcessor.createEosStreamProcessor(options);
 
-        eosStreamProcessor.subscribe(of(inputTopic)); // <5>
+        eosStreamProcessor.subscribe(of(inputTopic)); // <4>
 
         return eosStreamProcessor;
         // end::exampleSetup[]
@@ -227,7 +208,7 @@ public class CoreApp {
         // tag::batching[]
         ParallelStreamProcessor.createEosStreamProcessor(ParallelConsumerOptions.<String, String>builder()
                 .consumer(getKafkaConsumer())
-                .producerConfig(getProducerConfig())
+                .producer(getKafkaProducer())
                 .maxConcurrency(100)
                 .batchSize(5) // <1>
                 .build());
