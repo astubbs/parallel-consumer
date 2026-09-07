@@ -29,6 +29,7 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
@@ -139,12 +140,12 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
      */
     static final long POST_REVOKE_PROCESSING_DELAY_MS = 500L;
     /**
-     * How many more records PC must have processed after the revoked partitions come back to it before the output
-     * topic is read for duplicates. Enough to cover the records a deferred duplicate would come from - the
+     * How many records PC must have processed ON THE RETURNED PARTITIONS after they come back to it before the
+     * output topic is read for duplicates. Enough to cover the records a deferred duplicate would come from - the
      * produced-but-undrained tail at the revocation, a handful at most - with margin; small enough that at
      * {@link #POST_REVOKE_PROCESSING_DELAY_MS} per record the wait stays in seconds.
      */
-    static final long RECORDS_PROCESSED_AFTER_THE_PARTITIONS_RETURN = 30L;
+    static final long RECORDS_PROCESSED_AFTER_THE_PARTITIONS_RETURN = 20L;
 
     Consumer<String, String> consumer;
     Producer<String, String> producer;
@@ -167,6 +168,10 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
 
     /** The input-topic partitions the first revocation revoked. */
     volatile Collection<TopicPartition> revokedPartitions;
+    /** Of those, the ones assigned back to PC after the second consumer left - the partitions a duplicate would come from. */
+    final Set<TopicPartition> returnedPartitions = ConcurrentHashMap.newKeySet();
+    /** Records processed on a returned partition after its return - the wait the duplicate check needs. */
+    final AtomicLong processedOnReturnedPartitions = new AtomicLong();
 
     volatile boolean slowProcessingAfterRevoke = false;
 
@@ -210,6 +215,19 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
                     ThreadUtils.sleepQuietly(CONTROL_COMMIT_DELAY_MS);
                 }
                 super.commitOffsetsThatAreReady();
+            }
+
+            @Override
+            public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+                super.onPartitionsAssigned(partitions);
+                var revoked = revokedPartitions;
+                if (revoked != null) {
+                    for (var tp : partitions) {
+                        if (revoked.contains(tp)) {
+                            returnedPartitions.add(tp);
+                        }
+                    }
+                }
             }
 
             @Override
@@ -299,6 +317,10 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
         pc.pollAndProduce((recordContexts) -> {
             ThreadUtils.sleepQuietly(slowProcessingAfterRevoke ? POST_REVOKE_PROCESSING_DELAY_MS : PROCESSING_DELAY_MS);
             count.getAndIncrement();
+            var record = recordContexts.getSingleConsumerRecord();
+            if (returnedPartitions.contains(new TopicPartition(record.topic(), record.partition()))) {
+                processedOnReturnedPartitions.incrementAndGet();
+            }
             log.debug("Processed record, count now {} - offset: {}", count, recordContexts.offset());
             return new ProducerRecord<>(outputTopic, recordContexts.key(), recordContexts.value());
         });
@@ -366,10 +388,13 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
         // the output topic can see (astubbs#436 for the defect, and the fix that hands the revoke commit to the
         // control thread so that it drains first). Every input value is unique, so a repeated output value is a
         // duplicated result and nothing else.
-        long countAtReturn = count.get();
-        await("PC has reprocessed the returned partitions past where a deferred duplicate would come from")
-                .timeout(Duration.ofSeconds(60))
-                .untilAtomic(count, is(greaterThan(countAtReturn + RECORDS_PROCESSED_AFTER_THE_PARTITIONS_RETURN)));
+        // Counted on the RETURNED partitions specifically - the still-owned partition keeps processing throughout and
+        // would satisfy a total count on its own before the follow-up rebalance has even given the others back.
+        await("PC has been given the revoked partitions back and has reprocessed them past where a deferred " +
+                "duplicate would come from")
+                .timeout(Duration.ofSeconds(90))
+                .untilAtomic(processedOnReturnedPartitions, is(greaterThan(RECORDS_PROCESSED_AFTER_THE_PARTITIONS_RETURN)));
+        Assertions.assertFalse(returnedPartitions.isEmpty(), "no revoked partition came back to PC");
         try (var output = TransactionalTopicVerifier.readCommitted(getKcu(), "output", outputTopic)) {
             readToTheCommittedEnd(output);
             List<String> duplicated = output.consumed().stream()

@@ -193,7 +193,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
 
         private boolean isNewConsumerRecords() {
-            return !isWorkResult();
+            return !isWorkResult() && !isWakeUp();
+        }
+
+        /**
+         * Neither a result nor records: a message whose only purpose is to return the control thread's blocking
+         * mailbox poll at once. The revocation commit request uses it instead of an interrupt
+         * ({@link #wakeTheControlLoopWithoutInterrupting}) - an interrupt aimed at the mailbox poll can land
+         * anywhere the control thread is by the time it arrives, and in a timed lock acquisition it reads as a
+         * shutdown request. A message can only ever be consumed by the drain, so it cannot be misread.
+         */
+        private boolean isWakeUp() {
+            return workContainer == null && consumerRecords == null;
+        }
+
+        private static <K, V> ControllerEventMessage<K, V> wakeUp() {
+            return new ControllerEventMessage<>(null, null);
         }
 
         private static <K, V> ControllerEventMessage<K, V> of(EpochAndRecordsMap<K, V> polledRecords) {
@@ -760,13 +775,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * complete) completes whatever request is pending at that point, the control task fails anything still pending
      * when it exits, and a callback that finds the instance already closed or failed declines at once.
      * <p>
-     * <b>The wake-up is sent only while the control thread is parked on the mailbox.</b> {@link #notifySomethingToDo}
-     * interrupts the control thread whenever the producer write lock is not held - which includes the control thread
-     * still WAITING for that lock in {@code acquireCommitLock}'s timed {@code tryLock}, where an interrupt is not a
-     * wake-up but an {@code InterruptedException} that the control loop treats as failure and closes the instance
-     * on. A revocation lands at exactly such moments. So this path checks {@link #currentlyPollingWorkCompleteMailBox}
-     * first - the contract the wake-up's own javadoc states - and otherwise lets the pass pick the request up when
-     * its bounded mailbox wait ends. The other callers of {@code notifySomethingToDo} keep their behaviour.
+     * <b>The wake-up is a mailbox message, not an interrupt.</b> {@link #notifySomethingToDo} interrupts the control
+     * thread whenever the producer write lock is not held - which includes the control thread still WAITING for that
+     * lock in {@code acquireCommitLock}'s timed {@code tryLock}, where an interrupt is not a wake-up but an
+     * {@code InterruptedException} that the control loop treats as a shutdown request. A revocation lands at exactly
+     * such moments, and checking the polling flag before interrupting only narrows the race (the flag can clear
+     * between the read and the interrupt - the review of this fix found it). So this path offers a
+     * {@link ControllerEventMessage#wakeUp} to the mailbox instead: the blocking poll returns at once if the thread
+     * is parked there, and otherwise the message waits for the drain, which skips it. The other callers of
+     * {@code notifySomethingToDo} keep their behaviour.
      * <p>
      * <b>The served pass also fences the revoked partitions, between its drain and its commit.</b> The commit alone
      * left a second, narrower door open: once it releases the producer write lock, a worker parked on the produce
@@ -788,9 +805,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             return;
         }
 
-        if (isClosedOrFailed()) {
-            logDeclinedRevokeCommit(partitions, new IllegalStateException("the instance is closed or has failed, " +
-                    "so no control-loop pass will serve a revocation commit"));
+        if (state == State.CLOSING || isClosedOrFailed()) {
+            // CLOSING as well as closed: the close serves whatever is pending when it reaches its own commit, but
+            // the poll thread keeps polling (and can be revoked) until closeAndWait stops it, and a request posted
+            // after that one-shot serve would wait out its deadline while the close waits on this very thread.
+            logDeclinedRevokeCommit(partitions, new IllegalStateException("the instance is closing, closed or " +
+                    "failed, so no control-loop pass will serve a revocation commit"));
             return;
         }
 
@@ -805,7 +825,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // Fail it rather than leave a waiter-less future for the control thread to complete.
             displaced.done.completeExceptionally(new IllegalStateException("superseded by a later revocation"));
         }
-        wakeControlThreadIfParkedOnTheMailbox();
+        wakeTheControlLoopWithoutInterrupting();
         var deadline = options.getCommitLockAcquisitionTimeout();
         log.info("Revocation of {}: asked the control thread to drain, fence and commit, waiting up to {}.", partitions, deadline);
         try {
@@ -836,34 +856,46 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
-     * The deadline expired after the control thread had taken the request - so a pass is serving it now, bounded by
-     * that pass's own write-lock timeout and one commit. Waiting once more keeps truncation after the commit.
+     * The deadline expired after the control thread had taken the request - so a pass is serving it now, and it will
+     * complete or fail the request when it finishes, bounded by the producer's own timeouts. This waits through that
+     * completion, in deadline-sized slices each logged at WARN, rather than giving up: a callback that returns while
+     * the commit is still running truncates underneath it, and a commit that then succeeds lands on a state that is
+     * no longer that partition's - the review of this fix traced it to the removed singleton or a re-assignment.
+     * Every slice is a timed wait, which keeps this off {@code ArchitectureTest}'s untimed-wait deny list.
      */
     private void waitForTheTakenRequest(RevokeCommitRequest request, Collection<TopicPartition> partitions, Duration deadline) {
-        log.info("Revocation of {}: the deadline passed while the control thread was already serving the request - " +
-                "waiting for that pass rather than truncating underneath its commit.", partitions);
-        try {
-            request.done.get(deadline.toMillis(), MILLISECONDS);
-            log.info("Revocation of {}: the control thread drained and committed, late but inside the callback.", partitions);
-        } catch (TimeoutException | ExecutionException e) {
-            logDeclinedRevokeCommit(partitions, e instanceof ExecutionException ? e.getCause() : e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            logDeclinedRevokeCommit(partitions, e);
+        log.warn("Revocation of {}: {} passed while the control thread was already serving the request - waiting " +
+                "for that pass to finish rather than truncating underneath its commit. If this repeats, the producer's " +
+                "own timeouts are longer than commitLockAcquisitionTimeout.", partitions, deadline);
+        while (!request.done.isDone()) {
+            try {
+                request.done.get(deadline.toMillis(), MILLISECONDS);
+                log.info("Revocation of {}: the control thread drained and committed, late but inside the callback.", partitions);
+                return;
+            } catch (TimeoutException e) {
+                log.warn("Revocation of {}: still waiting on the control thread's commit after another {}.", partitions, deadline);
+            } catch (ExecutionException e) {
+                logDeclinedRevokeCommit(partitions, e.getCause());
+                return;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logDeclinedRevokeCommit(partitions, new IllegalStateException("interrupted while the control thread " +
+                        "was serving the request; its commit may still complete", e));
+                return;
+            }
         }
     }
 
     /**
-     * @see #commitOnRevokeViaTheControlThread the paragraph on the wake-up, for why this is narrower than
-     * {@link #notifySomethingToDo}
+     * Returns the control thread's blocking mailbox poll at once by handing it a message, never an interrupt - see
+     * {@link #commitOnRevokeViaTheControlThread}, the paragraph on the wake-up. Checking the polling flag first and
+     * interrupting was tried and is a race: the flag can clear between the read and the interrupt, and the interrupt
+     * then lands in the next pass's timed write-lock acquisition, which the control loop reads as a shutdown. A
+     * message has exactly one consumer, the drain, so wherever the control thread is when it arrives it does nothing
+     * until the drain skips it.
      */
-    private void wakeControlThreadIfParkedOnTheMailbox() {
-        if (currentlyPollingWorkCompleteMailBox.get()) {
-            interruptControlThread();
-        } else {
-            log.debug("Control thread is not parked on the mailbox - the revocation commit request is picked up " +
-                    "at the end of its current pass");
-        }
+    private void wakeTheControlLoopWithoutInterrupting() {
+        boolean ignoredOffered = workMailBox.offer(ControllerEventMessage.wakeUp()); // unbounded queue: never false
     }
 
     /**
@@ -2278,6 +2310,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         log.trace("Processing drained work {}...", results.size());
         for (var action : results) {
+            if (action.isWakeUp()) {
+                continue;
+            }
             if (action.isNewConsumerRecords()) {
                 wm.registerWork(action.getConsumerRecords());
             } else {

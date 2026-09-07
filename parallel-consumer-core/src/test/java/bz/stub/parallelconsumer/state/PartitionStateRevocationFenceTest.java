@@ -9,6 +9,8 @@ import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import org.apache.kafka.common.TopicPartition;
 import pl.tlinkowski.unij.api.UniMaps;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -135,6 +137,22 @@ class PartitionStateRevocationFenceTest {
         assertWithMessage("the removed singleton is untouched - it is shared by every removed partition")
                 .that(removed)
                 .isSameInstanceAs(RemovedPartitionState.getSingleton());
+    }
+
+    /**
+     * The fence is written by the control thread and read by the workers and the poll thread, so {@code volatile} is
+     * the only happens-before edge that makes it take effect. The tests above call fence and check on one thread and
+     * would stay green without it; this is the modifier tripwire the engine's AGENTS.md asks for on shared state.
+     */
+    @Test
+    void theRevocationFenceIsVolatile() throws NoSuchFieldException {
+        Field fence = PartitionState.class.getDeclaredField("fencedForRevocation");
+        assertWithMessage("PartitionState.fencedForRevocation must be volatile - set on the control thread inside "
+                + "the producer write lock, read by every worker after it acquires the produce lock and by the poll "
+                + "thread. Without the modifier a worker can miss the fence and produce for a partition whose offsets "
+                + "were just committed for the last time by this instance.")
+                .that(Modifier.isVolatile(fence.getModifiers()))
+                .isTrue();
     }
 
     /** The epochs a revocation callback would capture when it posts its request. */
