@@ -13,14 +13,16 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.PollContextInternal;
 import bz.stub.parallelconsumer.ProvesClaim;
-import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.TransactionalClaim;
 import bz.stub.parallelconsumer.state.ModelUtils;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.SneakyThrows;
+import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -49,6 +51,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.ManagedTruth.assertThat;
 import static bz.stub.parallelconsumer.ManagedTruth.assertWithMessage;
@@ -1044,7 +1047,8 @@ class ProducerManagerTest {
     private static final int OFFSET_PRODUCED_BUT_UNDRAINED = 1;
 
     /**
-     * C9, on the <em>revoke</em> path rather than the control loop's.
+     * C9 and C4 on the <em>revoke</em> path rather than the control loop's - the proof that the revocation-time
+     * commit covers every record already produced into the transaction it closes.
      * <p>
      * <b>Why this is not already covered by {@link #commitLockIsGrantedOnlyAfterTheProducedWorkReachesTheMailbox}.</b>
      * That test proves the first half of the contract - the commit lock is granted only after every produced
@@ -1052,42 +1056,25 @@ class ProducerManagerTest {
      * before collecting offsets, because {@link bz.stub.parallelconsumer.state.PartitionState#onSuccess} - the only
      * caller that marks a partition dirty on a success - is reachable from
      * {@link AbstractParallelEoSStreamProcessor#processWorkCompleteMailBox} and nowhere else in main. The control
-     * loop does both halves, in that order. The revoke path does the first and not the second.
+     * loop does both halves, in that order. The revoke path used to do the first and not the second: it committed
+     * inline on the broker-poll thread, and was RED here 5/5, sending offset 1 where 2 is required, while the
+     * control arm below passed with only a drain inserted. It now hands the commit to the control thread and waits
+     * ({@code AbstractParallelEoSStreamProcessor#commitOnRevokeViaTheControlThread}), which is why the revoke here
+     * runs on its own thread while this thread hand-drives the control loop, as production would.
      * <p>
-     * <b>The lock discipline is what makes this reachable, not what prevents it.</b> The intuition that the produce
-     * lock might leave the mailbox empty of produced work whenever a commit can begin is backwards:
+     * <b>The lock discipline is what makes the drain necessary, not what makes it optional.</b> The intuition that
+     * the produce lock might leave the mailbox empty of produced work whenever a commit can begin is backwards:
      * {@link AbstractParallelEoSStreamProcessor#cleanUpContext} is the single release point and runs strictly after
      * the batch is mailboxed, so a returned produce lock is a <em>guarantee</em> that the work is already queued.
-     * A commit granted the write lock therefore always has that work in front of it - drained by the control loop,
-     * ignored by the revoke path.
-     *
-     * <b>Deliberately NOT annotated {@link ProvesClaim}, though it is the test that refuted
-     * {@link TransactionalClaim#NO_PRODUCE_WITHOUT_ITS_OFFSET}.</b>
-     * {@code TransactionalClaimCoverageTest#claimProofsMustLiveWhereATestRunnerWillFindThem} rejects a
-     * {@code @ProvesClaim} method the gating lanes exclude, and it is right to: a claim whose only proof is
-     * quarantined is covered on paper only. C9 keeps its enforced coverage from the two control-loop proofs that
-     * really run, and this test is cited from the claim's own recorded reason and from its tracking note instead.
+     * A commit granted the write lock therefore always has that work in front of it.
      *
      * @see #aRevokeTimeCommitIncludesThatOffsetWhenTheMailboxIsDrainedFirst for the control arm - one term changed
+     * @see #afterARevokeThatCommitsNothingTheNextCommitPublishesTheRevokedPartitionsOutputWithoutItsOffset for why
+     * declining the commit was not the fix
      */
     @SneakyThrows
     @Test
-    @Quarantined(
-            reason = "Deterministic, 5/5 - not a flake. The revoke-path commit "
-                    + "(AbstractParallelEoSStreamProcessor#tryCommitOffsetsOnRevoke) collects offsets without "
-                    + "first draining the controller's work mailbox, and PartitionState#onSuccess - the only "
-                    + "thing that marks a partition dirty on a success - is reachable from "
-                    + "processWorkCompleteMailBox and nowhere else in main. So a revoke-time commit publishes a "
-                    + "transaction containing a record whose source offset it omits. Observed: the commit sends "
-                    + "offset 1 where 2 is required. The sibling control arm "
-                    + "#aRevokeTimeCommitIncludesThatOffsetWhenTheMailboxIsDrainedFirst passes with the drain "
-                    + "inserted and nothing else changed, so the drain is the responsible term. Master-state, "
-                    + "and older than the branch that found it. NOT fixed here on purpose: the revoke callback "
-                    + "runs on the broker-poll thread and the mailbox drain mutates control-thread-confined "
-                    + "WorkManager state, so the obvious one-line fix is the same cross-thread mutation that "
-                    + "corrupted the out-for-processing counter in astubbs#29. The fix is a thread-ownership "
-                    + "decision, not a line.",
-            tracking = "docs/inflight/core-revoke-commit-skips-the-work-mailbox-drain.md")
+    @ProvesClaim({TransactionalClaim.NO_PRODUCE_WITHOUT_ITS_OFFSET, TransactionalClaim.OFFSET_AND_RECORDS_ATOMIC})
     void aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced() {
         var committed = offsetCommittedByARevoke(false);
 
@@ -1164,49 +1151,339 @@ class ProducerManagerTest {
                 return UniLists.of();
             };
 
-            // offset 0 - distributed here, drained on the next pass, which is what makes the partition dirty
-            pc.registerWork(mu.createFreshWork());
-            pc.controlLoop(userFunc, ignore -> {
-            });
-            await("offset 0's completion reaches the mailbox")
-                    .atMost(ofSeconds(20))
-                    .untilAsserted(() -> assertThat(pc.getWorkMailBox()).hasSize(1));
-
-            // this pass drains offset 0 (marking the partition dirty) and distributes offset 1
-            pc.registerWork(mu.createFreshWork());
-            pc.controlLoop(userFunc, ignore -> {
-            });
-            await("offset " + OFFSET_PRODUCED_BUT_UNDRAINED + "'s completion reaches the mailbox, where it stays")
-                    .atMost(ofSeconds(20))
-                    .untilAsserted(() -> assertThat(pc.getWorkMailBox()).hasSize(1));
-
-            Truth.assertWithMessage("offset 0's success must have marked the state dirty, or the revoke attempts no "
-                            + "commit at all and both arms are vacuous")
-                    .that(pc.getWm().isDirty())
-                    .isTrue();
-            // AWAITED, not sampled, and the mailbox await above is not a substitute for it: the ordering is
-            // addToMailbox and THEN cleanUpContext - runUserFunction's finally, and the single produce-lock
-            // release point - so a worker can sit preempted between the two while the mailbox already reads 1.
-            // Sampling the count here would therefore go red intermittently against correct production, in the
-            // control arm as well as the quarantined one, and the control arm is not quarantined. This is a
-            // PRECONDITION of the experiment rather than its result, so waiting for it costs the proof nothing:
-            // the assertion still fails loudly, with the same message, if the lock is never returned.
-            await("every produce lock has been returned")
-                    .atMost(ofSeconds(20))
-                    .untilAsserted(() -> Truth.assertWithMessage("no produce lock may still be held - otherwise the "
-                                    + "revoke's write-lock acquisition, not the missing drain, is what the arms "
-                                    + "would be measuring")
-                            .that(producerManager.getProducerTransactionLock().getReadLockCount())
-                            .isEqualTo(0));
+            arrangeOffsetZeroDrainedAndOffsetOneUndrained(pc, userFunc);
 
             if (drainTheMailboxFirst) {
                 pc.processWorkCompleteMailBox(Duration.ZERO);
             }
 
-            pc.onPartitionsRevoked(mu.getPartitions());
+            revokeOnAnotherThreadWhileDrivingTheControlLoop(pc, userFunc, mu.getPartitions());
         }
 
         var sent = offsetsSentToTransaction.get();
         return sent == null ? Optional.empty() : Optional.ofNullable(sent.get(mu.getPartition()));
+    }
+
+    /**
+     * In production the revoke callback runs on the broker-poll thread and, in transactional mode, waits there for
+     * the control thread to drain and commit. This harness has no control thread - it hand-drives
+     * {@link AbstractParallelEoSStreamProcessor#controlLoop} - so the revoke goes on its own thread and this one
+     * drives passes until the callback returns. A callback that never returns fails the await; a callback that threw
+     * is rethrown here rather than lost on the other thread.
+     */
+    @SneakyThrows
+    private void revokeOnAnotherThreadWhileDrivingTheControlLoop(AbstractParallelEoSStreamProcessor<String, String> pc,
+                                                                 Function<PollContextInternal<String, String>, List<Object>> userFunc,
+                                                                 List<TopicPartition> partitions) {
+        var revokeReturned = new CountDownLatch(1);
+        var revokeFailure = new AtomicReference<Throwable>();
+        var revoke = new Thread(() -> {
+            try {
+                pc.onPartitionsRevoked(partitions);
+            } catch (Throwable t) {
+                revokeFailure.set(t);
+            } finally {
+                revokeReturned.countDown();
+            }
+        }, "test-broker-poll");
+        revoke.start();
+        await("the revoke callback returns, served by the hand-driven control loop")
+                .atMost(ofSeconds(20))
+                .untilAsserted(() -> {
+                    pc.controlLoop(userFunc, ignore -> {
+                    });
+                    Truth.assertThat(revokeReturned.getCount()).isEqualTo(0);
+                });
+        revoke.join(ofSeconds(20).toMillis());
+        if (revokeFailure.get() != null) {
+            throw revokeFailure.get();
+        }
+    }
+
+    /**
+     * The fallback: nobody drives the control loop, so the revoke's request is never served, and the callback must
+     * come back on its own within the deadline - declining, not committing, and still truncating. It is a decline
+     * with a known cost (the experiment below), which is why the deadline is the only way to reach it.
+     */
+    @SneakyThrows
+    @Test
+    void aRevokeTheControlThreadDoesNotServeInTimeDeclinesAndStillTruncates() {
+        var deadline = ofMillis(300);
+        setup(ParallelConsumerOptions.<String, String>builder()
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
+                .commitLockAcquisitionTimeout(deadline), false);
+        var producerWrap = module.producerWrap();
+
+        try (var pc = module.pc()) {
+            pc.subscribe(UniLists.of(mu.getTopic()));
+            pc.onPartitionsAssigned(mu.getPartitions());
+            pc.setState(State.RUNNING);
+            Function<PollContextInternal<String, String>, List<Object>> userFunc = context -> {
+                acquireProduceLockInto(context);
+                producerManager.produceMessages(makeRecord());
+                return UniLists.of();
+            };
+            arrangeOffsetZeroDrainedAndOffsetOneUndrained(pc, userFunc);
+
+            var started = System.nanoTime();
+            pc.onPartitionsRevoked(mu.getPartitions());
+            var waited = Duration.ofNanos(System.nanoTime() - started);
+
+            Truth.assertWithMessage("the callback waited out the deadline before declining")
+                    .that(waited.compareTo(deadline) >= 0)
+                    .isTrue();
+            verify(producerWrap, never()).sendOffsetsToTransaction(anyMap(), any(ConsumerGroupMetadata.class));
+            verify(producerWrap, never()).commitTransaction();
+            verify(producerWrap, never()).abortTransaction();
+            Truth.assertWithMessage("truncation still ran: the partition is gone from the state")
+                    .that(pc.getWm().getPm().getPartitionState(mu.getPartition()).isRemoved())
+                    .isTrue();
+        }
+    }
+
+    // ---- The abort-or-defer experiment ----------------------------------------------------------------------------
+    //
+    // Before the fix above, the recorded position was to decline the revoke-time commit unconditionally in
+    // transactional mode - and it rested on ONE unverified question: when the revoke commits nothing, what becomes of
+    // the open transaction's already-produced output? Aborted, and exactly-once is preserved. Committed later by the
+    // control thread without the revoked partition's offset, and the decline is the same defect through a different
+    // door. Settled by running it, not by arguing it: the answer is the second, so declining is the fallback with a
+    // cost, never the fix. The arms stay because they are the reason the fix has the shape it has.
+
+    /**
+     * The trace of one revoke-then-commit sequence, as the transactional producer saw it: the names of the wrapper
+     * methods called, in order, and the offsets the next commit sent to the transaction.
+     */
+    @Value
+    private static class ProducerInteractionTrace {
+        List<String> callsInOrder;
+        Map<TopicPartition, OffsetAndMetadata> offsetsSentByTheNextCommit;
+
+        int indexOfNthCall(String method, int n) {
+            int seen = 0;
+            for (int i = 0; i < callsInOrder.size(); i++) {
+                if (callsInOrder.get(i).equals(method) && ++seen == n) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        long countOf(String method) {
+            return callsInOrder.stream().filter(method::equals).count();
+        }
+    }
+
+    /**
+     * <b>The experiment's red arm: a revoke that commits nothing, followed by the control thread's next commit.</b>
+     * <p>
+     * A decline in {@code tryCommitOffsetsOnRevoke} is exactly "no commit, then truncation", so the arm performs the
+     * truncation directly ({@code WorkManager#onPartitionsRevoked}) and skips the commit - the same state transition
+     * the unconditional decline would leave behind, without depending on how the decline is triggered.
+     * <p>
+     * <b>Prediction, stated before the first run: DEFER.</b> Nothing on the revoke path aborts - the only caller of
+     * {@code abortTransaction} in main is {@code ProducerManager#close} - so the transaction that offset 1's output
+     * was produced into stays open, the mailbox entry for offset 1 is dropped on the next drain as belonging to a
+     * removed partition, and the first commit driven by another partition publishes that transaction with an offset
+     * map that has no entry for the revoked partition at all. Output committed, input offset not - the defect the
+     * quarantined arm proves, reached through the decline instead of the inline commit.
+     *
+     * @see #anAbortAfterTheRevokeKeepsTheRevokedPartitionsOutputOutOfTheNextCommit the control arm - one term changed
+     */
+    @Test
+    void afterARevokeThatCommitsNothingTheNextCommitPublishesTheRevokedPartitionsOutputWithoutItsOffset() {
+        var trace = traceOfTheCommitAfterARevokeThatCommitsNothing(false);
+
+        Truth.assertWithMessage("nothing on the revoke path aborts the open transaction; calls were " + trace.getCallsInOrder())
+                .that(trace.countOf("abortTransaction"))
+                .isEqualTo(0);
+        Truth.assertWithMessage("one transaction spans the whole sequence; calls were " + trace.getCallsInOrder())
+                .that(trace.countOf("beginTransaction"))
+                .isEqualTo(1);
+        int revokedPartitionsOutput = trace.indexOfNthCall("send", OFFSET_PRODUCED_BUT_UNDRAINED + 1);
+        int theNextCommit = trace.indexOfNthCall("commitTransaction", 1);
+        Truth.assertWithMessage("offset " + OFFSET_PRODUCED_BUT_UNDRAINED + "'s output was sent inside the transaction "
+                        + "the next commit closes: begin < send < commit, with no abort between; calls were "
+                        + trace.getCallsInOrder())
+                .that(trace.indexOfNthCall("beginTransaction", 1) < revokedPartitionsOutput
+                        && revokedPartitionsOutput < theNextCommit)
+                .isTrue();
+        Truth.assertWithMessage("the commit that published that output carried no offset for its partition - "
+                        + "the revoked partition is gone from the state, so its input can never be committed by this "
+                        + "instance, and the next owner reprocesses it: " + trace.getOffsetsSentByTheNextCommit())
+                .that(trace.getOffsetsSentByTheNextCommit())
+                .doesNotContainKey(mu.getPartition());
+    }
+
+    /**
+     * <b>The control arm: identical, but the open transaction is aborted after the revoke.</b> If the instrument
+     * distinguishes the two outcomes, this arm's next commit closes a <em>different</em> transaction from the one
+     * offset 1's output was sent into, and the output never reaches a committed transaction at all.
+     * <p>
+     * This arm establishes what the instrument can see. It does not make an abort the fix: an abort discards every
+     * partition's produced-but-uncommitted output, not only the revoked one's, while their completions stay recorded
+     * in the state - so the offsets of surviving partitions would be committed for output that was never published.
+     * {@code AbstractParallelEoSStreamProcessor#commitOnRevokeViaTheControlThread} records where that leaves the
+     * design.
+     */
+    @Test
+    void anAbortAfterTheRevokeKeepsTheRevokedPartitionsOutputOutOfTheNextCommit() {
+        var trace = traceOfTheCommitAfterARevokeThatCommitsNothing(true);
+
+        int revokedPartitionsOutput = trace.indexOfNthCall("send", OFFSET_PRODUCED_BUT_UNDRAINED + 1);
+        int theAbort = trace.indexOfNthCall("abortTransaction", 1);
+        int theTransactionTheNextCommitCloses = trace.indexOfNthCall("beginTransaction", 2);
+        int theNextCommit = trace.indexOfNthCall("commitTransaction", 1);
+        Truth.assertWithMessage("send < abort < begin < commit: the output was in the aborted transaction, not the "
+                        + "committed one; calls were " + trace.getCallsInOrder())
+                .that(revokedPartitionsOutput < theAbort
+                        && theAbort < theTransactionTheNextCommitCloses
+                        && theTransactionTheNextCommitCloses < theNextCommit)
+                .isTrue();
+        Truth.assertWithMessage("the surviving partition's own commit is unaffected: " + trace.getOffsetsSentByTheNextCommit())
+                .that(trace.getOffsetsSentByTheNextCommit())
+                .doesNotContainKey(mu.getPartition());
+    }
+
+    /**
+     * Shared by both arms. The precondition is {@link #offsetCommittedByARevoke}'s: offset 0 produced and drained
+     * (partition dirty), offset 1 produced and sitting undrained in the mailbox, every produce lock returned. Then a
+     * revoke that commits nothing, optionally an abort, and a second partition completing work - which is what
+     * drives the next commit, because a commit with no dirty partition sends nothing and closes nothing.
+     */
+    @SneakyThrows
+    private ProducerInteractionTrace traceOfTheCommitAfterARevokeThatCommitsNothing(boolean abortAfterTheRevoke) {
+        setup(ParallelConsumerOptions.<String, String>builder()
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER), false);
+        var producerWrap = module.producerWrap();
+
+        var offsetsSentToTransaction = new AtomicReference<Map<TopicPartition, OffsetAndMetadata>>();
+        Mockito.doAnswer(invocation -> {
+            offsetsSentToTransaction.set(invocation.getArgument(0));
+            return invocation.callRealMethod();
+        }).when(producerWrap).sendOffsetsToTransaction(anyMap(), any(ConsumerGroupMetadata.class));
+
+        var revokedPartition = mu.getPartition();
+        var survivingPartition = new TopicPartition(mu.getTopic(), revokedPartition.partition() + 1);
+
+        try (var pc = module.pc()) {
+            pc.subscribe(UniLists.of(mu.getTopic()));
+            pc.onPartitionsAssigned(UniLists.of(revokedPartition, survivingPartition));
+            pc.setState(State.RUNNING);
+
+            Function<PollContextInternal<String, String>, List<Object>> userFunc = context -> {
+                acquireProduceLockInto(context);
+                producerManager.produceMessages(makeRecord());
+                assertProduceLockStillOwnedByContext(context);
+                return UniLists.of();
+            };
+
+            arrangeOffsetZeroDrainedAndOffsetOneUndrained(pc, userFunc);
+
+            // The revoke that commits nothing: truncation without the commit, which is what a decline leaves behind.
+            pc.getWm().onPartitionsRevoked(UniLists.of(revokedPartition));
+            if (abortAfterTheRevoke) {
+                producerWrap.abortTransaction();
+            }
+
+            // The control thread's next pass drains the mailbox. Offset 1's success now names a removed partition.
+            pc.controlLoop(userFunc, ignore -> {
+            });
+            Truth.assertWithMessage("the drain must have consumed offset " + OFFSET_PRODUCED_BUT_UNDRAINED
+                            + "'s entry, or the arms are measuring a mailbox that was never drained")
+                    .that(pc.getWorkMailBox())
+                    .isEmpty();
+
+            // The surviving partition completes one record - produced, then drained - so the next commit has something
+            // to send. That commit is the observation.
+            pc.registerWork(oneRecordOn(survivingPartition, pc));
+            pc.controlLoop(userFunc, ignore -> {
+            });
+            await("the surviving partition's completion reaches the mailbox")
+                    .atMost(ofSeconds(20))
+                    .untilAsserted(() -> assertThat(pc.getWorkMailBox()).hasSize(1));
+            pc.controlLoop(userFunc, ignore -> {
+            });
+            await("every produce lock has been returned")
+                    .atMost(ofSeconds(20))
+                    .untilAsserted(() -> Truth.assertThat(producerManager.getProducerTransactionLock().getReadLockCount())
+                            .isEqualTo(0));
+            Truth.assertWithMessage("the surviving partition's success must have marked the state dirty, or the next "
+                            + "commit sends nothing and the arms are vacuous")
+                    .that(pc.getWm().isDirty())
+                    .isTrue();
+
+            pc.commitOffsetsThatAreReady();
+        }
+
+        var callsInOrder = mockingDetails(producerWrap).getInvocations().stream()
+                .map(invocation -> invocation.getMethod().getName())
+                .filter(TRANSACTION_SHAPING_CALLS::contains)
+                .collect(Collectors.toList());
+        log.info("Producer interaction trace (abortAfterTheRevoke={}): {}; offsets sent by the next commit: {}",
+                abortAfterTheRevoke, callsInOrder, offsetsSentToTransaction.get());
+        return new ProducerInteractionTrace(callsInOrder, offsetsSentToTransaction.get());
+    }
+
+    /**
+     * The wrapper calls that decide which transaction a record lands in. Everything else the spy records - state
+     * queries, {@code flush}, configuration checks - is noise for the trace.
+     */
+    private static final List<String> TRANSACTION_SHAPING_CALLS =
+            UniLists.of("beginTransaction", "send", "sendOffsetsToTransaction", "commitTransaction", "abortTransaction");
+
+    /**
+     * The shared precondition of every revoke experiment in this class: offset 0 produced and drained, so the
+     * partition is dirty; offset {@value #OFFSET_PRODUCED_BUT_UNDRAINED} produced and sitting undrained in the
+     * mailbox; every produce lock returned. Extracted from {@link #offsetCommittedByARevoke} so the two experiments
+     * cannot drift in what they measure against.
+     */
+    @SneakyThrows
+    private void arrangeOffsetZeroDrainedAndOffsetOneUndrained(AbstractParallelEoSStreamProcessor<String, String> pc,
+                                                              Function<PollContextInternal<String, String>, List<Object>> userFunc) {
+        // offset 0 - distributed here, drained on the next pass, which is what makes the partition dirty
+        pc.registerWork(mu.createFreshWork());
+        pc.controlLoop(userFunc, ignore -> {
+        });
+        await("offset 0's completion reaches the mailbox")
+                .atMost(ofSeconds(20))
+                .untilAsserted(() -> assertThat(pc.getWorkMailBox()).hasSize(1));
+
+        // this pass drains offset 0 (marking the partition dirty) and distributes offset 1
+        pc.registerWork(mu.createFreshWork());
+        pc.controlLoop(userFunc, ignore -> {
+        });
+        await("offset " + OFFSET_PRODUCED_BUT_UNDRAINED + "'s completion reaches the mailbox, where it stays")
+                .atMost(ofSeconds(20))
+                .untilAsserted(() -> assertThat(pc.getWorkMailBox()).hasSize(1));
+
+        Truth.assertWithMessage("offset 0's success must have marked the state dirty, or the revoke attempts no "
+                        + "commit at all and both arms are vacuous")
+                .that(pc.getWm().isDirty())
+                .isTrue();
+        // AWAITED, not sampled, and the mailbox await above is not a substitute for it: the ordering is
+        // addToMailbox and THEN cleanUpContext - runUserFunction's finally, and the single produce-lock
+        // release point - so a worker can sit preempted between the two while the mailbox already reads 1.
+        // Sampling the count here would therefore go red intermittently against correct production, in the
+        // control arm as well as the quarantined one, and the control arm is not quarantined. This is a
+        // PRECONDITION of the experiment rather than its result, so waiting for it costs the proof nothing:
+        // the assertion still fails loudly, with the same message, if the lock is never returned.
+        await("every produce lock has been returned")
+                .atMost(ofSeconds(20))
+                .untilAsserted(() -> Truth.assertWithMessage("no produce lock may still be held - otherwise the "
+                                + "revoke's write-lock acquisition, not the missing drain, is what the arms "
+                                + "would be measuring")
+                        .that(producerManager.getProducerTransactionLock().getReadLockCount())
+                        .isEqualTo(0));
+    }
+
+    /**
+     * One record at offset 0 on {@code partition}, as a poll result the processor can register. {@link ModelUtils}
+     * only models partition 0, and the experiments need a second one.
+     */
+    private EpochAndRecordsMap<String, String> oneRecordOn(TopicPartition partition,
+                                                            AbstractParallelEoSStreamProcessor<String, String> pc) {
+        var record = new ConsumerRecord<>(partition.topic(), partition.partition(), 0L, "a-key", "a-value");
+        return new EpochAndRecordsMap<>(new ConsumerRecords<>(UniMaps.of(partition, UniLists.of(record))), pc.getWm().getPm());
     }
 }

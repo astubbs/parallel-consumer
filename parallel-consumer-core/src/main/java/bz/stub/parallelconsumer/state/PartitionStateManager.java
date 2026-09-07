@@ -209,6 +209,18 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         }
     }
 
+    /**
+     * The step between a revocation commit's drain and its commit, on the control thread inside the producer
+     * write lock: from here on nothing may start or produce for these partitions, so that the offsets about to be
+     * committed are the last word this instance has on them. {@link PartitionState#fenceForRevocation} owns the
+     * reasoning; truncation ({@link #onPartitionsRevoked}) follows on the poll thread once the commit has returned.
+     */
+    public void fenceForRevocation(Collection<TopicPartition> partitions) {
+        for (TopicPartition partition : partitions) {
+            getPartitionState(partition).fenceForRevocation();
+        }
+    }
+
     void onPartitionsRemoved(final Collection<TopicPartition> partitions) {
         incrementPartitionAssignmentEpoch(partitions);
         resetOffsetMapAndRemoveWork(partitions);

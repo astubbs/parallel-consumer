@@ -129,6 +129,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     /**
+     * @see PartitionStateManager#fenceForRevocation
+     */
+    public void fenceForRevocation(Collection<TopicPartition> partitions) {
+        pm.fenceForRevocation(partitions);
+    }
+
+    /**
      * Clear offset map for lost partitions
      */
     @Override
