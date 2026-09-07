@@ -1,6 +1,0 @@
-2,1,bz.stub.parallelconsumer.examples.core.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
-2,1,bz.stub.parallelconsumer.examples.core.TestConventionsArchTest,TestConventionRules > test_methods_must_have_names_longer_than_one_character
-2,8,bz.stub.parallelconsumer.examples.core.TestConventionsArchTest,TestConventionRules > test_classes_must_be_named_so_surefire_collects_them
-2,840,bz.stub.parallelconsumer.examples.core.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
-4,1013,bz.stub.parallelconsumer.examples.core.CoreAppTest,test
-4,2267,bz.stub.parallelconsumer.examples.core.CoreAppTest,testPollAndProduce

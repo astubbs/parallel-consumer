@@ -1,5 +1,0 @@
-2,1,bz.stub.parallelconsumer.examples.vertx.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
-2,1,bz.stub.parallelconsumer.examples.vertx.TestConventionsArchTest,TestConventionRules > test_methods_must_have_names_longer_than_one_character
-2,2,bz.stub.parallelconsumer.examples.vertx.TestConventionsArchTest,TestConventionRules > test_classes_must_be_named_so_surefire_collects_them
-2,1110,bz.stub.parallelconsumer.examples.vertx.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
-4,3236,bz.stub.parallelconsumer.examples.vertx.VertxAppTest,test

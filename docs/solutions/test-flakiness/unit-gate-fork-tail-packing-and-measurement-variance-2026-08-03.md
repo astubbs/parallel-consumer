@@ -1,17 +1,17 @@
 ---
-title: Pack the fork tail - run the slowest test classes first, and beware that one un-splittable class dominates both the wall time and the measurement noise
+title: "Fork-tail packing was measured on this gate and does not pay - and the un-splittable class that made it look promising was also what made the gate unmeasurable"
 date: 2026-08-03
 category: test-flakiness
 module: all
 problem_type: slow_test_suite
 component: testing
 symptoms:
-  - "CI Unit Tests gate takes ~6:40 on the 2-core GitHub runner"
+  - "CI Unit Tests gate is the slowest required check on the 2-core GitHub runner"
   - "One surefire fork sits idle at the end of the run while the other finishes a long class"
   - "Repeat runs of the same commit differ by 50-90s, so small improvements cannot be measured"
   - "Maven -T module parallelism makes the 2-core gate SLOWER and induces awaitility timeouts"
 root_cause: fork_scheduling_and_unsplittable_slow_class
-resolution_type: fixed
+resolution_type: rejected_after_measurement
 severity: medium
 tags:
   - surefire
@@ -29,7 +29,41 @@ which established *forking* (not JUnit threads) as this project's safe paralleli
 about what limits that forked suite next, and about a measurement trap that will mislead anyone who
 tries to optimise it.
 
-## The fix that worked: LPT fork packing
+## Verdict, taken last and stated first
+
+**Fork-tail packing does not pay on this gate. It was implemented, measured properly, and rejected.**
+Everything below is why it looked promising, how it was measured, and the two findings that outlived
+it - all of which stand. Only the conclusion changed.
+
+The comparison that settled it could not be run until
+astubbs/parallel-consumer#106 merged, and that ordering is the point. That change collapsed
+`RunLengthEncoderTest`, the un-splittable class the whole idea was built around. Judged before it, the
+packing was being measured in the arrangement this repo's other write-up
+(`docs/solutions/performance-issues/shard-count-buys-nothing-while-one-class-sets-the-floor-2026-09-07.md`)
+says buys nothing for *any* arrangement: the dominant class still setting the floor. Shrink the class
+first, re-derive the ordering, then measure.
+
+Measured that way - two arms sharing one base, statistics regenerated on the very tree under test,
+interleaved, three repetitions each - the packing arm was **slower in every paired repetition**, by a
+few seconds at the median. Not "no measurable effect": a small, consistent loss.
+
+To reproduce, the harness is short enough to restate rather than cite: run `bin/ci-unit-test.sh` inside
+a container capped to the runner's core count (`docker run --cpus=2 --memory=7g` against a
+`maven:3.9.9-eclipse-temurin-17` image, with `~/.m2/repository` mounted), timing the whole invocation.
+Interleave the arms rather than running one after the other, so machine drift spreads across both, and
+never run two at once - they share the CPU cap and the local repository. **Snapshot and restore any
+`.surefire-pc-unit-times` files around each run**: surefire rewrites them in place, so without that
+every measurement inherits the previous run's ordering and you are measuring a feedback loop. The
+working harness lives outside version control under the repository's ignored `.context/` directory, so
+it is not citable here - which is itself the reason the recipe is written out.
+
+**The second finding is worth more than the verdict.** Before that merge, repeat runs of identical
+code differed by up to a minute and a half; after it, the spread across all six runs was a few
+seconds. The variance everyone had been fighting *was* the one un-splittable class landing in
+different fork slots. Removing it did not just make the gate faster - it made the gate **measurable**,
+which is why a difference of a few seconds could be resolved at all when ninety could not be before.
+
+## Why it looked promising: LPT fork packing
 
 Surefire's forks pull test classes from **one shared queue**. With the default
 `runOrder=filesystem`, core's slowest class (`RunLengthEncoderTest`) happened to be scheduled
@@ -128,12 +162,24 @@ ArchUnit classpath-scan cost.
 idle fork at the end of the run; astubbs#106 removes the work that made that fork long. Neither change
 makes the other pointless, and adding their measured gains together would double-count.
 
-**How much packing survives astubbs#106 is a question about the SECOND-heaviest class, and per class
-the gap between the top two is small** - `ParallelEoSStreamProcessorTest` sits just under
-`RunLengthEncoderTest`, not at a third of it (aggregate with the `awk` line above rather than trusting
-a ratio written here, which goes stale at the next refresh). So the residual tail after astubbs#106
-is most of the present one, and packing keeps most of its value rather than being largely obsoleted -
-a substantial un-splittable class scheduled last still strands a fork for its own length. Forking
-cannot split a class, so the floor moves down to the next class and no further; that is the same
-result the integration lane measured in
+**The prediction made here before the measurement was WRONG, and it is left visible on purpose.**
+This section used to argue that because the second-heaviest class sits just under the heaviest rather
+than at a third of it, the residual tail after astubbs/parallel-consumer#106 would be most of the
+present one, so packing would keep most of its value. The per-class arithmetic was right - the tail did
+barely move, and a separate review that put it at "a third" was wrong because it compared per-METHOD
+lines when `runOrder=balanced` sorts per CLASS. The conclusion drawn from it was still wrong.
+
+Packing measured slower, in every paired repetition. A correct model of where the floor sits does not
+tell you what reordering around it is worth, because the scheduler was already doing an adequate job
+by accident and the ordering is not free: `balanced` reads and writes per-module statistics on every
+run, and pinning the slowest class to a fork at the start removes the scheduler's freedom to balance
+the rest. Neither cost was in the model. **A mechanism that is real is not the same as a mechanism that
+pays, and only a measurement tells the two apart.**
+
+Forking cannot split a class, so the floor moves down to the next class and no further - that part
+holds, and it is the same result the integration lane measured in
 [`shard-count-buys-nothing-while-one-class-sets-the-floor`](../performance-issues/shard-count-buys-nothing-while-one-class-sets-the-floor-2026-09-07.md).
+What that write-up adds, and what this one now confirms from the other direction, is that the ORDER of
+the steps decides the answer: shrink the dominant class first, then re-derive, then measure. Judged in
+the wrong order, packing looked like the last available win on a CPU-bound gate. Judged in the right
+one, it is a small loss.

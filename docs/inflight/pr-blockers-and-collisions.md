@@ -42,19 +42,6 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
   inline copy in `LoadFactorCeilingReportingTest` is converted, so no rival implementation can reach
   master.
 <!-- post-merge: checked-end -->
-- **Landing astubbs#106 obliges a regeneration of the checked-in fork-order statistics, and nothing
-  goes red if you skip it.** The unit gate runs surefire `runOrder=balanced` from
-  `<module>/.surefire-pc-unit-times`, and core's ordering is built around `RunLengthEncoderTest`, its
-  heaviest class. astubbs#106 collapses that class, so the file it leaves behind sorts by a cost that
-  no longer exists and the packing decays toward the unordered scan. Re-run a full
-  `bin/ci-unit-test.sh` on core afterwards and commit the rewritten files. **Read that file per CLASS
-  before drawing any conclusion from it** - a line is one test METHOD and `balanced` schedules
-  classes, so the longest line is not the longest class and the raw lines overstate how far the top
-  class stands above the next; aggregate with
-  `awk -F, '{t[$3]+=$2} END {for (c in t) printf "%9.0f  %s\n", t[c], c}' parallel-consumer-core/.surefire-pc-unit-times | sort -rn | head -5`.
-  Mechanism and both staleness directions:
-  `docs/solutions/test-flakiness/unit-gate-fork-tail-packing-and-measurement-variance-2026-08-03.md`.
-
 - **astubbs#8 (`features/retry-dlq`, 2022) is an abandoned draft**, kept only because it is the sole
   DLQ code that exists. Close or finish it; it is not in flight.
 
