@@ -294,13 +294,29 @@ class RiderSupplierGuardTest {
     void aCaughtUpPartitionWhoseRiderIsTooBigWritesNoMetadataAtAll() {
         var state = caughtUpStateWith(context -> AN_OVERSIZED_RIDER);
 
-        OffsetAndMetadata committed = state.createOffsetAndMetadata();
+        OffsetAndMetadata committed;
+        List<String> warnings;
+        try (var capture = LogCapture.of(PartitionState.class, Level.WARN)) {
+            committed = state.createOffsetAndMetadata();
+            warnings = warningsFromThisThreadMentioning(capture, ParallelConsumerOptions.Fields.riderSupplier);
+        }
 
         assertWithMessage("KTD4: no hole map and no rider means nothing worth committing - and the payload must "
                         + "be identical to what this build writes for a caught-up partition today")
                 .that(committed.metadata())
                 .isEqualTo(new OffsetAndMetadata(committed.offset()).metadata());
         assertThat(state.isAllowedMoreRecords()).isTrue();
+
+        // The warning is the operator's only account of what happened, so it must describe THIS outcome: nothing
+        // written, reader sees no rider. Promising the dropped marker here sent them looking for a state the
+        // caught-up commit never writes (review finding, PR of astubbs#255).
+        assertWithMessage("R8: one rate-limited warning, naming the option").that(warnings).hasSize(1);
+        assertWithMessage("the caught-up warning must not promise the dropped marker")
+                .that(warnings.get(0))
+                .doesNotContain("existed and was dropped");
+        assertWithMessage("the caught-up warning says no metadata is written and the reader sees no rider")
+                .that(warnings.get(0))
+                .contains("no metadata is written");
     }
 
     // ---- the thread arms --------------------------------------------------------------------------------

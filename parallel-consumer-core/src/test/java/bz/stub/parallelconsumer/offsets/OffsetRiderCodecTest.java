@@ -319,6 +319,22 @@ class OffsetRiderCodecTest {
     }
 
     /**
+     * The renderer's third shape: an envelope whose inner magic byte this build does not know - the downgrade
+     * diagnostic, what an older reader logs about a newer writer's payload. It has to name the byte rather than
+     * throw or render the map branch, and until this test the branch had nothing telling it apart from either
+     * (the PIT lane reported its conditional as a surviving mutant).
+     */
+    @Test
+    void getDecodedStringNamesAnInnerEncodingItDoesNotKnow() throws Exception {
+        byte unknown = OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet();
+        byte[] payload = OffsetRiderEnvelope.wrap(new byte[]{unknown, 1, 2, 3}, Rider.present(RIDER_BYTES));
+
+        assertThat(EncodedOffsetPair.unwrap(payload).getDecodedString())
+                .contains("does not know")
+                .contains(String.valueOf(unknown));
+    }
+
+    /**
      * KTD10's floor: the envelope is unwrapped above the pair, so a pair carrying the envelope constant is malformed
      * input rather than something to decode. It must reach the user's policy, never {@code decodeBody}'s
      * {@code PCInternalRuntimeException} default - the escape the policy exists to close.

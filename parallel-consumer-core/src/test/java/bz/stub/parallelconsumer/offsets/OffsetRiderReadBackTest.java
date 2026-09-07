@@ -262,9 +262,45 @@ class OffsetRiderReadBackTest {
     }
 
     /**
+     * The half of R14 that {@code assertThatThrownBy} cannot pin. Its callable is declared {@code throws Throwable},
+     * so the compiler never asks whether the checked types the javadoc promises are actually <em>declared</em> - and
+     * a checked type that is thrown but not declared cannot be caught by name: javac rejects the {@code catch} as
+     * unreachable. This test is the caller the javadoc describes, written the way an embedder would write it, and
+     * it compiles only while the declaration holds.
+     */
+    @Test
+    void aFailCallerCanCatchTheDocumentedCheckedExceptionsByType() throws Exception {
+        String corrupt = "not-valid-base64!!";
+        String unknownMagic = codec.assembleMetadataPayload(
+                new byte[]{OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet(), 1, 2, 3}, Rider.none());
+
+        String caughtForCorrupt = "nothing";
+        try {
+            OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, corrupt, FAIL);
+        } catch (CorruptOffsetMetadataException e) {
+            caughtForCorrupt = "corrupt";
+        } catch (UnknownOffsetMetadataMagicException e) {
+            caughtForCorrupt = "unknown magic";
+        }
+        assertThat(caughtForCorrupt).as("the corrupt payload lands in the catch the javadoc names for it")
+                .isEqualTo("corrupt");
+
+        String caughtForUnknownMagic = "nothing";
+        try {
+            OffsetMapCodecManager.decodeRider(COMMITTED_OFFSET, unknownMagic, FAIL);
+        } catch (CorruptOffsetMetadataException e) {
+            caughtForUnknownMagic = "corrupt";
+        } catch (UnknownOffsetMetadataMagicException e) {
+            caughtForUnknownMagic = "unknown magic";
+        }
+        assertThat(caughtForUnknownMagic).as("the unknown magic byte lands in ITS catch, not the corrupt one")
+                .isEqualTo("unknown magic");
+    }
+
+    /**
      * R14's shape, pinned rather than described: the offset leads, like every entry point in this family; the policy
      * is a parameter; and the checked {@link OffsetDecodingError} is declared, so a caller cannot forget the base64
-     * failure mode.
+     * failure mode - along with the two typed {@code FAIL} outcomes, so a caller can catch them by name.
      */
     @Test
     void theEntryPointLeadsWithTheOffsetAndDeclaresTheCheckedDecodingError() throws Exception {
@@ -279,7 +315,10 @@ class OffsetRiderReadBackTest {
                 .as("the committed offset leads, like the deserialiseIncompleteOffsetMapFromBase64 family")
                 .isEqualTo(long.class);
         assertThat(decodeRider.getReturnType()).isEqualTo(Rider.class);
-        assertThat(decodeRider.getExceptionTypes()).contains(OffsetDecodingError.class);
+        assertThat(decodeRider.getExceptionTypes())
+                .contains(OffsetDecodingError.class,
+                        CorruptOffsetMetadataException.class,
+                        UnknownOffsetMetadataMagicException.class);
     }
 
     /**

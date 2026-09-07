@@ -359,6 +359,11 @@ class OffsetRiderEnvelopeTest {
     void ridersCompareByTheirContentNotTheirIdentity() {
         assertThat(Rider.present(new byte[]{1, 2})).isEqualTo(Rider.present(new byte[]{1, 2}));
         assertThat(Rider.present(new byte[]{1, 2}).hashCode()).isEqualTo(Rider.present(new byte[]{1, 2}).hashCode());
+        // the formula itself, because "equal riders hash equal" is satisfied by any constant: it is the state term
+        // and the content term combined the way equals() combines them, so the PIT lane can tell them apart
+        assertThat(Rider.present(new byte[]{1, 2}).hashCode())
+                .isEqualTo(31 * RiderState.PRESENT.hashCode() + java.util.Arrays.hashCode(new byte[]{1, 2}));
+        assertThat(Rider.none().hashCode()).isNotEqualTo(Rider.dropped().hashCode());
         assertThat(Rider.present(new byte[]{1, 2})).isNotEqualTo(Rider.present(new byte[]{1, 3}));
         assertThat(Rider.none()).isEqualTo(Rider.none());
         assertThat(Rider.none()).isNotEqualTo(Rider.dropped());

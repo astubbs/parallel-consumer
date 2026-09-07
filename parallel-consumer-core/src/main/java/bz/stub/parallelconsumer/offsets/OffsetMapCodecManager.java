@@ -391,12 +391,20 @@ public class OffsetMapCodecManager<K, V> {
      * @throws CorruptOffsetMetadataException      under {@code FAIL}, when the payload is not readable metadata
      * @throws UnknownOffsetMetadataMagicException under {@code FAIL}, when its magic byte belongs to no encoding this
      *                                             build knows - deliberately NOT an {@link OffsetDecodingError}, so
-     *                                             it escapes the rebalance callback rather than being swallowed
+     *                                             it escapes the rebalance callback rather than being swallowed.
+     *                                             Both of these are checked, and both are <b>declared</b> here even
+     *                                             though they arrive through the same sneaky-throw path every other
+     *                                             entry point in this family uses ({@code EncodedOffsetPair}'s
+     *                                             policy handler): a checked type that is thrown but not declared
+     *                                             cannot be caught by name - javac rejects the {@code catch} as
+     *                                             unreachable - so without the declaration a {@code FAIL} caller
+     *                                             could not write the handling this javadoc describes
      * @see ParallelConsumerOptions#getRiderSupplier()
      */
     public static OffsetRiderEnvelope.Rider decodeRider(long committedOffset,
                                                         String metadata,
-                                                        InvalidOffsetMetadataHandlingPolicy policy) throws OffsetDecodingError {
+                                                        InvalidOffsetMetadataHandlingPolicy policy)
+            throws OffsetDecodingError, CorruptOffsetMetadataException, UnknownOffsetMetadataMagicException {
         // Straight through the string-level entry point rather than round the outer codec: decodeCompressedMetadata
         // stays the single decode choke point, so this answers with whatever the assignment path would have seen for
         // the same string, including the policy's fallback. The Rider it returns copies its bytes out on every

@@ -820,7 +820,7 @@ public class PartitionState<K, V> {
         }
 
         if (theirs.length > allowance) {
-            warnOversizedRider(theirs.length, allowance);
+            warnOversizedRider(theirs.length, allowance, innerEncodingByteLength > 0);
             // a dropped rider like any other from an operator's point of view - the embedder's bytes did not
             // reach the wire. Counted here rather than below the ladder because a rider refused at the write side
             // never descends it; both spellings of the same loss belong in one series.
@@ -1010,12 +1010,26 @@ public class PartitionState<K, V> {
      * throws are different faults with different fixes, and sharing a limiter would let whichever happened first
      * silence the other for its whole window.
      */
-    private void warnOversizedRider(int riderLength, int allowance) {
+    /**
+     * The one warning for an over-cap rider has to describe two different outcomes, because {@link #riderFromSupplier}
+     * produces two: beside an offset map the rider becomes the dropped marker, and a reader sees
+     * {@link OffsetRiderEnvelope.RiderState#DROPPED}; on a caught-up partition there is no map for the marker to
+     * sit beside, no metadata is written at all, and a reader sees {@link OffsetRiderEnvelope.RiderState#NONE}. A
+     * message that promised the marker in both cases sent an operator looking for a dropped-rider state the
+     * caught-up commit never wrote.
+     *
+     * @param besideAnOffsetMap whether this commit carries an offset map for the marker to sit beside
+     */
+    private void warnOversizedRider(int riderLength, int allowance, boolean besideAnOffsetMap) {
         var limiter = module.oversizedRiderWarnLimiter();
+        String whatIsWritten = besideAnOffsetMap
+                ? "The offset map is still committed; the rider is not, so whatever reads it back will see " +
+                "that one existed and was dropped. "
+                : "The partition is caught up, so with no offset map to carry the marker no metadata is " +
+                "written for this commit at all, and whatever reads it back will see no rider. ";
         limiter.performIfNotLimited(() ->
                 log.warn("Your {} returned {} bytes for partition {}, more than the {} it was given room for in " +
-                                "this commit - dropping the rider. The offset map is still committed; the rider " +
-                                "is not, so whatever reads it back will see that one existed and was dropped. " +
+                                "this commit - dropping the rider. {}" +
                                 "The allowance is in RiderContext and moves with how much of the metadata the " +
                                 "offset map is using, so size the rider for the crowded case. This warning is " +
                                 "rate limited to once per {}.",
@@ -1023,6 +1037,7 @@ public class PartitionState<K, V> {
                         riderLength,
                         tp,
                         allowance,
+                        whatIsWritten,
                         limiter.getRate()));
     }
 
