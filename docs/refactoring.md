@@ -213,6 +213,16 @@ measurement ever asks for more, the next lever is parsing the distinct trees thr
 `cat-file` per depth instead of one `ls-tree` per tree. Not pulled: `node bin/inflight.mjs --perf docs`
 prints the figures, and none demands it.
 
+### `formatRank` moves to `rank-views.mjs` when a second rank-family command lands
+
+`bin/lib/views.mjs` grew by a third when `rank` arrived, making it the second-largest file in
+`bin/lib`. **The trigger is a second command in the family, not the size.** Its stated boundary -
+render strings, run no git, decide no exit code - is intact, and `refsText`/`scopeLine` are shared
+with `docsShape` on purpose, so moving them would recreate the duplication the file exists to
+prevent. The `docs-views.mjs` split earned its place because docs is *several* formatters; every
+other command's single formatter still lives here, so moving `rank` alone makes it the odd one out.
+When the second one arrives, take `formatRank` with it and import the shared helpers one way.
+
 ### The portable-mtime probe exists three times
 
 `hook_file_mtime` in `.claude/hooks/lib/hook-common.sh`, `_mtime` in
