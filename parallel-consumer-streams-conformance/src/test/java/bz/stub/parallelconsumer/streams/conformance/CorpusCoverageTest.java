@@ -55,17 +55,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  *     gate that only read the YAML.</li>
  * </ol>
  *
- * <h2>What green means today, and why the uncovered set is PINNED rather than excluded</h2>
+ * <h2>What green means today: nothing this module knows ships uncovered</h2>
  *
- * The corpus holds one outcome case, so four operations - {@code map-values}, {@code reduce}, {@code join} and
- * {@code aggregate} - have no case at all. {@link #DELIBERATELY_UNCOVERED} is <b>empty and must stay empty</b>: an
- * exclusion means "this operation is deliberately not covered", and none of these four are - they are simply not
- * written yet, and padding the list to go green would convert a corpus gap into a decision nobody made.
+ * {@link #UNCOVERED_TODAY} is <b>empty</b>, and {@link #theUncoveredOperationSetIsEmpty} asserts exactly that: every
+ * one of the ten builder operations is credited by an outcome case in the committed corpus. It was not always - the
+ * set was pinned to the four operations the corpus had no case for while U6 was writing them, and it reddened in
+ * either direction while it was, so the gate could not drift quietly as the corpus grew. U6 emptied it, and the same
+ * assertion now reads as the property rather than the leftover: an operation losing its credit reddens here, and so
+ * does a new operation arriving on the surface without a case.
  * <p>
- * So {@link #theUncoveredOperationsAreExactlyTheSetU6MustEmpty} pins the four instead. It is red the moment the set
- * <em>changes in either direction</em>: a case added without updating it, or an operation that stops being credited.
- * That is the property wanted here - the gate cannot drift quietly while the corpus grows, and U6's job is to shrink
- * the pinned set to nothing and delete the test with it.
+ * {@link #DELIBERATELY_UNCOVERED} is <b>empty and must stay empty</b>: an exclusion means "this operation is
+ * deliberately not covered", and padding the list to go green would convert a corpus gap into a decision nobody made.
  *
  * <h2>Everything is testable without the real corpus</h2>
  *
@@ -84,41 +84,38 @@ class CorpusCoverageTest {
     /**
      * Operations this module knows and deliberately does not cover, each with the reason it is excused.
      * <p>
-     * <b>Empty, and that is not an oversight.</b> Nothing on the builder surface is deliberately uncovered: the four
-     * operations without a case are unwritten, not excused, and they are pinned in
-     * {@link #theUncoveredOperationsAreExactlyTheSetU6MustEmpty} instead. An entry added here to make the gate green
-     * would turn a corpus gap into a recorded decision, which is precisely the lie this list exists to prevent.
+     * <b>Empty, and that is not an oversight.</b> Nothing on the builder surface is deliberately uncovered, and
+     * nothing is uncovered at all - {@link #theUncoveredOperationSetIsEmpty} is where that is asserted. An entry
+     * added here to make the gate green would turn a corpus gap into a recorded decision, which is precisely the lie
+     * this list exists to prevent.
      */
     private static final ImmutableMap<OperationKind, String> DELIBERATELY_UNCOVERED = ImmutableMap.of();
 
     /**
-     * The operations no outcome case in the committed corpus credits today. U6 fills the corpus and empties this
-     * set; until then it is pinned, so adding a case without updating it reddens.
+     * The operations no outcome case in the committed corpus credits. <b>Empty since U6 filled the corpus</b>, and
+     * an entry appearing here again is a corpus gap to fill rather than a set to update: the assertion below is what
+     * makes that gap fail the build.
      * <p>
-     * {@code aggregate} is here even though the corpus holds a case naming it: that case is refusal-class (R15), and
-     * a refusal-class case is never executed, so it credits nothing. That is the plan's "an operation with only a
-     * refusal-class case is counted as uncovered", observed rather than asserted in the abstract.
+     * Two things do not count towards a credit, and the corpus's own cases are where that is observed rather than
+     * asserted in the abstract. A refusal-class case (R15) is never executed, so it credits nothing - which is why
+     * {@code aggregate} stayed uncovered while the only case naming it was the refusal-class one. A pinned-emit case
+     * (KTD5) is oracle-only, so it credits nothing either, and every operation
+     * {@code windowed-aggregate-emitted-on-window-close} names is covered by another case.
      */
-    private static final ImmutableSet<OperationKind> UNCOVERED_TODAY = ImmutableSet.of(
-            OperationKind.MAP_VALUES,
-            OperationKind.REDUCE,
-            OperationKind.JOIN,
-            OperationKind.AGGREGATE);
+    private static final ImmutableSet<OperationKind> UNCOVERED_TODAY = ImmutableSet.of();
 
     // ============================================================== the five assertions, on the real corpus
 
-    /**
-     * Assertion 1, in the form the corpus is actually in. Pinned rather than asserted empty - see the class javadoc.
-     */
+    /** Assertion 1: no operation this module knows ships without a case. */
     @Test
-    void theUncoveredOperationsAreExactlyTheSetU6MustEmpty() {
+    void theUncoveredOperationSetIsEmpty() {
         Coverage coverage = coverage(realCorpus(), DELIBERATELY_UNCOVERED, Oracle::run);
 
-        assertWithMessage("the corpus covers %s of the %s builder operations. U6 must shrink this set to EMPTY; "
-                        + "until it is empty this test pins it, so a case added without updating the set reddens "
-                        + "here rather than quietly passing. Do NOT make it green by adding entries to "
-                        + "DELIBERATELY_UNCOVERED - an exclusion means 'deliberately not covered', and these are "
-                        + "simply not written yet. What credits what: %s",
+        assertWithMessage("the corpus covers %s of the %s builder operations, and the uncovered set must be EMPTY - "
+                        + "U6 emptied it, and an operation appearing in it again is a case to write. Do NOT make it "
+                        + "green by adding entries to DELIBERATELY_UNCOVERED - an exclusion means 'deliberately not "
+                        + "covered', which is a decision, not a gap. Remember what does NOT credit: a refusal-class "
+                        + "case is never executed and an emit-pinned case is oracle-only. What credits what: %s",
                 BuilderSurface.all().size() - coverage.uncovered().size(), BuilderSurface.all().size(),
                 BuilderSurface.table())
                 .that(coverage.uncovered()).containsExactlyElementsIn(UNCOVERED_TODAY);
@@ -158,8 +155,12 @@ class CorpusCoverageTest {
         assertWithMessage("the corpus holds outcome cases at all - a corpus of refusal-class cases alone would "
                 + "leave every assertion here true over nothing")
                 .that(coverage.outcomeCases()).isGreaterThan(0);
-        assertWithMessage("the refusal-class case is counted separately")
-                .that(coverage.refusalCases()).isEqualTo(1);
+        assertWithMessage("the corpus holds refusal-class cases at all, so the claim below is about something")
+                .that(refusalCaseNames(realCorpus())).isNotEmpty();
+        assertWithMessage("every refusal-class case is counted separately - against the corpus's own flags rather "
+                + "than a number written here, which would need editing every time a case is added and would say "
+                + "nothing while it was right")
+                .that(coverage.refusalCases()).isEqualTo(refusalCaseNames(realCorpus()).size());
         assertWithMessage("and is never executed: plain Kafka Streams never refuses what the wire invented, so "
                 + "there is no oracle row to compute for one (R15)")
                 .that(executed).containsNoneIn(refusalCaseNames(realCorpus()));

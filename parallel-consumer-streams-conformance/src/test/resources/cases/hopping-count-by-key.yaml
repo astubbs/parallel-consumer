@@ -1,13 +1,19 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 
-# The corpus's first outcome case: a hopping windowed count, compared at final state.
-# U6 fills the rest of this directory; U2 needs one well-formed case to load.
+# A hopping windowed count, compared at final state - the count operation's floor and the corpus's
+# overlapping-window shape (advance well under size, so every record opens several windows).
+#
+# retention-ms is 3x the window, and deliberately: with retention at exactly the window size, the
+# trailing record at 7200000 advances stream time past the retention of every window the earlier
+# records opened, so the store is left holding only the trailing record's own windows - identical
+# between the case and its twin - and the twin was detectable through the SINK alone. Widening
+# retention keeps the earlier windows alive, so the key change shows up in both observables.
 name: hopping-count-by-key
 base-instant: 2025-01-01T02:00:00Z      # past the epoch clamp; record offsets are relative to it
 topology:                               # ordered; every entry has an id, every op names its input(s) by id
   - {id: in, source: {topic: in}}
   - {id: g, group-by-key: {of: in}}
-  - {id: w, windowed-by: {of: g, size-ms: 3600000, advance-ms: 300000, grace-ms: 0, retention-ms: 3600000}}
+  - {id: w, windowed-by: {of: g, size-ms: 3600000, advance-ms: 300000, grace-ms: 0, retention-ms: 10800000}}
   - {id: c, count: {of: w, store: counts}}
   - {id: s, to-stream: {of: c}}
   - {sink: {of: s, topic: out}}         # fed by a windowed handle: compared as the full record list (R3)

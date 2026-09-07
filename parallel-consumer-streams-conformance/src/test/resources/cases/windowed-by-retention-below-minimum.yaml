@@ -1,0 +1,20 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# The second refusal-class case (R15). retention-ms is 3600000 against a minimum of size-ms plus
+# grace-ms, 3660000: a store retaining less than a whole window plus its grace drops windows that are
+# still open, so the wire refuses the builder call with the minimum named rather than letting it
+# surface later as Kafka's own exception - or, worse, as windows that quietly went missing.
+#
+# Like every refusal-class case it carries no inputs, no twin and no agreement level, because there
+# is no outcome to compute: plain Kafka Streams accepts this specification, so the oracle has no row
+# for it and the gate gives it a skipped-by-design cell. Note that the loader accepts the
+# out-of-range retention - the load-time rules check that all four window fields are PRESENT and
+# positive, and leave the minimum to the wire, which is what lets refusal-class data through.
+name: windowed-by-retention-below-minimum
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: in, source: {topic: in}}
+  - {id: g, group-by-key: {of: in}}
+  - {id: w, windowed-by: {of: g, size-ms: 3600000, advance-ms: 3600000, grace-ms: 60000, retention-ms: 3600000}}
+  - {id: c, count: {of: w, store: counts}}
+expects-fault: windowed-by-names-retention-ms-below-the-minimum

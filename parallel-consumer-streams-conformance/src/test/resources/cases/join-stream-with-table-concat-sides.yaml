@@ -1,0 +1,36 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# The corpus's one non-linear topology: a stream joined to a table built from a second source. This
+# is the defect class the whole programme exists for - a binding that transposes the joiner's two
+# arguments - so the two sides are distinguishable per key ("L1" against "R1", "L2" against "R2") and
+# `concat-sides` puts the stream side, a separator and the table side in that order. A transposed
+# binding therefore yields "R1|L1" where the oracle yields "L1|R1": a different outcome, not a
+# plausible one.
+#
+# Record order IS pipe order, so the table side is piped FIRST: a stream-table join looks up the
+# table as it stands when the stream record arrives, and a stream record arriving first would join
+# against nothing and drop.
+#
+# The twin changes the stream-side value for key a. The table side is untouched, so the reduce store
+# agrees and the sink is where the divergence lands - which is the point: the join is the only
+# operation that reads both.
+name: join-stream-with-table-concat-sides
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: l, source: {topic: left}}
+  - {id: r, source: {topic: right}}
+  - {id: rg, group-by-key: {of: r}}
+  - {id: rt, reduce: {of: rg, fn: last-wins, store: right-latest}}
+  - {id: j, join: {stream: l, table: rt, fn: concat-sides}}
+  - {sink: {of: j, topic: out}}
+inputs:                                 # two sources, so every record names its topic
+  - {key: a, value: "R1", at-ms: 0, topic: right}
+  - {key: b, value: "R2", at-ms: 1000, topic: right}
+  - {key: a, value: "L1", at-ms: 2000, topic: left}
+  - {key: b, value: "L2", at-ms: 3000, topic: left}
+perturbation:                           # a's stream-side value: the joined value carries it verbatim
+  - {key: a, value: "R1", at-ms: 0, topic: right}
+  - {key: b, value: "R2", at-ms: 1000, topic: right}
+  - {key: a, value: "L9", at-ms: 2000, topic: left}
+  - {key: b, value: "L2", at-ms: 3000, topic: left}
+agreement: final-state

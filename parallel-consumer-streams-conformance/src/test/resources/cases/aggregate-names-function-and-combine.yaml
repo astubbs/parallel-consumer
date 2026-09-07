@@ -4,6 +4,10 @@
 # specification, not an outcome. Plain Kafka Streams never refuses this - the alternation between
 # a host function and an engine combine is something the wire invented - so no oracle row exists
 # for it and this rung loads it, counts it, and never executes it.
+#
+# The fault is spelt in the WIRE's vocabulary, not the case format's: the proto's Aggregate names
+# the alternatives function_token and combine, and refuses a call carrying both rather than
+# resolving them by precedence, which would silently discard half of what the host said.
 name: aggregate-names-function-and-combine
 base-instant: 2025-01-01T02:00:00Z
 topology:
@@ -11,4 +15,4 @@ topology:
   - {id: g, group-by-key: {of: in}}
   - {id: w, windowed-by: {of: g, size-ms: 3600000, advance-ms: 3600000, grace-ms: 0, retention-ms: 3600000}}
   - {id: a, aggregate: {of: w, fn: concat, combine: last-bytes, store: aggregates}}
-expects-fault: aggregate-names-function-and-combine
+expects-fault: aggregate-carries-both-function-token-and-combine

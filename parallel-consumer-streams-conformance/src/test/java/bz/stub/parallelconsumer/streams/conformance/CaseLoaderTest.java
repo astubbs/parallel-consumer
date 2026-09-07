@@ -49,7 +49,7 @@ class CaseLoaderTest {
         assertThat(window.sizeMs()).isEqualTo(3_600_000L);
         assertThat(window.advanceMs()).isEqualTo(300_000L);
         assertThat(window.graceMs()).isEqualTo(0L);
-        assertThat(window.retentionMs()).isEqualTo(3_600_000L);
+        assertThat(window.retentionMs()).isEqualTo(10_800_000L);
 
         assertThat(operation(loaded, ConformanceCase.OperationKind.COUNT).store()).isEqualTo("counts");
         assertThat(operation(loaded, ConformanceCase.OperationKind.SINK).topic()).isEqualTo("out");
@@ -80,7 +80,9 @@ class CaseLoaderTest {
                 caseNamed(CaseLoader.loadClasspathDirectory(CORPUS), "aggregate-names-function-and-combine");
 
         assertThat(loaded.refusalClass()).isTrue();
-        assertThat(loaded.expectsFault()).isEqualTo("aggregate-names-function-and-combine");
+        // The fault is spelt in the wire's vocabulary rather than the case's own name: the proto's Aggregate names
+        // function_token and combine as alternatives, and refuses a call carrying both.
+        assertThat(loaded.expectsFault()).isEqualTo("aggregate-carries-both-function-token-and-combine");
         // It carries a specification to refuse, and no outcome to compute: no inputs, no twin, nothing to run.
         assertThat(loaded.inputs()).isEmpty();
         assertThat(loaded.perturbation()).isEmpty();
