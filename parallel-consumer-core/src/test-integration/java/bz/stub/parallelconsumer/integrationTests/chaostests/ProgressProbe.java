@@ -184,13 +184,22 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * bound's rationale, the busy-worker rule, the tokens and the dumps; this probe owns the sampler
      * thread that drives it and the sinks its findings land in.
      */
-    private final InstanceStallDetector instanceStall = new InstanceStallDetector(this::violate, this::observe);
+    private final InstanceStallDetector instanceStall = new InstanceStallDetector(new InstanceStallDetector.FindingSink() {
+        @Override
+        public void violate(String message) {
+            ProgressProbe.this.violate(message);
+        }
+
+        @Override
+        public void observe(String message) {
+            ProgressProbe.this.observe(message);
+        }
+    });
 
     /** The longest hold-work-return-nothing stretch seen, for the end-of-run peaks line. */
     public long getPeakInstanceStallMs() {
         return instanceStall.getPeakInstanceStallMs();
     }
-
 
     /** per-partition committed-offset watermarks for the Class 2 (lag stagnation) probe */
     private final Map<TopicPartition, Long> lastCommitted = new ConcurrentHashMap<>();
@@ -443,7 +452,6 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     void sampleInstanceProgress(Instant now) {
         instanceStall.sample(now);
     }
-
 
     private void sampleRebalanceDwell() throws Exception {
         var adminOpt = kcu.adminIfOpen();

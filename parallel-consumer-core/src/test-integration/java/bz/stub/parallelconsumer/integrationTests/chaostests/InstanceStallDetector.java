@@ -4,7 +4,6 @@ package bz.stub.parallelconsumer.integrationTests.chaostests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-
 import lombok.Getter;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -14,10 +13,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
-
 
 /**
  * The instance-progress detector ({@code INSTANCE_STALL/NO_WORK_COMPLETED}) and the two instruments
@@ -27,8 +24,8 @@ import java.util.function.Supplier;
  * {@code ProgressProbe#instanceProgressSnapshot}, {@code ProgressProbe#INSTANCE_STALL_BOUND}), so
  * every record that cites them still resolves.
  * <p>
- * Findings go out through the two consumers the probe hands in at construction: {@code violate} for
- * the gating claim, {@code observe} for the non-gating {@code INSTANCE_BUSY_IN_USER_CODE} report -
+ * Findings go out through the {@link FindingSink} the probe hands in at construction: {@code violate}
+ * for the gating claim, {@code observe} for the non-gating {@code INSTANCE_BUSY_IN_USER_CODE} report -
  * so the probe's record rule (mode-dependent log level, and the observation marker that
  * {@code bin/chaos-test.sh} counts) stays in one place.
  */
@@ -155,12 +152,23 @@ class InstanceStallDetector {
     static final Duration INSTANCE_STALL_DUMP_AFTER = Duration.ofSeconds(
             Long.getLong("chaos.instanceStallDumpAfterSeconds", INSTANCE_STALL_BOUND.getSeconds()));
 
-    private final Consumer<String> violate;
-    private final Consumer<String> observe;
+    /**
+     * Where findings land. Two named methods rather than two {@code Consumer<String>} parameters,
+     * because those are the same type and only argument order tells them apart - a swapped pair
+     * compiles and files every gating claim as a non-gating observation.
+     */
+    interface FindingSink {
+        /** A gating claim about PC - fails the run. */
+        void violate(String message);
 
-    InstanceStallDetector(Consumer<String> violate, Consumer<String> observe) {
-        this.violate = violate;
-        this.observe = observe;
+        /** Reported, never fails the run. */
+        void observe(String message);
+    }
+
+    private final FindingSink sink;
+
+    InstanceStallDetector(FindingSink sink) {
+        this.sink = sink;
     }
 
     /** Arms the detector with a live view of the fleet - see {@link ProgressProbe#withInstanceProgress}. */
@@ -282,7 +290,7 @@ class InstanceStallDetector {
                             threadDumpSource.apply(id)); // through the seam, so the dump-count test sees this branch too
                 }
                 if (busyMs > INSTANCE_STALL_BOUND.toMillis() && busyObservedThisStretch.add(id)) {
-                    observe.accept("INSTANCE_BUSY_IN_USER_CODE: instance " + id + " has held work (queued=" + queued
+                    sink.observe("INSTANCE_BUSY_IN_USER_CODE: instance " + id + " has held work (queued=" + queued
                             + ", outForProcessing=" + outForProcessing + ") for " + (busyMs / 1000)
                             + "s with " + busy + " worker(s) running user code and no work result returned - "
                             + "a working member, not a stalled control loop; the stall clock starts when the "
@@ -299,17 +307,19 @@ class InstanceStallDetector {
             if (stalledMs > peakInstanceStallMs) peakInstanceStallMs = stalledMs;
             boolean earlyDumpedThisSample =
                     stalledMs > INSTANCE_STALL_DUMP_AFTER.toMillis() && stallDumpedThisStretch.add(id);
+            // read once for the sample: the early dump and the firing below may both print it
+            String engineSnapshot = view.engineSnapshot();
             if (earlyDumpedThisSample) {
                 // Diagnostic only, and only when the property lowers it below the bound: a stretch that
                 // ends before the bound leaves no violation and no dump, so a wedge that clears when
                 // the run happens to finish first was invisible - which is how seed 6077035105695 read
                 // as clean on a tree where its instance 0 sat frozen for the whole tail of the run.
                 log.warn("INSTANCE_STALL early dump ({}s frozen, bound {}s) for instance {}: {}\n{}",
-                        stalledMs / 1000, INSTANCE_STALL_BOUND.getSeconds(), id, view.engineSnapshot(),
+                        stalledMs / 1000, INSTANCE_STALL_BOUND.getSeconds(), id, engineSnapshot,
                         threadDumpSource.apply(id));
             }
             if (stalledMs > INSTANCE_STALL_BOUND.toMillis()) {
-                violate.accept("INSTANCE_STALL/NO_WORK_COMPLETED: instance " + id + " holds work (queued="
+                sink.violate("INSTANCE_STALL/NO_WORK_COMPLETED: instance " + id + " holds work (queued="
                         + queued + ", outForProcessing=" + outForProcessing
                         + ") but has returned no work result for " + (stalledMs / 1000) + "s (bound "
                         + INSTANCE_STALL_BOUND.getSeconds() + "s) at " + returned
@@ -326,10 +336,10 @@ class InstanceStallDetector {
                 if (earlyDumpedThisSample) {
                     log.warn("INSTANCE_STALL thread dump for instance {} at the moment the detector fired: {}"
                                     + "\n  (its threads are in the early dump logged immediately above - same sample)",
-                            id, view.engineSnapshot());
+                            id, engineSnapshot);
                 } else {
                     log.warn("INSTANCE_STALL thread dump for instance {} at the moment the detector fired: {}\n{}",
-                            id, view.engineSnapshot(), threadDumpSource.apply(id));
+                            id, engineSnapshot, threadDumpSource.apply(id));
                 }
                 instanceProgressMarks.put(id, new InstanceProgressMark(returned, incarnation, now)); // re-arm
                 stallDumpedThisStretch.remove(id); // the re-armed stretch may earn its own early dump
