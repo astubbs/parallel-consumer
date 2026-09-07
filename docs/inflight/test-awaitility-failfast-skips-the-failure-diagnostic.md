@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - still true: both named instances are unchanged - BrokerIntegrationTest.awaitWithTopicNudge still has only catch (ConditionTimeoutException timeout) around its logTailPositionDiagnosis, and TransactionAndCommitModeTest still pairs failFast("PC died, check logs.", ...) with a lone catch (ConditionTimeoutException e); VeryLargeMessageVolumeTest is still the dismissed shape -->
 
 `waitAtMost(...).failFast(...)` has **two** failure exits and they are unrelated siblings under
 `RuntimeException`: the deadline throws `ConditionTimeoutException`, the fail-fast arm throws

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED partly true, and the state change is for the owner: items 1 and 4 are unchanged (ChaosScenarioBase.settleFleet still calls close() after its 15s wait whether or not the wait timed out - only narrowed by a new !isClosedOrFailed() check, still a check-then-act; settleRun is still five bare statements that throw InterruptedException with no try/finally). Item 2 is half fixed: ChaosConductor.doStopDrain now calls victim.markStopRequested() so stopRequested IS set for a drain, but closePending still is not (closingPcs is only added in stopAsync/closeQuietly), so the settleFleet wait still reads false immediately for a drain stop. Item 3 stands: settleFleet still never consults startInFlight and never calls stop()/stopAsync() -->
 
 
 The double-start race inside `ChaosConductor`'s draw loop is fixed (astubbs/parallel-consumer#292:
