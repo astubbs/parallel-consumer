@@ -153,6 +153,20 @@ signal lands first in the log. **The three old job names live on as the step nam
 reads in the log the way the red check used to, and the references across `docs/inflight/` to what
 `dups: clones` or `dups: similarity` found stay accurate - only the check name changed.
 
+**The fold gave the scanners a `needs: prepare-deps` edge they never had, and that edge had to be
+made non-skipping.** The CVE and PIT steps at the end of the job want the Maven cache, so the merged
+job depends on the cache lane; the three scanners themselves depend on nothing. Left with the
+implicit job-level `success()`, a failed or timed-out `prepare-deps` - the Azure west-US Maven
+Central timeout that lane exists for - would SKIP `scan: repo` entirely, and a skipped **required**
+check pends forever rather than going red, so a transient cache failure would wedge the PR on a
+context nothing will emit ([`docs/ci.md`](../ci.md), "A skip does not satisfy a required check").
+The job's `if:` is therefore `!cancelled() && github.event_name == 'pull_request'`: the scanners
+still report, the cache restore falls back to its prefix key, and a Maven step that genuinely cannot
+resolve fails its step and reds the check. Nothing degrades into a tick. `static: analysis` carries
+the same guard for the same reason - there the edge is inherited from the two jobs it merges rather
+than introduced, but it is about to become a required context under a new name, so the same skip
+would have the same effect.
+
 Not folded into `repo: hygiene`: hygiene runs PR-authored scripts under a read-only token by design,
 and all three scanners need `pull-requests: write` to post. Keeping the write grant in a job that
 runs only pinned third-party actions is the same reviewer-isolation line `docs/ci.md` draws for

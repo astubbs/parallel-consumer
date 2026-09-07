@@ -618,8 +618,25 @@ jobs:
   # repository, i.e. one pushed by somebody who already has write access, so the build code they
   # execute is not attacker-supplied in the way a fork PR's would be. The OSS Index secrets stay on
   # the two steps that need them and are not visible to the pinned third-party actions above.
+  # A SKIPPED REQUIRED CHECK IS PENDING FOREVER, WHICH IS WHY THIS `if:` NAMES A STATUS FUNCTION.
+  # `!cancelled()` replaces the implicit job-level `success()`, so the `needs: prepare-deps` edge
+  # below can no longer SKIP this job when the cache lane fails. That mattered here and nowhere else
+  # in this fold: the three no-build scanners were three jobs with no dependency on prepare-deps at
+  # all, and they reported through a failed cache job; batching them behind the CVE and PIT steps'
+  # cache edge silently made a transient Maven Central timeout (docs/solutions/build-errors/ - the
+  # Azure west-US case prepare-deps exists for) able to wedge every PR on a required context that
+  # never resolves. Red is recoverable and visible; pending is neither.
+  #
+  # NOTHING IS DEGRADED INTO A PASS by running anyway, which is the constraint that decides the
+  # shape. The scanners need no Maven at all. The cache restore below is restore-only with a prefix
+  # fallback, so with prepare-deps dead the CVE and PIT steps get an older cache or a cold one -
+  # slower, not silently weaker - and a Maven step that genuinely cannot resolve still fails its
+  # step, which still fails this job. A CANNOT-measure reads as red, never as a tick.
+  #
+  # `!cancelled()` and not `always()`: a superseded push cancels this run, and it should stay
+  # cancelled rather than spend a runner finishing work nobody will read.
   scan:
-    if: github.event_name == 'pull_request'
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     name: "scan: repo"
     runs-on: ubuntu-latest
     # The scanners held 10, the CVE audit 20 and the mutation lane 30. Sized for the sum of the
@@ -947,8 +964,15 @@ jobs:
   # is the check: `static: analysis` is the required-check name in the making, and the two names it
   # replaces are still in the master ruleset. docs/inflight/ci-fewer-jobs-ruleset-edits.md owns the
   # swap and its ordering.
+  # `!cancelled()` for the reason spelled out on `scan: repo` above: `static: analysis` is the other
+  # required context this fold creates, it also carries a `needs: prepare-deps` edge, and a required
+  # check that is SKIPPED pends forever instead of going red. Unlike `scan: repo` this is not a
+  # regression the fold introduced - `static: infer` and `static: spotbugs` were both already
+  # required and both already had the edge - but it is the same defect under a name that is about to
+  # be added to the ruleset, and the cache restore below is restore-only with a prefix fallback, so
+  # the analysers degrade to a cold cache rather than to a false pass.
   static:
-    if: github.event_name == 'pull_request'
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     name: "static: analysis"
     runs-on: ubuntu-latest
     # The two jobs held 15 and 10. The sum plus an Infer toolchain download on a cache miss needs

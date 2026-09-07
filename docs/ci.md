@@ -79,7 +79,11 @@ document. This section is the detail behind it.
   `deps: vulnerabilities`, `deps: whole-tree CVE scan`, `Mutation Tests (PIT, PR-scoped)`), so a red
   step still reads the way the red check did. The PIT steps are the only ones in either job carrying
   `continue-on-error` - the lane was an advisory *job* before the fold, and `scan: repo` is required,
-  so the flag is what stops the fold promoting it to a gate. Push to
+  so the flag is what stops the fold promoting it to a gate. Both batched jobs guard their `if:`
+  with `!cancelled()` rather than leaning on the implicit `success()`, because each one `needs:
+  prepare-deps` and a **required check that is skipped waits forever** instead of going red - so a
+  transient cache failure would otherwise wedge every PR. The batched steps still run, fall back to
+  a prefix-key cache restore, and go red honestly if they genuinely cannot resolve. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
   job - never `setup-java cache: 'maven'`.
