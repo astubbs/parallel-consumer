@@ -40,5 +40,5 @@ apply - it predates the ownership lifecycle it would now be built on.
 ## Not started
 
 Unowned. Recorded 2026-09-03 while reading every pre-fork branch, because the idea had no tracker at
-all: astubbs#420 reaches it only through a line in `docs/refactoring.md`'s idea bank.
 <!-- post-merge: checked - how the idea was found, a record -->
+all: astubbs#420 reaches it only through a line in `docs/refactoring.md`'s idea bank.
