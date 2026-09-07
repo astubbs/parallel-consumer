@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED closed: both halves have landed - `.claude/hooks/check-merge-outstanding-work.sh` now probes the platform once (`if stat -c %Y .`) and picks a GNU or BSD `_mtime`, then fails CLOSED on any non-numeric mtime, recording the task as "mtime unreadable - assuming live" instead of skipping it; fixed in ffba75936 for astubbs#341. `repo-hygiene.yml` also gained a `shell: macos` job on `macos-latest` (11c6551ab) that runs the self-tests where BSD stat is real -->
 
 `.claude/hooks/check-merge-outstanding-work.sh` reads each background task's mtime with GNU
 `stat -c %Y`. BSD `stat` rejects `-c`, so on macOS the guard silently allows every merge it was

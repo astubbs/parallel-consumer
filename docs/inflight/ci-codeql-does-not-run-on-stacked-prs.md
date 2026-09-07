@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - re-checked both halves: `ls .github/workflows | grep -i codeql` is still empty, and `gh api repos/astubbs/parallel-consumer/code-scanning/default-setup` returns `state: configured` (default setup, weekly, 6 languages), so PRs not based on master still get no analysis -->
 
 CodeQL here is GitHub's **default setup** - configured in repository settings, with no workflow file
 under `.github/workflows/` (`ls .github/workflows | grep -i codeql` returns nothing, which is the

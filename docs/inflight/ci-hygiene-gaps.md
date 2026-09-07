@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - re-read `bin/check-all.sh` - discovery is still the bare `for g in bin/check-*.sh bin/check-*.mjs` glob with no per-gate arguments and no todo-index special case, and the split-out read-only wrapper option two proposes is still absent from `bin/` -->
 
 **The pre-push sweep reports "no gate failed" while a tree-health gate it cannot see is red.** That
 is the failure mode `check-all.sh` exists to prevent, arriving through a different door than the one

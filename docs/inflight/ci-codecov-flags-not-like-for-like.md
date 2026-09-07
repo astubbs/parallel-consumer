@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: first open item is discharged - astubbs#475 (zero `.java` files, base master) has `codecov/project/unit` and `codecov/project/integration` both SUCCESS against a base carrying both flags. The two-band section has also stopped reproducing: every master commit since abd1d392c (astubbs#464, per-SHA push concurrency) carries a codecov status and `unit` sits at 78.72-78.98% with deltas under 0.15%, where the sampled band jumps (440b9bd98 -3.17%, 7a8dd925b -2.99%, e8f7beb68 -3.12%) all predate it - suggestive, not the files/lines comparison the note asks for. STILL OPEN and unchanged: the shared upload glob - the `test` matrix still hands every suite `*/target/site/jacoco/jacoco.xml` AND `*/target/site/jacoco-it/jacoco.xml`, so the per-suite `files:` question is unsettled and the delete-when's second half is unmet -->
 
 `codecov/project` compared a PR total against a base total built from a **disjoint set of flags**.
 The master `build` job uploaded everything under one `default` flag; a PR runs the `test` matrix and

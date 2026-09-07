@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - re-read `maven.yml`'s `dups: similarity` step - it still passes only `directories`, `file_extensions`, `ignore_below`, `fail_above: 80`, `warn_above`, `one_comment`, `compare_with_base`, `max_increase`; no `ignore_files` or accepted-pairs input exists, so the delete-when condition is not met -->
 
 `dups: similarity` (`astubbs/duplicate-code-detection-tool`, pinned in `maven.yml`) compares whole
 files pairwise and fails above 80%. It has **no allowlist**: no `ignore_files`, no accepted-pairs

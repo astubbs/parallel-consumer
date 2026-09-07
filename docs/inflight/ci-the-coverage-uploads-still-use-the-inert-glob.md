@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED closed: the stated delete-when now holds. Master's own flags report DIFFERENT figures (49f81f155: `codecov/project/unit` 78.95%, `codecov/project/integration` 61.44%), which the identical-figure tell said could not happen while both flags held the same data; and astubbs#475 - a PR with zero `.java` files based on master - shows `codecov/project/unit` and `codecov/project/integration` both SUCCESS. `maven.yml` carries the repair: `find`-built comma lists into `$GITHUB_OUTPUT`, `disable_search: true` on every `codecov/codecov-action@v5` call, the master collector without `always()`, and the per-SHA push `concurrency` group -->
 
 `codecov/project/unit` and `codecov/project/integration` reported large negative deltas on branches
 that changed no Java. They are required checks, so they read as "the branch under review dropped

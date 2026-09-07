@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: the first two items are unchanged - all three quarantine scripts still carry the unreachable `source ... || source bin/lib/quarantine-common.sh` fallback under `set -e`, and `bin/test-check-pr-ready.sh` still holds no executing `stat`/mtime case (its only match is a prose comment). The THIRD item is stale: `bin/check-shell-hazards.sh` gained `gnu-bsd` rows for both `stat -c` and `stat -f` on 2026-08-26 (957d08423/3d5166799), so the guard half it says does not exist now does; only the triplicated prose remains -->
 
 <!-- post-merge: checked-begin -->
 The hooks in `.claude/hooks/` and the gates in `bin/` were swept for GNU-only constructs, and the
