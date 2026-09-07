@@ -3,6 +3,10 @@
 # KTD5: under close-driven suppression the driver emits a window only when a later record advances
 # stream time to its close, and never on close(). A pinned-emit case with no such record observes
 # nothing about emit while passing every proof on its store alone.
+#
+# One rule, once: the rule is checked against the inputs AND the perturbation, so the perturbation
+# here carries the trailing record the inputs lack. That keeps this fixture tripping exactly the
+# inputs half - the twin's half has its own fixture, pinned-emit-twin-no-trailing-record.
 name: pinned-emit-no-trailing-record
 base-instant: 2025-01-01T02:00:00Z
 topology:
@@ -18,4 +22,5 @@ inputs:
 perturbation:
   - {key: b, value: "1", at-ms: 0}
   - {key: a, value: "2", at-ms: 60000}
+  - {key: z, value: "-", at-ms: 7200000}
 emit: on-window-close

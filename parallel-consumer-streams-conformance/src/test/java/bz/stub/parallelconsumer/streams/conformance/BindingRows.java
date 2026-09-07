@@ -39,9 +39,11 @@ import java.util.stream.Collectors;
  *
  * <h2>The property is read in exactly one place</h2>
  *
- * {@link #fromSystemProperty()} is that place, and it is called at the gate's entry. Everything worth testing is in
- * {@link #select(String, List)}, the pure function, so no test in this module ever sets the property: a JVM-wide
- * property set by one test is read by every test running beside it.
+ * {@link #fromSystemProperty()} is that place, and {@code CorpusGateTest.cellsFor} calls it at the gate's entry.
+ * Everything worth testing about <em>selection</em> is in {@link #select(String, List)}, the pure function, so the
+ * selector's own tests never set the property: a JVM-wide property set by one test is read by every test running
+ * beside it. Exactly one test sets it - the gate's wiring test - because whether the gate reads the property at all
+ * is the one thing the pure function cannot show.
  *
  * @see TheEngineArrivingMustBringTheStreamsRowTest
  * @see SelectorMatchingNothingFailsTest
@@ -91,8 +93,11 @@ public final class BindingRows {
     /**
      * The gate's entry point, and the <em>only</em> read of {@link #BINDING_PROPERTY} in this module (KTD7).
      * <p>
-     * Nothing in this module's tests calls it, on purpose: everything it does beyond reading one property is
-     * {@link #select(String, List)}, which a test can call directly with whatever value it wants to fail on.
+     * Everything it does beyond reading one property is {@link #select(String, List)}, which a test can call
+     * directly with whatever value it wants to fail on - so the selector's tests go through the pure function and
+     * never touch the property. The one test that does set the property is
+     * {@code CorpusGateTest.anUnregisteredBindingNameFailsTheGateRatherThanSelectingNothing}, whose whole subject is
+     * that this method has a caller: with none, a typo'd {@code -D} value ran the entire corpus and reported green.
      */
     static List<String> fromSystemProperty() {
         return select(System.getProperty(BINDING_PROPERTY), registered());

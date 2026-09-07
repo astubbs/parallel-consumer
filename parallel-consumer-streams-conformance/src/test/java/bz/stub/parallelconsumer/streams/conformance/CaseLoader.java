@@ -48,6 +48,9 @@ import java.util.stream.Stream;
  * <h2>The rules</h2>
  *
  * <ul>
+ *     <li><b>Named as a case</b> - every regular file in the directory ends in {@value #CASE_EXTENSION}, or is the
+ *     corpus {@value #CORPUS_README}; anything else is refused naming the file and the required extension. See
+ *     {@link #caseFilesIn} for why this is a rule rather than a filter.</li>
  *     <li><b>Readable</b> - a file that does not parse, or holds no document, is refused by file name (the rest of
  *     the directory is still read); a case with no name is refused by file name too.</li>
  *     <li><b>Unique names</b> (R1) - two files declaring one name are refused, naming the name and both files.</li>
@@ -70,7 +73,8 @@ import java.util.stream.Stream;
  *     <li><b>Observable final state</b> (R3, AE8) - a topology with no store-creating operation and no sink can
  *     produce no final state, so it would pass every proof by observing nothing.</li>
  *     <li><b>Case class</b> (R15) - a refusal-class case names its fault and carries no inputs, twin or agreement;
- *     an outcome case carries inputs and the twin (R8) and no fault.</li>
+ *     an outcome case carries inputs and the twin (R8) and no fault. An {@code expects-fault} that is present and
+ *     blank is neither, and is refused by name rather than quietly read as one of them.</li>
  * </ul>
  *
  * An empty directory yields an empty corpus and no refusal. Whether an empty corpus is itself a failure is the
@@ -87,11 +91,26 @@ public final class CaseLoader {
      */
     private static final Set<String> COMBINE_VOCABULARY = ImmutableSet.of("last-bytes", "append-bytes");
 
+    /** The one extension a case file may carry. Named in the refusal, so the fix is in the message. */
+    static final String CASE_EXTENSION = ".yaml";
+
+    /** The one non-case file a corpus directory may hold - the corpus README, which documents the cases. */
+    static final String CORPUS_README = "README.md";
+
+    /**
+     * How a whole-list refusal names the two record lists, in the spelling the case file uses for them. Singular
+     * forms name one record within a list ({@code input record 2}); these name the list itself.
+     */
+    private static final String INPUT_RECORDS = "input records";
+
+    private static final String PERTURBATION_RECORDS = "perturbation records";
+
     private CaseLoader() {
     }
 
     /**
-     * Reads every {@code *.yaml} file directly under {@code directory}, in file-name order.
+     * Reads every {@code *.yaml} file directly under {@code directory}, in file-name order, and refuses any other
+     * regular file beside them ({@link #CORPUS_README} excepted).
      *
      * @return the loaded cases, ordered by case name; empty when the directory holds no case files
      * @throws CorpusRefusedException if any case or file was refused - listing every refusal, not just the first
@@ -102,7 +121,7 @@ public final class CaseLoader {
         Map<String, Path> filesByCaseName = new LinkedHashMap<>();
         ObjectMapper mapper = mapper();
 
-        for (Path file : yamlFilesIn(directory)) {
+        for (Path file : caseFilesIn(directory, refusals)) {
             CaseDocument document;
             try {
                 document = mapper.readValue(file.toFile(), CaseDocument.class);
@@ -221,7 +240,16 @@ public final class CaseLoader {
                 "perturbation record", baseInstant, sourceTopics, name, file, refusals);
 
         boolean refusalClass = !isBlank(document.expectsFault);
-        if (refusalClass) {
+        if (document.expectsFault != null && !refusalClass) {
+            // A case that names its class and then names nothing. It is refused rather than resolved either way:
+            // read as an outcome case it would go on to collect the missing-inputs and missing-twin refusals, which
+            // describe consequences rather than the mistake; read as refusal class it would carry a fault no driver
+            // could map. Refusing here is also what keeps this decision and ConformanceCase.refusalClass() - which
+            // asks only whether the fault is PRESENT - from ever disagreeing about the same case.
+            refuse(refusals, name, file, "declares expects-fault with a blank value; a refusal-class case names the "
+                    + "fault the wire must raise, in the wire's own vocabulary, and a case that names nothing has "
+                    + "said something it did not mean - remove the field for an outcome case, or name the fault");
+        } else if (refusalClass) {
             // R15: it declares the fault the wire must raise for an invalid specification. There is no outcome to
             // compute, so carrying inputs, a twin or an agreement level would be describing one anyway.
             if (document.inputs != null || document.perturbation != null || document.agreement != null) {
@@ -240,7 +268,7 @@ public final class CaseLoader {
             }
             checkSomeFinalStateIsObservable(topology, name, file, refusals);
             if (emit == ConformanceCase.EmitRule.ON_WINDOW_CLOSE) {
-                checkPinnedEmitHasATrailingRecord(topology, inputs, baseInstant, name, file, refusals);
+                checkPinnedEmitHasATrailingRecord(topology, inputs, perturbation, baseInstant, name, file, refusals);
             }
         }
 
@@ -256,7 +284,9 @@ public final class CaseLoader {
                 .perturbation(perturbation)
                 .agreement(agreement)
                 .emit(emit)
-                .expectsFault(document.expectsFault)
+                // The DECISION, not the raw field: ConformanceCase.refusalClass() asks whether the fault is present,
+                // so handing it a value this loader has already judged blank would make the two disagree.
+                .expectsFault(refusalClass ? document.expectsFault : null)
                 .build();
     }
 
@@ -624,6 +654,12 @@ public final class CaseLoader {
      * KTD5: a pinned-emit case must contain a record that actually closes a window, or it observes nothing about
      * emit while passing every proof on its store alone.
      * <p>
+     * <b>Both record lists, and the refusal says which.</b> {@link Oracle#runPerturbation} drives the twin through
+     * the identical suppressed topology, so a perturbation without a trailing record emits nothing at all - and the
+     * positive control then fires on that <em>absence</em>, reporting a green arm that measured the emit rule
+     * rather than the perturbation. The two lists are fixed in different places in the file, so a refusal that did
+     * not name the short one would leave a maintainer checking both.
+     * <p>
      * <b>The exact rule.</b> Take each {@code windowed-by} in the topology, with size {@code S}, advance {@code A}
      * and grace {@code G}. A record at absolute time {@code t} opens windows up to and including the one starting at
      * {@code floor(t / A) * A}, so the latest window it opens ends at {@code floor(t / A) * A + S}. Under
@@ -639,6 +675,7 @@ public final class CaseLoader {
      */
     private static void checkPinnedEmitHasATrailingRecord(List<ConformanceCase.Operation> topology,
                                                           List<ConformanceCase.InputRecord> inputs,
+                                                          List<ConformanceCase.InputRecord> perturbation,
                                                           @Nullable Instant baseInstant,
                                                           String name,
                                                           Path file,
@@ -647,6 +684,8 @@ public final class CaseLoader {
                 .filter(op -> op.kind() == ConformanceCase.OperationKind.WINDOWED_BY)
                 .collect(Collectors.toList());
         if (windows.isEmpty()) {
+            // Once, not once per list: the topology is the same for both, so a second copy of this refusal would
+            // say nothing new and would break the one-rule-one-refusal contract the fixtures are written against.
             refuse(refusals, name, file, "names emit on-window-close but has no windowed-by, so there is no window "
                     + "for a close to be driven by");
             return;
@@ -654,11 +693,25 @@ public final class CaseLoader {
         if (baseInstant == null) {
             return;
         }
+        checkRecordsReachAWindowClose(windows, inputs, INPUT_RECORDS, baseInstant, name, file, refusals);
+        checkRecordsReachAWindowClose(windows, perturbation, PERTURBATION_RECORDS, baseInstant, name, file, refusals);
+    }
 
+    /**
+     * One record list against every window in the topology - see {@link #checkPinnedEmitHasATrailingRecord} for the
+     * arithmetic and for why the list is named in the refusal.
+     */
+    private static void checkRecordsReachAWindowClose(List<ConformanceCase.Operation> windows,
+                                                      List<ConformanceCase.InputRecord> records,
+                                                      String listLabel,
+                                                      Instant baseInstant,
+                                                      String name,
+                                                      Path file,
+                                                      List<String> refusals) {
         // Distinct, ascending: records sharing a timestamp are neither earlier nor later than each other, and a
         // window end depends only on the timestamp, so one entry per distinct time is the whole population.
         Set<Long> distinctAscendingTimes = new TreeSet<>();
-        for (ConformanceCase.InputRecord record : inputs) {
+        for (ConformanceCase.InputRecord record : records) {
             boolean ignoredAlreadyPresent = distinctAscendingTimes.add(record.timestamp().toEpochMilli());
         }
 
@@ -679,10 +732,10 @@ public final class CaseLoader {
                 long wouldNeed = latestCloseSoFar == Long.MIN_VALUE
                         ? window.sizeMs()
                         : latestCloseSoFar + window.graceMs() - baseInstant.toEpochMilli();
-                refuse(refusals, name, file, "names emit on-window-close, but no input record sits at or past the "
-                        + "close of a window an earlier record opens: " + windowedBy + " " + window + " would need a "
-                        + "record at at-ms " + wouldNeed + " or later, and without one nothing is ever emitted - "
-                        + "TopologyTestDriver does not advance stream time on close()");
+                refuse(refusals, name, file, "names emit on-window-close, but none of its " + listLabel + " sits at "
+                        + "or past the close of a window an earlier record opens: " + windowedBy + " " + window
+                        + " would need a record at at-ms " + wouldNeed + " or later, and without one nothing is ever "
+                        + "emitted - TopologyTestDriver does not advance stream time on close()");
             }
         }
     }
@@ -711,14 +764,38 @@ public final class CaseLoader {
         }
     }
 
-    private static List<Path> yamlFilesIn(Path directory) {
+    /**
+     * Every regular file directly under {@code directory}, split into the {@code *.yaml} cases and a refusal for
+     * anything else.
+     * <p>
+     * <b>A file this method skipped silently was a case nobody ran.</b> Filtering on the extension and dropping the
+     * rest read as a smaller corpus that passed - a case saved as {@code .yml}, a case left as {@code .yaml.orig} by
+     * an editor, a case renamed halfway. So the extension is a <em>rule</em>, refused like every other rule, rather
+     * than a filter: the corpus fails as a whole and names the file. {@link #CORPUS_README} is the one non-case file
+     * a case directory may hold. Sub-directories are not regular files and are not the corpus's business.
+     */
+    private static List<Path> caseFilesIn(Path directory, List<String> refusals) {
+        List<Path> cases = new ArrayList<>();
         try (Stream<Path> entries = Files.list(directory)) {
-            return entries.filter(path -> path.getFileName().toString().endsWith(".yaml"))
-                    .sorted()
-                    .collect(Collectors.toList());
+            List<Path> sorted = entries.sorted().collect(Collectors.toList());
+            for (Path entry : sorted) {
+                if (!Files.isRegularFile(entry)) {
+                    continue;
+                }
+                String fileName = entry.getFileName().toString();
+                if (fileName.endsWith(CASE_EXTENSION)) {
+                    cases.add(entry);
+                } else if (!CORPUS_README.equals(fileName)) {
+                    refusals.add("file " + fileName + " is not a case and is not " + CORPUS_README + ": every case "
+                            + "file in a corpus directory ends in " + CASE_EXTENSION + ", and a file the loader "
+                            + "skipped would be a case nobody ran in a corpus that still reported green - rename it "
+                            + "or move it out of the directory");
+                }
+            }
         } catch (IOException e) {
             throw new IllegalArgumentException("cannot read the case directory " + directory, e);
         }
+        return cases;
     }
 
     private static ObjectMapper mapper() {

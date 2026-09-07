@@ -141,9 +141,15 @@ class CaseLoaderTest {
 
     @Test
     void aPinnedEmitCaseWithNoRecordPastWindowCloseIsRefused() {
-        String refusals = refusalsFrom("invalid-cases/pinned-emit-no-trailing-record");
+        CaseLoader.CorpusRefusedException refused = refusal("invalid-cases/pinned-emit-no-trailing-record");
+
+        // One rule, one refusal: the fixture's perturbation carries the trailing record its inputs lack, so the
+        // twin's half of the rule cannot fire here and rot untested.
+        assertThat(refused.refusals()).hasSize(1);
+        String refusals = String.join(System.lineSeparator(), refused.refusals());
         assertThat(refusals).contains("pinned-emit-no-trailing-record");
         assertThat(refusals).contains("on-window-close");
+        assertThat(refusals).contains("input records");
 
         // The same case with a record past the close of the last window an earlier record could open loads, so the
         // rule is a real discrimination and not a blanket refusal of pinned emit.
@@ -151,6 +157,56 @@ class CaseLoaderTest {
                 CaseLoader.loadClasspathDirectory("valid-variants/pinned-emit-with-trailing-record");
         assertThat(caseNamed(loaded, "pinned-emit-with-trailing-record").emit())
                 .isEqualTo(ConformanceCase.EmitRule.ON_WINDOW_CLOSE);
+    }
+
+    /**
+     * The twin's half of KTD5. {@link Oracle#runPerturbation} drives the perturbation through the identical
+     * suppressed topology, so a twin with no trailing record emits nothing at all - and the positive control would
+     * then fire on that absence, reporting a green arm that measured the emit rule rather than the perturbation.
+     * The refusal has to say <em>which</em> list is short, because the two lists are fixed in different places.
+     */
+    @Test
+    void aPinnedEmitCaseWhoseTwinHasNoRecordPastWindowCloseIsRefusedNamingThePerturbation() {
+        CaseLoader.CorpusRefusedException refused = refusal("invalid-cases/pinned-emit-twin-no-trailing-record");
+
+        assertThat(refused.refusals()).hasSize(1);
+        String refusals = String.join(System.lineSeparator(), refused.refusals());
+        assertThat(refusals).contains("pinned-emit-twin-no-trailing-record");
+        assertThat(refusals).contains("on-window-close");
+        // The inputs here are sound; naming the list is the whole difference between a fixable message and a hunt.
+        assertThat(refusals).contains("perturbation");
+    }
+
+    /**
+     * A file the loader skips is a case nobody runs, and the corpus stays green one case smaller - the silent shape
+     * this rung exists to refuse. So every regular file in a case directory is either a {@code *.yaml} case or the
+     * corpus {@code README.md}, and anything else is refused by name.
+     */
+    @Test
+    void aCaseSavedWithTheWrongExtensionIsRefusedNamingTheFileAndTheRequiredOne() {
+        CaseLoader.CorpusRefusedException refused = refusal("invalid-cases/wrong-extension");
+
+        assertThat(refused.refusals()).hasSize(1);
+        assertThat(refused.refusals().get(0)).contains("case.yml");
+        assertThat(refused.refusals().get(0)).contains(".yaml");
+        // The .yaml file beside it was still read: a mis-named file refuses the corpus, it does not stop the pass.
+        assertThat(refused.loadedCaseNames()).containsExactly("sound-neighbour-of-the-mis-extended");
+    }
+
+    /**
+     * {@code expects-fault: ""} is a case that names its class and then names nothing. It is refused rather than
+     * silently loaded as an outcome case, because the two readings of the field disagree - the loader's
+     * "is the fault non-blank" and {@link ConformanceCase#refusalClass()}'s "is the fault present" - and a case that
+     * loads under one reading and reports the other is a case nobody can act on.
+     */
+    @Test
+    void aBlankExpectsFaultIsRefusedByNameRatherThanLoadingAsAnOutcomeCase() {
+        CaseLoader.CorpusRefusedException refused = refusal("invalid-cases/blank-expects-fault");
+
+        // Exactly one: the blank field is the fault to report, not the missing inputs and twin that follow from it.
+        assertThat(refused.refusals()).hasSize(1);
+        assertThat(refused.refusals().get(0)).contains("blank-expects-fault");
+        assertThat(refused.refusals().get(0)).contains("expects-fault");
     }
 
     /** Covers AE8. A stateless case cannot pass by observing nothing. */

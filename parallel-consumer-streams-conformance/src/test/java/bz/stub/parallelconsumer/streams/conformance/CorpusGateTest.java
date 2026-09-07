@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.streams.conformance;
 
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 
 import java.util.ArrayList;
@@ -12,7 +13,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
@@ -65,6 +68,49 @@ class CorpusGateTest {
     /** The cell a refusal-class case gets: present, named, and aborted rather than absent (R15). */
     static final String SKIPPED_BY_DESIGN = "skipped-by-design";
 
+    /**
+     * The one test in this module that sets {@link BindingRows#BINDING_PROPERTY}, and it is allowed to only because
+     * the wiring <em>is</em> what it proves (KTD7).
+     * <p>
+     * The selector's behaviour is tested property-free in {@code SelectorMatchingNothingFailsTest}, over the pure
+     * function; nothing there can tell whether the gate ever reads the property. It did not: for seven commits
+     * {@link BindingRows#fromSystemProperty()} had no caller, so {@code -Dpc.streams.conformance.binding=typo} ran
+     * the whole corpus and reported green - the exact "a typo reads as a pass" outcome the selector exists to
+     * refuse, one layer up from where it was being refused.
+     * <p>
+     * The property is restored in a {@code finally}: a JVM-wide property left set by one test is read by every test
+     * beside it.
+     */
+    @Test
+    void anUnregisteredBindingNameFailsTheGateRatherThanSelectingNothing() {
+        List<ConformanceCase> corpus = CaseLoader.loadClasspathDirectory(CORPUS);
+        String restore = System.getProperty(BindingRows.BINDING_PROPERTY);
+        try {
+            String ignoredPrevious = System.setProperty(BindingRows.BINDING_PROPERTY, "java-wrappre");
+
+            IllegalArgumentException thrown =
+                    assertThrows(IllegalArgumentException.class, () -> cellsFor(corpus, CORPUS));
+
+            assertWithMessage("the gate has to fail on the typo the CI row actually wrote")
+                    .that(thrown).hasMessageThat().contains("java-wrappre");
+            assertWithMessage("and name what is registered, so the fix is in the message rather than in the source")
+                    .that(thrown).hasMessageThat().contains(BindingRows.ORACLE);
+        } finally {
+            if (restore == null) {
+                Object ignoredRemoved = System.getProperties().remove(BindingRows.BINDING_PROPERTY);
+            } else {
+                Object ignoredReplaced = System.setProperty(BindingRows.BINDING_PROPERTY, restore);
+            }
+        }
+    }
+
+    /** With no selector set - every ordinary run - the gate resolves the oracle and builds its cells. */
+    @Test
+    void withNoSelectorSetTheGateResolvesTheOracleAndBuildsItsCells() {
+        assertThat(System.getProperty(BindingRows.BINDING_PROPERTY)).isNull();
+        assertThat(cellsFor(CaseLoader.loadClasspathDirectory(CORPUS), CORPUS)).isNotEmpty();
+    }
+
     @TestFactory
     Stream<DynamicTest> everyExecutableCaseHoldsTheControlArmAndThePositiveControl() {
         return cellsFor(CaseLoader.loadClasspathDirectory(CORPUS), CORPUS).stream();
@@ -73,8 +119,21 @@ class CorpusGateTest {
     /**
      * The cells for one corpus. Package-private and taking its corpus rather than loading one so the empty-corpus
      * rule is testable without an empty directory on the classpath - {@code DifferTest} holds that test.
+     * <p>
+     * This is also where {@link BindingRows#BINDING_PROPERTY} is read, once per gate entry and nowhere else (KTD7).
+     * Reading it here rather than inside a cell is deliberate: an unregistered name has to throw out of the test
+     * <em>factory</em>, which reddens the run, where the same throw inside one cell would redden one cell of a run
+     * that still executed everything the selector was supposed to narrow.
      */
     static List<DynamicTest> cellsFor(List<ConformanceCase> corpus, String corpusDirectory) {
+        List<String> selection = BindingRows.fromSystemProperty();
+        assertWithMessage("the oracle is the control arm and is in every selection, so a selection without it means "
+                        + "the registry and the selector have come apart - and on this rung the oracle is the whole "
+                        + "selection, since no binding row is registered yet. The driver rung iterates the rest of "
+                        + "this list; today there is no rest")
+                .that(selection)
+                .contains(BindingRows.ORACLE);
+
         List<DynamicTest> cells = new ArrayList<>();
         int executable = 0;
         for (ConformanceCase conformanceCase : corpus) {

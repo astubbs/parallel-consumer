@@ -26,8 +26,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  *
  * Every assertion goes through {@link BindingRows#select(String, List)}, the pure function, with a registry supplied
  * by the test. A JVM-wide property set by one test is read by every test running beside it, and the thing worth
- * proving is the <em>function</em>, not that {@code System.getProperty} works. {@link BindingRows#fromSystemProperty()}
- * is the one caller that reads the property, and nothing in this module calls it.
+ * proving is the <em>function</em>, not that {@code System.getProperty} works.
+ * <p>
+ * That leaves one thing this class cannot see: whether anything reads the property at all. It is proven one layer
+ * up, by {@code CorpusGateTest.anUnregisteredBindingNameFailsTheGateRatherThanSelectingNothing} - the module's only
+ * test that sets the property, and the module's only test that needs to.
  *
  * <h2>Two registries, and both are the point</h2>
  *

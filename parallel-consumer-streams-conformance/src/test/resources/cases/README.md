@@ -90,8 +90,10 @@ refusal-class case carrying an out-of-range retention load at all, which is what
 
 ## Adding a case
 
-Add one file, run `CorpusGateTest` and `CorpusCoverageTest`, and read what they say before adding
-the next. Two failures are worth recognising on sight:
+Add one file, named `<case-name>.yaml` - the extension is a rule, not a convention, and a file
+saved as anything else (this README excepted) refuses the whole corpus by name rather than being
+skipped into a smaller green run. Then run `CorpusGateTest` and `CorpusCoverageTest`, and read what
+they say before adding the next. Two failures are worth recognising on sight:
 
 - **The positive control did not fire.** The twin is absorbed by the case's own operations. Fix the
   twin.

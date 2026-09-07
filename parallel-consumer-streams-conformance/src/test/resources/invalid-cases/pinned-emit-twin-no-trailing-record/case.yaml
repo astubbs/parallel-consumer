@@ -1,0 +1,23 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# KTD5, the twin's half. The inputs carry the trailing record at 7200000 and would emit; the
+# perturbation stops at 60000 and would not. Oracle.runPerturbation drives the twin through the
+# identical suppressed topology, so an unchecked twin emits NOTHING and the positive control fires
+# on that absence - a green arm that measured the emit rule rather than the perturbation.
+name: pinned-emit-twin-no-trailing-record
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: in, source: {topic: in}}
+  - {id: g, group-by-key: {of: in}}
+  - {id: w, windowed-by: {of: g, size-ms: 3600000, advance-ms: 3600000, grace-ms: 0, retention-ms: 3600000}}
+  - {id: c, count: {of: w, store: counts}}
+  - {id: s, to-stream: {of: c}}
+  - {sink: {of: s, topic: out}}
+inputs:
+  - {key: a, value: "1", at-ms: 0}
+  - {key: a, value: "2", at-ms: 60000}
+  - {key: z, value: "-", at-ms: 7200000}
+perturbation:
+  - {key: b, value: "1", at-ms: 0}
+  - {key: a, value: "2", at-ms: 60000}
+emit: on-window-close
