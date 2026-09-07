@@ -347,7 +347,16 @@ recipe above).
 
 - **Run one** - always name the class, because a lane whose members run for half an hour each is not
   something to select by tag alone:
-  `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=soak -Dexcluded.groups= -Dit.test=<Name>`
+  `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=soak -Dexcluded.groups= -Dit.test=<Name> -Dfailsafe.failIfNoSpecifiedTests=false`
+  The last flag is required rather than optional - `-am` builds the parent module first, the named
+  class is not in it, and failsafe fails the reactor there before core is reached (the trap
+  `bin/chaos-test.sh`'s header owns for the chaos lane). It buys that at the price of a run selecting
+  nothing exiting 0, so **read the scenario's own banner and summary lines out of the log before
+  recording a green** - see "A SHARD THAT RAN NOTHING MUST NOT READ AS A PASS" in
+  `bin/ci-integration-test.sh` for the same hazard in the gating lane.
+- **This lane is not `bin/soak-test.sh`.** That script is unrelated: it repeats a *short* test many
+  times under deliberate CPU contention to measure a flake **rate**. The `soak` tag is one long run
+  of one scenario. The word does two jobs in this repo; say which you mean.
 - **CI**: none, deliberately. A soak's result is a *rate under conditions*, and a lane that runs one
   repetition per PR would report a number nobody can read.
 - **The result goes in a ledger, not in a verdict.** "Zero findings in one 30-minute run" is a

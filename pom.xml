@@ -112,7 +112,7 @@
              class at the committed bounds but superlinear in them, and a model-checking run needs the
              -Plincheck JVM args, so it is opt-in like chaos. -->
         <included.groups></included.groups>
-        <excluded.groups>performance,chaos,quarantined,lincheck</excluded.groups>
+        <excluded.groups>performance,chaos,quarantined,lincheck,soak</excluded.groups>
 
         <!-- version numbers -->
         <!-- plugins -->

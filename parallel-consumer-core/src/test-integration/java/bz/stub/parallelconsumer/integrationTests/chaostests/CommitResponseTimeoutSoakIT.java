@@ -96,28 +96,79 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * what") needs every thread.
  *
  * <h2>Calibration status</h2>
- * <b>2026-09-07, first run, and it is a SIGHTING-LEDGER ENTRY rather than a verdict.</b> Zero
- * timeouts in one 30-minute run says the shape did not reproduce once; it does not say the shape
- * cannot. Conditions, so the number is interpretable: 1 run x 30 min, single instance,
- * {@code KEY}/{@code PERIODIC_CONSUMER_SYNC}, {@value #KEY_SPACE} keys over {@value #PARTITIONS}
- * partitions, failureFraction 0.5 permanent, {@code maxConcurrency} 14, 100ms user function, 1000
- * records produced every {@value #BURST_INTERVAL_SECONDS}s; broker = the suite's Testcontainers Kafka
- * on Docker; machine = the maintainer's macOS arm64 workstation. The run's own numbers - steady-state
- * shape, successes, failures, seed - are in the note named at the top of this javadoc, which owns the
- * ledger. <b>Do not read a green run here as the reports being closable</b>; that note says what would
- * be needed and this run is one line of it.
+ * <b>2026-09-07, two runs, zero timeouts - and NEITHER is a sighting-ledger entry, because in both
+ * the assertion was unfalsifiable for all but the first minute.</b> Common to both: 30 min, single
+ * instance, {@code KEY}/{@code PERIODIC_CONSUMER_SYNC} at a 1s interval, {@value #KEY_SPACE} keys
+ * over {@value #PARTITIONS} partitions, {@code maxConcurrency} 14, 100ms user function, 1000 records
+ * every {@value #BURST_INTERVAL_SECONDS}s (90,000 produced), the suite's Testcontainers Kafka on
+ * Docker, maintainer's macOS arm64 workstation.
+ * <ul>
+ *   <li><b>failureFraction 0.5</b> (the reporter's) - seed 3747722682837130843, succeeded 451,
+ *   failed 237,006, no findings.</li>
+ *   <li><b>failureFraction 0.03</b> - seed 5055695573431537469, succeeded 2,372, failed 81,114, no
+ *   findings.</li>
+ * </ul>
+ * <b>What both runs actually measured is a total intake stall, not the absence of a timeout.</b>
+ * Successes froze - at 451 and at 2,372 - inside the first ~60 seconds of each run and never moved
+ * again across the remaining 29 minutes, while the producer kept publishing and the failure count
+ * kept climbing at a rate that then held EXACTLY constant. A constant retry rate with a frozen
+ * success count means no new record is being taken as work at all: the instance is not merely slowed
+ * by head-of-line blocking, it has stopped.
  * <p>
- * <b>Arms not run, in the order they are worth running.</b> Each changes ONE term, which is the point:
+ * <b>And a stalled instance cannot reach the exception being hunted.</b> Only
+ * {@code PartitionState#onSuccess} calls {@code setDirty} - {@code onFailure} in the same file is an
+ * explicit no-op - and the control loop gates on {@code shouldTryCommitNow} =
+ * {@code isTimeToCommitNow() && wm.isDirty() && !isRebalanceInProgress.get()}. With no success
+ * anywhere, nothing is dirty, no commit request is enqueued, and
+ * {@code ConsumerOffsetCommitter#commitAndWait} - the sole thrower of
+ * {@value #COMMIT_RESPONSE_TIMEOUT} - is never entered. A green assertion here cannot tell "no
+ * timeout occurred" from "no commit was attempted". This is the {@code dirty} asymmetry
+ * {@code docs/inflight/upstream-tell-809-833-the-hang-is-fixed.md} names for this very workload.
+ * <p>
+ * <b>Lowering the failure fraction does NOT fix it - that arm has been run.</b> Dropping 0.5 to 0.03
+ * bought about 1.5 extra bursts of throughput and then stalled identically, which rules out "too many
+ * poisoned keys" as the explanation and makes the poisoned fraction the wrong knob. So is duration:
+ * the stall is reached in the first minute of a thirty-minute run, and a longer run only adds
+ * retry traffic to a stopped instance.
+ * <p>
+ * <b>What stops intake is NOT the documented offset-encoding back pressure.</b> That path logs on
+ * every transition ({@code Offset map data too large}, {@code not allow further messages} in
+ * {@code PartitionState#updateBlockFromEncodingResult}) and neither string appears once in either
+ * run's log. The untested candidate is the load gate: {@code WorkManager#isSufficientlyLoaded}
+ * compares {@code workable = inShards - parkedForRetry} against
+ * {@code targetAmountOfRecordsInFlight * loadingFactor}, and {@code inShards} counts records queued
+ * BEHIND a blocked shard head - records that can never be worked - while only the failing head itself
+ * is {@code parkedForRetry}. A shard set full of unworkable queued records therefore reads as
+ * "sufficiently loaded", the broker poller stays paused, and nothing ever arrives to change it. That
+ * is the silent-stall shape the gate's own comment names against confluentinc#857. <b>It is a
+ * hypothesis, not a result</b> - the gate logs {@code isSufficientlyLoaded=} with its own operands at
+ * DEBUG precisely so this can be settled, and no run has yet read it.
+ * <p>
+ * <b>Arms not run, re-ordered by what these two runs established.</b> Each changes ONE term:
  * <ol>
- *   <li>{@code -Dsoak.failureFraction=0} - the CONTROL arm. It removes the poisoning and nothing else,
- *   so a timeout appearing in it would say the failure traffic is not the mechanism.</li>
- *   <li>Longer than 30 minutes. The reporter's application ran for hours, and at their produce rate
- *   30 minutes of this soak is roughly three hours of theirs - but "accumulation" has no established
- *   knee, so duration is the least-informed constant here.</li>
- *   <li>Per-ATTEMPT failure instead of per-record, so the watermark advances and the pressure lands on
- *   the retry path rather than on the offset encoding. A different mechanism, not a weaker version of
- *   this one - which is why it is a separate arm and not a default.</li>
+ *   <li><b>Re-run either arm with {@code WorkManager} at DEBUG and read the
+ *   {@code isSufficientlyLoaded=(inShards=... - parkedForRetry=... vs target(...)*loadingFactor)}
+ *   line at the moment successes freeze.</b> It either confirms the load gate is latched by
+ *   unworkable queued records or eliminates it, and until it is read every other arm is guesswork.
+ *   This costs one run and settles the question the other arms are built on.</li>
+ *   <li><b>Per-ATTEMPT failure instead of per-record</b>, so records eventually succeed, the shards
+ *   drain, and the instance keeps committing for the whole run. On this evidence it is the only shape
+ *   that keeps the commit path alive indefinitely, which promotes it from "a different mechanism" to
+ *   "the first arm that can actually falsify the assertion".</li>
+ *   <li><b>{@code gtassone}'s configuration from confluentinc#809</b> - 128 partitions, concurrency
+ *   64, a user function from 100ms to minutes, {@code PERIODIC_CONSUMER_SYNC}.
+ *   {@code docs/inflight/upstream-175-sporadic-commit-timeouts.md} nominates him explicitly as the
+ *   better wedge candidate, because he posted his configuration and it is the only mode in which the
+ *   AB-BA cycle can close. This scenario transcribes the OTHER reporter, whose defect
+ *   {@code upstream-tell-809-833-the-hang-is-fixed.md} says is already fixed.</li>
+ *   <li>{@code -Dsoak.failureFraction=0} - the control arm, and worth less than it looked: with no
+ *   poisoning this is a plain throughput soak, and the two runs above have already shown the
+ *   interesting axis is intake, not the poisoned share.</li>
  * </ol>
+ * <b>The stall may be the more interesting lead than the timeout.</b> confluentinc#833's reporter
+ * showed {@code pc_processed_records_total} FLAT across the window in which their timeout fired -
+ * which is this state, not a busy one. Anyone picking this up should consider whether the reports'
+ * timeout is a consequence of the stall rather than a peer of it.
  *
  * <h2>Running it</h2>
  * Tagged {@code @Tag("soak")}, which sits in {@code pom.xml}'s {@code excluded.groups} default, so it
@@ -125,8 +176,18 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * (those select classes by name through {@code CHAOS_SCENARIOS}). It is opt-in only:
  * <pre>{@code
  * ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
- *     -Dincluded.groups=soak -Dexcluded.groups= -Dit.test=CommitResponseTimeoutSoakIT
+ *     -Dincluded.groups=soak -Dexcluded.groups= -Dit.test=CommitResponseTimeoutSoakIT \
+ *     -Dfailsafe.failIfNoSpecifiedTests=false
  * }</pre>
+ * {@code -Dfailsafe.failIfNoSpecifiedTests=false} is REQUIRED, not tidiness: {@code -am} builds the
+ * parent module first, the named class is not in it, and failsafe fails the reactor there before core
+ * is reached. {@code bin/chaos-test.sh}'s header owns the same trap for the chaos lane. Its cost is
+ * that a run selecting NOTHING now exits 0, so read the {@code === SOAK ...} banner and the
+ * {@code Soak summary:} line out of the log before believing a green - a soak that ran no test is not
+ * a sighting-ledger entry.
+ * <p>
+ * <b>Not {@code bin/soak-test.sh}</b>, which is an unrelated tool that repeats a short test under CPU
+ * load to measure a flake RATE. This lane is one long run of one scenario.
  * {@code -Dsoak.duration=PT45M} sets the run length, {@code -Dsoak.failureFraction=<0..1>} the
  * poisoned share, and {@code -Dchaos.seed=<long>} replays which records were poisoned - the seed is
  * logged at the top of every run and lifted into the ambient autopsy by {@link ChaosSeed.Holder}.
