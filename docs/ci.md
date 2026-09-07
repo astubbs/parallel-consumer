@@ -105,8 +105,8 @@ document. This section is the detail behind it.
   [`docs/solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md`](solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md)
   for the class.
 - **The PR-body gates** - formerly the `PR Checklist` job in `pr-checklist.yml`, now the tail of
-  `repo: hygiene` in `repo-hygiene.yml` (folded 2026-09-07; the old context is a removal owed to the
-  ruleset, see below): the template checklist (rule in AGENTS.md, PR Discipline), the
+  `repo: hygiene` in `repo-hygiene.yml` (folded 2026-09-07; the old context has since been removed
+  from the ruleset, see below): the template checklist (rule in AGENTS.md, PR Discipline), the
   changelog-citation gate (`changelog-ref-gate.js`, see [`docs/releasing.md`](releasing.md)), the
   issue-reference gate (`issue-ref-gate.js`, see [`docs/issue-references.md`](issue-references.md)),
   the file-reference gate (`file-ref-gate.js`, see [`docs/citations.md`](citations.md)), which fails
@@ -196,10 +196,10 @@ document. This section is the detail behind it.
   **is in the required list** as of the live check on 2026-09-07 -
   `gh api repos/astubbs/parallel-consumer/rules/branches/master` enumerates every required context
   by name. The four contexts retired into it that day - `Copyright header check`,
-  `quarantine: audit`, `docs data: audit`, `PR Checklist` - are the removals currently owed to the
-  ruleset;
-  [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md) owns
-  that edit. Confirm against the live ruleset rather than assuming this paragraph is current.
+  `quarantine: audit`, `docs data: audit`, `PR Checklist` - were removed from the ruleset in turn;
+  the 2026-09-07 vetting sweep confirmed none of them is still required.
+  [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md) records
+  that edit, closed. Confirm against the live ruleset rather than assuming this paragraph is current.
   - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
     exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
     (retiring them needs someone else to act, on no timetable we control) and *temporary* (the
