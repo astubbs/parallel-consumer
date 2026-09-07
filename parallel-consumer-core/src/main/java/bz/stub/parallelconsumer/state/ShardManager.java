@@ -473,9 +473,20 @@ public class ShardManager<K, V> {
             // Confirm residency AFTER the add, and undo it if the container has left - see the javadoc for why
             // this order closes the window that asking first only narrows.
             if (!shard.isResident(wc)) {
+                // The removal's answer is LOGGED rather than dropped, because a bare call here cannot be told
+                // from a forgotten check - and it says which of the two racing removals won, which is the only
+                // interesting thing about this branch. BOTH answers are correct and neither is actionable:
+                // false means the sweep's own paired removal reached the entry first, which is the outcome this
+                // method is arranging for, and true means this call is the one that kept the pair whole. The
+                // argument above needs only that AT LEAST ONE of the two removals observes the entry, never
+                // which. (Logged rather than assigned to an ignored local: a dead store in main code trades one
+                // static-analysis finding for another - see docs/inflight/static-error-prone-rule-registry.md,
+                // `ReturnValueIgnored`.)
+                boolean thisCallRemovedIt = this.retryQueue.remove(wc);
                 log.debug("Failed work left its shard while it was being re-queued (its partition was revoked); " +
-                        "taking the retry queue entry back out so it cannot be orphaned. {}", wc);
-                this.retryQueue.remove(wc);
+                        "taking the retry queue entry back out so it cannot be orphaned - this call removed it: " +
+                        "{} (false means the revoke sweep's own paired removal got there first). {}",
+                        thisCallRemovedIt, wc);
             }
         }
 
