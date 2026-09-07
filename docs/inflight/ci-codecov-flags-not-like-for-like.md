@@ -41,6 +41,54 @@ un-cover anything - which is why this was left alone rather than guessed at. Nar
 per-suite `files` value in the matrix, and three of the five suites (`performance`, `lincheck`,
 `chaos`) would need their report shape established first rather than assumed.
 
+## 2026-09-07: master's own `unit` history falsifies "so a drop there is a real drop"
+
+The `<!-- post-merge: checked -->` block above claims both sides of the `unit`/`integration` gates
+come from the same profile and exclusions, "so a drop there is a real drop." `codecov.yml` carries
+the identical sentence in its own comments. Master's own `codecov/project/unit` history contradicts
+that, for `unit` specifically - `integration` was not examined here.
+
+**The shape**: pull the `codecov/project/unit` status for a run of recent master commits
+(`gh api repos/astubbs/parallel-consumer/commits/<sha>/status`, or `node bin/inflight.mjs codecov`)
+and the percentage does not walk - it sits in one of two stable bands roughly three points apart and
+jumps between them from one master commit to the next, with no correlation to what that commit
+changed. `440b9bd9` and `cc36b64b` are two masters commits where this pattern drove the check to a
+genuine `failure` state - reproduce with the status command above - on commits that did not
+introduce a coverage regression: the very next master commit lands back in the other band. A gate
+whose own text says a drop on it is real, going red on master against master, is the falsification.
+
+**Not the same sighting as the two related ones already on file, and neither settles it.**
+astubbs/parallel-consumer#431's `ed6b8f461` documents a **verified, narrower** cause - a single base
+report short on files and lines because its upload was partial - which explains a one-off red on a
+PR compared against a specific truncated master commit. The `optimize/unit-gate` branch
+(astubbs/parallel-consumer#105) adds a sighting to this same file finding the PR and its base
+disagree on `unit`'s file set even though the base is a git ancestor of the head, and leaves the
+cause **explicitly unverified** - a candidate (the shared jacoco upload glob) named but not checked
+against an actual file list. Neither is a same-commit-pair, master-vs-master comparison: both are a
+PR against one base at one point in time. A stable two-band oscillation across many consecutive
+master pushes, with no relation to diff content, is a different shape from either, and this note
+records it rather than folding it into theirs.
+
+**The mechanism for this shape is NOT established.** Nothing here or in the two related sightings
+pins down *why* master's own `unit` upload lands in one of two bands rather than drifting
+continuously. The cheapest next check: for one same-band master pair and one cross-band master
+pair, pull each commit's whole report totals (the `curl .../commits/<sha>/ | files, lines, coverage`
+line from the astubbs#431 sighting works for this) and see whether files/lines move in lockstep with
+the percentage jump (points at the same file-set-mismatch class as the two sightings above) or stay
+fixed while the percentage still jumps (points elsewhere - most likely a run-to-run difference in
+which tests actually executed, since `unit` is JVM-forked and per-class). Nobody has run that
+comparison yet.
+
+**What it costs.** `codecov/project/unit` is not in the repository's required status checks, so none
+of this blocks a merge. The cost is upstream of blocking: astubbs/parallel-consumer#444 is a PR
+whose diff added no files under `src/main/java` and still read a real `unit` drop while the
+project-wide total rose, purely because its base happened to sit in the other band from its head -
+the same shape as the PR the `optimize/unit-gate` sighting describes. A gate that flips on
+roughly every other master commit, independent of content, cannot be told apart from a genuine
+unit-coverage regression by looking at the number alone - the noise band is wide enough to hide a
+real drop of the same size. "So a drop there is a real drop" is no longer a safe reading of this
+gate for `unit` until the mechanism above is found and fixed.
+
 ## Delete when
 
 A PR after this has merged shows `codecov/project/unit` and `codecov/project/integration` comparing
