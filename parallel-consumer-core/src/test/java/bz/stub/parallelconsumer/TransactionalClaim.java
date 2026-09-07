@@ -85,7 +85,8 @@ public enum TransactionalClaim {
      */
     OFFSET_AND_RECORDS_ATOMIC(Source.OPTIONS_JAVADOC,
             "A source offset, and it's produced records will be committed as an atomic set.",
-            Status.PROVED, "TransactionalCrashReplayIT#replayCommitsTheResultsAndTheirSourceOffsetTogether asserts "
+            Status.REFUTED, "REFUTED on the revoke path by the same run that refutes C9, and PROVED on the control-loop path by what follows. Leaving this PROVED while C9 reads REFUTED would make the register assert and deny one observation: both claims are about the same commit, and ProducerManagerTest#aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced shows a transaction carrying offset 1s output while committing offset 1 rather than 2 - the atomic set broken, observed rather than inferred. This claims own exemption below does NOT cover it: that exemption is about marker-delivery ordering WITHIN one commit, whereas here the offset is never committed by that transaction at all. Operator ruling, 2026-09-07; docs/inflight/core-revoke-commit-skips-the-work-mailbox-drain.md owns the diagnosis. THE CONTROL-LOOP PROOF STANDS UNCHANGED: "
+            + "TransactionalCrashReplayIT#replayCommitsTheResultsAndTheirSourceOffsetTogether asserts "
             + "both halves at both ends of a crash: before, no payload result visible AND the source offset still "
             + "on the priming record; after, the offset reaching its target is PAIRED with every result being "
             + "visible - sampled together on each poll rather than awaited one after the other, because two "
@@ -324,7 +325,8 @@ public enum TransactionalClaim {
             + "astubbs#257 fixes it and is merged into this branch: that arm now passes, whole class 5/5 in 72s "
             + "where it previously took 178s to fail. The defect IS the negative control - it was found before the "
             + "fix landed, not injected afterwards. Write-up in "
-            + "docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md");
+            + "docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md. "
+            + "SCOPE, 2026-09-07: a route to duplication exists and is NOT yet observed. The revoke-path defect refuting C9 and C4 omits a produced record's source offset, so the next owner redelivers that input and produces its output again - a duplicate in the output topic, which is exactly what this claim denies. Every step of that chain is sound, but no duplicate has been seen: field impact is unmeasured and no broker-level reproduction was attempted. This claim is therefore left PROVED DELIBERATELY rather than by oversight, because its RED and its GREEN were each OBSERVED, and refuting it on a reasoning chain would make it the register's first argued status - breaking the observed-versus-argued distinction that is the whole reason this register is worth more than prose. WHAT WOULD SETTLE IT: a broker-level rebalance reproduction showing a duplicated result in the output topic. Operator ruling, 2026-09-07.");
 
     /**
      * Where a claim is published, and how to find the text that must still contain it.
