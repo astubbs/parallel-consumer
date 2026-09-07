@@ -84,6 +84,46 @@ assert "exit 3 is nothing-in-scope, also not a pass" 0 "1 nothing-in-scope" "$ou
 rm -rf "$d"
 
 echo
+echo "=== --strict makes a CANNOT fail, which is the only thing holding up the folded gates ==="
+
+# THIS IS THE LOAD-BEARING ARM OF THE WHOLE FILE NOW. The dedicated per-gate CI jobs are gone -
+# copyright, the quarantine registry, docs-data - and what replaced them is one `repo: hygiene` step
+# running this sweep with --strict. Those jobs used to install what they needed explicitly, so a
+# hosted image that stopped shipping PyYAML or ShellCheck showed up as a red job. Folded into the
+# sweep, the same image change turns the gate into a CANNOT, and the sweep's DEFAULT exits 0 on a
+# CANNOT as long as something else ran - a green `repo: hygiene` over gates that measured nothing.
+# --strict is the single line of behaviour that stops that, and until this arm existed nothing here
+# invoked it: the exit-2 fixture below asserted only the default's exit 0, so a regression that
+# accepted a CANNOT under --strict would have been caught by no test in this repository.
+d="$(make_fixture cannot 2)"; out="$(run "$d" --strict)"; rc=$?
+assert "red: exit 2 FAILS the sweep under --strict" 1 "FAILED (strict - could not run): check-cannot.sh" "$out" "$rc"
+assert "...and says why a CANNOT on a runner is never a legitimate skip" 1 \
+    "a gate that could not run is a FAILURE here" "$out" "$rc"
+rm -rf "$d"
+
+# CONTROL, same fixture, one term changed. Without --strict the identical CANNOT exits 0, so the arm
+# above is measuring the flag rather than the fixture. (The exit-2 arm further up asserts the same
+# thing from the other side; this repeats it here because a regression arm whose control lives
+# thirty lines away is one edit from becoming a tautology.)
+d="$(make_fixture cannot 2)"; out="$(run "$d")"; rc=$?
+assert "green control: the same CANNOT does not fail the DEFAULT sweep" 0 "COULD NOT RUN: check-cannot.sh" "$out" "$rc"
+rm -rf "$d"
+
+# EXIT 3 IS NOT SWEPT UP BY --strict, and that distinction is the reason --strict is safe to run in
+# CI at all: "I measured and there was nothing in scope" is a result, "I could not measure" is not.
+# Pinned so a future tightening of --strict cannot quietly redefine nothing-in-scope as a failure.
+d="$(make_fixture nothing 3)"; out="$(run "$d" --strict)"; rc=$?
+assert "green: exit 3 stays nothing-in-scope under --strict" 0 "1 nothing-in-scope" "$out" "$rc"
+rm -rf "$d"
+
+# A FAILURE UNDER --strict MUST STILL REPORT AS A FAILURE, not be relabelled as a strict-CANNOT.
+# The two exits are both 1, so only the message distinguishes them, and a reader who cannot tell
+# "the gate said no" from "the gate never ran" has lost the distinction this script exists for.
+d="$(make_fixture failing 1)"; out="$(run "$d" --strict)"; rc=$?
+assert "red: --strict does not relabel a genuine failure" 1 "FAILED: check-failing.sh" "$out" "$rc"
+rm -rf "$d"
+
+echo
 echo "=== the exception list must not rot silently ==="
 
 # Rename one of the excepted scripts and the runner must refuse, rather than quietly sweeping one

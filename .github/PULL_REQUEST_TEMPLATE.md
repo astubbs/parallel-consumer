@@ -16,7 +16,7 @@
 
 ## Checklist
 
-<!-- Keep this checklist and resolve EVERY box: tick it [x], or mark it "N/A - <reason>". The "PR Checklist"
+<!-- Keep this checklist and resolve EVERY box: tick it [x], or mark it "N/A - <reason>". The "repo: hygiene"
      CI check fails a human PR when the checklist is missing entirely, or when a box has no [x] and no N/A.
      Only real bot authors (Dependabot/Renovate etc.) are exempt. -->
 

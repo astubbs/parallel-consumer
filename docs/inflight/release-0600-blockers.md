@@ -36,6 +36,31 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
     record before it lands, or it ships undocumented.
   - Re-read the maturity wording itself. `stable` was withdrawn because it was untrue; the
     replacement, `production-use`, is only as good as the critical-defect gate holding.
+
+  **Rechecked at this commit (2026-09-05), the "before the tag" half only - the "again after the
+  critical fixes land" half stays open below.** `docs/data/module-maturity.yaml` was read and
+  deliberately left unchanged, and **what the pass actually saw is worth writing down, because the
+  file is only half conditional.** Each shipped module carries a bare `maturity: production-use`
+  field value with no condition attached to it, and *separately* a `support_posture` line reading
+  "Maintained for production use when the release validation passes." Only the second is qualified;
+  the first is a naked value that a renderer or a reader can lift on its own. Whether that unqualified
+  value is a claim the still-open confluentinc#857 family falsifies, or a category label the
+  `support_posture` line exists to condition, is a **release call for the maintainer** - so this pass
+  established the state and changed no value. The list is
+  `grep -n 'maturity:\|support_posture' docs/data/module-maturity.yaml`; the second recheck should
+  start from that rather than from "already conditional", which is what the first pass wrote and is
+  true of only one of the two. `docs/data/roadmap.yaml`'s
+  `known-defects-cleared` stage detail did carry a stale claim - it said astubbs#29 "remains
+  unmerged", and astubbs#29 merged 2026-09-02, fixing one confluentinc#857 mechanism (the
+  poll/control revoke-path deadlock). Corrected in place, without weakening what was already true:
+  the family is **not** closed by that merge. astubbs#44 (the transactional revoke wait) is a
+  separate defect the merged fix cannot reach, a third mechanism (a closing instance polling too
+  little to leave its group cleanly) has an open fix attempt in astubbs#444, and
+  `docs/inflight/bug-857-family.md` records unattributed stall sightings reproducing on trees that
+  already carry astubbs#29's fix. So `confluentinc#857` is still the open critical defect blocking
+  this gate, and the "amend the claim rather than the standard" instruction above still applies.
+  **Still open: recheck again after astubbs#44, astubbs#444 and the family ledger's remaining
+  sightings resolve** - this pass only established today's state, not the state at cut.
 <!-- post-merge: checked-begin -->
 - **The rest of astubbs#197's triage list**, minus the ones that have since been picked up (an
   `OffsetEncoding` magic-byte hazard in astubbs#217, the "Max loading factor steps reached" WARN in

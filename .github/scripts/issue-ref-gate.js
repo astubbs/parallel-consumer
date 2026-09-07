@@ -296,7 +296,7 @@ function prBodyEntry(body) {
 
 /**
  * The single copy of what an author is told when the gate fires. Both callers render this - the CI
- * job in pr-checklist.yml and the local bin/check-issue-refs.sh - so the two cannot tell different
+ * gate in repo-hygiene.yml and the local bin/check-issue-refs.sh - so the two cannot tell different
  * stories. They did exactly that once: hand-written copies disagreed in *both* directions within
  * hours of the second one being created, each carrying a correction the other lacked. The script's
  * own header already says "NO SECOND COPY OF THE RULE" about the matching logic; the message an
