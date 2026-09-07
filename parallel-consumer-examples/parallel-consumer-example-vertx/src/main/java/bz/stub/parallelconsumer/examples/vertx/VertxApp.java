@@ -9,7 +9,6 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ProducerFactory;
 import bz.stub.parallelconsumer.vertx.JStreamVertxParallelStreamProcessor;
 import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
-import bz.stub.parallelconsumer.vertx.JStreamVertxParallelStreamProcessor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
@@ -19,7 +18,6 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import pl.tlinkowski.unij.api.UniMaps;
 
-import java.util.Map;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;

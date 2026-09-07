@@ -17,7 +17,6 @@ import org.apache.kafka.clients.producer.Producer;
 import pl.tlinkowski.unij.api.UniMaps;
 import reactor.core.publisher.Mono;
 
-import java.util.Map;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
