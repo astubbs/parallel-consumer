@@ -17,6 +17,7 @@ import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.offsets.NoEncodingPossibleException;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import bz.stub.parallelconsumer.offsets.OffsetRiderEnvelope;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Tag;
@@ -194,6 +195,14 @@ public class PartitionState<K, V> {
     private Gauge ephochGauge;
     private DistributionSummary ratioPayloadUsedDistributionSummary;
     private DistributionSummary ratioMetadataSpaceUsedDistributionSummary;
+    /**
+     * The rider's four series (KTD14/R20). The rider is opaque to PC, so PC cannot tell an embedder whether its
+     * feature works - only whether the bytes it was handed reached the wire. These say when they did not.
+     */
+    private DistributionSummary riderSizeDistributionSummary;
+    private Counter riderDroppedCounter;
+    private Counter payloadStrippedCounter;
+    private Counter riderSupplierFailedCounter;
     private final PCMetrics pcMetrics;
     private final OffsetMapCodecManager<K, V> om;
 
@@ -595,6 +604,12 @@ public class PartitionState<K, V> {
             if (caughtUpRider.getState() == OffsetRiderEnvelope.RiderState.NONE) {
                 return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
             }
+            // KTD14: neither ratio takes a sample here, deliberately. There is no hole encoding to report a
+            // density for, and the offset range is zero or negative on this path - Micrometer records -0.0 and
+            // 0.0 as samples, and a positive numerator over a zero range is Infinity, so a sample would drag
+            // both distributions off their meaning on every commit of a healthy consumer. The rider itself is
+            // still measured: a caught-up commit is the one a restart reads back.
+            recordRiderSizeIfWritten(caughtUpRider);
             return ParallelConsumer.Tuple.pairOf(of(om.assembleMetadataPayload(NO_INNER_BYTES, caughtUpRider)),
                     offsetOfNextExpectedMessage);
         }
@@ -610,14 +625,14 @@ public class PartitionState<K, V> {
             // runs once on the winner rather than once per rung.
             var rider = fitRiderToBudget(offered, innerBytes.length);
             String offsetMapPayload = om.assembleMetadataPayload(innerBytes, rider);
-            ratioPayloadUsedDistributionSummary.record(offsetMapPayload.length() / (double) offsetRange);
-            ratioMetadataSpaceUsedDistributionSummary.record(offsetMapPayload.length() / (double) OffsetMapCodecManager.DefaultMaxMetadataSize);
             // KTD4: two lengths, both in encoded characters. With no envelope the assembled string IS the inner
             // encoding's string, so its own length is today's number byte for byte; with one, the inner length is
             // derived from the byte count by Base64's closed form rather than by a second encode.
             int innerEncodingCharacterLength = rider.getState() == OffsetRiderEnvelope.RiderState.NONE
                     ? offsetMapPayload.length()
                     : RiderBudgetRung.base64Characters(innerBytes.length);
+            recordEncodingRatios(innerEncodingCharacterLength, offsetMapPayload.length(), offsetRange);
+            recordRiderSizeIfWritten(rider);
             boolean mustStrip = updateBlockFromEncodingResult(innerEncodingCharacterLength, offsetMapPayload.length());
             if (mustStrip) {
                 return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
@@ -626,8 +641,55 @@ public class PartitionState<K, V> {
             }
         } catch (NoEncodingPossibleException e) {
             setAllowedMoreRecords(false);
+            // KTD14: the stripped-payload counter only. This escapes the inner-bytes step, which under KTD9 runs
+            // BEFORE the supplier is called, so on this path there is no rider to have discarded and nothing to
+            // count as dropped - the ladder's own strip rung is where both are counted.
+            payloadStrippedCounter.increment();
             log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance.", e);
             return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
+        }
+    }
+
+    /**
+     * The two ratios, which measure <b>different lengths</b> and answer different questions (KTD14).
+     * <p>
+     * {@link PCMetricsDef#PAYLOAD_RATIO_USED} is <em>density</em>: how many encoded characters the hole map
+     * spends per offset it describes, so it records the hole encoding's own length and is unmoved by a rider.
+     * {@link PCMetricsDef#METADATA_SPACE_USED} is <em>headroom</em>: how close this commit came to the broker's
+     * metadata limit, so it records the string that actually goes to the broker, rider included - which is what
+     * keeps its description true now that a payload can carry more than the offset map.
+     * <p>
+     * <b>Neither divisor may be zero or negative.</b> Micrometer's own sign check drops {@code NaN} but records
+     * {@code -0.0} and {@code 0.0} as samples, and a positive numerator over a zero divisor is {@code Infinity},
+     * which poisons a distribution's total for the life of the process. The caught-up path never reaches here at
+     * all (its range is zero or negative by definition); the guard is for the remaining shapes - a partition
+     * whose highest succeeded offset has not yet passed the offset being committed, and a metadata limit
+     * configured to zero.
+     *
+     * @param innerEncodingCharacterLength the hole encoding's own length, in characters
+     * @param assembledPayloadLength       the length of the string that will actually be committed
+     * @param offsetRange                  how many offsets the hole map describes
+     */
+    private void recordEncodingRatios(int innerEncodingCharacterLength, int assembledPayloadLength, long offsetRange) {
+        if (offsetRange > 0) {
+            ratioPayloadUsedDistributionSummary.record(innerEncodingCharacterLength / (double) offsetRange);
+        }
+        if (DefaultMaxMetadataSize > 0) {
+            ratioMetadataSpaceUsedDistributionSummary.record(assembledPayloadLength / (double) DefaultMaxMetadataSize);
+        }
+    }
+
+    /**
+     * The size of the rider this commit is about to write, in the bytes the embedder handed over rather than the
+     * characters they cost - bytes are the unit {@link RiderContext#getMaxRiderBytes()} gives the supplier its
+     * budget in, so a distribution in any other unit could not be read against it.
+     * <p>
+     * Only a {@link OffsetRiderEnvelope.RiderState#PRESENT} rider is a sample: the drop marker carries no bytes,
+     * and a rider shed anywhere above this never reached the wire, which is what the dropped counter is for.
+     */
+    private void recordRiderSizeIfWritten(OffsetRiderEnvelope.Rider rider) {
+        if (rider.getState() == OffsetRiderEnvelope.RiderState.PRESENT) {
+            riderSizeDistributionSummary.record(rider.getByteLength());
         }
     }
 
@@ -688,6 +750,10 @@ public class PartitionState<K, V> {
      */
     private boolean stripPayloadForSize(int assembledPayloadLength) {
         setAllowedMoreRecords(false);
+        // the only strip site on the ladder path, so this is the whole of what the counter means: a commit that
+        // wrote no payload at all, which is the half of
+        // docs/inflight/bug-no-metric-for-discarded-offset-metadata.md that a write-side counter can close
+        payloadStrippedCounter.increment();
         log.warn("Offset map data too large (size: {}) to fit in metadata payload hard limit of {} - cannot " +
                         "include in commit. Warning: messages might be replayed on rebalance. " +
                         "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {} and confluentinc#47.",
@@ -742,6 +808,10 @@ public class PartitionState<K, V> {
             theirs = supplier.apply(new RiderContext(tp, offsetToCommit, allowance));
         } catch (Throwable theirSupplierThrew) {
             warnBrokenRiderSupplier(theirSupplierThrew);
+            // KTD8 makes this silent by design - the commit proceeds - so the counter is the ONLY continuous
+            // signal that a rider-based feature has stopped working. The warning beside it is rate limited and
+            // may be half a minute away.
+            riderSupplierFailedCounter.increment();
             return OffsetRiderEnvelope.Rider.none();
         }
 
@@ -751,6 +821,10 @@ public class PartitionState<K, V> {
 
         if (theirs.length > allowance) {
             warnOversizedRider(theirs.length, allowance);
+            // a dropped rider like any other from an operator's point of view - the embedder's bytes did not
+            // reach the wire. Counted here rather than below the ladder because a rider refused at the write side
+            // never descends it; both spellings of the same loss belong in one series.
+            riderDroppedCounter.increment();
             // KTD4: a caught-up partition whose rider will not fit writes no metadata at all, rather than an
             // envelope whose only content is the marker saying it is empty. With a hole map to sit beside, the
             // marker is worth its three bytes - it is how a reader tells a rider that was shed from one that was
@@ -843,7 +917,7 @@ public class PartitionState<K, V> {
                         ? shedRiderForSize(riderByteLength, innerEncodingByteLength)
                         : offered; // already the marker, and the guard has already warned about it
             default:
-                return shedEnvelopeForSize(innerEncodingByteLength);
+                return shedEnvelopeForSize(state, innerEncodingByteLength);
         }
     }
 
@@ -852,6 +926,9 @@ public class PartitionState<K, V> {
      * zero-length marker instead. The offset map is untouched - that is R9.
      */
     private OffsetRiderEnvelope.Rider shedRiderForSize(int riderByteLength, int innerEncodingByteLength) {
+        // one increment per commit: the ladder chooses a rung by predicted length and jumps straight to it, so a
+        // commit reaches this OR shedEnvelopeForSize below, never both
+        riderDroppedCounter.increment();
         var limiter = module.riderBudgetLadderWarnLimiter();
         limiter.performIfNotLimited(() ->
                 log.warn("Dropping the {} bytes your {} returned for partition {}: with the {}-byte offset map they " +
@@ -872,8 +949,19 @@ public class PartitionState<K, V> {
      * The ladder's second descent: the marker itself does not fit, so the envelope goes and the payload becomes
      * the one this build writes with no rider configured - which is exactly how it reads back (R6). The alternative
      * would be dropping an offset map that fits, which R9 forbids.
+     *
+     * @param offeredState             what the rider slot held before this rung - {@code PRESENT} means an
+     *                                 embedder's bytes are being lost here and this commit is the first place
+     *                                 that has been counted; {@code DROPPED} means the write-time guard already
+     *                                 counted the same loss, and counting it again would report two riders lost
+     *                                 on a commit that only ever had one
+     * @param innerEncodingByteLength  bytes of encoded offset map that keeps the payload to itself
      */
-    private OffsetRiderEnvelope.Rider shedEnvelopeForSize(int innerEncodingByteLength) {
+    private OffsetRiderEnvelope.Rider shedEnvelopeForSize(OffsetRiderEnvelope.RiderState offeredState,
+                                                          int innerEncodingByteLength) {
+        if (offeredState == OffsetRiderEnvelope.RiderState.PRESENT) {
+            riderDroppedCounter.increment();
+        }
         var limiter = module.riderBudgetLadderWarnLimiter();
         limiter.performIfNotLimited(() ->
                 log.warn("Dropping the rider envelope entirely for partition {}: the {}-byte offset map is within " +
@@ -1101,6 +1189,14 @@ public class PartitionState<K, V> {
                 this, PartitionState::getPartitionsAssignmentEpoch, partitionStateTags);
         ratioMetadataSpaceUsedDistributionSummary = pcMetrics.getDistributionSummaryFromMetricDef(PCMetricsDef.METADATA_SPACE_USED, partitionStateTags);
         ratioPayloadUsedDistributionSummary = pcMetrics.getDistributionSummaryFromMetricDef(PCMetricsDef.PAYLOAD_RATIO_USED, partitionStateTags);
+        riderSizeDistributionSummary = pcMetrics.getDistributionSummaryFromMetricDef(
+                PCMetricsDef.OFFSETS_RIDER_SIZE, partitionStateTags);
+        riderDroppedCounter = pcMetrics.getCounterFromMetricDef(
+                PCMetricsDef.OFFSETS_RIDER_DROPPED, partitionStateTags);
+        payloadStrippedCounter = pcMetrics.getCounterFromMetricDef(
+                PCMetricsDef.OFFSETS_PAYLOAD_STRIPPED, partitionStateTags);
+        riderSupplierFailedCounter = pcMetrics.getCounterFromMetricDef(
+                PCMetricsDef.OFFSETS_RIDER_SUPPLIER_FAILED, partitionStateTags);
     }
 
     private void deregisterMetrics() {
@@ -1112,5 +1208,11 @@ public class PartitionState<K, V> {
         pcMetrics.removeMeter(ephochGauge);
         pcMetrics.removeMeter(ratioMetadataSpaceUsedDistributionSummary);
         pcMetrics.removeMeter(ratioPayloadUsedDistributionSummary);
+        // the same guarded path as everything above it: removal runs inside onPartitionsRevoked on the
+        // broker-poll thread, where a throw from the user's registry would stop every commit
+        pcMetrics.removeMeter(riderSizeDistributionSummary);
+        pcMetrics.removeMeter(riderDroppedCounter);
+        pcMetrics.removeMeter(payloadStrippedCounter);
+        pcMetrics.removeMeter(riderSupplierFailedCounter);
     }
 }
