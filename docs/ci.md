@@ -72,14 +72,15 @@ document. This section is the detail behind it.
   catch-all defined by subtraction; see
   ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). It also carries two
   batched jobs: **`static: analysis`** - Infer then SpotBugs, the cheaper signal first - and
-  **`scan: repo`** - the two duplication scanners, dependency vulnerability review, the whole-tree
-  CVE scan, and PR-scoped mutation testing (PIT) dead last, the two builds after the three
-  no-build tools. In both, each step keeps the name of the job it used
+  **`scan: repo`** - the two duplication scanners, dependency vulnerability review and the
+  whole-tree CVE scan, the build after the three no-build tools. In both, each step keeps the name
+  of the job it used
   to be (`static: infer`, `static: spotbugs`; `dups: clones`, `dups: similarity`,
-  `deps: vulnerabilities`, `deps: whole-tree CVE scan`, `Mutation Tests (PIT, PR-scoped)`), so a red
-  step still reads the way the red check did. The PIT steps are the only ones in either job carrying
-  `continue-on-error` - the lane was an advisory *job* before the fold, and `scan: repo` is required,
-  so the flag is what stops the fold promoting it to a gate. Both batched jobs guard their `if:`
+  `deps: vulnerabilities`, `deps: whole-tree CVE scan`), so a red
+  step still reads the way the red check did. **`Mutation Tests (PIT, PR-scoped)` was folded into
+  `scan: repo` too and had to be pulled back out** - see
+  ["A required check must not wait on a non-gating lane"](#a-required-check-must-not-wait-on-a-non-gating-lane).
+  It is a job again, `continue-on-error` on its two steps rather than on the job. Both batched jobs guard their `if:`
   with `!cancelled()` rather than leaning on the implicit `success()`, because each one `needs:
   prepare-deps` and a **required check that is skipped waits forever** instead of going red - so a
   transient cache failure would otherwise wedge every PR. The batched steps still run, fall back to
@@ -318,7 +319,7 @@ every other PR) and not after (nothing merges). The live instance of this is
 
 | Check | Why not |
 |---|---|
-| `Mutation Tests (PIT, PR-scoped)` | **There is no such check any more, and requiring it would have been vacuous anyway.** The lane is now the last two steps of `scan: repo`, each carrying its own `continue-on-error: true` - so a PIT verdict still cannot fail a check, exactly as when the flag sat on its own job. Requiring the old context is now impossible (nothing produces it) rather than merely pointless. The property worth gating is that the lane could not measure anything, which `bin/ci-mutation-test.sh` signals through its own exit codes rather than by finding survivors. Gating that still means removing `continue-on-error` first, which is a code change, not a ruleset edit - and it would now make `scan: repo` red on a mutation verdict, which is the decision to argue |
+| `Mutation Tests (PIT, PR-scoped)` | **Requiring it would be vacuous, and there is now a second, independent reason it must stay out.** *Vacuous:* both steps of the job carry `continue-on-error: true`, so a PIT verdict cannot fail the check whatever the ruleset says. The property worth gating is that the lane could not measure anything, which `bin/ci-mutation-test.sh` signals through its own exit codes rather than by finding survivors; gating that means removing `continue-on-error` first, which is a code change, not a ruleset edit. *Runtime:* PIT is bimodal - about 11 seconds when nothing in scope changed, up to ~20 minutes when it mutates - and a required check blocks the merge until the job it belongs to finishes. A lane whose outcome is deliberately advisory must not gate with its runtime either, which is why it is its own job again rather than steps of `scan: repo` (see ["A required check must not wait on a non-gating lane"](#a-required-check-must-not-wait-on-a-non-gating-lane)) |
 | `Performance (optional)` | The self-hosted lane is dispatch-only, so this context is never produced on a PR. Requiring it would block every PR permanently |
 | `compat: kafka 4.x (experimental)` | Disabled with `if: false` |
 | `full build (master)` | Push-only; never produced on a PR |
@@ -1158,9 +1159,29 @@ never run on our own hardware.
   on-demand benchmark nobody dispatched, so it was not worth a file. Read it at
   `git show 5ae0cbfe4:.github/workflows/pr-highcpu-fast-feedback.yml`.
 - `mutation-full-sweep.yml` - **nightly plus dispatch**: the whole-project PIT sweep
-  (`bin/ci-mutation-test.sh -Dverbose=true -Dthreads=N`). The PR-scoped mutation steps in
-  `maven.yml`'s `scan: repo` only cover classes changed against the base; this is its exhaustive
-  counterpart.
+  (`bin/ci-mutation-test.sh -Dverbose=true -Dthreads=N`). `maven.yml`'s
+  `Mutation Tests (PIT, PR-scoped)` job only covers classes changed against the base; this is its
+  exhaustive counterpart.
+
+### A required check must not wait on a non-gating lane
+
+`Mutation Tests (PIT, PR-scoped)` is its own job. It spent
+astubbs/parallel-consumer#457 as the last two steps of `scan: repo` and came back out in
+astubbs/parallel-consumer#463, because a **job emits one check run and that check does not report
+until the whole job finishes**. Folding an advisory lane into a required check therefore hands it a
+gate it was never supposed to hold - not over the merge *verdict*, which `continue-on-error` still
+protects, but over the *time* the verdict takes to arrive.
+
+PIT's runtime is bimodal: about **11 seconds** when no in-scope class changed, and up to **~20
+minutes** when it actually mutates. There is nothing in between. On job `101622402881` every other
+step of `scan: repo` - both duplication scanners, dependency review and the whole-tree CVE audit -
+was finished 3m29s into the job, and PIT alone held the required context for the remaining ~17
+minutes.
+
+The rule the fold broke, and the one to apply next time: **batch fast, bounded, gating work.** A
+lane that is slow, bimodal, or deliberately non-gating is the one shape that must not go into a
+required job. The other folds in that run - the two static analysers, the three no-build scanners,
+the CVE audit - are all fast, bounded and gating, and remain correct.
 
 ### A green mutation tick usually means "measured nothing" - read the exit code
 
@@ -1169,8 +1190,8 @@ never run on our own hardware.
 producing no statistics / zero mutants), **3** nothing in scope. Measured over the last 40
 `maven.yml` PR runs: 40 passes, zero mutants scored - the lane is correctly narrow, not broken. Only
 a **0** is evidence about test quality. `bin/test-ci-mutation-test.sh` guards the contract and runs
-in the lane ahead of it - and, since the lane became two steps of `scan: repo`, non-advisory inside
-`repo: hygiene`'s `bin/check-all.sh --with-tests` sweep as well. The scope, the exclusions and the ranked widening list are in
+in the lane ahead of it - advisory there, and non-advisory inside `repo: hygiene`'s
+`bin/check-all.sh --with-tests` sweep as well. The scope, the exclusions and the ranked widening list are in
 [`docs/inflight/ci-mutation-testing.md`](inflight/ci-mutation-testing.md); whether a skip should
 render grey rather than green is an open decision in
 [`docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md`](inflight/ci-mutation-lane-skip-reads-as-a-pass.md).
