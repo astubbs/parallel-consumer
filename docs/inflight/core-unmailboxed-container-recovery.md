@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED partly true (bug/blind-spot, owner to decide): the blind spot is still real - nothing in the tree distinguishes "recovered by X" from "never came back", so whether the astubbs#267 guards are a latency or a stall fix is still unestablished. What has moved is the "Where it surfaces concretely" half: option 2 shipped. `AbstractParallelEoSStreamProcessor#failFatallyOnUnmailboxableRecord` exists and is called from core, `ExternalEngine` and the vert.x `send.onFailure` handler, so an un-mailboxed record now terminates PC rather than stalling silently; the log line the note says to grep, "Failed to return {} to the mailbox", no longer exists anywhere in the tree, and options 1 and 3 are no longer live choices. Suggest shrinking to the recovery-mechanism question plus the one test it names -->
 
 A `WorkContainer` reaches the control thread by being put on the mailbox. Every failure path in core
 and in the engines ends with `addToMailbox`, and each is now wrapped so a throw earlier in the
