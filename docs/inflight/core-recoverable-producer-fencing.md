@@ -10,8 +10,13 @@
 - astubbs/parallel-consumer#426 - `producerConfig`: PC builds its producer from configuration with the
   default constructor, the caller's `transactional.id` included. The only rung recovery needs, because
   re-initialising a replacement under the same id is what fences the producer it replaces.
-- astubbs/parallel-consumer#410 - recovery: detection, the aborted-transaction ledger and replay, the
-  replacement with backoff, observability, the broker IT. Stacked on astubbs#426.
+- astubbs/parallel-consumer#472 - what the broker reports and how PC builds another producer: the
+  recoverable conditions and their unwrapping, the replacement source, the recovery policy, the metric
+  definitions. Nothing calls them yet. Stacked on master (astubbs#426 has landed).
+- astubbs/parallel-consumer#474 - the completed-but-uncommitted ledger, the restore path, the processor's
+  drain-then-replay step. Stacked on astubbs#472.
+- astubbs/parallel-consumer#410 - recovery itself: detection on both paths, the replacement with backoff,
+  worker deferral, observability, the broker IT. Stacked on astubbs#474.
 - astubbs/parallel-consumer#420 - the rest of producer ownership: a derived prefix-free
   `transactional.id`, a `ProducerFactory` with an enforced contract, configuration redaction, the
   validation that refuses an instance where PC must build the producer, migrating the examples. Stacked on

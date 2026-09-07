@@ -13,6 +13,7 @@ import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Tag;
+import com.facebook.infer.annotation.ThreadConfined;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;

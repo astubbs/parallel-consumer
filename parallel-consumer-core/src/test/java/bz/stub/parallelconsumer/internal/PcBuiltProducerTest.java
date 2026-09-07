@@ -195,6 +195,58 @@ class PcBuiltProducerTest {
     }
 
     /**
+     * A source of further producers exists only where PC built the first one: the instance path carries no
+     * configuration to build from. Each build is a fresh wrapper from the same map, the caller's transactional id
+     * with it, so a replacement can be initialised under the id that fences the producer it replaces.
+     */
+    @Test
+    void theConfigurationPathOffersAReplacementSourceThatBuildsAFreshProducerEachTimeUnderTheCallersId() {
+        var built = new java.util.ArrayList<MockProducer<String, String>>();
+        var module = moduleBuildingWith(optionsWith(UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092",
+                        ProducerConfig.TRANSACTIONAL_ID_CONFIG, "callers-id"), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER),
+                config -> {
+                    var producer = new MockProducer<String, String>(true, new StringSerializer(), new StringSerializer());
+                    built.add(producer);
+                    return producer;
+                });
+        var initial = module.producerWrap();
+
+        var source = module.replacementProducerWrap();
+
+        assertThat(source).isPresent();
+        assertThat(source.get().getTransactionalId()).isEqualTo("callers-id");
+        var first = source.get().build();
+        var second = source.get().build();
+        assertWithMessage("three producers built: the initial one and one per build").that(built).hasSize(3);
+        assertThat(first).isNotSameInstanceAs(initial);
+        assertThat(second).isNotSameInstanceAs(first);
+        assertThat(first.isConfiguredForTransactions()).isTrue();
+    }
+
+    @Test
+    void theReplacementSourceCarriesNoIdInAConsumerCommitMode() {
+        var module = moduleBuildingWith(optionsWith(UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092"), CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS),
+                config -> new MockProducer<>(false, new StringSerializer(), new StringSerializer()));
+
+        var source = module.replacementProducerWrap();
+
+        assertThat(source).isPresent();
+        assertThat(source.get().getTransactionalId()).isNull();
+    }
+
+    @Test
+    void theInstancePathOffersNoReplacementSource() {
+        @SuppressWarnings("unchecked")
+        Producer<String, String> instance = mock(Producer.class);
+        var module = new PCModule<>(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerInGroup())
+                .producer(instance)
+                .build());
+
+        assertThat(module.replacementProducerWrap()).isEmpty();
+    }
+
+    /**
      * The manager's constructor initialises transactions; when that throws at start-up, the producer PC built for it
      * belongs to nobody - the processor is never returned to the caller - so it is closed rather than leaked one per
      * start-up attempt.
