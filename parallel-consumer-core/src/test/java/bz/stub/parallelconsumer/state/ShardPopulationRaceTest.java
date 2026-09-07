@@ -5,11 +5,13 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -196,7 +198,7 @@ class ShardPopulationRaceTest extends ShardSeamTestBase {
                     var thread = new Thread(() -> sm.removeShardIfEmpty(ShardKey.ofKey(this)), "shard-collector");
                     collector.set(thread);
                     thread.start();
-                    joinQuietly(thread, 500);
+                    ThreadUtils.joinQuietly(thread, Duration.ofMillis(500));
                 }
                 return super.offset();
             }
@@ -217,11 +219,4 @@ class ShardPopulationRaceTest extends ShardSeamTestBase {
                 .that(sm.getWorkIfAvailable(10)).hasSize(1);
     }
 
-    private static void joinQuietly(Thread thread, long millis) {
-        try {
-            thread.join(millis);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
 }

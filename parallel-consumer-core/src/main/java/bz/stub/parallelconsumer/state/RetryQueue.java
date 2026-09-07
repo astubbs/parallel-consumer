@@ -91,6 +91,7 @@ public class RetryQueue {
     /**
      * Clear the set
      */
+    @ControllerThreadOnly
     public void clear() {
         lock.writeLock().lock();
         try {
@@ -119,6 +120,7 @@ public class RetryQueue {
      * @param workContainer to add
      * @return true if the element was not already present
      */
+    @ControllerThreadOnly
     public boolean add(final WorkContainer<?, ?> workContainer) {
         lock.writeLock().lock();
         try {
@@ -138,12 +140,18 @@ public class RetryQueue {
     }
 
     /**
-     * Remove a work container from the set. Method follows Set.remove() behaviour, returning true if the element was
-     * present.
+     * Remove a work container from the set, WAITING for the write lock. Method follows Set.remove() behaviour,
+     * returning true if the element was present.
+     * <p>
+     * {@link ControllerThreadOnly} states the contract and names its check: the broker-poll thread must not reach
+     * this method, because a rebalance callback that waits here waits inside {@code poll()}. There is no declining
+     * alternative on this class yet - the sweeps that need one are the subject of
+     * astubbs/parallel-consumer#431, which adds a {@code tryLock()}-based path and routes those callers onto it.
      *
-     * @param workContainer
-     * @return
+     * @param workContainer the container to remove
+     * @return true if the element was present
      */
+    @ControllerThreadOnly
     public boolean remove(final WorkContainer<?, ?> workContainer) {
         lock.writeLock().lock();
         try {
@@ -165,6 +173,7 @@ public class RetryQueue {
      * @param toRemove collection of work containers to remove
      * @return true if the set was modified
      */
+    @ControllerThreadOnly
     public <K, V> boolean removeAll(List<WorkContainer<K, V>> toRemove) {
         // GUARD ON THE CALLER'S OWN LIST, never on `unique`. The original fast path read
         // `unique.isEmpty()` with no lock held while writers mutate it under the write lock, so the
