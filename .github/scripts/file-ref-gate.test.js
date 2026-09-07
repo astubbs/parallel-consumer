@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Antony Stubbs and contributors
 
-// Unit tests for file-ref-gate.js. Run by the PR Checklist job before the gate itself, so a broken
+// Unit tests for file-ref-gate.js. Run by the `repo: hygiene` job before the gate itself, so a broken
 // rule fails loudly rather than silently passing - or failing - every PR.
 //
 // The cases that matter most here are the NEGATIVE ones. This gate's failure mode is not missing a

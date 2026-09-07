@@ -84,7 +84,7 @@ print(json.dumps({
             "checks that have already cost it once, both recorded in "
             "docs/inflight/ci-duplication-report-can-fail-to-post.md:\n"
             "\n"
-            "1. A RED CHECK CAN HAVE NO COMMENT. `dups: clones` is a required check, and it has "
+            "1. A RED CHECK CAN HAVE NO COMMENT. `dups: clones` is a step of the required `scan: repo` check, and it has "
             "failed on this repo with its finding posted nowhere - GitHub rejected the inline "
             "annotation and nothing fell back to a summary comment. If a check is red and you "
             "cannot find a comment explaining it, the finding is in the job log: "

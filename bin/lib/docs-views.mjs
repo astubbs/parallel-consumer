@@ -14,7 +14,7 @@
 
 import { INFLIGHT_IMPACT_ORDER } from './inflight-tags.mjs'
 import { largestFirst } from './notes.mjs'
-import { addedSizeText, formatWarnings, plural } from './views.mjs'
+import { addedSizeText, formatWarnings, plural, refsText, scopeLine } from './views.mjs'
 
 // --- The divergence header. ---------------------------------------------------------------------
 //
@@ -237,8 +237,8 @@ export function formatDocsShow(d, { ref, warnings = [], archivalCarriers = [], b
 const TOOL = 'bin/inflight.mjs'
 const offText = (n) => (n > 0 ? `, ${n} only off the baseline` : '')
 /** The ref set and the baseline, the way every scope statement in this family spells them. */
-const refsText = (shape) => `${shape.refs.total} refs (${shape.refs.live} live, ${shape.refs.archival} archival); baseline ${shape.baseline}.`
-const scopeLine = (shape) => `searched ${refsText(shape)} Read from the refs, never the working tree.`
+// `refsText` and `scopeLine` moved to bin/lib/views.mjs: `rank` renders the same sentence, and the
+// tool's core disclaimer is the last thing that should exist in two drifting copies.
 
 /** One area's heading and its non-empty groups, each with the command that lists it. */
 const areaBlock = (area, { allGroups = false } = {}) => {
