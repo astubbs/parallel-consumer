@@ -567,13 +567,14 @@ public final class Oracle {
 
     private static Properties configuration(Path stateDirectory) {
         Properties configuration = new Properties();
-        Object ignoredApplicationId =
-                configuration.put(StreamsConfig.APPLICATION_ID_CONFIG, APPLICATION_ID);
+        // Each put's returned previous value is discarded, and that is not a decision to record per line: the
+        // Properties is fresh and every key below is written once, so a previous value cannot exist.
+        configuration.put(StreamsConfig.APPLICATION_ID_CONFIG, APPLICATION_ID);
         // No broker is ever contacted - TopologyTestDriver requires the key to be set, not to resolve.
-        Object ignoredBootstrap = configuration.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        Object ignoredStateDir = configuration.put(StreamsConfig.STATE_DIR_CONFIG, stateDirectory.toString());
+        configuration.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        configuration.put(StreamsConfig.STATE_DIR_CONFIG, stateDirectory.toString());
         // See the class javadoc: with the cache on, what reaches a sink depends on when the driver commits.
-        Object ignoredCache = configuration.put(StreamsConfig.STATESTORE_CACHE_MAX_BYTES_CONFIG, "0");
+        configuration.put(StreamsConfig.STATESTORE_CACHE_MAX_BYTES_CONFIG, "0");
         return configuration;
     }
 

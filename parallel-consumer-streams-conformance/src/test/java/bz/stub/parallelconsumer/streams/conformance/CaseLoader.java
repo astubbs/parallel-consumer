@@ -218,15 +218,7 @@ public final class CaseLoader {
             }
         }
 
-        ConformanceCase.EmitRule emit = null;
-        if (document.emit != null) {
-            try {
-                emit = ConformanceCase.EmitRule.fromSpelling(document.emit);
-            } catch (IllegalArgumentException e) {
-                refuse(refusals, name, file, "declares emit rule " + document.emit + ", which is not one of "
-                        + spellingsOf(ConformanceCase.EmitRule.values()));
-            }
-        }
+        ConformanceCase.EmitRule emit = resolveEmitRule(document, name, file, refusals);
 
         if (document.callLog != null) {
             refuse(refusals, name, file, "declares a call-log, which is reserved and unset on this rung; the driver "
@@ -290,6 +282,27 @@ public final class CaseLoader {
                 .build();
     }
 
+    /**
+     * @return the emit rule the case names, or {@code null} when it names none - absent is the whole vocabulary of
+     *         "no pinned rule", which is why the field is nullable rather than carrying a DEFAULT member
+     */
+    @Nullable
+    private static ConformanceCase.EmitRule resolveEmitRule(CaseDocument document,
+                                                            String name,
+                                                            Path file,
+                                                            List<String> refusals) {
+        if (document.emit == null) {
+            return null;
+        }
+        try {
+            return ConformanceCase.EmitRule.fromSpelling(document.emit);
+        } catch (IllegalArgumentException e) {
+            refuse(refusals, name, file, "declares emit rule " + document.emit + ", which is not one of "
+                    + spellingsOf(ConformanceCase.EmitRule.values()));
+            return null;
+        }
+    }
+
     // ------------------------------------------------------------------------------------------ topology
 
     private static List<ConformanceCase.Operation> resolveTopology(CaseDocument document,
@@ -345,28 +358,28 @@ public final class CaseLoader {
         String where = "topology entry " + (position + 1) + (entry.id == null ? "" : " (" + entry.id + ")");
 
         // The ten operation fields mirror the wire's BuilderCall oneof, so exactly one of them is set.
-        Map<ConformanceCase.OperationKind, Object> set = new LinkedHashMap<>();
-        putIfSet(set, ConformanceCase.OperationKind.SOURCE, entry.source);
-        putIfSet(set, ConformanceCase.OperationKind.MAP_VALUES, entry.mapValues);
-        putIfSet(set, ConformanceCase.OperationKind.GROUP_BY_KEY, entry.groupByKey);
-        putIfSet(set, ConformanceCase.OperationKind.COUNT, entry.count);
-        putIfSet(set, ConformanceCase.OperationKind.REDUCE, entry.reduce);
-        putIfSet(set, ConformanceCase.OperationKind.JOIN, entry.join);
-        putIfSet(set, ConformanceCase.OperationKind.WINDOWED_BY, entry.windowedBy);
-        putIfSet(set, ConformanceCase.OperationKind.AGGREGATE, entry.aggregate);
-        putIfSet(set, ConformanceCase.OperationKind.TO_STREAM, entry.toStream);
-        putIfSet(set, ConformanceCase.OperationKind.SINK, entry.sink);
+        Map<ConformanceCase.OperationKind, Object> declared = new LinkedHashMap<>();
+        putIfSet(declared, ConformanceCase.OperationKind.SOURCE, entry.source);
+        putIfSet(declared, ConformanceCase.OperationKind.MAP_VALUES, entry.mapValues);
+        putIfSet(declared, ConformanceCase.OperationKind.GROUP_BY_KEY, entry.groupByKey);
+        putIfSet(declared, ConformanceCase.OperationKind.COUNT, entry.count);
+        putIfSet(declared, ConformanceCase.OperationKind.REDUCE, entry.reduce);
+        putIfSet(declared, ConformanceCase.OperationKind.JOIN, entry.join);
+        putIfSet(declared, ConformanceCase.OperationKind.WINDOWED_BY, entry.windowedBy);
+        putIfSet(declared, ConformanceCase.OperationKind.AGGREGATE, entry.aggregate);
+        putIfSet(declared, ConformanceCase.OperationKind.TO_STREAM, entry.toStream);
+        putIfSet(declared, ConformanceCase.OperationKind.SINK, entry.sink);
 
-        if (set.isEmpty()) {
+        if (declared.isEmpty()) {
             refuse(refusals, name, file, where + " names no operation");
             return null;
         }
-        if (set.size() > 1) {
-            refuse(refusals, name, file, where + " names more than one operation: " + spellingsOf(set.keySet()));
+        if (declared.size() > 1) {
+            refuse(refusals, name, file, where + " names more than one operation: " + spellingsOf(declared.keySet()));
             return null;
         }
 
-        ConformanceCase.OperationKind kind = set.keySet().iterator().next();
+        ConformanceCase.OperationKind kind = declared.keySet().iterator().next();
         if (kind == ConformanceCase.OperationKind.SINK) {
             if (entry.id != null) {
                 refuse(refusals, name, file, where + " gives a sink an id; a sink mints no handle, which is the "
@@ -756,11 +769,12 @@ public final class CaseLoader {
         return value;
     }
 
-    private static void putIfSet(Map<ConformanceCase.OperationKind, Object> set,
+    private static void putIfSet(Map<ConformanceCase.OperationKind, Object> declared,
                                  ConformanceCase.OperationKind kind,
                                  @Nullable Object value) {
         if (value != null) {
-            Object ignoredPrevious = set.put(kind, value); // one entry per kind, so there is never a previous
+            // The discarded previous value is not a decision: one call per kind, so there is never a previous.
+            declared.put(kind, value);
         }
     }
 

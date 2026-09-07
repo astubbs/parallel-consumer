@@ -139,7 +139,9 @@ public final class ConformanceCase {
      * A pinned emit rule (KTD5). One member today: the oracle suppresses a windowed aggregate until its window
      * closes. It is outside the wrapper's builder grammar - the one named exception to the otherwise one-to-one
      * translation between a case and a builder call - so a case naming it is oracle-only until the wrapper exposes an
-     * emit control, and the coverage gate does not credit it toward binding coverage.
+     * emit control, and the coverage gate does not credit it toward binding coverage. The single member is the
+     * design and not an unfinished enum: this rung pins exactly the one rule its oracle implements, and the driver
+     * rung adds a member per rule it can also drive.
      */
     public enum EmitRule {
 
