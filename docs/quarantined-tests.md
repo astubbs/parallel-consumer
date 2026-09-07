@@ -98,6 +98,28 @@ deletes the annotation and its entry together.
 (`OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` went
 earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it had itself frozen.)
 
+- [ ] `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`
+  - times out on its own SETUP GUARD, so a failure proves nothing about the defect it reproduces. The
+  awaited condition is the control thread reaching the mid-loop pause point (offset 25) that saturates
+  the pipeline, not the confluentinc#909 signature assertion the test exists to make. Every recorded
+  failure carries that identical message and sits at the 30s timeout, against passes that complete in
+  about 10s - the shape of a precondition the test cannot force under load rather than a wrong answer.
+  `flapping = true`: it passes most runs, so a pass is report-only.
+
+  Master-state on a recorded ledger rather than on a diagnosis, which rule 1 allows.
+  `node bin/inflight.mjs codecov test RegistrationRaceStaleResidentIT` is that ledger and outlives any
+  CI log: failures land on unrelated branches minutes apart while sibling branches pass in the same
+  window, including branches touching core. It has failed on heads whose only content was a dependency
+  bump and on heads whose only content was documentation, which is what rules out PR-state. The
+  standing prose ledger is
+  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
+
+  Unowned - no fix PR exists, because no diagnosis does. What would produce one: the guard waits for a
+  pause point driven through `PausableInsertShardManager`, so the question is whether the control
+  thread never reaches offset 25 under contention or reaches it after the wait expired. Separate those
+  before touching any timeout - the rule that governs the load-tightness family governs this one too,
+  and a test failing under load may be exposing a real product bug.
+
 - [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is
   measured but not explained. The progress detector returns `FLAT` - the record count *stops* rather
   than slowing, which is the discriminator it exists to report - and the `AMBIENT PROBE AUTOPSY`
