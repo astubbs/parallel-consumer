@@ -25,12 +25,39 @@ consumer-group protocol plus PC survives, on given hardware. That number is wort
 it after a PC change would be signal. It is not a correctness gate, and `scriptedChurnRoundsCompleteWithoutStall`
 already gates correctness for the same code paths, 17/17 green.
 
-## Options, and a recommendation
+## DECIDED 2026-09-07: option 1
+
+The operator took option 1 - move the capacity profiles to the scheduled lane and record the rate.
+Recorded here because this note is where the question was posed, and a note still reading "recommends"
+after the call has been made is the kind of stale record that gets re-litigated.
+
+**What implementing it involves**, so the next session does not re-derive it:
+
+- Split the three capacity profiles off `@Tag("performance")` onto a tag the gating lane excludes and
+  `experiments.yml` includes. `largeNumberOfInstances`, `cooperativeStickyRebalanceShouldNotStall` and
+  `gentleChaosRebalance` move together: they share the profile shape, and leaving two behind would put
+  the same measurement on both sides of a gate.
+- `scriptedChurnRoundsCompleteWithoutStall` **stays where it is.** It is the deterministic correctness
+  twin, 17/17, and it is what keeps these code paths gated once the capacity profiles leave.
+- The rate wants recording the way the throughput report already records its share - against a rolling
+  median rather than a fixed threshold, because the number moves with hardware and a fixed bound would
+  become a second gate by accident.
+- **`bin/performance-test.sh` passes `-Dexcluded.groups=` (empty), and an override REPLACES the pom's
+  default rather than adding to it.** That is how a quarantined test kept gating merges once already.
+  Whatever tag the split uses, check what the lane actually selected rather than that the flags look
+  right - the failure mode is a lane that runs nothing and passes.
+- The `@Quarantined` annotation comes off in the same change or not at all: a profile that no longer
+  gates does not need quarantining, and leaving both would say two different things about one test.
+
+Not done in the change that recorded this decision: that one carries the measurement which justifies
+it, not the lane move, and the two want separate review.
+
+## Options, and the reasoning behind the choice
 
 The operator ruled out one option on 2026-09-01: **do not make the lane non-gating**, because GitHub
 runners perform reliably enough that a baseline shift is real signal. That constraint stands. Within it:
 
-1. **Move the three capacity profiles to a scheduled, non-required lane that records the rate.** The
+1. **Move the three capacity profiles to a scheduled, non-required lane that records the rate.** ← **CHOSEN** The
    `experiments.yml` workflow already runs this exact test on a weekly schedule and uploads a tally;
    the throughput report already compares a per-run share against a rolling master median. The rate
    belongs beside that: a number with a trend, not a tick. Cost: a workflow edit and an `@Tag` split.
