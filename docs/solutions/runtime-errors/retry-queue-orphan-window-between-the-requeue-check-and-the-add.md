@@ -9,7 +9,7 @@ severity: high
 symptoms:
   - "A draining close never transitions to closing and hangs to its drain timeout, with nothing assigned, nothing in flight and no records in any shard"
   - "`workIsWaitingToBeProcessed()` / `isRecordsAwaitingProcessing()` read true forever on an idle instance"
-  - "The retry queue holds an entry whose container is resident in no shard, so no scan, sweep or completion can ever remove it"
+  - "The retry queue holds an entry whose container is resident in no shard - no scan or sweep reaches it, and only a later container at the same topic/partition/offset can clear it, which a revoked partition does not supply until it is reassigned"
   - "Only under PARTITION or UNORDERED ordering - KEY ordering garbage-collects the emptied shard, and the re-queue is skipped"
   - "Requires a rebalance to complete while a failed record's result is being handled"
 root_cause: race_condition
@@ -48,9 +48,23 @@ So a rebalance completing on the broker-poll thread **between that check and the
    present, and the container is added to the retry queue.
 
 The result is a **queue-only orphan**: a container in the retry queue and in no shard. Work is handed
-out by scanning shards, so it is never selected, never completed and never swept - and every route
-that removes a retry-queue entry reaches it *through* shard contents, so nothing can ever take it
-out again. It is there for the life of the instance.
+out by scanning shards, so *that container* is never selected, never completed and never swept.
+
+**The entry outlives the container, but not the instance - and the difference matters.** An earlier
+version of this write-up said every route that removes a retry-queue entry reaches it through shard
+contents, so nothing could ever take it out again. That is not true, and the same over-claim was
+caught one file over on the displacement sibling. `RetryQueue` keys by topic, partition and offset
+(`WorkContainerKey.of`), never by container identity, and `ShardManager.onSuccess` removes by that
+key **unconditionally, before it looks up any shard at all** - so it is a removal route that does
+not go through shard contents. Any later container at those same three coordinates clears the entry
+when it succeeds.
+
+**The bound is therefore the partition's absence, not the instance's lifetime**: the orphan is
+created by a revocation, so no container at those coordinates arrives again until that partition is
+reassigned to this instance. What makes the consequence below hold anyway is that a **draining close
+is exactly the window in which no reassignment can occur** - so during a drain the entry cannot
+clear, and the drain hangs. State the bound rather than the stronger claim: on an instance that keeps
+running and is given the partition back, the entry is reachable and goes.
 
 ## What it actually costs - and the claim that did not survive measurement
 
