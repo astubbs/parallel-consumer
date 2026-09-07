@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -195,6 +196,71 @@ class QuarantinedAnnotationContractTest {
         return Arrays.asList(commaSeparated.split(","));
     }
 
+    /**
+     * The trigger names declared in a workflow's top-level {@code on:} block - and nothing else in the file.
+     * <p>
+     * A plain {@code contains("pull_request:")} over the whole file CANNOT assert a trigger, and
+     * repo-hygiene.yml is the live proof: it carries that exact literal inside a comment describing the
+     * roadmap gate's carrier line ({@code pull_request: astubbs#NNN}), so deleting the real trigger would
+     * leave the grep green. An assertion a comment can satisfy is prose-matching, not a contract.
+     * <p>
+     * So this walks the block instead: it opens at a column-0 {@code on:} (or {@code "on":} - YAML 1.1
+     * reads a bare {@code on} as a boolean, so some editors quote it), closes at the next column-0 key,
+     * skips comment and blank lines, and returns the keys at the block's own indent - which is why
+     * {@code types:} under {@code pull_request:} is not mistaken for a trigger. The inline forms
+     * ({@code on: push}, {@code on: [push, pull_request]}) are handled too, so rewriting the block in
+     * flow style does not silently empty the result.
+     */
+    private static List<String> workflowTriggers(String yaml) {
+        List<String> triggers = new ArrayList<>();
+        boolean inOnBlock = false;
+        int blockIndent = -1;
+        for (String raw : yaml.split("\n", -1)) {
+            String line = raw.replaceAll("\\s+$", "");
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                continue;
+            }
+            java.util.regex.Matcher onKey = java.util.regex.Pattern
+                    .compile("^[\"']?on[\"']?:\\s*(.*)$").matcher(line);
+            if (onKey.matches()) {
+                String inline = onKey.group(1).replaceAll("\\s+#.*$", "").trim();
+                if (inline.isEmpty()) {
+                    inOnBlock = true;
+                    blockIndent = -1;
+                } else {
+                    for (String t : inline.replaceAll("^\\[", "").replaceAll("]$", "").split(",")) {
+                        if (!t.trim().isEmpty()) {
+                            triggers.add(t.trim());
+                        }
+                    }
+                    inOnBlock = false;
+                }
+                continue;
+            }
+            if (!line.startsWith(" ")) {   // any other column-0 key closes the block
+                inOnBlock = false;
+                continue;
+            }
+            if (!inOnBlock) {
+                continue;
+            }
+            java.util.regex.Matcher key = java.util.regex.Pattern
+                    .compile("^(\\s+)([A-Za-z_][A-Za-z0-9_-]*):.*$").matcher(line);
+            if (!key.matches()) {
+                continue;
+            }
+            int indent = key.group(1).length();
+            if (blockIndent == -1) {
+                blockIndent = indent;
+            }
+            if (indent == blockIndent) {
+                triggers.add(key.group(2));
+            }
+        }
+        return triggers;
+    }
+
     @Test
     void quarantineLaneRunnerIncludesOnlyTheQuarantinedGroup() throws IOException {
         String lane = read(REPO_ROOT.resolve("bin/quarantined-test.sh"));
@@ -236,8 +302,11 @@ class QuarantinedAnnotationContractTest {
         assertWithMessage("the per-PR audit reaches the quarantine gates only through check-all.sh's sweep, " +
                 "and only --with-tests --strict makes that sweep run the self-tests and refuse a CANNOT")
                 .that(hygiene).contains("bin/check-all.sh --with-tests --strict");
-        assertWithMessage("the sweep must run on pull_request or the audit is not per-PR at all")
-                .that(hygiene).contains("pull_request:");
+        assertWithMessage("the sweep must run on pull_request or the audit is not per-PR at all. Read from "
+                + "the parsed `on:` block, not the file text: this workflow also carries `pull_request:` in a "
+                + "comment, so a grep would stay green with the trigger deleted. Declared triggers: "
+                + workflowTriggers(hygiene))
+                .that(workflowTriggers(hygiene)).contains("pull_request");
 
         String checkAll = read(REPO_ROOT.resolve("bin/check-all.sh"));
         assertWithMessage("check-all.sh must discover gates by glob - a hardcoded list is what the fold " +
@@ -287,16 +356,24 @@ class QuarantinedAnnotationContractTest {
     /**
      * The lane workflow must DECLARE the triggers it exists for - a real bug this test guards: the
      * dispatch trigger was once missing while docs claimed "run it manually", making that impossible.
+     * <p>
+     * Read through {@link #workflowTriggers(String)} rather than by substring for the reason that method
+     * records: this file discusses all three trigger names in its own prose, so a text match would be
+     * satisfiable by a comment. It happens to have no comment carrying the literal WITH its colon today,
+     * which makes the substring form correct by luck rather than by construction - the same shape that
+     * did go wrong one method up.
      */
     @Test
     void laneWorkflowDeclaresItsTriggers() throws IOException {
         String lane = read(REPO_ROOT.resolve(".github/workflows/quarantine-lane.yml"));
-        assertWithMessage("lane runs on every PR push (pre-merge attribution)")
-                .that(lane).contains("pull_request:");
-        assertWithMessage("lane must run after every merge to master (canonical master-state record)")
-                .that(lane).contains("push:");
-        assertWithMessage("manual lane runs need a declared workflow_dispatch trigger")
-                .that(lane).contains("workflow_dispatch:");
+        List<String> triggers = workflowTriggers(lane);
+        assertWithMessage("lane runs on every PR push (pre-merge attribution). Declared: " + triggers)
+                .that(triggers).contains("pull_request");
+        assertWithMessage("lane must run after every merge to master (canonical master-state record). "
+                + "Declared: " + triggers)
+                .that(triggers).contains("push");
+        assertWithMessage("manual lane runs need a declared workflow_dispatch trigger. Declared: " + triggers)
+                .that(triggers).contains("workflow_dispatch");
     }
 
     @Test
