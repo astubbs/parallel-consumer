@@ -24,10 +24,17 @@ import static com.google.common.truth.Truth.assertWithMessage;
 /**
  * Self-test of the quarantine lane's wiring - the {@link Quarantined} mechanism only works while a set
  * of otherwise-unrelated string sites stay in agreement (annotation meta-tag, pom group exclusion, the
- * gating CI scripts, the lane runner, the workflow job, the release guard). Any one of them drifting in
+ * gating CI scripts, the lane runner, the lane workflow, the release guard). Any one of them drifting in
  * a big refactor breaks the lane SILENTLY - worst case, quarantined tests vanish from both lanes (no
  * red anywhere, coverage just gone). This test pins them all together so drift fails the gating unit
  * suite instead.
+ * <p>
+ * WHERE THE PER-PR AUDIT RUNS: not in a job of its own, and not in maven.yml. It reaches every pull
+ * request through {@code repo: hygiene}'s discovering {@code bin/check-all.sh} sweep, and again as
+ * explicit fail-fast steps in quarantine-lane.yml. A grep for the script names in a workflow therefore
+ * proves nothing about the first of those - see
+ * {@link #theHygieneSweepRunsTheAuditOnEveryPrAndTheLaneWorkflowRunsTheTests()} for what is asserted
+ * instead, and why.
  */
 class QuarantinedAnnotationContractTest {
 
@@ -196,20 +203,85 @@ class QuarantinedAnnotationContractTest {
                 .that(lane).contains("-Dexcluded.groups=");
     }
 
+    /**
+     * The two registry gates, named as {@code bin/check-all.sh} names them - basenames, because that is
+     * the spelling its exception lists use.
+     */
+    private static final List<String> QUARANTINE_AUDIT_GATES =
+            Arrays.asList("check-quarantine-registry.sh", "check-quarantine-owners.sh");
+
+    /**
+     * The per-PR audit has TWO homes, and neither of them is maven.yml any more.
+     * <p>
+     * It used to be maven.yml's {@code quarantine: audit} job, which named both scripts literally, so this
+     * test could grep the workflow for them. That job was folded away because the same scripts were already
+     * running in {@code repo: hygiene}'s {@code bin/check-all.sh --with-tests --strict} sweep, and the sweep
+     * DISCOVERS gates by globbing {@code bin/check-*.sh} rather than naming them - deliberately, so that a
+     * gate added to {@code bin/} cannot run nowhere. Nothing literally names the scripts on the per-PR path
+     * now, so grepping a workflow for them can only fail.
+     * <p>
+     * What replaces the grep is the chain the glob actually depends on, asserted link by link: the sweep runs
+     * on {@code pull_request} with both flags; each gate EXISTS at a path the glob matches; and neither is
+     * named in {@code check-all.sh}'s two exception lists, {@code PR_SCOPED} and {@code NEEDS_ARGS}, which are
+     * the only ways a globbed gate is skipped. That last link is the one doing the work - without it "the
+     * glob covers them" is an assumption rather than a measurement.
+     * <p>
+     * The second home is quarantine-lane.yml, which still names both scripts explicitly as fail-fast steps
+     * ahead of the lane run, and is asserted separately below. The lane RUN itself must stay out of maven.yml.
+     */
     @Test
-    void perPrWorkflowRunsTheAuditAndTheLaneWorkflowRunsTheTests() throws IOException {
-        String maven = read(REPO_ROOT.resolve(".github/workflows/maven.yml"));
-        assertWithMessage("per-PR audit must enforce the registry")
-                .that(maven).contains("bin/check-quarantine-registry.sh");
-        assertThat(maven).contains("bin/check-quarantine-owners.sh");
-        assertWithMessage("the lane RUN must NOT be in maven.yml - it lives in its own workflow " +
-                "with its own trigger set")
-                .that(maven).doesNotContain("bin/quarantined-test.sh");
+    void theHygieneSweepRunsTheAuditOnEveryPrAndTheLaneWorkflowRunsTheTests() throws IOException {
+        // (a) The per-PR audit, reached through the discovering sweep rather than by name.
+        String hygiene = read(REPO_ROOT.resolve(".github/workflows/repo-hygiene.yml"));
+        assertWithMessage("the per-PR audit reaches the quarantine gates only through check-all.sh's sweep, " +
+                "and only --with-tests --strict makes that sweep run the self-tests and refuse a CANNOT")
+                .that(hygiene).contains("bin/check-all.sh --with-tests --strict");
+        assertWithMessage("the sweep must run on pull_request or the audit is not per-PR at all")
+                .that(hygiene).contains("pull_request:");
+
+        String checkAll = read(REPO_ROOT.resolve("bin/check-all.sh"));
+        assertWithMessage("check-all.sh must discover gates by glob - a hardcoded list is what the fold " +
+                "away from per-gate jobs relies on NOT existing")
+                .that(checkAll).contains("bin/check-*.sh");
+        String prScoped = exceptionList(checkAll, "PR_SCOPED");
+        String needsArgs = exceptionList(checkAll, "NEEDS_ARGS");
+        for (String gate : QUARANTINE_AUDIT_GATES) {
+            assertWithMessage("bin/" + gate + " must exist where check-all.sh's bin/check-*.sh glob finds it")
+                    .that(Files.exists(REPO_ROOT.resolve("bin/" + gate))).isTrue();
+            assertWithMessage(gate + " is in check-all.sh's PR_SCOPED list, so the per-PR sweep SKIPS it and " +
+                    "no workflow runs the quarantine audit on a pull request. Found: " + prScoped)
+                    .that(groups(prScoped.replace(' ', ','))).doesNotContain(gate);
+            assertWithMessage(gate + " is in check-all.sh's NEEDS_ARGS list, so the sweep skips it and the " +
+                    "per-PR quarantine audit does not run. Found: " + needsArgs)
+                    .that(groups(needsArgs.replace(' ', ','))).doesNotContain(gate);
+        }
+
+        // (b) The lane workflow, which does still name both scripts - see quarantineLaneRunnerIncludesOnly...
         String lane = read(REPO_ROOT.resolve(".github/workflows/quarantine-lane.yml"));
         assertThat(lane).contains("bin/quarantined-test.sh");
         assertWithMessage("the lane fail-fasts on rule violations before spending a test run")
                 .that(lane).contains("bin/check-quarantine-registry.sh");
         assertThat(lane).contains("bin/check-quarantine-owners.sh");
+
+        String maven = read(REPO_ROOT.resolve(".github/workflows/maven.yml"));
+        assertWithMessage("the lane RUN must NOT be in maven.yml - it lives in its own workflow " +
+                "with its own trigger set")
+                .that(maven).doesNotContain("bin/quarantined-test.sh");
+    }
+
+    /**
+     * The space-separated value of one of {@code bin/check-all.sh}'s exception lists. A list that stopped
+     * being a plain double-quoted assignment fails here rather than silently reading as empty, which would
+     * turn every membership check above into a pass.
+     */
+    private static String exceptionList(String checkAllBody, String name) {
+        java.util.regex.Matcher assignment = java.util.regex.Pattern
+                .compile("(?m)^" + java.util.regex.Pattern.quote(name) + "=\"([^\"]*)\"\\s*$")
+                .matcher(checkAllBody);
+        assertWithMessage("bin/check-all.sh must assign " + name + " as a plain double-quoted list - this test "
+                + "reads it to prove the quarantine gates are not excluded from the glob")
+                .that(assignment.find()).isTrue();
+        return assignment.group(1);
     }
 
     /**
