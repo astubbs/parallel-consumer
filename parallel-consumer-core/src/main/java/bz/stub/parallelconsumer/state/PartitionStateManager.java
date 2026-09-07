@@ -274,24 +274,91 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
      *
      * <li>{@link ProcessingOrder#UNORDERED} ordering, {@link WorkContainer}s go into shards keyed by partition, so
      * falls back to the {@link ProcessingOrder#PARTITION} case
+     *
+     * <p>
+     * <b>A revoked partition may have no state, and that is survivable.</b> {@link #onPartitionsAssigned} records
+     * the epoch before it loads the state, so anything thrown by the load - {@code consumer.committed()} failing, or
+     * {@code invalidOffsetMetadataPolicy(FAIL)} rejecting metadata - leaves the partition with an epoch and no
+     * entry here. Kafka keeps it assigned regardless: the assignment is applied before the listener runs, and the
+     * exception is rethrown out of {@code poll()} with the member STABLE.
+     * <p>
+     * <b>How this sweep is then reached - not on "the next rebalance".</b> That exception propagates the whole way:
+     * {@link #onPartitionsAssigned} logs and rethrows, {@code AbstractParallelEoSStreamProcessor.onPartitionsAssigned}
+     * has no catch, and {@code BrokerPollSystem.controlLoop}'s catch notifies the committer and rethrows, so the
+     * broker-poll thread ends and there is no next poll. The route left is the close sequence, on the
+     * <em>control</em> thread: {@code supervise()} surfaces the dead poller, {@code doClose} runs, and
+     * {@code maybeCloseConsumer} closes the consumer, whose {@code onLeavePrepare} drives {@code onPartitionsRevoked}
+     * (or {@code onPartitionsLost}) into this sweep before it sends LeaveGroup. That step is gated on
+     * {@code committer instanceof ProducerManager}, so this is a live path only in
+     * {@code PERIODIC_TRANSACTIONAL_PRODUCER} mode; in the default consumer-commit modes nothing closes the consumer
+     * after a poller death and this branch is insurance -
+     * {@code docs/inflight/bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md} owns that gap.
+     * <p>
+     * On the live route a throw here is expensive twice over: Kafka's close throws out of {@code onLeavePrepare}
+     * before {@code maybeLeaveGroup}, so the member's departure is left to the session timeout, and the {@code for}
+     * loop below aborts, leaving every partition after this one in the same revoke unswept. There is nothing to
+     * sweep for a state that was never installed - no work was registered against it, no shard references it - and
+     * {@link #incrementPartitionAssignmentEpoch} has already fenced anything that somehow carried the old epoch. So
+     * the partition is marked removed, the gap is logged, and the sweep moves on.
+     * {@code PartitionStateManagerRevokeAfterFailedAssignmentTest} drives both routes into the partial state and the
+     * mixed revoke of a stateless partition alongside a stateful one.
      */
     private void resetOffsetMapAndRemoveWork(Collection<TopicPartition> allRemovedPartitions) {
         for (TopicPartition removedPartition : allRemovedPartitions) {
             // by replacing with a no op implementation, we protect for stale messages still in queues which reference it
             // however it means the map will only grow, but only it's key set
-            var partition = this.partitionStates.get(removedPartition);
-            partitionStates.put(removedPartition, RemovedPartitionState.getSingleton());
+            var partition = this.partitionStates.put(removedPartition, RemovedPartitionState.getSingleton());
 
-            //
+            if (partition == null) {
+                log.warn("Partition {} revoked with no tracked state: its assignment must have failed after the epoch "
+                        + "was recorded and before its state was installed (see the earlier onPartitionsAssigned error). "
+                        + "Nothing to remove; the epoch has been advanced so no work referencing it can be taken.",
+                        removedPartition);
+                continue;
+            }
+
             partition.onPartitionsRemoved(sm);
         }
     }
 
     /**
-     * @return the current epoch of the partition, or null if not yet assigned
+     * The current assignment epoch of the partition, or empty if the assignment callback has not fired for it yet.
+     * <p>
+     * Absence only ever means "not yet assigned": epochs are written by {@link #incrementPartitionAssignmentEpoch}
+     * on every assignment and every revocation, and nothing removes one. The two production readers consume an
+     * absent epoch in opposite ways, and the type makes each choose at the call site:
+     * <ul>
+     *   <li><b>Skip, on the poll path</b> - {@link bz.stub.parallelconsumer.internal.EpochAndRecordsMap} can be
+     *   handed a poll's records for a partition before its assignment callback fires (the eager-protocol race), and
+     *   it skips them: they are uncommitted, so Kafka re-delivers them once the callback has run.</li>
+     *   <li><b>Fail closed, on the assignment path</b> - {@code OffsetMapCodecManager.epochOfPartitionBeingAssigned}
+     *   builds {@link PartitionState} from this epoch and must never see it absent, because
+     *   {@link #onPartitionsAssigned} writes every epoch before it loads any state. It throws, naming that
+     *   ordering; its javadoc carries the trace.</li>
+     * </ul>
+     *
+     * @return the current epoch of the partition, or empty if the assignment callback has not fired for it
+     * @see #getEpochOfPartition the nullable form of the same lookup
+     */
+    public Optional<Long> epochOfPartitionIfAssigned(TopicPartition partition) {
+        return Optional.ofNullable(partitionsAssignmentEpochs.get(partition));
+    }
+
+    /**
+     * The legacy nullable form of {@link #epochOfPartitionIfAssigned}: the same lookup, with null carrying exactly the
+     * meaning empty carries there - the assignment callback has not fired for this partition yet.
+     * <p>
+     * New callers should prefer the {@link Optional} form, so that absence is handled at the call site rather than by
+     * an accidental unbox: this method's null was consumed by an auto-unbox into a primitive on the assignment path
+     * until {@code OffsetMapCodecManager.epochOfPartitionBeingAssigned} was made to fail closed, and a nullable
+     * boxed return reads identically whether the caller decided about the null or forgot it. The return type is not
+     * narrowed to {@code long} because absence is a legitimate outcome on the poll path (see the Optional form's
+     * javadoc). Existing callers - the test suite unboxes this in many places - can migrate when they touch the site.
+     *
+     * @return the current epoch of the partition, or null if the assignment callback has not fired for it
      */
     public Long getEpochOfPartition(TopicPartition partition) {
-        return partitionsAssignmentEpochs.get(partition);
+        return epochOfPartitionIfAssigned(partition).orElse(null);
     }
 
 

@@ -36,6 +36,15 @@
 # gate fails BOTH ways: an identity here that no longer fires means somebody fixed something and
 # did not ratchet, which is how a ceiling quietly stops meaning anything.
 #
+# A LINE THAT STOPS FIRING WITHOUT ITS CODE CHANGING IS SILENCED, NOT FIXED. The gate cannot tell
+# the two apart - "no longer fires" is its only signal - and there is deliberately no third state
+# for it: a line the analyser can verify in neither direction could never go red, which is the
+# count-ceiling hole again. Retire the line, because the gate leaves no choice, and in the SAME
+# change either establish by reading the code that the defect is gone, or open a bug- note in
+# docs/inflight/ carrying the claim - never alongside genuine fixes without saying which is which.
+# Observed on astubbs#57, where one silenced null deref left with four fixed races; settled in
+# docs/solutions/workflow-issues/a-silenced-static-finding-is-not-a-fixed-one-2026-09-05.md.
+#
 # Format: <count> <bug_type> <Class.method>
 1 INTEGER_OVERFLOW_L2 BackportUtils.readFully
 1 NULLPTR_DEREFERENCE AbstractParallelEoSStreamProcessor.processWorkCompleteMailBox
@@ -44,7 +53,6 @@
 1 NULLPTR_DEREFERENCE PartitionStateManager.isAllowedMoreRecords
 1 NULLPTR_DEREFERENCE PartitionStateManager.lambda$onOffsetCommitSuccess$3
 1 NULLPTR_DEREFERENCE PartitionStateManager.maybeRegisterNewRecordAsWork
-1 NULLPTR_DEREFERENCE PartitionStateManager.resetOffsetMapAndRemoveWork
 1 NULLPTR_DEREFERENCE ProcessingShard.isWorkContainerStale
 1 NULLPTR_DEREFERENCE WorkManager.checkIfWorkIsStale
 1 NULLPTR_DEREFERENCE WorkManager.handleFutureResult
