@@ -82,9 +82,11 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-Two entries, and they are opposite kinds. `MultiInstanceRebalanceTest.largeNumberOfInstances` is an
-unreliable failure, so it carries `flapping = true`: a pass proves nothing and the lane reports it
-without demanding action. It was never hidden by the surefire retry astubbs#224 removed, because the
+The entries below are of two opposite kinds, and the checklist is the inventory - not this paragraph.
+`RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`
+and `MultiInstanceRebalanceTest.largeNumberOfInstances` are **unreliable failures**, so both carry
+`flapping = true`: a pass proves nothing and the lane reports it without demanding action.
+`MultiInstanceRebalanceTest` was never hidden by the surefire retry astubbs#224 removed, because the
 test did not run in a gating lane until the PR that quarantines it.
 `ProducerManagerTest.aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced` is the other
 kind - **deterministic**, so it is left at the annotation's default `flapping = false` and a PASS is

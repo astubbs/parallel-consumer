@@ -3,7 +3,6 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: data-loss -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-state: open - diagnosed and machine-checked; the FIX is a thread-ownership decision, not a line -->
 
 **Pre-existing on master, not introduced by astubbs/parallel-consumer#408.** Found while disproving a
 P0 raised against that PR, and recorded because the disproof turned up a real thing one step over.
@@ -61,7 +60,7 @@ held, a revoke-time commit sends `{partition -> offset 1}` rather than `{partiti
 
 | Arm | One term changed | Result |
 |---|---|---|
-| `aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced` | revoke commits as it does today | **RED 5/5** - sends offset 1, omitting the offset of a record inside the transaction it just committed |
+| `aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced` | revoke commits as it does today | **RED** - sends offset 1, omitting the offset of a record inside the transaction it just committed |
 | `aRevokeTimeCommitIncludesThatOffsetWhenTheMailboxIsDrainedFirst` | `processWorkCompleteMailBox(ZERO)` inserted immediately before the revoke, nothing else | **GREEN** - sends offset 2 |
 
 Same magnitude, different position: the drain is the only term that moves, so the outcome is
@@ -69,8 +68,11 @@ attributable to it and not to added latency or to anything else the revoke path 
 held exactly. Both arms live in `ProducerManagerTest`, beside the C9 proofs they extend; the red one
 carries `@Quarantined` with this file as its `tracking`.
 
-Reproduction rate: 5/5, deterministic, hand-driven control loop on a mocked producer - no broker, no
-load, no timing. This is not a flake and must not be treated as one.
+**Deterministic, and it must not be treated as a flake.** The arm drives the control loop by hand
+against a mocked producer - no broker, no load, no timing - so it is red on every run rather than
+some of them, and the number of runs behind that is not the finding. Re-run it with
+`bin/quarantined-test.sh` (the red arm is `@Quarantined`, so the ordinary unit lane skips it; its
+control-arm sibling runs there).
 
 ## What this does to the register
 
@@ -111,11 +113,20 @@ Candidate dispositions, none of them free, in rough order of how well they fit t
 - **Decline instead of committing.** `tryCommitOffsetsOnRevoke` already has a documented-safe decline
   branch for the contended case (*"Uncommitted offsets will be re-delivered to the new assignee"*).
   Extending it to "decline when undrained work is queued" trades a wrong offset map for no commit,
-  which is the outcome the design already accepts. The catch: the check has to sit **after** the
-  write lock is taken, because only then is the mailbox stable with respect to produced work -
-  checking in `onPartitionsRevoked` before `retrieveOffsetsAndCommit` leaves a narrower version of
-  the same race, and a fix that narrows a data-loss window without closing it is worse than none,
-  because it reads as closed.
+  which is the outcome the design already accepts.
+
+  **The catch is that a mailbox-emptiness test does not close the window, wherever it is placed, and
+  an earlier draft of this note said it did once taken after the write lock.** Taking the write lock
+  stabilises the mailbox against *new* produced work - no producer can take the read lock - but not
+  against the control thread *emptying* it: `processWorkCompleteMailBox` does
+  `workMailBox.drainTo(results, size)` into a local queue and only then loops calling
+  `wm.handleFutureResult`, which is what reaches `PartitionState#onSuccess` and marks the partition
+  dirty. A poll-thread check landing in that gap sees an empty mailbox and a partition not yet
+  dirty, and commits the same incomplete offset map. Nothing gates that drain during a rebalance
+  (above), so the gap is live exactly when the revoke path runs. So this candidate is only safe if
+  it either declines unconditionally in transactional mode, or coordinates with the control-thread
+  drain so the two cannot interleave - and a fix that narrows a data-loss window without closing it
+  is worse than none, because it reads as closed.
 - **Move the drain inside the commit sequence**, so both commit initiators get it by construction
   rather than by each remembering. This is where it belongs, and it is a change to
   `AbstractOffsetCommitter`/`ProducerManager`, not to the revoke path - but it still leaves the poll
