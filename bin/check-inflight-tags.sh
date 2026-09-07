@@ -143,8 +143,12 @@ for f in docs/inflight/*.md; do
     # records - so the shape is refused here, in front of whoever wrote it. The date is not checked
     # against a calendar: a typo in the day is a wrong record, which no script can tell from a
     # right one, but a marker with no date at all is a marker that says nothing.
-    vetted=$(sed -n 's/.*inflight-vetted:[[:space:]]*\([^>]*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
-    if grep -q 'inflight-vetted:' "$f" && ! grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} - .+' <<<"$vetted"; then
+    # THE MARKER FORM ONLY, `<!-- inflight-vetted:` - not the bare field name, which appears in prose
+    # whenever a note quotes the grep that lists PROPOSED markers. The first cut matched the bare
+    # name and failed the sweep's own working note for citing the command; the duplicate check above
+    # already keys on the comment opener, and this follows it.
+    vetted=$(sed -n 's/.*<!-- inflight-vetted:[[:space:]]*\([^>]*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
+    if grep -q '<!-- inflight-vetted:' "$f" && ! grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} - .+' <<<"$vetted"; then
         note "$f \"$(note_title "$f")\": inflight-vetted '$vetted' is not 'YYYY-MM-DD - <what was checked>'. docs/inflight/AGENTS.md -> \"Vetting a note\" owns the marker"
     fi
 done

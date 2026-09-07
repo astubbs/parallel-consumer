@@ -156,6 +156,9 @@ assert "one of each still passes"                          pass '# T\n\n<!-- inf
 assert "a well-formed vetted marker passes"            pass '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-vetted: 2026-09-07 - re-read against the tree; the race is still there -->\n'
 assert "a vetted marker with no date is rejected"      fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-vetted: re-read, still true -->\n'
 assert "a vetted marker with no reason is rejected"    fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-vetted: 2026-09-07 -->\n'
+# PROSE IS NOT A MARKER. A note that quotes `grep 'inflight-vetted:.*PROPOSED'` names the field
+# without carrying it; matching the bare name failed the sweep's own working note.
+assert "a prose mention of the field passes"          pass '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: coordination -->\nrun grep -l inflight-vetted:.*PROPOSED to list them\n'
 assert "a second vetted marker is rejected"            fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-vetted: 2026-09-07 - a -->\n<!-- inflight-vetted: 2026-09-08 - b -->\n'
 
 echo
