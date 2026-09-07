@@ -597,6 +597,21 @@ gh workflow run claude-code-review-dispatch.yml -R astubbs/parallel-consumer --r
   -f focus="the guard's failure paths, not the docs"
 ```
 
+**The dispatch route can finish successfully and post nothing, and has done so twice** - runs
+`31774560811` on 2026-08-14 and `34066111691` on 2026-09-06. Each concluded `success`, each passed
+the workflow's own refuse-to-report-success guard, and neither left a comment.
+[`docs/solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md`](solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md)
+**owns that evidence**; what binds here is the consequence. **After dispatching, check that a comment
+actually arrived and names the head you dispatched against** - a green `claude-review` is not that
+evidence, because it is satisfied by any finished reviewer comment whenever it was posted.
+
+**When you want findings that mechanically block the merge, comment `@claude review this` instead.**
+It posts a sticky comment seconds into the run and rewrites it into the finished review, so a run
+that produced nothing is visible rather than silent - and it is the only route that can open inline
+review threads, because the action installs that tool only for an entity event and
+`workflow_dispatch` is not one. The trade is that a mention passes your text through as the entire
+prompt, so it takes no `-f focus` steer.
+
 It used to fire on every `pull_request` event, which spent a full review on every push,
 overwhelmingly on branches that were not ready for one. That coupled "get CI feedback" to "spend a
 review" tightly enough that people batched pushes to avoid it. The two are now split:
