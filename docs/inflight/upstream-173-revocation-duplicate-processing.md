@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - PROPOSED partly true, shrink to the unposted draft: the misdirection this note is filed against is GONE from the tree - `upstream-pr-analysis.adoc` no longer states the fixed-by-merging claim this note quotes anywhere; it reads *REFUTED 2026-08-20* and carries "Do not close confluentinc#777 when the confluentinc#893 cherry-pick merges". Next items 1 and 2 are also done: `src/docs/README_TEMPLATE.adoc` has a `reducing-duplicate-replay` section with the assignor guidance, and the fourth cell has been MEASURED at 369 duplicates rather than predicted. Still live and unowned: the draft answer (astubbs#173 OPEN, confluentinc#777's only fork comment is still the 2026-08-05 mirror-tracking one), the two mirror-body corrections, and the maintainer decision on a revocation grace period. Verified still true: `WorkManager.handleFutureResult`'s "Dropping work from revoked partition" and the four `synchronized (commitCommand)` sites -->
 
 Mirror: [astubbs/parallel-consumer#173](https://github.com/astubbs/parallel-consumer/issues/173).
 Upstream: [confluentinc/parallel-consumer#777](https://github.com/confluentinc/parallel-consumer/issues/777).

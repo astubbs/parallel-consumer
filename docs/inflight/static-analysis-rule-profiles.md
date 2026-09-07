@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - the gate this note tracks still does not exist: `.github/scripts/` holds no diff-filter module, only the per-purpose gates, and `newFindings()` in `file-ref-gate.js` is still the only instance of the shape. The promotion list is still empty and "Decompose the God class" is still open in `docs/refactoring.md`. Two claims corrected: the `AbstractParallelEoSStreamProcessor` line count had drifted by about a thousand, and the Error Prone registry's Tier 2 table still carries no Profile column, so "every suppressed rule now carries a marker" was not true -->
 
 **A rule switched off because legacy code trips it is switched off for new code too.** That is the
 flaw in a single global rule set, and it is what the per-rule registries were quietly paying: rules
@@ -66,9 +67,10 @@ building twice, and the diff filter makes that unnecessary.
 ## Scoping granularity: lines now, files later, piecemeal
 
 Profile new is scoped to changed **lines**, and that is a size problem rather than a design
-preference. `AbstractParallelEoSStreamProcessor` is 1533 lines; scoping by file would mean any PR
-touching it inherits every latent finding in it, which is a red build for reasons the author did not
-cause - the exact failure this whole scheme exists to avoid.
+preference. `AbstractParallelEoSStreamProcessor` is thousands of lines and still growing (`wc -l` for
+today's figure - the one written here was already a thousand lines out by 2026-09-07); scoping by
+file would mean any PR touching it inherits every latent finding in it, which is a red build for
+reasons the author did not cause - the exact failure this whole scheme exists to avoid.
 
 **File scoping is strictly better and the trigger is file size, so it can be taken one file at a
 time.** As each file comes down to a reviewable size it can be promoted to file scoping on its own,
@@ -138,8 +140,12 @@ three, which is how two lists of the same contract start disagreeing about it.
 
 **The classification is done. The wiring is not, deliberately.**
 
-Every suppressed rule in every registry now carries a `profile:` marker - `old` or `new`. Nothing
-about enforcement changed: the engines still run whole-tree with the same suppressions, so this PR's
+Every suppressed rule was *meant* to carry a `profile:` marker - `old` or `new` - and as of
+2026-09-07 that is true of the SpotBugs registry, whose tables have a Profile column, and **not** of
+the Error Prone one, whose Tier 2 table (`| Check | Count | Why off | Turns back on when |`) has no
+such column; only its ranked top three are classified. Finish that before wiring anything, or the
+gate will have nothing to read for the largest suppressed set in the repo. Nothing about enforcement
+changed: the engines still run whole-tree with the same suppressions, so this PR's
 behaviour is identical with and without the markers. What the markers buy is that the split is
 recorded **while somebody has the context to make it**, which is the perishable half. Deciding that
 `EI_EXPOSE_REP` is wrong-for-this-codebase while `CT_CONSTRUCTOR_THROW` is merely blocked-by-legacy

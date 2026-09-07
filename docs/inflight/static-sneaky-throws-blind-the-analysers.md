@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - the blind spot is still open and still untracked anywhere else; the `docs/solutions/best-practices/` write-up it rests on is still on master. PROPOSED correction, not applied because this is a gated note: the counts have drifted and the title carries one - `grep -rn "@SneakyThrows" --include=*.java parallel-consumer-*/src/main/` now returns 26, not 21, and the test figure is 155, not 122. Per this directory's own rule a count does not belong in a note at all; the greps above are the replacement -->
 
 **The question this note exists to answer was asked in review and had no home:** is removing sneaky
 throws tracked anywhere, given they cost us analysis coverage? It was not. It was one row inside
