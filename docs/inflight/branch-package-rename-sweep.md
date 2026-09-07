@@ -46,7 +46,8 @@ the base, not the contributor's work.
 
 ### Also waiting on a human, lower priority
 
-- **`dups: similarity` is a required check and fails on any renamed branch, as a false positive.**
+- **`dups: similarity` (a step of the `scan: repo` check) fails on any renamed branch, as a false
+  positive.**
   The five near-identical `TestConventionsArchTest.java` files score 89-91% against each other and
   always have — on astubbs#293 they score 89.57-91.04 and the job passes. The same numbers fail on
   astubbs#294 because the check compares against base *by file path*, and after a 234-file rename no
