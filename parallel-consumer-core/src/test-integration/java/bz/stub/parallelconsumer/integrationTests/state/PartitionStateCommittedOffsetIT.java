@@ -12,7 +12,6 @@ import bz.stub.parallelconsumer.FakeRuntimeException;
 import bz.stub.parallelconsumer.ManagedTruth;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.PollContext;
-import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
@@ -299,25 +298,17 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
 
             getKcu().close();
         } else {
-            Awaitility.await()
-                    .pollInterval(5, SECONDS) // allow bumper messages to propagate
-                    .atMost(30, SECONDS) // so, allow more for more total time
-                    .failFast(tempPc::isClosedOrFailed)
-                    .untilAsserted(() -> {
-                        // in case we're at the end of the topic, add some messages to make sure we get a poll response
-                        // must go before failing assertion, otherwise won't be reached
-                        getKcu().getProducer().send(new ProducerRecord<>(getTopic(), "key-bumper", "poll-bumper"));
-                        bumpersSent.incrementAndGet();
+            // nudge-inside-the-await shared primitive - see BrokerIntegrationTest#awaitWithTopicNudge
+            awaitWithTopicNudge(tempPc, Duration.ofSeconds(5), Duration.ofSeconds(30), bumpersSent, () -> {
+                final long endOffset = getKcu().getAdmin().listOffsets(UniMaps.of(tp, OffsetSpec.earliest())).partitionResult(tp).get().offset();
+                final long startOffset = getKcu().getAdmin().listOffsets(UniMaps.of(tp, OffsetSpec.latest())).partitionResult(tp).get().offset();
+                log.error("start await loop: {}, end: {}, bumpersSent: {}", startOffset, endOffset, bumpersSent);
 
-                        final long endOffset = getKcu().getAdmin().listOffsets(UniMaps.of(tp, OffsetSpec.earliest())).partitionResult(tp).get().offset();
-                        final long startOffset = getKcu().getAdmin().listOffsets(UniMaps.of(tp, OffsetSpec.latest())).partitionResult(tp).get().offset();
-                        log.error("start await loop: {}, end: {}, bumpersSent: {}", startOffset, endOffset, bumpersSent);
-
-                        //
-                        assertWithMessage("Highest seen offset to read up to")
-                                .that(highest.get())
-                                .isAtLeast(checkUpTo - 1);
-                    });
+                //
+                assertWithMessage("Highest seen offset to read up to")
+                        .that(highest.get())
+                        .isAtLeast(checkUpTo - 1);
+            });
 
             log.warn("Offset started at should equal the target {}, lowest {}, sent {}, diff is {})", targetStartOffset, lowest, bumpersSent, lowest.get() - targetStartOffset);
 
@@ -381,14 +372,19 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
             // give first poll a chance to run
             ThreadUtils.sleepSecondsLog(1);
 
-            getKcu().produceMessages(getTopic(), 1, "poll-bumper");
-
-            Awaitility.await()
-                    .failFast(tempPc::isClosedOrFailed)
-                    .untilAsserted(() -> {
-                        assertThat(seenOffsets).isNotEmpty();
-                        assertThat(seenOffsets.last().offset()).isGreaterThan(expectedProcessToOffset - 2);
-                    });
+            // Nudge records are produced INSIDE the await, not just once up front: with
+            // auto.offset.reset=latest and a contention-slowed bootstrap, a single pre-await record can be
+            // leapfrogged by the offset reset resolving after it - leaving the consumer positioned past
+            // every record that will ever exist, making this await unwinnable at ANY timeout. That race
+            // was this test's long-standing CI "flake" ([1]=latest only). See
+            // BrokerIntegrationTest#awaitWithTopicNudge and the linked solution doc.
+            log.info("first-poll await: pcId={} topic={} groupId={}",
+                    tempPc.getMyId().orElse("?"), getTopic(), getKcu().getGroupId());
+            var nudgesSent = new AtomicLong();
+            awaitWithTopicNudge(tempPc, Duration.ofSeconds(1), Duration.ofSeconds(10), nudgesSent, () -> {
+                assertThat(seenOffsets).isNotEmpty();
+                assertThat(seenOffsets.last().offset()).isGreaterThan(expectedProcessToOffset - 2);
+            });
 
             if (!succeededOffsets.isEmpty()) {
                 log.debug("Succeeded up to: {}", succeededOffsets.last().offset());
@@ -438,14 +434,6 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
      *
      * @see #noOffsetPolicyOnStartup
      */
-    @Quarantined(
-            reason = "Nudge race under auto.offset.reset=latest: the single pre-await tail-nudge record can be " +
-                    "produced BEFORE the consumer's [latest] reset resolves on a slow/loaded broker, so the reset " +
-                    "leapfrogs it and the await can never see the expected records at any timeout - only the " +
-                    "[latest] parameter ever fails.",
-            tracking = "docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md (on the fix branch)",
-            fixedBy = "PR #80 (awaitWithTopicNudge: nudge-inside-await + timeout self-diagnosis; 20/20 clean)",
-            flapping = true) // passes most runs - only the [latest] param under broker load fails; a pass proves nothing
     @SneakyThrows
     @EnumSource(value = OffsetResetStrategy.class)
     @ParameterizedTest
@@ -476,18 +464,31 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
             var groupId = clientUtils.getGroupId();
             runPcUntilOffset(offsetResetPolicy, END_OFFSET, END_OFFSET, UniSets.of(), GroupOption.REUSE_GROUP);
 
-            producedCount = producedCount + 1; // run sends one
+            // REGRESSION GUARD - deliberately makes this test exercise the case that used to break it.
+            // awaitWithTopicNudge above produces 1..N nudge records depending on load, and on an idle
+            // machine N is reliably 1, which is exactly why "run sends one" arithmetic passed locally
+            // for months and failed on a contended CI runner. Producing one extra record here forces
+            // N >= 2 on EVERY run, so any future assertion that assumes a fixed record count fails
+            // immediately and everywhere, instead of intermittently and only under load.
+            getKcu().produceMessages(getTopic(), 1, "nudge-count-regression-guard-");
+
+            // How many records exist is a question the BROKER can answer, so ask it. This used to be
+            // "+ 1 // run sends one", true when runPcUntilOffset produced a single record up front. It
+            // now nudges from INSIDE the await, one record per poll iteration, so the real count is
+            // 1..10 and load-dependent. Under LATEST, producedCount IS the expected reset offset, so a
+            // wrong count also moved the goalposts for the assertion at the end of the test.
+            producedCount = (int) currentEndOffset();
 
             //
             final String compactedKey = "key-50";
 
             // before compaction
-            checkHowManyRecordsWithKeyPresent(compactedKey, 1, TO_PRODUCE);
+            checkHowManyRecordsWithKeyPresent(compactedKey, 1);
 
             final int triggerRecordsCount = causeCommittedOffsetToBeRemoved(END_OFFSET);
 
             // after compaction
-            checkHowManyRecordsWithKeyPresent(compactedKey, 1, TO_PRODUCE + 2);
+            checkHowManyRecordsWithKeyPresent(compactedKey, 1);
 
             producedCount = producedCount + triggerRecordsCount;
 
@@ -502,11 +503,23 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
         }
     }
 
-    private void checkHowManyRecordsWithKeyPresent(String keyToSearchFor, int expectedQuantityToFind, long searchUpToOffset) {
-        log.debug("Looking for {} records with key {} up to offset {}", expectedQuantityToFind, keyToSearchFor, searchUpToOffset);
-
+    /**
+     * Scans the whole partition and counts the records carrying {@code keyToSearchFor}.
+     *
+     * <p>The search bound is read from the BROKER ({@code endOffsets}) rather than derived from how many
+     * records we think we produced. It used to be a caller-supplied {@code TO_PRODUCE + 2}, which assumed
+     * the partition held exactly the seeded records plus the two compaction records - an assumption
+     * {@code awaitWithTopicNudge} breaks, because it produces one nudge record per poll iteration (1..10
+     * of them, not one). Each extra nudge pushed the compaction records past the window, so the scan
+     * stopped before reaching them and reported them missing. That was this test's CI flake: the records
+     * were always present, the reader just stopped early.
+     */
+    private void checkHowManyRecordsWithKeyPresent(String keyToSearchFor, int expectedQuantityToFind) {
         try (KafkaConsumer<String, String> newConsumer = getKcu().createNewConsumer(GroupOption.NEW_GROUP);) {
             newConsumer.assign(of(tp));
+            long searchUpToOffset = newConsumer.endOffsets(of(tp)).get(tp);
+            log.debug("Looking for {} records with key {} up to the partition end offset {}",
+                    expectedQuantityToFind, keyToSearchFor, searchUpToOffset);
             newConsumer.seekToBeginning(UniSets.of(tp));
             long positionAfter = newConsumer.position(tp); // trigger eager seek
             assertThat(positionAfter).isEqualTo(0);
@@ -526,12 +539,20 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
         }
     }
 
+    /** The partition's end offset - how many records actually exist, not how many we think we sent. */
+    private long currentEndOffset() {
+        try (KafkaConsumer<String, String> probe = getKcu().createNewConsumer(GroupOption.NEW_GROUP)) {
+            probe.assign(of(tp));
+            return probe.endOffsets(of(tp)).get(tp);
+        }
+    }
+
     @SneakyThrows
     private int causeCommittedOffsetToBeRemoved(long offset) {
         sendCompactionKeyForOffset(offset);
         sendCompactionKeyForOffset(offset + 1);
 
-        checkHowManyRecordsWithKeyPresent("key-" + offset, 2, TO_PRODUCE + 2);
+        checkHowManyRecordsWithKeyPresent("key-" + offset, 2);
 
         List<String> strings = triggerCompactionProcessing();
 

@@ -22,7 +22,7 @@ TIP:: Editing template file
 endif::[]
 
 
-= Kafka Parallel Consumer
+= Parallel Consumer for Apache Kafka
 :icons:
 :toc: macro
 :toclevels: 3
@@ -57,7 +57,14 @@ Parallel Apache Kafka client wrapper with client side queueing, a simpler consum
 ====
 This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under new Maven coordinates. The original upstream project is no longer actively maintained.
 
-It is a *drop-in replacement*: the Java API and package (`bz.stub.parallelconsumer`) are unchanged from upstream 0.5.x -- only the Maven `groupId` differs.
+// The old spelling below MUST survive: this paragraph tells a reader arriving from upstream which
+// namespace they are moving OFF, and a summary that names only the destination cannot say that.
+// rename-packages.sh would otherwise rewrite it into a package that moves to itself.
+// rename-packages: freeze-begin(fork-summary)
+*Behaviour* is a drop-in replacement for upstream 0.5.x: the API is source-compatible, and the committed offset format is unchanged, so an existing consumer group upgrades in place without resetting or migrating offsets.
+Two identifiers do change in 0.6.0.0, and both are mechanical: the Maven `groupId` becomes `bz.stub.parallelconsumer`, and the Java packages *move* with it, from `io.confluent.parallelconsumer.*` to `bz.stub.parallelconsumer.*`.
+See <<upgrading-from-upstream,Upgrading from upstream 0.5.x>> for the steps.
+// rename-packages: freeze-end(fork-summary)
 
 [source,xml]
 ----
@@ -74,6 +81,15 @@ TIP: If you like this project, please ⭐ Star it in GitHub to show your appreci
 NOTE: This is a community-maintained project with no commercial support.
 See the <<Support and Issues>> section for more information.
 
+[[trademarks]]
+[NOTE]
+.Trademarks
+====
+KAFKA is a registered trademark of The Apache Software Foundation and has been licensed for use by Antony Stubbs and contributors. Antony Stubbs and contributors have no affiliation with and are not endorsed by The Apache Software Foundation.
+
+See <<Attribution>> for the other Apache marks referenced in this document.
+====
+
 [[when-to-use]]
 == When to use this library (vs KIP-932 Share Groups)
 
@@ -85,16 +101,58 @@ The Kafka landscape has shifted since this library's 2021 stable release. *KIP-9
 
 The two are not strict alternatives -- they solve different problems.
 
+=== How they differ
+
+[cols="1,2,2", options="header"]
+|===
+| | Share Groups | Parallel Consumer
+
+| Ordering
+| None guaranteed. Records in a share-partition "can be delivered out of order to a consumer, in particular when redeliveries occur", and only offsets *within a single batch* ascend -- there are "no guarantees about the ordering of offsets between different batches"
+| Per key, per partition, or unordered -- your choice. See <<ordering-guarantees,Ordering Guarantees>>
+
+| Exactly-once
+| Not supported. There is no transactional read-process-write for share consumers
+| Supported. Produced records and their source offsets commit as one atomic transaction -- see <<transaction-system,the EoS transaction model>>
+
+| Slow processing
+| Each record carries an acquisition lock (`share.record.lock.duration.ms`, default 30s). Overrun it and the record is redelivered to another consumer while you are still processing it
+| A record stays in flight until your function returns. There is no clock
+
+| Poison messages
+| Broker-side: after `group.share.delivery.attempt.limit` attempts (default 5) the record is Archived and never redelivered
+| In your code: a configurable retry delay function, record skipping, or a circuit breaker
+
+| Broker cost
+| Per-record state is persisted to the internal `__share_group_state` topic through a share coordinator, plus acknowledgement RPCs -- but that topic is theirs alone, so the state is isolated
+| None beyond an ordinary consumer group: no coordinator, no per-record RPCs. The trade is isolation rather than load -- the state rides in the commit metadata field, which is free-form and shared with anything else that has ever owned the group, so foreign bytes there have to be survived rather than prevented -- see <<offset_map,the offset map>>
+
+| Requires
+| KRaft, and Apache Kafka 4.2 / Confluent Platform 8.2. The 4.0 release was early access and explicitly not for production clusters
+| Nothing. The broker does not know you are using it
+
+| Scaling axis
+| *Out.* Several consumers may share one partition, so throughput can scale past the partition count across machines
+| *Up.* One instance processes its whole assignment concurrently; add instances for availability as usual
+|===
+
 [TIP]
 ====
-* If you want unordered queue semantics on Kafka 4.2+, reach for *Share Groups*. The "partitions are fixed, I need more consumers" motivation is now solved at the broker.
-* If you need *key-level ordering with concurrency beyond partition count*, reach for *Parallel Consumer*. Nothing else does that cleanly today.
+* *Both* solve "partitions are fixed, I need more consumers" -- so the choice between them is about *ordering*, not about concurrency. Reach for *Share Groups* on Kafka 4.2+ when ordering genuinely does not matter to you: that condition is the whole trade, not a footnote to it. You get consumers decoupled from partition count at the broker, in exchange for delivery that may be out of order, and for redelivery of a record another consumer may still be working on.
+* Reach for *Parallel Consumer* when you need *key-level ordering with concurrency beyond partition count* -- nothing else does that cleanly today. Also when you need exactly-once together with parallelism, when a processing step can outlive a 30 second lock, or when you are simply not on Kafka 4.2 yet, which includes every cluster still running 3.x.
+* Spreading a *single* partition's throughput across several machines is genuinely theirs alone. Worth putting in perspective, though: that requirement is largely inherited from an era when adding consumers was the only way to add concurrency at all. Parallel Consumer already drives one partition at high concurrency inside a single instance, so what actually remains is throughput beyond what one instance can carry, or a deliberate want for machine-level isolation.
 ====
+
+NOTE: For the reasoning behind the project as a whole -- the problem it exists to solve, why it is solved in the client rather than the broker, and where effort is currently going -- see link:STRATEGY.md[STRATEGY.md].
 
 [[intro]]
 This library lets you process messages in parallel via a single Kafka Consumer meaning you can increase consumer parallelism without increasing the number of partitions in the topic you intend to process.
 For many use cases this improves both throughput and latency by reducing load on your brokers.
 It also opens up new use cases like extreme parallelism, external data enrichment, and queuing.
+
+NOTE: Below 1.0 does not mean unproven.
+The same core engine has been in production use for years.
+What 1.0 is waiting on is a settled API surface, the functionality still intended for it, and confidence that reaches beyond the defects already known.
 
 .Consume many messages _concurrently_ with a *single* consumer instance:
 [source,java,indent=0]
@@ -132,6 +190,7 @@ image::{talk_preview_image}[Talk]
 
 toc::[]
 
+[[motivation]]
 == Motivation
 
 === Why would I need this?
@@ -256,7 +315,11 @@ The end-to-end latency of the responses to these answers needs to be as low as t
 We can break out as described below into the tool for processing that step, then return to the Kafka Streams context.
 * Provisioning extra machines (either virtual machines or real machines) to run multiple clients has a cost, using this library instead avoids the need for extra instances to be deployed in any respect.
 
+[[features-list]]
 == Features List
+
+Renderer-ready source data for every capability in this list lives in link:docs/features/[`docs/features/`].
+This README remains the current presentation until the separate documentation-site work renders that data.
 
 * Have massively parallel consumption processing without running hundreds or thousands of:
 ** Kafka consumer clients,
@@ -283,7 +346,7 @@ without operational burden or harming the cluster's performance
 * Throttle control and broker liveliness management
 * Clean draining shutdown cycle
 * Manual global pause / resume of all partitions, without unsubscribing from topics (useful for implementing a simplistic https://en.wikipedia.org/wiki/Circuit_breaker_design_pattern[circuit breaker])
-** Circuit breaker patterns for individual paritions or keys can be done through throwing failure exceptions in the processing function (see https://github.com/confluentinc/parallel-consumer/pull/291[PR #291 Explicit terminal and retriable exceptions] for further refinement)
+** Circuit breaker patterns for individual paritions or keys can be done through throwing failure exceptions in the processing function (see https://github.com/confluentinc/parallel-consumer/pull/291[confluentinc PR #291 Explicit terminal and retriable exceptions] for further refinement)
 ** Note: Pausing of a partition is also automatic, whenever back pressure has built up on a given partition
 
 //image:https://codecov.io/gh/astubbs/parallel-consumer/branch/master/graph/badge.svg["Coverage",https://codecov.io/gh/astubbs/parallel-consumer]
@@ -419,7 +482,7 @@ This library is copyright Confluent, Inc. and contributors, and licensed under t
 
 === Maven
 
-This project is available in Maven Central, https://repo1.maven.org/maven2/io/github/astubbs/parallelconsumer/[repo1].
+This project is available in Maven Central, https://repo1.maven.org/maven2/bz/stub/parallelconsumer/[repo1].
 
 Latest version can be seen https://search.maven.org/artifact/bz.stub.parallelconsumer/parallel-consumer-core[here].
 
@@ -478,7 +541,8 @@ Where `${project.version}` is the version to be used:
 ----
 
 <1> Setup your clients as per normal.
-A Producer is only required if using the `produce` flows.
+A Producer is only required if using the `produce` flows: hand PC either a finished `Producer` instance, or the configuration to build one from as `producerConfig` - any `ProducerConfig` key, serializers included, and PC builds it with `new KafkaProducer<>(config)`.
+In the transactional commit mode, set `transactional.id` in that configuration as you would when building the producer yourself.
 <2> Choose your ordering type, `KEY` in this case.
 This ensures maximum concurrency, while ensuring messages are processed and committed in `KEY` order, making sure no offset is committed unless all offsets before it in it's partition, are completed also.
 <3> The maximum number of concurrent processing operations to be performing at any given time.
@@ -495,7 +559,7 @@ After this setup, one then has the choice of interfaces:
 * `JStreamVertxParallelStreamProcessor`
 
 There is another interface: `ParallelConsumer` which is integrated, however there is currently no immediate implementation.
-See {base_confluent_url}/issues/12[issue #12], and the `ParallelConsumer` JavaDoc:
+See {base_confluent_url}/issues/12[confluentinc issue #12], and the `ParallelConsumer` JavaDoc:
 
 [source,java]
 ----
@@ -543,12 +607,17 @@ You can also optionally provide a callback function to be run after the message(
                 }
         );
 
+[[callbacks-vs-streams]]
 ==== Callbacks vs Streams
 
 You have the option to either use callbacks to be notified of events, or use the `Streaming` versions of the API, which use the `java.util.stream.Stream` system:
 
 * `JStreamParallelStreamProcessor`
 * `JStreamVertxParallelStreamProcessor`
+
+IMPORTANT: The returned stream is *live*. It yields each result as it is produced and waits in between, and it ends when you close the consumer -- after delivering whatever was already queued.
+So consume it on a thread that can stay with it, as the Vert.x example below does; consuming it is what keeps the result queue drained.
+A consumer that walks away early leaves nobody draining, which is what caused link:https://github.com/confluentinc/parallel-consumer/issues/912[confluentinc#912].
 
 In future versions, we plan to look at supporting other streaming systems like https://github.com/ReactiveX/RxJava[RxJava] via modules.
 
@@ -604,9 +673,16 @@ There is no guarantee that the messages will be retried again in the same batch.
             Map<String, String> params = UniMaps.of("recordKey", consumerRecord.key(), "payload", consumerRecord.value());
             return new RequestInfo("localhost", port, "/api", params); // <1>
         });
+
+        resultConsumer = new Thread(() -> // <2>
+                resultStream.forEach(result -> log.info("From result stream: {}", result)),
+                "vertx-result-stream-consumer");
+        resultConsumer.start();
 ----
 
 <1> Simply return an object representing the request, the Vert.x HTTP engine will handle the rest, using it's non-blocking engine
+<2> The stream is live -- it waits for results and ends when the consumer is closed -- so it gets a thread of its own rather than blocking startup.
+Consuming it is what keeps the result queue drained; `close()` then joins this thread once the stream has ended.
 
 See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/bz/stub/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
 
@@ -680,6 +756,55 @@ See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example
 
 [[upgrading]]
 == Upgrading
+
+[[upgrading-from-upstream]]
+=== From 0.5 to 0.6
+
+0.6.0.0 is the first release of this community fork, and it changes two identifiers: the Maven coordinates, and the Java package names.
+
+// Everything down to freeze-end MUST keep the old spelling: it is the instruction for getting off it,
+// and a migration step that names only the destination tells the reader nothing. rename-packages.sh
+// would otherwise rewrite these into a package moving to itself and a sed that does nothing - which
+// passes every check the script has, because the sweep hunts old spellings that SHOULD have been
+// rewritten and these are the ones that must NOT be.
+// rename-packages: freeze-begin(upgrade-instructions)
+Upstream's last release was published as `io.confluent.parallelconsumer`; this fork publishes as `bz.stub.parallelconsumer`, and uses that namespace in its own source.
+
+First, the dependency:
+
+[source,xml]
+----
+<dependency>
+    <!-- was: <groupId>io.confluent.parallelconsumer</groupId> -->
+    <groupId>bz.stub.parallelconsumer</groupId>
+    <artifactId>parallel-consumer-core</artifactId>
+    <version>0.6.0.0</version>
+</dependency>
+----
+
+Then your imports.
+A find-and-replace of `io.confluent.parallelconsumer` with `bz.stub.parallelconsumer` across your source is sufficient:
+
+[source,java]
+----
+// was: import io.confluent.parallelconsumer.ParallelStreamProcessor;
+import bz.stub.parallelconsumer.ParallelStreamProcessor;
+----
+
+Across a whole tree, that is one line:
+
+[source,bash]
+----
+find . -name '*.java' -exec sed -i 's/io\.confluent\.parallelconsumer/bz.stub.parallelconsumer/g' {} +
+----
+
+NOTE: That `sed -i` is GNU syntax. On macOS or BSD, use `sed -i '' -e 's/…/…/g'` instead -- BSD `sed` reads the argument after `-i` as a backup-file suffix.
+// rename-packages: freeze-end(upgrade-instructions)
+
+Nothing else changes.
+The API is source-compatible, so beyond the import lines no source edit is needed, and most codebases reference only a handful of types.
+Committed offset metadata is unchanged too, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
+The library's shared internal utilities moved with the rest, into `bz.stub.parallelconsumer.internal.utils` -- they were always plumbing, they are not part of the published API, and they are now named as such.
 
 === From 0.4 to 0.5
 
@@ -806,7 +931,9 @@ You can access the retry count of a record through it's wrapped `WorkContainer` 
 .Example retry delay function implementing exponential backoff
 [source,java,indent=0]
 ----
-        final double multiplier = 0.5;
+        // Exponential backoff: the multiplier must be > 1 so the delay GROWS with each failed
+        // attempt. Here: 1s, 2s, 4s, 8s ...
+        final double multiplier = 2;
         final int baseDelaySecond = 1;
 
         ParallelConsumerOptions.<String, String>builder()
@@ -884,6 +1011,7 @@ This will put the message back in the queue.
         });
 ----
 
+[[head-of-line-blocking]]
 === Head of Line Blocking
 
 In order to have a failing record not block progress of a partition, one of the ordering modes other than `PARTITION` must be used, so that the system is allowed to process other messages that are perhaps in `KEY` order or in the case of `UNORDERED` processing - any message.
@@ -893,10 +1021,10 @@ This is because in `PARTITION` ordering mode, records are always processed in or
 
 Improvements to this system are planned, see the following issues:
 
-* https://github.com/confluentinc/parallel-consumer/issues/65[Enhanced retry epic #65]
+* https://github.com/confluentinc/parallel-consumer/issues/65[Enhanced retry epic confluentinc#65]
 * https://github.com/confluentinc/parallel-consumer/issues/48[Support scheduled message processing (scheduled retry)]
-* https://github.com/confluentinc/parallel-consumer/issues/196[Provide option for max retires, and a call back when reached (potential DLQ) #196]
-* https://github.com/confluentinc/parallel-consumer/issues/34[Monitor for progress and optionally shutdown (leave consumer group), skip message or send to DLQ #34]
+* https://github.com/confluentinc/parallel-consumer/issues/196[Provide option for max retires, and a call back when reached (potential DLQ) confluentinc#196]
+* https://github.com/confluentinc/parallel-consumer/issues/34[Monitor for progress and optionally shutdown (leave consumer group), skip message or send to DLQ confluentinc#34]
 
 == Result Models
 
@@ -946,6 +1074,32 @@ NOTE:: As with the `synchronous` processing mode, this will also block the proce
 
 CAUTION: This cannot be true for any externally integrated third party system, unless that system is __idempotent__.
 
+[[transaction-system-verified]]
+==== What is machine-checked, as of 2026-08-08
+
+The guarantees on this page are enumerated as a register (`TransactionalClaim`) and each one is tied to a test.
+A build fails if a claim recorded as covered has no test, and also if a claim's sentence here is edited without updating the register - so this section cannot quietly drift from what is actually verified.
+
+The distinction between the two lists below is deliberate, because it is what the evidence actually supports.
+
+*Verified against a real broker:* an open transaction is invisible at `read_committed` while a `read_uncommitted` reader sees it; a `read_committed` consumer is blocked at the first still-open transaction rather than filtering around it; an aborted or timed-out transaction never becomes visible; a crash before commit leaves neither the results nor the source offset, and the replay commits them together with each result present exactly once; and if one `send` in a `pollAndProduceMany` result set fails terminally - for example a record over `max.request.size` - none of that result set becomes visible.
+
+*Verified in-process, against the lock and options machinery with a mocked producer:* all parallel workers share one bulk transaction; no record is produced whose source offset is excluded from the transaction being committed; processing is blocked for the duration of the commit lock; and the commit interval default changes when transactional mode is selected.
+These are real proofs of PC's own logic, but no broker takes part in them - so read them as statements about what PC does, not about what a cluster observed.
+
+Each claim in both lists has a negative control that was observed to fail: the mechanism it guards was deliberately broken and the test went red for the stated reason.
+
+The terminally-failed-send case above used to leave a *partial* result set visible to a `read_committed` consumer, silently, because a producer callback threw and pre-empted the Kafka client's own transition of the transaction into an abortable state.
+It was found by these tests and fixed; the test that found it is now the regression test.
+
+The commit-interval default used to be applied by comparing your configured value against the default by reference identity, so `commitInterval(ParallelConsumerOptions.DEFAULT_COMMIT_INTERVAL)` in transactional mode was treated as "not set" and silently replaced with 100ms - fifty times the broker load configured, with no log line.
+Found by this register, fixed in astubbs/parallel-consumer#422: unset is now the absence of a value, and any value you set is kept, whatever it equals.
+
+One guarantee is attributed rather than re-proved here, and is marked as such in the register: the commit-lock timeout failing fast.
+It is covered by an existing test, but no negative control was observed for it, so it is not recorded as proved.
+The produce-lock timeout returning the record for retry started out the same way and no longer is: the eager-processing test holds the commit lock shut until a worker's acquisition is observed to time out, then watches that record's retry succeed, and removing the hold turns it red.
+It is recorded `PROVED`.
+
 For implementations details, see the <<Transactional System Architecture>> section.
 
 .From the Options Javadoc
@@ -985,9 +1139,10 @@ For implementations details, see the <<Transactional System Architecture>> secti
          * message replay may cause duplicates in external systems which is unavoidable - external systems must be
          * idempotent).
          * <p>
-         * The default commit interval {@link AbstractParallelEoSStreamProcessor#KAFKA_DEFAULT_AUTO_COMMIT_FREQUENCY}
+         * The default commit interval {@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL}
          * gets automatically reduced from the default of 5 seconds to 100ms (the same as Kafka Streams <a
          * href=https://docs.confluent.io/platform/current/streams/developer-guide/config-streams.html">commit.interval.ms</a>).
+         * The reduction applies only when no interval was set; an interval set explicitly is kept, whatever its value.
          * Reducing this configuration places higher load on the broker, but will reduce (but cannot eliminate) replay
          * upon failure. Note also that when using transactions in Kafka, consumption in {@code READ_COMMITTED} mode is
          * blocked up to the offset of the first STILL open transaction. Using a smaller commit frequency reduces this
@@ -1036,6 +1191,49 @@ For implementations details, see the <<Transactional System Architecture>> secti
          */
 ----
 
+[[shutdown]]
+== Shutdown and Close Modes
+
+There are two ways to shut the system down.
+`closeDrainFirst()` (`DrainingMode.DRAIN`) stops polling the broker, then keeps processing the records it has already downloaded until that backlog is empty, and only then shuts the worker pool down.
+`closeDontDrainFirst()` (`DrainingMode.DONT_DRAIN`) also stops polling, but throws away the queued records that have not started yet, and waits only for the records actually in flight in your user function.
+Discarded records are simply never committed, so they are redelivered to whichever consumer picks up the partition next.
+Both modes commit the offsets of everything that did complete, so neither mode loses finished work.
+
+IMPORTANT: A bare `close()` is `closeDontDrainFirst()` - the *non* draining mode.
+That includes the implicit close from try-with-resources, as the processors are `Closeable`.
+If you want the queued backlog finished first, you have to ask for it with `closeDrainFirst()`.
+
+Two options bound how long a close may take, and they apply to different phases:
+
+* `shutdownTimeout` (default 10 seconds) is how long the worker pool is given to finish the records already in flight.
+When it expires the remaining workers are interrupted, so a user function that swallows interrupts can still hold the close up.
+* `drainTimeout` (default 30 seconds) is the extra budget for working through the queued backlog, so it only has an effect in `DRAIN` mode.
+
+A `DONT_DRAIN` close therefore waits up to `shutdownTimeout`, and a `DRAIN` close up to `drainTimeout` plus `shutdownTimeout` (both plus a fixed ten second grace period).
+Exceeding that budget throws a `TimeoutException` out of `close`, rather than returning quietly.
+
+NOTE: The `Duration` argument on the `close(Duration, ...)` overloads overrides `shutdownTimeout` only - `drainTimeout` always comes from the options.
+
+.Configuring the close timeouts, and closing with draining
+[source,java,indent=0]
+----
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(getKafkaConsumer())
+                .drainTimeout(Duration.ofMinutes(2)) // <1>
+                .shutdownTimeout(Duration.ofSeconds(30)) // <2>
+                .build();
+        var pc = ParallelStreamProcessor.createEosStreamProcessor(options);
+
+        pc.poll(context -> processRecord(context.getSingleRecord().getConsumerRecord()));
+
+        pc.closeDrainFirst(); // <3>
+----
+
+<1> Budget for finishing the already downloaded backlog - only used by a `DRAIN` close.
+<2> Budget for finishing the records in flight, used by both modes.
+<3> Drain the backlog before closing. `close()` on its own would not.
+
 [[streams-usage]]
 == Using with Kafka Streams
 
@@ -1048,7 +1246,9 @@ For a code example, see the <<streams-usage-code>> section.
 
 .Example usage with Kafka Streams
 image::https://lucid.app/publicSegments/view/43f2740c-2a7f-4b7f-909e-434a5bbe3fbf/image.png[Kafka Streams Usage,align="center"]
+// [[mertics]] is a long-standing misspelling. Kept so existing links still resolve.
 [[mertics]]
+[[metrics]]
 == Metrics
 
 Metrics collection subsystem is implemented using Micrometer. This allows for flexible configuration of target metrics backend to be used. See below on example of how to configure MeterRegistry for Parallel Consumer to use for metrics collection.
@@ -1140,6 +1340,12 @@ Total number of incomplete offsets
 Gauge `pc.shards.size{subsystem=shardmanager}`
 
 Number of records queued for processing across all shards
+
+**Shards Max Size**
+
+Gauge `pc.shards.max.size{subsystem=shardmanager}`
+
+Maximum number of records queued in any single shard (the most-loaded shard) - useful for spotting hot-key shards under KEY ordering
 
 ==== Work Manager
 
@@ -1255,15 +1461,23 @@ NOTE:: any additional binders / metrics need to be cleaned up appropriately - fo
 [[roadmap]]
 == Roadmap
 
-For released changes, see the link:CHANGELOG.adoc[CHANGELOG].
+*Yes, this is maintained - and this repository is where the maintenance happens.*
+{base_url}[astubbs/parallel-consumer] is the active line of development: it is what is published to
+Maven Central as `bz.stub.parallelconsumer`, and it is where fixes, releases and issue triage land.
+The original {base_confluent_url}[confluentinc/parallel-consumer] is no longer actively maintained.
 
-For features in development and a more accurate view on the roadmap, have a look at the
-https://github.com/confluentinc/parallel-consumer/issues[GitHub issues], and clone https://github.com/astubbs/parallel-consumer[Antony's fork].
+For what has already shipped, see the link:CHANGELOG.adoc[CHANGELOG].
+
+For the direction of the project, see link:docs/data/roadmap.yaml[the roadmap data]. For work in progress and
+known defects, use the {issues_link}[issue tracker on this repository]. We mirrored every open issue from
+the upstream tracker into it (labelled `upstream-mirror` and titled
+`confluentinc#NNN: ...`), so an upstream report you are following has a counterpart here that reflects its
+real status on this fork. Please raise new issues here rather than upstream - see <<Support and Issues>>.
 
 == Usage Requirements
 
 * Client side
-** JDK 8
+** JDK 8, except for the Mutiny module - see <<java-version-per-module>> below
 ** SLF4J
 ** Apache Kafka (AK) Client libraries 2.5
 ** Supports all features of the AK client (e.g. security setups, schema registry etc)
@@ -1274,6 +1488,89 @@ https://github.com/confluentinc/parallel-consumer/issues[GitHub issues], and clo
 * Server side
 ** Should work with any cluster that the linked AK client library works with
 *** If using EoS/Transactions, needs a cluster setup that supports EoS/transactions
+
+[[java-version-per-module]]
+=== Java Version per Module
+
+Most modules run on Java 8. The Mutiny module does not, because SmallRye Mutiny itself is built for Java 17.
+
+|===
+| Module | Minimum Java
+
+| `parallel-consumer-core`
+| 8
+
+| `parallel-consumer-vertx`
+| 8
+
+| `parallel-consumer-reactor`
+| 8
+
+| `parallel-consumer-mutiny`
+| 17
+
+|===
+
+WARNING: Adding `parallel-consumer-mutiny` to a Java 8 or Java 11 application will build without complaint and then fail at runtime with an `UnsupportedClassVersionError`, because its SmallRye Mutiny dependency is compiled for Java 17.
+Maven cannot warn you about this, so check the table before picking the module.
+The other modules are unaffected, and using them does not pull Mutiny in.
+
+=== Module maturity
+
+Reliability and API stability are separate questions, and the version number answers neither.
+
+On reliability: 0.6.0.0 ships only once every known *critical* defect in its scope is resolved and evidenced.
+Critical is the line, deliberately. Claiming that all known defects are fixed would be a promise this project cannot
+keep, and non-critical defects are not claimed to be fixed. The claim also does not deny that unknown defects exist.
+
+On API stability: the published modules remain pre-1.0, so a compatible change is preferred but not guaranteed.
+
+The published modules share one answer to both. They all depend on `parallel-consumer-core` and run the same engine, so
+there is no per-module reliability gradient to publish. What does differ is the experimental artifacts, which are a
+separate and explicit opt-in and cannot change an application that does not depend on one.
+
+Virtual threads, micro-batching and a dead-letter queue are intentionally deferred capabilities, not exceptions to the
+critical-defect gate.
+
+|===
+| Module | Status | Reliability confidence | API expectation | Use this if
+
+| `parallel-consumer-core`
+| Production use
+| Release-gated on known critical defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| You need ordered concurrent Kafka consumption in a standard Java application.
+
+| `parallel-consumer-vertx`
+| Production use
+| Release-gated on known critical defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses Vert.x asynchronous APIs.
+
+| `parallel-consumer-reactor`
+| Production use
+| Release-gated on known critical defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses Project Reactor.
+
+| `parallel-consumer-mutiny`
+| Production use (Java 17)
+| Release-gated on known critical defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses SmallRye Mutiny.
+
+| `parallel-consumer-examples`
+| Reference examples
+| Exercises supported use cases; not a runtime dependency
+| Changes with the APIs it demonstrates
+| You want runnable examples before choosing an integration module.
+
+|===
+
+The experimental artifacts are not listed above because they are not in this release's build yet. When one lands it
+brings its own row, and depending on that artifact is the entire opt-in. For the reliability evidence and the
+release-time limits behind the claim, see link:docs/data/testing-evidence.yaml[the testing evidence data] and
+link:docs/data/module-maturity.yaml[the module-maturity data].
 
 == Development Information
 
@@ -1315,6 +1612,10 @@ The source of truth readme is in link:{project_root}/src/docs/README_TEMPLATE.ad
 
 === Maven targets
 
+The first command in a fresh clone is a whole-reactor `mvn clean install -DskipTests`.
+The test sources need code that is *generated* at the `generate-test-sources` phase, so any invocation that stops earlier - `mvn compile` above all - leaves it absent and the tests then fail to compile with `cannot find symbol: class ManagedTruth`.
+See the Note below, and link:{project_root}/docs/building.md[docs/building.md] for the full recipe.
+
 [qanda]
 Compile and run all tests::
 `mvn verify`
@@ -1349,8 +1650,12 @@ git bisect run ./bisect.sh
 ----
 
 Note::
-`mvn compile` - Due to a bug in Maven's handling of test-jar dependencies - running `mvn compile` fails, use `mvn test-compile` instead.
-See https://github.com/confluentinc/parallel-consumer/issues/162[issue #162]
+`mvn compile` fails on a fresh clone, and misleadingly: it dies resolving `parallel-consumer-core:jar:tests` for the `parallel-consumer-vertx` module, which reads like a broken repository or a network outage.
+It is neither - `compile` stops before `test-compile`, so core's test-jar is never produced inside that reactor run.
+Where that jar is already cached from an earlier `install`, the same command instead succeeds while generating nothing, and the failure resurfaces later as `cannot find symbol: class ManagedTruth`.
+Use `mvn clean install -DskipTests` or `mvn test-compile` instead.
+See https://github.com/confluentinc/parallel-consumer/issues/162[confluentinc#162],
+https://github.com/astubbs/parallel-consumer/issues/180[astubbs#180] / https://github.com/confluentinc/parallel-consumer/issues/861[confluentinc#861],
 and this https://stackoverflow.com/questions/4786881/why-is-test-jar-dependency-required-for-mvn-compile[Stack Overflow question].
 
 === Build Scripts
@@ -1441,6 +1746,31 @@ docker container ls --filter 'label=org.testcontainers=true'
 
 See https://github.com/testcontainers/testcontainers-java/pull/1781[this testcontainers PR] for details on the reusable containers feature.
 
+=== Searching the repository across every branch
+
+Most of what this project knows about itself is not on `master`.
+Measured 2026-09-01: **580 of the 901 documents under `docs/` exist only on branches that have not merged**, because a note travels with the work that produced it and many of those branches never land.
+
+So `grep` in your checkout answers a narrower question than the one you asked, and returns a false negative carrying the authority of a completed check.
+
+`bin/inflight.mjs` is the front door for asking across every ref instead:
+
+[source,bash]
+----
+node bin/inflight.mjs help                                  # every command, and when to reach for it
+node bin/inflight.mjs prior-art --headings <term>           # before forming any hypothesis
+node bin/inflight.mjs note find <fuzzy-name>                # which note is this, and who carries it
+node bin/inflight.mjs note drift <path>                     # what other branches have that master does not
+node bin/inflight.mjs branch <ref>                          # what a branch is, and whether anything tracks it
+node bin/inflight.mjs stranded                              # work that will be lost if nobody acts
+----
+
+Every command exits `0` when it *ran* — whatever it found — and `2` when it could not run.
+That distinction is the point: "nothing, across 436 refs" is a result, and a search that never happened is not.
+
+Worked examples, including the CI failure that this tool diagnosed on its own pull request, are in link:docs/inflight-tool.md[`docs/inflight-tool.md`].
+It reads the repository only; it is not a task tracker and owns no schema of its own.
+
 == Implementation Details
 
 === Core Architecture
@@ -1487,6 +1817,81 @@ This is not an _exactly once guarantee_, as message replay cannot be prevented a
 CAUTION: Note that Kafka's Exactly Once Semantics (EoS) (transactional processing) also does not prevent _duplicate message replay_ - it *presents* an _effectively once_ result messages in Kafka topics.
 Messages may _still_ be replayed when using `EoS`.
 This is an important consideration when using it, especially when integrating with thrid party systems, which is a very common pattern for utilising this project.
+
+[[reducing-duplicate-replay]]
+==== Reducing duplicate replay: choose the cooperative assignor, and drain on close
+
+Two settings dominate how many messages get replayed when your consumer group changes membership, and
+neither is specific to this library -- they are ordinary Kafka consumer behaviour. They are called out
+here because the effect is large, it is easy to leave on the worse setting by accident, and the cost
+lands as duplicate work in *your* processing function.
+
+. *Use `CooperativeStickyAssignor`.* Under the default eager protocol, *any* membership change revokes
+*every* partition from *every* member, so all in-flight work everywhere is abandoned and redelivered --
+including on members that were not joining or leaving. Cooperative rebalancing keeps existing
+assignments and moves only what must move.
+. *Close by draining* (`closeDrainFirst()`), not `close()`. `close()` is
+`closeDontDrainFirst()`: it abandons in-flight work rather than finishing it, so that work is
+redelivered to whoever picks the partition up. Draining lets it finish and commit first.
+
+The ordering matters: the assignor is the larger effect by far, because it governs work abandoned on
+*every* member, while the close mode only governs the work of the instance actually shutting down.
+
+.Duplicate deliveries under deliberate rebalance churn, 250,000 records
+[cols="2,1,1", options="header"]
+|===
+| Configuration | Duplicates | Share of total
+
+| Eager assignor, `close()`
+| 2,421
+| ~1.0%
+
+| Eager assignor, `closeDrainFirst()`
+| 2,007
+| ~0.8%
+
+| `CooperativeStickyAssignor`, `close()`
+| 405
+| ~0.16%
+
+| `CooperativeStickyAssignor`, `closeDrainFirst()`
+| 369
+| ~0.15%
+|===
+
+CAUTION: *Where these numbers come from, and what they are not.* They were measured on 2026-08-19 by
+this project's *chaos test suite* -- `ChaosRevokeUnderWorkIT` and its cooperative and draining
+variants -- on a single seed, `4734674029169027864`, one run per configuration. That suite stops and
+restarts fleet members every few hundred milliseconds for a solid minute while deliberately slow
+records are in flight, and is built to be far more hostile than production precisely so effects like
+this are visible at all.
++
+So: *do not read these as rates you should expect.* A normally-operating deployment rebalances
+rarely and would see a small fraction of this, and one run per cell is a direction rather than a
+precise figure. The *relative* ordering between the four configurations is the part that carries
+over, and it is large enough that a single run establishes it.
++
+To regenerate them, run the four cells against the same seed and count deliveries beyond the
+expected record total:
++
+[source,bash]
+----
+./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+  -Dincluded.groups=chaos -Dexcluded.groups= \
+  -Dchaos.seed=4734674029169027864 \
+  -Dit.test='ChaosRevokeUnderWorkIT'                  # eager, close()
+# then ChaosRevokeUnderWorkDrainIT, ChaosRevokeUnderWorkCooperativeIT,
+# ChaosRevokeUnderWorkCooperativeDrainIT for the other three cells
+----
++
+NOTE: A forthcoming demonstration application will supersede this table by running these
+configurations interactively -- against your own topic and your own processing function, which
+answers the question a published table never can.
+
+None of this makes replay impossible, and nothing can: as stated above, replay across failure cannot
+be prevented, so a processing function that must not repeat side effects still needs to be idempotent
+or externally deduplicated. These settings reduce how often you pay that cost, not whether you must
+handle it.
 
 As mentioned previously, offsets are always committed in the correct order and only once all previous messages have been successfully processed; regardless of <<ordering-guarantees,ordering mode>> selected.
 We call this the "highest committable offset".
@@ -1553,6 +1958,8 @@ So it's very efficient.
 
 == Attribution
 
+KAFKA is a registered trademark of The Apache Software Foundation and has been licensed for use by Antony Stubbs and contributors. Antony Stubbs and contributors have no affiliation with and are not endorsed by The Apache Software Foundation.
+
 http://www.apache.org/[Apache®], http://kafka.apache.org/[Apache Kafka], and http://kafka.apache.org/[Kafka®] are either registered trademarks or trademarks of the http://www.apache.org/[Apache Software Foundation] in the United States and/or other countries.
 
 == Tools
@@ -1574,5 +1981,3 @@ https://www.google.com/url?q=https://www.yourkit.com/.net/profiler/&source=gmail
 == Change Log
 
 Release notes for every version live in link:CHANGELOG.adoc[CHANGELOG.adoc].
-
-

@@ -1,1 +1,5 @@
-2,2592,bz.stub.parallelconsumer.examples.reactor.ReactorAppTest,test
+1,0,bz.stub.parallelconsumer.examples.reactor.TestConventionsArchTest,TestConventionRules > test_methods_must_have_names_longer_than_one_character
+1,1,bz.stub.parallelconsumer.examples.reactor.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
+1,3,bz.stub.parallelconsumer.examples.reactor.TestConventionsArchTest,TestConventionRules > test_classes_must_be_named_so_surefire_collects_them
+1,810,bz.stub.parallelconsumer.examples.reactor.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
+3,2320,bz.stub.parallelconsumer.examples.reactor.ReactorAppTest,test

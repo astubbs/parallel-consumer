@@ -72,7 +72,7 @@ prepare-deps:
         restore-keys: |
           setup-java-Linux-x64-maven-
     - name: Download all dependencies
-      run: ./mvnw --batch-mode -Pci dependency:go-offline -Dlicense.skip -DincludeScope=test -U
+      run: ./mvnw --batch-mode -Pci dependency:go-offline -DincludeScope=test -U
     - name: Save Maven cache (rotating key)
       if: success()
       uses: actions/cache/save@v4
@@ -117,6 +117,6 @@ With cache warming, all artifacts (including vertx) are downloaded by a single `
 
 ## Related Issues
 
-- PR #48 (`fix/prepare-deps-push-builds`) - the fix that extends cache warming to push builds
+- PR astubbs#48 (`fix/prepare-deps-push-builds`) - the fix that extends cache warming to push builds
 - `docs/solutions/security-issues/ci-hardening-pull-request-target-mutable-refs-publish-gate-2026-04-21.md` - companion CI hardening doc
 - `.mvn/maven.config` - connection timeout settings (10s connect, 120s read, 3 retries)

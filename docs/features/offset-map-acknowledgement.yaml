@@ -1,0 +1,36 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Per-record acknowledgement and offset-map commits
+category: delivery
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: Offset-map creation and commit support landed before the first tagged release.
+  milestones:
+    - release: 0.3.0.0
+      basis: Added wider BitSet and run-length formats plus payload-size backpressure.
+readme_anchor: offset_map
+summary: Track completed records independently and commit only the contiguous Kafka offset plus encoded completion state.
+use_this_when:
+  - Records can finish out of order and replaying already-completed work would be costly.
+  - You need Kafka commits to reflect completed work rather than fetch order.
+setup:
+  configure:
+    - Disable the Kafka consumer's enable.auto.commit setting.
+    - Let Parallel Consumer own acknowledgement and commit coordination.
+opt_in:
+  mechanism: Use a Parallel Consumer processing API with its managed consumer.
+  isolated_from_stable_modules: false
+boundaries:
+  - The encoded state is stored in Kafka commit metadata and is subject to Kafka's metadata-size limit.
+  - Completion tracking preserves Kafka delivery semantics only. See bulk-kafka-transactions.yaml.
+references:
+  - label: Offset-map architecture
+    path: README.adoc#offset_map

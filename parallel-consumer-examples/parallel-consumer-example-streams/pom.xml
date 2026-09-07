@@ -2,6 +2,7 @@
 <!--
 
     Copyright (C) 2020-2025 Confluent, Inc.
+    Modifications Copyright (C) 2026 Antony Stubbs and contributors
 
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -14,7 +15,23 @@
     </parent>
 
     <artifactId>parallel-consumer-example-streams</artifactId>
-    <name>Kafka Parallel Consumer Example - Streams</name>
+    <name>Parallel Consumer - Examples - Streams</name>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Version comes from jackson.examples.version in the examples parent, which carries
+                 the reasoning for the number and for why it is not managed at the root. The BOM
+                 rather than a bare databind pin, because databind 2.18 needs jackson-core and
+                 jackson-annotations on the same line, and kafka-streams pins core here. -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.examples.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>

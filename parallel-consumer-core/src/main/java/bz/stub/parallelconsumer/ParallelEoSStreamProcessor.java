@@ -7,7 +7,7 @@ package bz.stub.parallelconsumer;
 
 import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.ProducerManager;
 import lombok.SneakyThrows;
@@ -119,7 +119,7 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
             }
         }
 
-        // wait for all acks to complete, see PR #356 for a fully async version which doesn't need to block here
+        // wait for all acks to complete, see PR confluentinc#356 for a fully async version which doesn't need to block here
         try {
             var futures = pm.produceMessages(recordListToProduce);
 
@@ -137,8 +137,15 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
         } catch (InvalidPidMappingException invalidPidMappingException) {
             log.error("Closing parallel Consumer due to InvalidPidMappingException", invalidPidMappingException);
             this.closeOnException(invalidPidMappingException);
+            // Rethrow, or runUserFunctionInternal marks every WorkContainer in this batch SUCCEEDED and returns
+            // an empty result list - records whose output was never produced, recorded as done. Today nothing
+            // commits that verdict only because closeOnException blocks this worker until the instance is
+            // CLOSED; the verdict is wrong regardless, and must not depend on that. Wrapped like the arm below
+            // so the failure travels the same route as any other produce failure.
+            throw new PCInternalRuntimeException("Producer id mapping invalid - the instance is closing, and this "
+                    + "batch is failed so its offsets are not committed", invalidPidMappingException);
         } catch (Exception e) {
-            throw new InternalRuntimeException("Error while waiting for produce results", e);
+            throw new PCInternalRuntimeException("Error while waiting for produce results", e);
         }
         return results;
     }

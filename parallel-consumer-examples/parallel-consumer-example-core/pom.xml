@@ -2,6 +2,7 @@
 <!--
 
     Copyright (C) 2020-2025 Confluent, Inc.
+    Modifications Copyright (C) 2026 Antony Stubbs and contributors
 
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -14,7 +15,7 @@
     </parent>
 
     <artifactId>parallel-consumer-example-core</artifactId>
-    <name>Kafka Parallel Consumer Example - Core</name>
+    <name>Parallel Consumer - Examples - Core</name>
 
     <dependencies>
         <!-- tag::exampleDep[] -->
@@ -36,14 +37,4 @@
             <artifactId>commons-lang3</artifactId>
         </dependency>
     </dependencies>
-
-    <repositories>
-        <!-- tag::exampleRepo[] -->
-        <repository>
-            <name>Confluent</name>
-            <id>confluent</id>
-            <url>https://packages.confluent.io/maven/</url>
-        </repository>
-        <!-- end::exampleRepo[] -->
-    </repositories>
 </project>

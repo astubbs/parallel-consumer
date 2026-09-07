@@ -1,13 +1,18 @@
-4,1,bz.stub.parallelconsumer.mutiny.MutinyTest,runSubscriptionOnExample
-4,2,bz.stub.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
-4,10,bz.stub.parallelconsumer.mutiny.MutinyTest,emitOnExample
-4,227,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[3]
-4,245,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[1]
-4,1406,bz.stub.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
-4,4083,bz.stub.parallelconsumer.mutiny.MutinyPCTest,kickTires
-4,5101,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[2]
-4,8094,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[3]
-4,8309,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[2]
-4,8603,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[1]
-4,11734,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,averageBatchSizeTest
-4,17283,bz.stub.parallelconsumer.mutiny.MutinyPCTest,concurrencyTest
+1,1,bz.stub.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > test_methods_must_have_names_longer_than_one_character
+1,2,bz.stub.parallelconsumer.mutiny.MutinyRetriableClassificationTest,mutinyHandsTheFailureConsumerTheOriginalThrowable
+1,5,bz.stub.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > test_classes_must_be_named_so_surefire_collects_them
+1,88,bz.stub.parallelconsumer.mutiny.MutinyRetriableClassificationTest,aRetriableSurvivingMutinysFailurePathIsStillClassifiedExpected
+1,2399,bz.stub.parallelconsumer.mutiny.MutinyMdcPropagationTest,callersContextReachesTheUserFunctionOnTheMutinyExecutor
+5,3,bz.stub.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
+5,4,bz.stub.parallelconsumer.mutiny.MutinyTest,runSubscriptionOnExample
+5,63,bz.stub.parallelconsumer.mutiny.MutinyTest,emitOnExample
+5,221,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[1]
+5,721,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[3]
+5,2177,bz.stub.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
+5,2800,bz.stub.parallelconsumer.mutiny.MutinyPCTest,kickTires
+5,5605,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[2]
+5,5607,bz.stub.parallelconsumer.mutiny.MutinyPCTest,concurrencyTest
+5,8111,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[3]
+5,8128,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[1]
+5,8608,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[2]
+5,8846,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,averageBatchSizeTest

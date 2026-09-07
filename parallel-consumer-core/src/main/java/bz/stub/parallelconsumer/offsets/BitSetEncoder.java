@@ -7,7 +7,7 @@ package bz.stub.parallelconsumer.offsets;
 
 import bz.stub.parallelconsumer.internal.utils.MathUtils;
 import bz.stub.parallelconsumer.internal.utils.StringUtils;
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.state.PartitionState;
 import lombok.Getter;
 import lombok.ToString;
@@ -160,12 +160,12 @@ public class BitSetEncoder extends OffsetEncoder {
         ByteBuffer wrappedBitSetBytesBuffer = constructWrappedByteBuffer(originalLength, version);
 
         if (wrappedBitSetBytesBuffer.remaining() < bitSetArray.length)
-            throw new InternalRuntimeException("Not enough space in byte array");
+            throw new PCInternalRuntimeException("Not enough space in byte array");
 
         try {
             wrappedBitSetBytesBuffer.put(bitSetArray);
         } catch (BufferOverflowException e) {
-            throw new InternalRuntimeException("Error copying bitset into byte wrapper", e);
+            throw new PCInternalRuntimeException("Error copying bitset into byte wrapper", e);
         }
 
         final byte[] array = wrappedBitSetBytesBuffer.array();

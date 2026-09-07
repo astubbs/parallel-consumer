@@ -1,0 +1,347 @@
+<!-- Extracted from `origin/docs/ideate-dapr-adapter` @d5c8cf1b0, `docs/ideation/2026-08-17-dapr-adapter-ideation.html`. -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Dapr Adapter for Parallel Consumer</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --ink: #23211e; --muted: #6b675f; --line: #e3ded6;
+    --card: #ffffff; --accent: #0f6b5c; --accent-soft: #e7f2ef; --accent-text: #0a5145;
+    --warn: #9a5b00; --warn-soft: #fbf1e2; --info: #274e77; --info-soft: #e9f0f8;
+    --danger: #8c2f2f; --danger-soft: #f9ebea; --chip: #f0ede7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16150f; --ink: #e8e4dc; --muted: #a49e92; --line: #35322a;
+      --card: #1e1c15; --accent: #4dbfa8; --accent-soft: #1c2f2a; --accent-text: #7fd6c4;
+      --warn: #d99a3d; --warn-soft: #2e2618; --info: #7ea9d8; --info-soft: #1b2531;
+      --danger: #d98080; --danger-soft: #2e1c1c; --chip: #2a2820;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 "Charter", "Georgia", "Iowan Old Style", serif;
+  }
+  .wrap { max-width: 900px; margin-inline: auto; padding: 2.5rem 1.5rem 4rem; }
+  h1, h2, h3, .eyebrow, .meta, dt, .chip, th, .jump, figcaption, .verdict {
+    font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+  }
+  h1 { font-size: 1.9rem; line-height: 1.25; margin: .3rem 0 .6rem; }
+  h2 { font-size: 1.3rem; margin: 2.6rem 0 .8rem; border-bottom: 1px solid var(--line); padding-bottom: .35rem; }
+  h3 { font-size: 1.05rem; margin: 0; }
+  p, li { max-width: 70ch; }
+  .eyebrow { text-transform: uppercase; letter-spacing: .12em; font-size: .7rem; color: var(--accent); font-weight: 600; }
+  .meta { color: var(--muted); font-size: .82rem; display: flex; flex-wrap: wrap; gap: .4rem 1.4rem; margin-bottom: 1.6rem; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  a { color: var(--info); }
+  code { font: .86em/1.5 "SF Mono", "Cascadia Code", Menlo, Consolas, monospace; background: var(--chip); padding: .08em .32em; border-radius: 4px; }
+  blockquote { margin: .6rem 0 .6rem .2rem; padding: .1rem .9rem; border-left: 3px solid var(--line); color: var(--muted); font-style: italic; }
+  article.idea { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1.1rem 1.3rem 1.2rem; margin: 1.1rem 0; }
+  .idea-head { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; margin-bottom: .5rem; }
+  .chip { font-size: .72rem; font-weight: 700; padding: .18em .6em; border-radius: 999px; background: var(--chip); color: var(--muted); white-space: nowrap; }
+  .chip.rank { background: var(--accent-soft); color: var(--accent-text); }
+  .chip.axis { background: var(--info-soft); color: var(--info); }
+  dl.fields { margin: .7rem 0 0; }
+  dl.fields dt { text-transform: uppercase; letter-spacing: .09em; font-size: .68rem; font-weight: 700; color: var(--muted); margin-top: .7rem; }
+  dl.fields dd { margin: .15rem 0 0; }
+  .basis-tag { font-weight: 700; color: var(--accent-text); font-family: "SF Mono", Menlo, monospace; font-size: .85em; }
+  .jump { font-size: .85rem; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: .8rem 1.1rem; }
+  .jump ol { margin: .3rem 0 0 1.2rem; padding: 0; }
+  .jump li { margin: .18rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .88rem; margin: .8rem 0; }
+  th, td { border: 1px solid var(--line); padding: .45rem .65rem; text-align: left; vertical-align: top; }
+  th { background: var(--chip); font-size: .74rem; text-transform: uppercase; letter-spacing: .07em; }
+  .callout { border-radius: 8px; padding: .7rem 1rem; margin: .8rem 0; font-size: .92rem; }
+  .callout.warn { background: var(--warn-soft); }
+  .callout.warn .eyebrow { color: var(--warn); }
+  figure { margin: 1rem 0; }
+  figure svg { max-width: 100%; height: auto; display: block; }
+  figcaption { font-size: .78rem; color: var(--muted); margin-top: .35rem; }
+  footer.composition-signal { margin-top: 3.5rem; padding-top: 1rem; border-top: 1px solid var(--line); font-size: .78rem; color: var(--muted); font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif; }
+  .svgtxt { font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif; font-size: 12px; fill: var(--ink); }
+  .svgmut { font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif; font-size: 10.5px; fill: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">Ideation</div>
+<h1>A Dapr Adapter for Parallel Consumer</h1>
+<div class="meta">
+  <span><b>Date</b> 2026-08-17</span>
+  <span><b>Topic</b> dapr-adapter</span>
+  <span><b>Mode</b> repo-grounded</span>
+  <span><b>Focus</b> "look into making a dapr adapter — search existing PRs for prior art"</span>
+</div>
+
+<h2 id="grounding-context">Grounding Context</h2>
+<p><strong>Prior-art search result:</strong> no PR or issue in either <a href="https://github.com/astubbs/parallel-consumer">astubbs/parallel-consumer</a> or upstream <a href="https://github.com/confluentinc/parallel-consumer">confluentinc/parallel-consumer</a> mentions "dapr" — verified across all states, titles and bodies. The real prior art lives in this repo's own git history: <a href="https://github.com/astubbs/parallel-consumer/issues/242">astubbs#242</a> (mirror of confluentinc#154, "Integrate into a Proxy") and three inflight docs captured 2026-08-15 at commit <code>85cfce876</code> — <code>next-study-dapr-and-kafka-proxies.md</code> (the Dapr study), <code>next-http-strategy-ideas.md</code> (§3 names the Dapr adapter "the highest-leverage" integration, with two unknowns: contract expressiveness, and the two-sidecars deployment smell), and <code>next-work-server-pitch-and-buyer.md</code> (the shared-interface architecture and buyer analysis).</p>
+<p><strong>Codebase state:</strong> a proxy sidecar module exists on branch <code>feats/proxy-requirements</code> — <code>ProxyProcessor</code> wraps the core engine as an <code>ExternalEngine</code>; a frozen gRPC v1 protocol carries per-record tokens (topic/partition/offset + delivery epoch + attempt metadata) with epoch fencing of dispatch and report; the engine seam (<code>DispatchSink</code>) imports no transport class. Integration precedent: streams/connect previews ship as isolated opt-in alpha modules.</p>
+<p><strong>External research (high value):</strong> Dapr's pluggable pub/sub contract (<code>pubsub.proto</code>, <code>PullMessages</code>) is a bidirectional gRPC stream where daprd acks <em>per message, independently, not necessarily in delivery order</em> — structurally the same shape as PC's Dispatch/Report cycle. Dapr's built-in Kafka component has documented head-of-line-blocking complaints (<a href="https://github.com/dapr/dapr/issues/5946">dapr#5946</a>). No third-party Dapr component offers ordering-preserving concurrency. KIP-932 share groups are GA (Kafka 4.2.0, 2026-02-17), giving Kafka native <em>unordered</em> concurrent consumption — PC's durable differentiator narrows to <em>order-preserving</em> concurrency. Dapr graduated CNCF (2024-10); pluggable components sit outside its certification lifecycle and have no registry (<a href="https://github.com/dapr/dapr/issues/5210">dapr#5210</a>).</p>
+
+<h2 id="topic-axes">Topic Axes</h2>
+<ul>
+  <li><strong>contract-mapping</strong> — Dapr's <code>pubsub.proto</code> semantics vs the PC engine seam (per-record ack, ordering, in-flight ceiling, epoch fencing)</li>
+  <li><strong>deployment-shape</strong> — the sidecar-or-server fork, the "two sidecars" smell, whether a component can host the engine directly, credentials</li>
+  <li><strong>engine-seam</strong> — reusing ProxyProcessor/ExternalEngine, module isolation, the conformance suite</li>
+  <li><strong>delivery-semantics</strong> — leases/liveness, dying apps, rebalance fencing, at-least-once through Dapr's abstraction, retry ownership</li>
+  <li><strong>positioning-adoption</strong> — coupling-vs-concurrency framing, the post-KIP-932 landscape, distribution without a registry, claims discipline</li>
+</ul>
+
+<h2 id="what-it-unlocks">What a Dapr Adapter Unlocks</h2>
+<p><strong>A new user base, not a feature for the existing one.</strong> PC today is adoptable only by JVM teams programming against a Java library. Dapr's users are the opposite population: polyglot microservice teams (Go, Python, .NET, JS…) on Kubernetes who deliberately don't want to know broker details. One component reaches every Dapr-supported language at once — "one component, not eleven libraries" — a population the current distribution model structurally excludes.</p>
+<p><strong>A real, documented pain removed for them.</strong> Dapr's built-in Kafka component is partition-bounded and processes sequentially per partition; Dapr's own users complain about it (<a href="https://github.com/dapr/dapr/issues/5946">dapr#5946</a>). A PC-backed component removes that ceiling with no change to their programming model. Dapr solves coupling, PC solves concurrency — the adapter multiplies the axes rather than competing, so nothing is cannibalized and nothing has to be abandoned to adopt it.</p>
+<p><strong>Why now.</strong> The value of lifting the partition ceiling scales with how slow the work is, and inference-era workloads got slower — Dapr's growth area is AI workloads: slow, per-item, often key-ordered. Meanwhile KIP-932 sharpens rather than undercuts the case: Kafka natively answers "concurrency, order be damned," leaving ordered concurrency as the empty quadrant — and the Dapr component catalogue is where that gap is most legible to buyers.</p>
+<p><strong>Strategic side-payoffs for PC:</strong> a route to the platform-team buyer at sidecar cost (Component YAML + secret store + app scoping — config governance, though not the operational burden, of the server shape); empirical demand data ordering the eleven-client backlog; and a five-minute cross-language demo path that "adopt our Java library" can never be.</p>
+<p><strong>Honest limits:</strong> consume-transform-produce loses produce-then-complete atomicity (those users stay on the native proxy); discovery is informal (no component registry); and the unlock is conditional on daprd's delivery concurrency — see idea 1, including the patch-upstream option.</p>
+
+<h2 id="ranked-ideas">Ranked Ideas</h2>
+<nav class="jump">
+  <strong>Jump to:</strong>
+  <ol>
+    <li><a href="#i1">The break-of-gauge probe: measure Dapr's semantics before building anything</a></li>
+    <li><a href="#i2">Host the engine <em>in</em> the component — the WSL2 shape</a></li>
+    <li><a href="#i3">Dapr is a dialect, and native-vs-shim is an experiment, not an argument</a></li>
+    <li><a href="#i4">The stream is the lease; one retry owner</a></li>
+    <li><a href="#i5">The NC-pin degradation table as contract and launch artifact</a></li>
+    <li><a href="#i6">Ordered-concurrency positioning, codified once</a></li>
+    <li><a href="#i7">Skateboard module: UNORDERED/KEY-only v0, capability-gated growth</a></li>
+  </ol>
+</nav>
+
+<article class="idea" id="i1">
+  <div class="idea-head"><span class="chip rank">Idea 1</span><h3>The break-of-gauge probe: measure Dapr's semantics before building anything</h3><span class="chip axis">contract-mapping</span></div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Build a throwaway pluggable pub/sub component whose only job is to <em>measure</em> the four Dapr semantics every design decision hinges on: (a) is an ack emitted at app-completion or at daprd-receipt; (b) does daprd buffer between component and app — a hidden "capacitor" that would make PC's in-flight ceiling count records the app has never seen, and fire lease deadlines on them; (c) can the component distinguish app-death from daprd-death from stream-break; (d) what does daprd do after <code>ack_error</code> (redeliver? when? how often?). Output is a one-page semantics datasheet plus a reusable "work-shaped vs message-shaped" contract checklist that applies unchanged to the kafka-pixy and REST-Proxy compatibility questions later. The probe's verdict is a three-way triage, not a binary: <em>(i)</em> delivery is already concurrent → build as-is (plausible — dapr#5946 concerns the built-in Kafka component's per-partition goroutine model, which a pluggable component replaces entirely, and the <code>app-max-concurrency</code> annotation's existence implies concurrent delivery exists somewhere in the stack); <em>(ii)</em> daprd serializes → build the adapter <strong>and patch daprd upstream</strong> — Dapr is CNCF open source, the fix closes their own users' open complaint and benefits every component, and a visible upstream contribution is itself distribution in a registry-less ecosystem. This repo already has the discipline for exactly this situation: the Kafka Streams work patches upstream's published sources with a small tracked <code>.patch</code> applied at build time — reviewable, re-derivable, empty-patch control arm, no vendoring and no fork to maintain (<code>docs/solutions/architecture-patterns/patch-a-dependency-at-build-time-without-vendoring-it.md</code>, shipped in astubbs#271 / issue astubbs#255; mechanics in <code>parallel-consumer-streams/bin/apply-patch.sh</code> on <code>feats/ks-on-pc-spike</code>). Applied to daprd: pin the upstream source, carry the tracked patch in the component's image build while the upstream PR bakes, drop the patch when it releases — which shrinks the "requires daprd ≥ X" version-gate window to near zero for users of our image; <em>(iii)</em> something structural and unpatchable → no-go, documented cheaply. The probe's second job is therefore <em>locating</em> any serialization (daprd core vs app channel vs language-SDK handler), since that determines what a patch touches. Nineteenth-century railways learned that joining two networks fails not at the visible interface (track gauge) but at the secondary ones — brakes, couplings — so junctions built verification rigs before through-running.</dd>
+    <dt>Why the paper analysis is encouraging but not sufficient</dt>
+    <dd>On paper, Dapr's contract is more compatible than the inflight docs feared: <code>PullMessages</code> already acks per message, out of order, and per-key ordering plus the in-flight ceiling are <em>admission-side</em> — PC's own v1 protocol states "flow control does not exist on the wire, deliberately", and <code>ProcessingShard</code> holds back same-key successors inside the engine. Nothing about ordering ever needs to appear on Dapr's wire. But the verifier correctly flagged the residual unknown as real: <a href="https://github.com/dapr/dapr/issues/5946">dapr#5946</a> suggests daprd→app delivery may serialize, which would recreate head-of-line blocking one hop downstream and void the benefit. That question is answerable only by measurement.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> "Both are speculation until someone reads their actual contracts. <strong>That reading is the task</strong>, not the integration." (<code>next-study-dapr-and-kafka-proxies.md</code>); "Flow control does not exist on the wire, deliberately" (proxy protocol spec). <span class="basis-tag">external:</span> Dapr <code>pubsub.proto</code> <code>PullMessages</code> per-message ack; dapr#5946.</dd>
+    <dt>Rationale</dt>
+    <dd>The cheapest possible action (a probe) gates the most expensive possible mistake (building an adapter on a contract that turns out to be message-shaped). It converts the inflight docs' own stated task — "read their contracts" — into falsifiable pass/fail measurements, and upgrades reading to measuring.</dd>
+    <dt>Downsides</dt>
+    <dd>The probe is throwaway code; daprd behavior may also change version-to-version (streaming subscriptions still evolving, dapr#8079), so the datasheet needs a daprd version stamp.</dd>
+    <dt>Confidence</dt><dd>90%</dd>
+    <dt>Complexity</dt><dd>Low</dd>
+  </dl>
+  <figure>
+    <svg viewBox="0 0 720 150" role="img" aria-label="Two-hop chain with four measurement points">
+      <rect x="10" y="50" width="130" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/>
+      <text x="75" y="68" text-anchor="middle" class="svgtxt" font-weight="700">PC engine</text>
+      <text x="75" y="84" text-anchor="middle" class="svgmut">in the component</text>
+      <rect x="210" y="50" width="120" height="44" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text x="270" y="68" text-anchor="middle" class="svgtxt" font-weight="700">daprd</text>
+      <text x="270" y="84" text-anchor="middle" class="svgmut">buffer? (b)</text>
+      <rect x="400" y="50" width="120" height="44" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text x="460" y="68" text-anchor="middle" class="svgtxt" font-weight="700">application</text>
+      <text x="460" y="84" text-anchor="middle" class="svgmut">concurrent? serial?</text>
+      <line x1="140" y1="62" x2="210" y2="62" stroke="var(--info)" stroke-width="1.6" marker-end="url(#a1)"/>
+      <line x1="330" y1="62" x2="400" y2="62" stroke="var(--info)" stroke-width="1.6" marker-end="url(#a1)"/>
+      <line x1="400" y1="82" x2="330" y2="82" stroke="var(--warn)" stroke-width="1.6" marker-end="url(#a2)"/>
+      <line x1="210" y1="82" x2="140" y2="82" stroke="var(--warn)" stroke-width="1.6" marker-end="url(#a2)"/>
+      <text x="175" y="44" text-anchor="middle" class="svgmut">PullMessages</text>
+      <text x="365" y="44" text-anchor="middle" class="svgmut">deliver</text>
+      <text x="365" y="110" text-anchor="middle" class="svgmut">ack — origin? (a)</text>
+      <text x="175" y="110" text-anchor="middle" class="svgmut">ack_message_id (d: retry?)</text>
+      <rect x="560" y="38" width="150" height="70" rx="8" fill="var(--warn-soft)" stroke="var(--warn)"/>
+      <text x="635" y="60" text-anchor="middle" class="svgtxt" font-weight="700">probe output</text>
+      <text x="635" y="78" text-anchor="middle" class="svgmut">semantics datasheet (c: death modes)</text>
+      <text x="635" y="94" text-anchor="middle" class="svgmut">build / patch upstream / no-go</text>
+      <defs>
+        <marker id="a1" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--info)"/></marker>
+        <marker id="a2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--warn)"/></marker>
+      </defs>
+    </svg>
+    <figcaption>The two-hop chain and the four measurements (a)–(d). The ceiling and the lease both measure the wrong quantity if daprd buffers invisibly.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="i2">
+  <div class="idea-head"><span class="chip rank">Idea 2</span><h3>Host the engine <em>in</em> the component — the WSL2 shape</h3><span class="chip axis">deployment-shape</span></div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Answer the inflight docs' second unknown by making the pluggable-component container <em>be</em> the PC JVM: a process embedding <code>ProxyProcessor</code> that implements Dapr's component gRPC service directly, talking to daprd over the Unix domain socket. This is Dapr's own sanctioned topology — a pluggable component is <em>defined</em> as a separate container beside daprd in the same pod — so the "two sidecars" smell dissolves: there is no PC proxy process anywhere in the chain, just the two processes a Dapr user already runs. The precedent is WSL1→WSL2: translating a foreign contract onto a different engine leaks semantics at every edge forever; hosting the real engine inside the boundary won. Credentials improve too: the Component YAML plus Dapr's secret store carry Kafka credentials to the component at <code>Init</code>, so they never travel an unauthenticated loopback wire — a genuinely better posture than the proxy's recorded R48 reversal ("the gap recorded rather than papered over").</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> "their sidecar talking to ours is two sidecars, which is a smell; whether a component can host the engine directly is the question" (<code>next-http-strategy-ideas.md</code> §3); "The engine is built against this pair only — it never imports a transport class" (<code>DispatchSink.java</code>). <span class="basis-tag">external:</span> Dapr pluggable-components architecture (separate container, UDS, <code>Init</code> metadata).</dd>
+    <dt>Rationale</dt>
+    <dd>Both halves of the deployment unknown resolve at once, and the choice templates every future adapter: "does this front-end host the engine or proxy to a sidecar" is expensive to reverse once operators have deployed either shape.</dd>
+    <dt>Downsides</dt>
+    <dd>A JVM inside the component container is a heavier image than Dapr's Go components — worth stating plainly rather than hiding. One security claim from ideation was <em>cut</em> here: UDS peer credentials authenticate the daprd↔component hop only — they relocate, not close, the KTD11 first-connection trust question. (Verification also found KTD11's own text has stale prose beneath its revised header — worth a small doc fix on the proxy branch.)</dd>
+    <dt>Confidence</dt><dd>75%</dd>
+    <dt>Complexity</dt><dd>Medium</dd>
+  </dl>
+  <figure>
+    <svg viewBox="0 0 720 170" role="img" aria-label="Before and after process topology">
+      <text x="170" y="18" text-anchor="middle" class="svgtxt" font-weight="700">naive: two sidecars (smell)</text>
+      <rect x="20" y="30" width="300" height="120" rx="10" fill="none" stroke="var(--line)" stroke-dasharray="4 3"/>
+      <rect x="35" y="45" width="80" height="36" rx="7" fill="var(--card)" stroke="var(--line)"/>
+      <text x="75" y="67" text-anchor="middle" class="svgtxt">app</text>
+      <rect x="130" y="45" width="80" height="36" rx="7" fill="var(--card)" stroke="var(--line)"/>
+      <text x="170" y="67" text-anchor="middle" class="svgtxt">daprd</text>
+      <rect x="225" y="45" width="82" height="36" rx="7" fill="var(--danger-soft)" stroke="var(--danger)"/>
+      <text x="266" y="61" text-anchor="middle" class="svgtxt">PC proxy</text>
+      <text x="266" y="75" text-anchor="middle" class="svgmut">3rd process</text>
+      <text x="170" y="122" text-anchor="middle" class="svgmut">app → daprd → component-shim → PC sidecar</text>
+      <text x="550" y="18" text-anchor="middle" class="svgtxt" font-weight="700">chosen: component hosts engine</text>
+      <rect x="400" y="30" width="300" height="120" rx="10" fill="none" stroke="var(--line)" stroke-dasharray="4 3"/>
+      <rect x="425" y="45" width="80" height="36" rx="7" fill="var(--card)" stroke="var(--line)"/>
+      <text x="465" y="67" text-anchor="middle" class="svgtxt">app</text>
+      <rect x="530" y="45" width="150" height="52" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"/>
+      <text x="605" y="65" text-anchor="middle" class="svgtxt" font-weight="700">daprd ⇄ component</text>
+      <text x="605" y="82" text-anchor="middle" class="svgmut">= PC engine JVM, over UDS</text>
+      <text x="550" y="122" text-anchor="middle" class="svgmut">two processes — Dapr's ordinary shape</text>
+    </svg>
+    <figcaption>Illustrative contrast only: the shim chain vs the engine hosted directly as the pluggable component.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="i3">
+  <div class="idea-head"><span class="chip rank">Idea 3</span><h3>Dapr is a dialect, and native-vs-shim is an experiment, not an argument</h3><span class="chip axis">engine-seam</span></div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Architecturally, the adapter is <em>one more encoding of the same engine seam</em>: Dapr's component service wired to the same <code>ProxyProcessor</code>/<code>DispatchSink</code> internals the gRPC dialect uses — never a second implementation of ordering, retry, or offset logic. In the conformance suite it is one more <em>(language, dialect)</em> row: "more rows and no new scenarios". The frozen v1 protocol is untouched (a parallel service is a gain, not a change). Hold the honest counter-proposal alongside it: a thin Go shim speaking frozen v1 as "the twelfth client" (three processes per pod, zero JVM-image concerns, exercises the Go client scaffold). Frame native-vs-shim as the project's first Dapr ADR — and let the probe (idea 1) plus an image-size/operational comparison decide it, not taste.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> "No shard selection, no retry scheduling, no offset tracking. A client that grew any of those would be a second implementation of Parallel Consumer, and there would eventually be eleven of them, disagreeing" and "a new dialect is more rows and no new scenarios" (<code>next-work-server-pitch-and-buyer.md</code> §5, verified verbatim).</dd>
+    <dt>Rationale</dt>
+    <dd>Slotting Dapr into an architecture row that already exists means facade discipline, the conformance suite, and the freeze gate all apply unchanged — the difference between "small adapter" and "second implementation to keep in sync". Making the shape decision experimentally keeps the strongest alternative alive until evidence kills one.</dd>
+    <dt>Downsides</dt>
+    <dd>Running the decision as an ADR-with-experiment costs a little ceremony; the shim option, if chosen, reintroduces a third process and the two-sidecars shape idea 2 argues against.</dd>
+    <dt>Confidence</dt><dd>80%</dd>
+    <dt>Complexity</dt><dd>Medium</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i4">
+  <div class="idea-head"><span class="chip rank">Idea 4</span><h3>The stream is the lease; one retry owner</h3><span class="chip axis">delivery-semantics</span></div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Dapr's contract has no Heartbeat, no reconnect Manifest, no WorkerDied — but v1's degenerate form already covers it: "the connection is the session". Map <code>PullMessages</code> stream lifetime onto the lease: stream open ⇒ all dispatched records leased; stream close ⇒ that session's in-flight records return to scheduling "with their attempt counts unchanged"; late acks after re-dispatch are discarded by the existing epoch fence (<code>SUPERSEDED_EPOCH</code>). A daprd restart then costs a bounded-duplicate re-dispatch wave — the same class as a rebalance, documented rather than discovered. The second rule: <strong>PC owns retry, alone.</strong> Dapr's resiliency policies retry at the daprd layer independently; two retry machines diverge attempt counts and race the epoch fence. The component must document daprd-side retry as must-be-off and reject configurations that enable it.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> lease semantics ("returns that session's in-flight records to scheduling with their attempt counts unchanged"), <code>ProxyProcessor.report()</code> epoch check, <code>WorkContainer.updateFailureHistory</code> — all verified verbatim. <span class="basis-tag">external:</span> Dapr resiliency docs confirm daprd retries "augment" component retries and can cause "repetitive clustering of messages".</dd>
+    <dt>Rationale</dt>
+    <dd>Shows at-least-once survives Dapr's thinner liveness model using existing machinery, and names precisely what degrades. Double-retry is the "quietly wrong on failure" defect class this product exists to kill — preventable only by deciding ownership before the first line of component code.</dd>
+    <dt>Downsides</dt>
+    <dd>This is bug-857 territory (the silent-stall/zombie-liveness class with three fixes and an open root cause) — it needs real design work, not a green light. The verifier added a wrinkle: Dapr supports one component serving multiple daprd instances, where "the stream is the session" gets murkier than the 1:1 case this reasoning assumes.</dd>
+    <dt>Confidence</dt><dd>65%</dd>
+    <dt>Complexity</dt><dd>Medium</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i5">
+  <div class="idea-head"><span class="chip rank">Idea 5</span><h3>The NC-pin degradation table as contract and launch artifact</h3><span class="chip axis">delivery-semantics · positioning</span></div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Electronics adapters bridging incompatible sockets ship a datasheet marking which pins are Not Connected — the honesty is the product. PC's report vocabulary is four-valued; Dapr's ack is binary. Publish the mapping as a first-class artifact, run the shared conformance scenarios end-to-end through daprd, and let the residue table <em>be</em> the component's documentation, the claims-gate evidence, and the regression suite at once. Launch by posting the results — with Dapr's own component conformance tests passing alongside PC's suite — into <a href="https://github.com/dapr/dapr/issues/5946">dapr#5946</a>, the thread where the demand is already recorded. With no component registry, certification-style evidence substitutes for shelf placement.</dd>
+  </dl>
+  <table>
+    <thead><tr><th>PC verdict</th><th>Dapr surface</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>Failure (retry consumed)</td><td><code>ack_error</code></td><td>mapped</td></tr>
+      <tr><td>Terminal</td><td>dead-letter topic convention</td><td>mapped, convention-based</td></tr>
+      <tr><td>Released (no retry consumed)</td><td>— (lease expiry only)</td><td>degraded</td></tr>
+      <tr><td>Success.produce (produce-then-complete atomicity)</td><td>— (app publishes separately via daprd)</td><td><strong>not connected</strong> — consume-transform-produce stays on the native proxy</td></tr>
+    </tbody>
+  </table>
+  <dl class="fields">
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> <code>Success.produce</code> is "the only sanctioned route for worker output" and completion defers until produce lands (<code>ProxyProcessor</code> <code>ACCEPTED_PRODUCING</code>) — verified verbatim; Dapr's pub/sub has no ack-linked publish, so the atomicity severing is architecturally correct. "The conformance suite is the load-bearing part, not the clients."</dd>
+    <dt>Rationale</dt>
+    <dd>Extends the project's core discipline — correctness as a test result, not an adjective — across a runtime the project does not control, exactly where silent semantic drift would otherwise live. It also satisfies the claims gate by construction: the announcement <em>is</em> the evidence.</dd>
+    <dt>Downsides</dt>
+    <dd>An honest table showing degraded rows is a gift to hostile skimmers; mitigated by the orthogonal-axes framing (idea 6). One demand citation was cut in verification: dapr#4629 is about crash-loss questions, not head-of-line blocking — only dapr/dapr#5946 supports the demand claim.</dd>
+    <dt>Confidence</dt><dd>80%</dd>
+    <dt>Complexity</dt><dd>Medium</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i6">
+  <div class="idea-head"><span class="chip rank">Idea 6</span><h3>Ordered-concurrency positioning, codified once</h3><span class="chip axis">positioning-adoption</span></div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>KIP-932 share groups are GA: Kafka now natively offers <em>unordered</em> concurrent consumption. "Concurrency beyond partitions" alone is a falsifiable claim from day one; the claim that survives is <em>order-preserving</em> concurrency — which nothing in the Dapr catalogue offers (existing FIFO components — SQS FIFO, ASB sessions, RabbitMQ single-active-consumer — all trade concurrency away to get order). Write the coupling-vs-concurrency axes into <code>STRATEGY.md</code> once ("Dapr solves a different problem, and here is which"), and let the Dapr component, the kafka-pixy comparison, and every future "aren't you just X" conversation cite it rather than re-derive positioning under time pressure.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> "They are orthogonal axes, not competitors… 'We are better than Dapr' is both wrong and easy to refute"; "These claims belong in STRATEGY.md if they survive scrutiny" (<code>next-study-dapr-and-kafka-proxies.md</code>, verified verbatim). <span class="basis-tag">external:</span> KIP-932 GA in Kafka 4.2.0 (released 2026-02-17, independently verified); FIFO-component survey.</dd>
+    <dt>Rationale</dt>
+    <dd>Positioning wrong in public is expensive to walk back. The frame is reusable verbatim across every adapter, and the landscape shift that makes it urgent (KIP-932) has already happened.</dd>
+    <dt>Downsides</dt>
+    <dd>Minimal — a documentation change; the discipline cost is keeping the claim true as KIP-932 client support broadens through 2026.</dd>
+    <dt>Confidence</dt><dd>85%</dd>
+    <dt>Complexity</dt><dd>Low</dd>
+  </dl>
+  <figure>
+    <svg viewBox="0 0 720 210" role="img" aria-label="Order vs concurrency quadrant">
+      <line x1="360" y1="20" x2="360" y2="190" stroke="var(--line)" stroke-width="1.5"/>
+      <line x1="60" y1="105" x2="660" y2="105" stroke="var(--line)" stroke-width="1.5"/>
+      <text x="655" y="98" text-anchor="end" class="svgmut">concurrency beyond partitions →</text>
+      <text x="368" y="32" class="svgmut">↑ per-key order kept</text>
+      <rect x="90" y="45" width="200" height="34" rx="7" fill="var(--card)" stroke="var(--line)"/>
+      <text x="190" y="66" text-anchor="middle" class="svgtxt">FIFO components · Dapr Kafka</text>
+      <rect x="430" y="45" width="200" height="34" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"/>
+      <text x="530" y="61" text-anchor="middle" class="svgtxt" font-weight="700">PC (+ Dapr component)</text>
+      <text x="530" y="74" text-anchor="middle" class="svgmut">alone here · Pulsar Key_Shared analogue</text>
+      <rect x="90" y="130" width="200" height="34" rx="7" fill="var(--card)" stroke="var(--line)"/>
+      <text x="190" y="151" text-anchor="middle" class="svgtxt">plain consumer groups</text>
+      <rect x="430" y="130" width="200" height="34" rx="7" fill="var(--warn-soft)" stroke="var(--warn)"/>
+      <text x="530" y="146" text-anchor="middle" class="svgtxt">KIP-932 share groups (GA)</text>
+      <text x="530" y="159" text-anchor="middle" class="svgmut">order traded away</text>
+    </svg>
+    <figcaption>The post-KIP-932 landscape: the upper-right quadrant is the durable claim, and it is empty of competitors in the Dapr catalogue.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="i7">
+  <div class="idea-head"><span class="chip rank">Idea 7</span><h3>Skateboard module: UNORDERED/KEY-only v0, capability-gated growth, demand-gated build</h3><span class="chip axis">engine-seam</span></div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Scope v0 to what Dapr can natively say: ack → Success (no produce), ack_error → Failure, KEY and UNORDERED ordering, ceiling from component metadata. Ship as an isolated opt-in alpha module exactly like the streams/connect previews, README carrying the experimental warning so the claims gate holds. Terminal, Released, produce-on-success, and reconnect Manifest are explicitly out of v0 — later additions ride the protocol's existing capability negotiation ("negotiated in the handshake, never inferred"). One hard detail: Dapr component metadata is stringly YAML feeding typed, safety-critical config — a misspelled ordering value silently falling back to UNORDERED is a <em>correctness</em> bug, so validation must reject, never default. Sequencing: bank the cheap compounding parts now (the probe, idea 1; the strategy codification, idea 6); gate the full build on demand per the project's own rule — "build the one somebody asked for, not the one that completes the matrix". Secondary payoff: component adoption becomes empirical demand data for which of the eleven native clients deserve investment.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> capability-entry negotiation and "no 'unlimited': the in-flight ceiling is always finite" (<code>proxy.proto</code>, verified); "demand decides" and the experimental-claims gate (inflight docs, verified); streams/connect preview-module precedent (roadmap).</dd>
+    <dt>Rationale</dt>
+    <dd>Converts the whole thread from study to running code inside one iteration — the fastest way to confirm or kill ideas 1–5 — while the module isolation and claims gate cap the blast radius of being wrong.</dd>
+    <dt>Downsides</dt>
+    <dd>A v0 that can't produce-on-success excludes consume-transform-produce workloads (the native proxy's strength); must be stated in the README to avoid disappointed first users.</dd>
+    <dt>Confidence</dt><dd>70%</dd>
+    <dt>Complexity</dt><dd>Medium</dd>
+  </dl>
+</article>
+
+<h2 id="rejection-summary">Rejection Summary</h2>
+<p>46 raw ideas from five framing agents were deduped into 24 candidates; a fresh-context verifier spot-checked every load-bearing quote (all verified verbatim) and refuted or weakened four claims. Cuts:</p>
+<table>
+  <thead><tr><th>Idea</th><th>Reason rejected</th></tr></thead>
+  <tbody>
+    <tr><td>"Unknown 1 is already answered" (standalone)</td><td>Overclaim — the source doc itself says "that reading is the task"; the daprd→app concurrency question is real. Honest core folded into idea 1.</td></tr>
+    <tr><td>UDS/SO_PEERCRED closes the KTD11 admission gap</td><td>Refuted as stated — peer credentials authenticate the daprd↔component hop, relocating (not closing) the trust boundary; the cited KTD11 prose is stale beneath its revised header. Credential-via-secret-store half kept in idea 2.</td></tr>
+    <tr><td>Launch evidence citing dapr#4629</td><td>Mischaracterized — that issue concerns crash-loss questions, not head-of-line blocking; only dapr/dapr#5946 supports the demand claim. Honest core folded into idea 5.</td></tr>
+    <tr><td>"Dapr control plane dissolves the sidecar-or-server buyer fork"</td><td>Overclaim — scopes + secret store move config authorship, not the §4h operational burden of running N instances.</td></tr>
+    <tr><td>Reorder the 11-client roadmap on adapter demand signal</td><td>Evidence from an unbuilt adapter can't carry a roadmap decision; kept only as idea 7's secondary payoff.</td></tr>
+    <tr><td>Config-validation idea (standalone)</td><td>Sound but tactical — absorbed as a design detail of idea 7.</td></tr>
+    <tr><td>Work-shaped-vs-message-shaped checklist (standalone)</td><td>Sound but small — folded into idea 1's outputs.</td></tr>
+    <tr><td>Export the conformance suite as a semantics standard</td><td>Parking-lot contingency ("if someone ports this to Go") — record in inflight when it becomes live.</td></tr>
+    <tr><td>CI linter enforcing the experimental-claims gate</td><td>Sound, small; below the survivor cap.</td></tr>
+    <tr><td>kafka-pixy-over-this-proxy integration</td><td>Pre-rejected by the grounding docs ("expect the answer to be no") — not re-litigated.</td></tr>
+  </tbody>
+</table>
+<p>All five topic axes have at least one survivor; no coverage gaps.</p>
+
+<h2 id="sources">Sources &amp; References</h2>
+<ul>
+  <li><a href="https://github.com/astubbs/parallel-consumer/issues/242">astubbs/parallel-consumer#242</a> — proxy integration issue (mirror of confluentinc#154)</li>
+  <li><code>docs/inflight/next-study-dapr-and-kafka-proxies.md</code>, <code>next-http-strategy-ideas.md</code>, <code>next-work-server-pitch-and-buyer.md</code> — at commit <code>85cfce876</code> (branch <code>docs/proxy-http-ideation</code>)</li>
+  <li>Proxy module, frozen v1 protocol, <code>ProxyProcessor</code>, <code>DispatchSink</code> — branch <code>feats/proxy-requirements</code></li>
+  <li><a href="https://raw.githubusercontent.com/dapr/dapr/master/dapr/proto/components/v1/pubsub.proto">Dapr pluggable pub/sub <code>pubsub.proto</code></a> — PullMessages bidi stream, per-message ack</li>
+  <li><a href="https://docs.dapr.io/developing-applications/develop-components/pluggable-components/develop-pluggable/">Dapr pluggable-components docs</a> · <a href="https://docs.dapr.io/operations/components/certification-lifecycle/">certification lifecycle</a></li>
+  <li><a href="https://github.com/dapr/dapr/issues/5946">dapr#5946</a> (sequential Kafka processing) · <a href="https://github.com/dapr/dapr/issues/5210">dapr#5210</a> (no component registry) · <a href="https://github.com/dapr/dapr/issues/8079">dapr#8079</a> (streaming subscriptions evolving)</li>
+  <li><a href="https://www.confluent.io/blog/kafka-queue-semantics-share-consumer-ga/">KIP-932 share groups GA</a> · <a href="https://streamnative.io/blog/queues-are-just-subscriptions-demystifying-shared-and-failover-modes">Pulsar Key_Shared semantics</a></li>
+  <li>Build-time upstream-patch precedent (Kafka Streams work): <code>docs/solutions/architecture-patterns/patch-a-dependency-at-build-time-without-vendoring-it.md</code> + <code>parallel-consumer-streams/bin/apply-patch.sh</code> on <code>feats/ks-on-pc-spike</code> — astubbs#271, issue astubbs#255</li>
+</ul>
+
+<footer class="composition-signal">Composed 2026-08-17 by ce-ideate from the focus hint "look into making a dapr adapter" · grounding: repo refs <code>feats/proxy-requirements</code> + <code>85cfce876</code> inflight docs, web research, 5 evidence dossiers · verified by fresh-context basis check</footer>
+
+</div>
+</body>
+</html>

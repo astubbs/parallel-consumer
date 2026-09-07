@@ -5,22 +5,14 @@
  */
 package bz.stub.parallelconsumer.integrationTests;
 
-/*-
- * Copyright (C) 2024 Confluent, Inc.
- */
-
 import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import bz.stub.parallelconsumer.PCRetriableException;
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
-import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
-import org.apache.kafka.clients.consumer.Consumer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -36,27 +28,15 @@ import static org.hamcrest.Matchers.is;
 @Slf4j
 public class RetriesTest extends BrokerIntegrationTest<String, String> {
 
-    Consumer<String, String> consumer;
-
-    ParallelConsumerOptions<String, String> pcOpts;
     ParallelEoSStreamProcessor<String, String> pc;
 
     @BeforeEach
     void setUp() {
-        setupTopic();
-        consumer = getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP);
-
-        pcOpts = ParallelConsumerOptions.<String, String>builder()
-                .consumer(consumer)
+        pc = startPcOnNewTopic(options -> options
                 .ordering(KEY)
                 .maxConcurrency(100)
                 .defaultMessageRetryDelay(Duration.ofMillis(200))
-                .messageBufferSize(10000)
-                .build();
-
-        pc = new ParallelEoSStreamProcessor<>(pcOpts);
-
-        pc.subscribe(UniSets.of(topic));
+                .messageBufferSize(10000));
     }
 
     @Test
@@ -80,7 +60,7 @@ public class RetriesTest extends BrokerIntegrationTest<String, String> {
         await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(100)).until(count::get, is(equalTo(2000))); //wait for all successful messages to complete
         AtomicBoolean failed = new AtomicBoolean(false);
         AtomicBoolean checking = new AtomicBoolean(true);
-        new Thread(() -> {
+        Thread sampler = new Thread(() -> {
             try {
                 while (checking.get()) {
                     long countAwaiting = pc.getWm().getSm().getNumberOfWorkQueuedInShardsAwaitingSelection();
@@ -94,12 +74,22 @@ public class RetriesTest extends BrokerIntegrationTest<String, String> {
             } finally {
                 latch.countDown();
             }
-        }).start();
-        ThreadUtils.sleepQuietly(3000);
-        throwOnHeader.set(false);
-        ThreadUtils.sleepQuietly(2000);
-        checking.set(false);
-        latch.await();
+        }, "retry-queue-depth-sampler");
+        // daemon + the finally below: the sampler must not outlive the test. If the await times out, an
+        // un-stopped sampler keeps asserting against a closed PC and reports its failure against whichever
+        // test runs next in this JVM.
+        sampler.setDaemon(true);
+        sampler.start();
+        try {
+            ThreadUtils.sleepQuietly(3000); // soak the retry loop, so the sampler above gets many chances to catch a violation
+            throwOnHeader.set(false);
+            // keep sampling until the previously failing half has actually drained - the real end of the retry
+            // loop, rather than a fixed wait in which we hope it drained
+            await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(100)).until(count::get, is(equalTo(4000)));
+        } finally {
+            checking.set(false);
+            latch.await();
+        }
         assertThat(failed.get()).isFalse();
     }
 }

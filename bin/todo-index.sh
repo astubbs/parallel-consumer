@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+#
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+
+# Regenerate docs/todo-index.md - an index of every TODO/FIXME/XXX marker in the tree.
+#
+# Usage:
+#   bin/todo-index.sh            # rewrite docs/todo-index.md
+#   bin/todo-index.sh --check    # exit 1 if the committed index is stale (for CI)
+#
+# Why generated and not hand-maintained: a hand-written list of TODOs is wrong the day after it is
+# written. This is cheap to regenerate, so the index is always a true reflection of the tree - and
+# `--check` makes staleness visible instead of silent.
+#
+# Scope note: markers inside THIS script and inside the generated index are excluded, otherwise the
+# tool indexes itself.
+#
+# SORT UNDER LC_ALL=C. A bare `sort` collates by locale, so a macOS en_*.UTF-8 shell orders
+# `AbstractParallelEoSStreamProcessor.java` differently from CI's C locale, and the generated file
+# differs by machine - which makes `--check` fail for whoever did not generate it. The content is
+# identical; only the order moves.
+#
+# NO LINE NUMBERS, deliberately. An entry is the marker's own text, so it changes only when the
+# marker does. Recording `L<n>` instead would mean every edit above a marker rewrites every entry
+# below it in the file: the index would land in unrelated diffs, collide between branches, and make
+# `--check` fail on PRs that never touched a marker - which is exactly what stops such a gate being
+# wired into CI. To jump to one, grep its text: `grep -rn "check legacy is recursive"`.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+OUT="docs/todo-index.md"
+SELF="bin/todo-index.sh"
+
+# ARGUMENTS ARE PARSED STRICTLY, AND THAT IS THE SECURITY BOUNDARY - not tidiness. The review agent
+# is granted this script as `Bash(bin/todo-index.sh --check)` precisely so it can ask whether the
+# committed index is stale WITHOUT being able to rewrite the tree it is inspecting.
+#
+# A permissive parser breaks that grant open from the other side. The previous
+# `[[ "${1:-}" == "--check" ]]` silently ignored anything it did not recognise, so
+# `bin/todo-index.sh --check=false` left CHECK_MODE false, fell through to the REWRITE path, and
+# exited 0 - while still matching any prefix-shaped grant of `--check`. Reported by the review agent
+# on astubbs/parallel-consumer#286 and reproduced there.
+#
+# Rejecting unknown arguments keeps the guarantee HERE, where it holds however the caller was
+# granted, instead of resting on an allowlist string in two workflow files getting its wildcard
+# right. Exits 2 on a usage error, leaving 1 to mean "the index is stale".
+CHECK_MODE=false
+case $# in
+    0) ;;
+    1)
+        if [[ "$1" == "--check" ]]; then
+            CHECK_MODE=true
+        else
+            printf 'usage: %s [--check]\n' "$SELF" >&2
+            exit 2
+        fi
+        ;;
+    *)
+        printf 'usage: %s [--check]\n' "$SELF" >&2
+        exit 2
+        ;;
+esac
+
+# Files worth scanning: source, scripts, build and workflow config. Deliberately excludes build
+# output, the git dir, and agent scratch dirs.
+#
+# DOCS (.adoc/.md) ARE DELIBERATELY EXCLUDED, and it is worth saying why, because "surely docs could
+# contain a TODO too" is a reasonable first reaction. It was tried: scanning them added 4 hits and
+# not one was a marker. Three were docs/refactoring.md QUOTING markers that the index already lists
+# from their .java source - so the same work appeared twice and the count inflated - and the fourth
+# was prose ("seeded from a code scan (TODO/FIXME + ...)"). That is structural rather than bad luck:
+# docs/refactoring.md is where marker triage lives, and AGENTS.md / docs/inflight/ / CHANGELOG.adoc
+# describe this tool, so scanning them means indexing the index-of-work. The generated index itself
+# is the reductio - it alone accounts for ~95 self-referential hits.
+#
+# If that ever changes (a genuine marker left in prose), prefer moving it into the code it concerns,
+# where it belongs and where this scan will find it.
+#
+# $OUT is excluded belt-and-braces, so a future widening cannot make the index index itself.
+#
+# `src/docs/` IS EXCLUDED FOR THE SAME REASON AS .adoc/.md, and needs saying separately because the
+# extension list does not cover it: `src/docs/development/upstream-map.yaml` is DOCUMENTATION that
+# happens to be YAML, so it arrived through the '*.yaml' glob above while being exactly the case the
+# paragraph above rejects. Its branch-accounting notes QUOTE markers as evidence - "still carries
+# `// todo refactored to constant in the remove statics branch`" is the point being made about a
+# branch - and the index already lists those same markers from their .java source. Indexing the
+# quotation duplicates the entry and inflates the count, which is the documented pathology rather
+# than a new one. It contributed nothing to the index before this exclusion:
+# `git show HEAD:docs/todo-index.md | grep src/docs/` was empty.
+list_files() {
+    git ls-files \
+        '*.java' '*.sh' '*.xml' '*.yml' '*.yaml' \
+        | grep -v "^${SELF}$" \
+        | grep -v "^${OUT}$" \
+        | grep -v '^src/docs/' \
+        | LC_ALL=C sort
+}
+
+# A marker is TODO / FIXME / XXX as a WORD, case-insensitive. Captures the rest of the line as the
+# note. Deliberately not anchored to comment syntax so it works across .java/.sh/.xml/.yml alike.
+MARKER_RE='\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)\b'
+# ...but not when it is an IDENTIFIER rather than a marker, e.g. a shell variable `todo=()` or a
+# field named `fixmeCount`. Cheap heuristic: drop lines where the word is immediately assigned to.
+# Not every occurrence of the word is a marker. Skip the cases seen in this tree:
+#   shell variables   todo=()   todo+=("$t")   ${todo[*]}   ${#todo[@]}
+#   YAML/schema keys  todo:            (a mapping key, not a marker - no live instance today)
+#   string literals   Mono.just("something todo")
+# NOTE: this filter is applied to `grep -n` output, so line-anchored patterns must allow the
+# leading "<lineno>:" prefix - anchoring on ^[[:space:]] alone silently never matches.
+#   references TO a marker elsewhere, e.g. "the run-length optimisation TODO on {@link X}"
+#   compound names    todo-index.sh, todo-index.md   (a filename, not a marker - this one is live:
+#                                                     the review workflows name the script in a
+#                                                     comment)
+NOT_A_MARKER_RE='(\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)[A-Za-z0-9_]*[[:space:]]*(=|\+=)|\$\{#?[Tt][Oo][Dd][Oo]|^[0-9]+:[[:space:]]*[A-Za-z_]*[Tt][Oo][Dd][Oo][A-Za-z_]*:|"[^"]*[Tt][Oo][Dd][Oo][^"]*"|(optimisation|optimization) TODO|[Tt][Oo][Dd][Oo][-_][A-Za-z])'
+
+emit_body() {
+    local current_group=""
+    while IFS= read -r file; do
+        # group by module (path up to /src/), else by top-level dir
+        local group
+        case "$file" in
+            */src/*) group="${file%%/src/*}" ;;
+            bin/*)   group="bin (scripts)" ;;
+            .github/*) group=".github (CI)" ;;
+            *)       group="$(dirname "$file")" ;;
+        esac
+        [[ "$group" == "." ]] && group="(repo root)"
+
+        # collect this file's markers as 'line<TAB>text'
+        local hits
+        hits=$(grep -nE "$MARKER_RE" "$file" 2>/dev/null | grep -vE "$NOT_A_MARKER_RE" || true)
+        [[ -z "$hits" ]] && continue
+
+        if [[ "$group" != "$current_group" ]]; then
+            printf '\n### %s\n\n' "$group"
+            current_group="$group"
+        fi
+
+        printf '**`%s`**\n\n' "$file"
+        while IFS= read -r hit; do
+            local text
+            text="${hit#*:}"   # drop grep's line-number prefix; see NO LINE NUMBERS above
+            # tidy: strip leading comment punctuation and whitespace, collapse runs of spaces
+            text=$(printf '%s' "$text" | sed -E 's/^[[:space:]]*(\/\/|\*|#|<!--)?[[:space:]]*//; s/[[:space:]]+/ /g; s/[[:space:]]*(-->)?[[:space:]]*$//')
+            printf -- '- %s\n' "$text"
+        done <<< "$hits"
+        printf '\n'
+    done < <(list_files)
+}
+
+count_markers() {
+    local n=0
+    while IFS= read -r file; do
+        local c
+        c=$(grep -nE "$MARKER_RE" "$file" 2>/dev/null | grep -vcE "$NOT_A_MARKER_RE" || true)
+        n=$((n + ${c:-0}))
+    done < <(list_files)
+    printf '%s' "$n"
+}
+
+generate() {
+    cat <<EOF
+# TODO index
+
+**Generated file - do not edit by hand.** Regenerate with \`bin/todo-index.sh\`
+(\`bin/todo-index.sh --check\` fails if this file is stale).
+
+Every \`TODO\` / \`FIXME\` / \`XXX\` marker in the tracked tree, grouped by module.
+
+## Prioritised? See the refactoring backlog
+
+This file is a raw, generated inventory - deliberately **not** prioritised, because it is rewritten
+wholesale on every run. Triage lives in [\`docs/refactoring.md\`](refactoring.md), which is the
+repo's existing backlog: markers that turn out to be real deferred work get written up there (grouped
+by file, with breaking changes in their own release-gated section). Do **not** start a parallel
+priority list - that was tried and duplicated the backlog.
+
+Most markers are notes-to-self and should stay exactly where they are; this index makes them
+discoverable in aggregate without promoting them to tasks.
+
+## Finding one
+
+Entries carry no line number - grep the text instead:
+
+\`\`\`bash
+grep -rn "check legacy is recursive"
+\`\`\`
+
+A line number would be wrong within a day and would drag this file into every unrelated diff. The
+marker's own text is stable until someone edits the marker.
+
+For the same reason this file carries no marker **count**: it would be a second, drifting statement
+of something the list below already says exactly, and the two would disagree the moment either moved.
+Count the entries if you need a number. \`bin/todo-index.sh\` prints one to the console when it runs,
+where it cannot go stale.
+
+## How to use this
+
+Markers here are *not* a backlog - most are notes-to-self left next to the code they concern, and
+that is the right place for them. This index exists so they are **discoverable in aggregate**: to
+spot clusters (several markers around one class usually means a design that wants revisiting), and
+so that the backlog can point at the code that motivates an item instead of restating it.
+
+The durable rule of thumb: if a marker describes work someone should actually schedule, write it up
+in \`docs/refactoring.md\` (with a link back to the code). If it is context for whoever next edits
+that line, leave it in the code - it will show up here.
+EOF
+
+    emit_body
+}
+
+if $CHECK_MODE; then
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' EXIT
+    generate > "$tmp"
+    if ! diff -q "$OUT" "$tmp" > /dev/null 2>&1; then
+        echo "STALE: $OUT does not match the tree. Regenerate with: bin/todo-index.sh" >&2
+        diff "$OUT" "$tmp" | head -40 >&2 || true
+        exit 1
+    fi
+    echo "$OUT is up to date."
+else
+    generate > "$OUT"
+    echo "Wrote $OUT ($(count_markers) markers)."
+fi

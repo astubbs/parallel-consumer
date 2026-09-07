@@ -1,0 +1,34 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Vert.x asynchronous integration
+category: integration
+module: parallel-consumer-vertx
+maturity: production-use
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: The Vert.x WebClient integration landed before the first tagged release.
+  milestones:
+    - release: 0.4.0.0
+      basis: Expanded from HTTP-only support to general Vert.x Future integration, including FileSystem and database operations.
+readme_anchor: http-with-vertx
+summary: Process records with Vert.x asynchronous APIs while Parallel Consumer coordinates ordering and commits.
+use_this_when:
+  - Your record handler uses Vert.x Future APIs or WebClient calls.
+  - You need asynchronous non-blocking work without implementing ordered commit coordination yourself.
+setup:
+  maven:
+    group_id: bz.stub.parallelconsumer
+    artifact_id: parallel-consumer-vertx
+  example: parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/bz/stub/parallelconsumer/examples/vertx/VertxApp.java
+opt_in:
+  mechanism: Add the Vert.x module and use its processor API.
+  isolated_from_stable_modules: false
+boundaries:
+  - The integration does not make a blocking handler non-blocking; keep blocking work out of Vert.x event-loop execution.
+  - Ordering and commit behavior still follows the configured Parallel Consumer ordering mode.

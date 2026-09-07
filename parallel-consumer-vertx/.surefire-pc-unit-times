@@ -1,16 +1,21 @@
-3,254,bz.stub.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[3]
-5,0,bz.stub.parallelconsumer.vertx.VertxTest,handleHttpResponseCodes
-5,4,bz.stub.parallelconsumer.vertx.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
-5,88,bz.stub.parallelconsumer.vertx.VertxTest,sanityTest(Vertx, VertxTestContext)
-5,99,bz.stub.parallelconsumer.vertx.VertxTest,failingHttpCall
-5,206,bz.stub.parallelconsumer.vertx.VertxTest,testHttpMinimal
-5,253,bz.stub.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[1]
-5,300,bz.stub.parallelconsumer.vertx.VertxTest,testVertxFunctionFail(Vertx, VertxTestContext)
-5,1097,bz.stub.parallelconsumer.vertx.VertxTest,genericVertxFuture(Vertx, VertxTestContext)
-5,5119,bz.stub.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[2]
-5,5831,bz.stub.parallelconsumer.vertx.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
-5,8123,bz.stub.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[2]
-5,8154,bz.stub.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[3]
-5,8178,bz.stub.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[1]
-5,8881,bz.stub.parallelconsumer.vertx.VertxTest,testHttp
-5,33910,bz.stub.parallelconsumer.vertx.VertxBatchTest,averageBatchSizeTest(Vertx, VertxTestContext)
+1,2,bz.stub.parallelconsumer.vertx.TestConventionsArchTest,TestConventionRules > test_methods_must_have_names_longer_than_one_character
+1,8,bz.stub.parallelconsumer.vertx.TestConventionsArchTest,TestConventionRules > test_classes_must_be_named_so_surefire_collects_them
+1,379,bz.stub.parallelconsumer.vertx.VertxTest,serverErrorStatusStillCommits
+1,456,bz.stub.parallelconsumer.vertx.VertxTest,transportFailureIsDistinctFromANonSuccessStatus
+1,1267,bz.stub.parallelconsumer.vertx.VertxTest,aSendFailureWhoseBookkeepingThrowsStillRedeliversTheRecord
+1,6354,bz.stub.parallelconsumer.vertx.VertxMdcPropagationTest,callersContextReachesTheVertxEventLoop
+4,320,bz.stub.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[3]
+6,21,bz.stub.parallelconsumer.vertx.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
+6,133,bz.stub.parallelconsumer.vertx.VertxTest,sanityTest(Vertx, VertxTestContext)
+6,331,bz.stub.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[1]
+6,432,bz.stub.parallelconsumer.vertx.VertxTest,testVertxFunctionFail(Vertx, VertxTestContext)
+6,443,bz.stub.parallelconsumer.vertx.VertxTest,failingHttpCall
+6,631,bz.stub.parallelconsumer.vertx.VertxTest,genericVertxFuture(Vertx, VertxTestContext)
+6,834,bz.stub.parallelconsumer.vertx.VertxTest,testHttpMinimal
+6,4192,bz.stub.parallelconsumer.vertx.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
+6,5197,bz.stub.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[2]
+6,6395,bz.stub.parallelconsumer.vertx.VertxTest,testHttp
+6,8243,bz.stub.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[2]
+6,8244,bz.stub.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[3]
+6,8265,bz.stub.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[1]
+6,25619,bz.stub.parallelconsumer.vertx.VertxBatchTest,averageBatchSizeTest(Vertx, VertxTestContext)

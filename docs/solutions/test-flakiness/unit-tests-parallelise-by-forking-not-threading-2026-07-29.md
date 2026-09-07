@@ -58,7 +58,7 @@ and process-global resources. When JUnit runs methods as **threads in one JVM**,
 **share and race on** that static state:
 
 - `ParallelEoSStreamProcessorTest`'s shutdown/commit assertion (tracked separately as a possible real
-  concurrency bug, to be examined with the #857 locking work) fails only under thread parallelism - a
+  concurrency bug, to be examined with the confluentinc#857 locking work) fails only under thread parallelism - a
   shutdown-timing/commit race that a single-threaded run never exposes.
 - On GitHub's 2-core runners, factor-20 threads also **CPU-starve** (20 runnable threads, 2 cores), turning
   tight in-test deadlines into mass timeouts (~28 failures) - a *second*, resource failure mode on top of the
@@ -106,6 +106,13 @@ the self-hosted/multi-core box goes ~5:14 → ~1:40, both reliable.
 - **JaCoCo under `forkCount>1`**: `prepare-agent` uses a single `jacoco.exec` with append mode; multiple
   forks appending concurrently can corrupt/undercount coverage. If CI coverage numbers look wrong, give each
   fork its own exec file (`destFile` with `${surefire.forkNumber}`) and `jacoco:merge` before reporting.
-  Tracked in `docs/inflight.md`.
+  Tracked in `docs/inflight.md`; now in [`docs/refactoring.md`](../../refactoring.md), grep the
+  heading `Build - jacoco coverage under forked surefire`.
 - The ~59s `RunLengthEncoderTest` INT floor is a separate, optional main-code optimisation (a delta-aware
-  `OffsetSimultaneousEncoder.invoke()`), also in `docs/inflight.md`.
+  `OffsetSimultaneousEncoder.invoke()`), also in `docs/inflight.md`; the optimisation itself is now in
+  [`docs/refactoring.md`](../../refactoring.md), grep the heading `offsets/OffsetSimultaneousEncoder.java`.
+
+Both pointers above named `docs/inflight.md`, the single file that became the directory
+[`docs/inflight/`](../../inflight/) on 2026-08-04 and was deleted in `0de96fc` — `git show
+0de96fc^:docs/inflight.md` for the entries as they stood. Neither follow-up carried into
+`docs/inflight/`; both landed in the refactoring backlog instead.

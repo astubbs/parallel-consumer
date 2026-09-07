@@ -8,7 +8,6 @@ package bz.stub.parallelconsumer.offsets;
 import com.google.common.truth.Truth;
 import com.google.common.truth.Truth8;
 import bz.stub.parallelconsumer.FakeRuntimeException;
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import bz.stub.parallelconsumer.state.PartitionState;
@@ -200,9 +199,33 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
                                         .that(partitionState)
                                         .isBlocked()); // blocked
 
-                Long partitionOffsetHighWaterMarks = wm.getPm().getHighestSeenOffset(topicPartition);
-                assertThat(partitionOffsetHighWaterMarks)
-                        .isGreaterThan(numberOfRecordsToPrimeWith); // high watermark is beyond our initial processed count upon blocking
+                // Back pressure gates which records may be TAKEN as work, not which are polled and
+                // registered - so every extra record IS seen, even though the partition is blocked.
+                long lastOffsetSent = numberOfRecordsToPrimeWith + extraRecordsToBlockWithThresholdBlocks - 1;
+                waitAtMost(defaultTimeout).untilAsserted(() ->
+                        assertWithMessage("every extra record was polled and registered, even while blocked")
+                                .that(partitionState).getOffsetHighestSeen().isEqualTo(lastOffsetSent));
+
+                // Wait for the succeeded frontier to settle before reading it. Once the partition is
+                // blocked, PartitionState#couldBeTakenAsWork refuses every record at or above the
+                // highest succeeded offset, so nothing else can complete and only the two records we
+                // are deliberately holding remain in flight. That makes this a quiescent state, not
+                // a moving one, so the frontier read below cannot race the assertion that uses it.
+                await().untilAsserted(() ->
+                        assertWithMessage("nothing left in flight but the records this test holds")
+                                .that(wm).getNumberRecordsOutForProcessing().isEqualTo(numberOfBlockedMessages));
+
+                // The encoded high-water mark is the highest SUCCEEDED offset, not the highest polled
+                // one - see `use offsetHighestSucceeded instead of offsetHighestSeen` in PartitionState.
+                // Back pressure therefore freezes that frontier wherever the encoding crossed the size
+                // threshold, which makes the last polled offset unreachable here rather than late.
+                // Asserting it only passed when the control loop happened to claim the whole extra batch
+                // as work before the block fired. Diagnosis, measurements and control arms:
+                // docs/solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md
+                long settledHighestSucceeded = partitionState.getOffsetHighestSucceeded();
+                assertThat(settledHighestSucceeded)
+                        .as("the succeeded frontier advanced into the extra batch, and no further than it")
+                        .isBetween((long) numberOfRecordsToPrimeWith, lastOffsetSent);
 
                 parallelConsumer.requestCommitAsap();
                 awaitForOneLoopCycle();
@@ -220,8 +243,7 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
                                     .deserialiseIncompleteOffsetMapFromBase64(0L, meta);
                             Truth.assertWithMessage("The only incomplete record now is offset zero, which we are blocked on")
                                     .that(incompletes.getIncompleteOffsets()).containsExactlyElementsIn(blockedOffsets);
-                            int expectedHighestSeen = numberOfRecordsToPrimeWith + extraRecordsToBlockWithThresholdBlocks - 1;
-                            Truth8.assertThat(incompletes.getHighestSeenOffset()).hasValue(expectedHighestSeen);
+                            Truth8.assertThat(incompletes.getHighestSeenOffset()).hasValue(settledHighestSucceeded);
                         }
                 );
             }
@@ -262,10 +284,10 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
                 // fail the message
                 finalMsgLock.countDown();
 
-                // wait for the retry
+                // wait for the retry - the attempt count IS the retry-happened event, so wait on it
+                // directly rather than first sleeping out the retry delay and hoping
                 awaitForOneLoopCycle();
-                sleepQuietly(ParallelConsumerOptions.DEFAULT_STATIC_RETRY_DELAY.toMillis());
-                await().until(() -> attempts.get() >= 2);
+                await().atMost(ofSeconds(30)).until(() -> attempts.get() >= 2);
 
                 // assert partition still blocked
                 awaitForOneLoopCycle();

@@ -3,13 +3,13 @@
  * Copyright (C) 2020-2025 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
-
-/*-
- * Copyright (C) 2020-2023 Confluent, Inc.
- */
 package bz.stub.parallelconsumer.integrationTests;
 
 import bz.stub.parallelconsumer.internal.testcontainers.FilteredTestContainerSlf4jLogConsumer;
+import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ParallelConsumerOptionsBuilder;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -17,6 +17,13 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.kafka.clients.admin.CreateTopicsResult;
+import org.apache.kafka.clients.admin.OffsetSpec;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.common.TopicPartition;
+import org.awaitility.Awaitility;
+import org.awaitility.core.ConditionTimeoutException;
+import org.awaitility.core.ThrowingRunnable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,8 +31,15 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+import pl.tlinkowski.unij.api.UniMaps;
+import pl.tlinkowski.unij.api.UniSets;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.UnaryOperator;
 
 import static org.apache.commons.lang3.RandomUtils.nextInt;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,6 +62,11 @@ public abstract class BrokerIntegrationTest<K, V> {
 
     int numPartitions = 1;
     int partitionNumber = 0;
+
+    /** @see CompletionCeiling#completionCeiling(long, long, Duration) */
+    public static Duration completionCeiling(long units, long gatingUnits, Duration ceilingAtGating) {
+        return CompletionCeiling.completionCeiling(units, gatingUnits, ceilingAtGating);
+    }
 
     @Getter
     String topic;
@@ -113,8 +132,40 @@ public abstract class BrokerIntegrationTest<K, V> {
         kafkaContainer.start();
     }
 
+    /**
+     * Stop the current Kafka container and start a fresh one. Use this before performance/chaos
+     * tests to avoid stale topics, consumer groups, and broker metadata from previous runs
+     * causing timeouts or unpredictable behaviour.
+     * <p>
+     * After calling this, any new test instances will pick up the fresh container via the
+     * static field. Existing KafkaClientUtils references become stale and must be recreated.
+     */
+    /**
+     * Stop the current Kafka container and start a fresh one. Recreates KafkaClientUtils
+     * to point to the new container. Call before performance/chaos tests.
+     */
+    protected void resetKafkaContainer() {
+        log.info("Resetting Kafka container for clean state...");
+        if (kcu != null) {
+            kcu.close();
+        }
+        kafkaContainer.stop();
+        kafkaContainer = createKafkaContainer(null);
+        kafkaContainer.start();
+        kcu = new KafkaClientUtils(kafkaContainer);
+        kcu.open();
+        log.info("Fresh Kafka container started at {}", kafkaContainer.getBootstrapServers());
+    }
+
     @Getter(AccessLevel.PROTECTED)
-    private final KafkaClientUtils kcu = new KafkaClientUtils(kafkaContainer);
+    private KafkaClientUtils kcu = new KafkaClientUtils(kafkaContainer);
+
+    /**
+     * Clients a test built for itself and handed to {@link #register(AutoCloseable)}. Disjoint from what
+     * {@link #close()} tears down: that closes {@link KafkaClientUtils}' own default consumer, producer and
+     * admin, none of which are ever registered here.
+     */
+    private final List<AutoCloseable> toClose = new ArrayList<>();
 
     @BeforeAll
     static void followKafkaLogs() {
@@ -132,6 +183,64 @@ public abstract class BrokerIntegrationTest<K, V> {
     @AfterEach
     void close() {
         kcu.close();
+    }
+
+    /**
+     * Registers a client for teardown and hands it straight back, so a test can build and keep it in one
+     * expression - {@code committed = register(TransactionalTopicVerifier.readCommitted(...))}. Generic so that
+     * the caller keeps the concrete type it needs to use.
+     *
+     * @return {@code closeable}, so this can wrap the expression that creates it
+     */
+    protected <T extends AutoCloseable> T register(T closeable) {
+        toClose.add(closeable);
+        return closeable;
+    }
+
+    /**
+     * How long a Kafka client gets to shut down during teardown before it is abandoned.
+     * <p>
+     * Failure isolation is not enough on its own here: {@code AutoCloseable#close()} on a KafkaProducer is
+     * effectively unbounded, and the clients this base class is asked to close are frequently ones a test
+     * deliberately broke - a fenced producer, a poisoned transaction, a consumer whose coordinator is gone. Those
+     * are exactly the closes that hang rather than throw, and a hang in teardown reports as the whole job timing
+     * out rather than as the test that caused it.
+     */
+    private static final Duration CLIENT_CLOSE_TIMEOUT = Duration.ofSeconds(10);
+
+    /**
+     * Closes everything {@link #register(AutoCloseable)} was given, tolerating failures and bounding the time each
+     * one may take.
+     * <p>
+     * Teardown only, and after every assertion has run, so a swallowed exception here cannot mask a result -
+     * whereas a throw could. Tests that deliberately leave a client in a broken state (a fenced producer, a
+     * producer whose transaction the broker already reaped) legitimately fail to close cleanly: that IS the
+     * scenario, so it is logged and the remaining clients are still closed.
+     * <p>
+     * {@link Producer} and {@link Consumer} are special-cased onto their {@code close(Duration)} overloads because
+     * they are the two that offer one; anything else registered here is closed plainly, since there is no general
+     * way to bound an {@link AutoCloseable}.
+     */
+    @AfterEach
+    void closeRegisteredTestClients() {
+        for (AutoCloseable closeable : toClose) {
+            try {
+                closeBounded(closeable);
+            } catch (Exception e) {
+                log.warn("Problem closing test client {} - tolerated during teardown", closeable, e);
+            }
+        }
+        toClose.clear();
+    }
+
+    private static void closeBounded(AutoCloseable closeable) throws Exception {
+        if (closeable instanceof Producer) {
+            ((Producer<?, ?>) closeable).close(CLIENT_CLOSE_TIMEOUT);
+        } else if (closeable instanceof Consumer) {
+            ((Consumer<?, ?>) closeable).close(CLIENT_CLOSE_TIMEOUT);
+        } else {
+            closeable.close();
+        }
     }
 
     protected void setupTopic() {
@@ -155,6 +264,43 @@ public abstract class BrokerIntegrationTest<K, V> {
         return kcu.createTopic(topic, numPartitions);
     }
 
+    /**
+     * <b>Start here when writing a PC integration test.</b> Does the setup nearly every one of them opens with -
+     * a fresh topic, a consumer in a new group, and a {@link ParallelEoSStreamProcessor} subscribed to that topic
+     * - so the test declares only the options it actually cares about, and the interesting configuration is not
+     * buried in boilerplate:
+     * <pre>{@code
+     * @BeforeEach
+     * void setUp() {
+     *     pc = startPcOnNewTopic(options -> options.ordering(KEY).maxConcurrency(10));
+     * }
+     * }</pre>
+     * Then use the siblings here rather than rebuilding them: {@link #produceMessages(int)} /
+     * {@link #produceMessages(int, String)} to feed the topic just created, {@link #getTopic()} for its
+     * generated name, {@link #getKcu()} for raw client access, and {@link #setupTopic(String)} /
+     * {@link #ensureTopic(String, int)} if a test needs a second or multi-partition topic. Every subclass also
+     * inherits the {@link AmbientProbeExtension} flight recorder, so a timeout here arrives pre-diagnosed.
+     * <p>
+     * The consumer is already wired into the builder handed to {@code options}; it and the built
+     * {@link ParallelConsumerOptions} are otherwise scaffolding, so they are deliberately not exposed as fields
+     * (several subclasses declare their own {@code consumer}/{@code pc} fields, which inherited ones would
+     * silently shadow).
+     *
+     * @param options the options this test needs, applied to a builder already holding the consumer
+     * @return the subscribed processor, ready to {@code poll}
+     */
+    protected ParallelEoSStreamProcessor<K, V> startPcOnNewTopic(UnaryOperator<ParallelConsumerOptionsBuilder<K, V>> options) {
+        setupTopic();
+
+        Consumer<K, V> consumer = getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP);
+        ParallelConsumerOptions<K, V> pcOpts = options.apply(ParallelConsumerOptions.<K, V>builder()
+                .consumer(consumer)).build();
+
+        var pc = new ParallelEoSStreamProcessor<K, V>(pcOpts);
+        pc.subscribe(UniSets.of(getTopic()));
+        return pc;
+    }
+
     protected List<String> produceMessages(int quantity) {
         return produceMessages(quantity, "");
     }
@@ -162,6 +308,91 @@ public abstract class BrokerIntegrationTest<K, V> {
     @SneakyThrows
     protected List<String> produceMessages(int quantity, String prefix) {
         return getKcu().produceMessages(getTopic(), quantity, prefix);
+    }
+
+    /**
+     * Await an assertion about records flowing through a PC whose consumer may currently be positioned AT
+     * THE TAIL of the topic - producing one "nudge" record into the topic before each assertion attempt so
+     * that the awaited condition is actually reachable.
+     * <p>
+     * Why this exists: a consumer with {@code auto.offset.reset=latest} and no committed offset resolves
+     * its start position at whatever the log end offset is <b>when the reset executes</b>. Under load,
+     * consumer-group bootstrap can take seconds - so a single nudge record produced <i>before</i> an await
+     * can be leapfrogged by the reset, leaving the consumer positioned past every record that will ever
+     * exist. Any await for "some record arrives" is then unwinnable regardless of its timeout - the
+     * failure mode behind the long-running {@code committedOffsetRemoved[latest]} CI flake. Producing the
+     * nudge <b>inside</b> the await loop (before the assertion, so it can be observed by the next attempt)
+     * makes the condition reachable at any bootstrap latency. See
+     * {@code docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md}.
+     * <p>
+     * On timeout, logs a self-diagnosis (topic end offset vs group committed offset and nudges sent) so
+     * this class of positioning race names itself instead of presenting as a generic empty-collection
+     * timeout.
+     *
+     * <p>
+     * <b>SIDE EFFECT - read this before asserting on offsets or record counts.</b> This PRODUCES RECORDS
+     * into the topic under test: one per poll interval, so {@code atMost / pollInterval} of them in the
+     * worst case, and how many you actually get depends on how loaded the machine is. It is NOT one.
+     * <p>
+     * Any assertion downstream of this call that needs to know how many records exist must ask the
+     * BROKER (e.g. {@code endOffsets}), not derive it from how many the test produced. Deriving it is a
+     * real bug this project has already paid for twice: {@code committedOffsetRemoved} carried
+     * {@code producedCount + 1 // run sends one} and a {@code TO_PRODUCE + 2} search window, both written
+     * when this helper nudged once up front. Moving the nudge inside the await made the count unbounded,
+     * the arithmetic silently wrong, and the test an intermittent CI failure that was quarantined rather
+     * than diagnosed. See {@code docs/plans/2026-08-05-001-investigate-committedoffset-latest-reflake.md}.
+     *
+     * @param nudgeCounter incremented for each nudge record produced. Both original callers passed one and
+     *                     never read it, which is how the count went unnoticed - if you are asserting
+     *                     anything about the contents of this topic, this number is load-bearing, not
+     *                     decoration.
+     */
+    protected void awaitWithTopicNudge(ParallelConsumer<?, ?> pc,
+                                       Duration pollInterval,
+                                       Duration atMost,
+                                       AtomicLong nudgeCounter,
+                                       ThrowingRunnable assertion) {
+        // correlation marker: ties this await to the consumer's own (pcId-tagged) client logs - the line
+        // that let the nudge-race capture be attributed to the right instance among 16 forks
+        log.info("awaitWithTopicNudge START: topic={} groupId={} atMost={}", getTopic(), getKcu().getGroupId(), atMost);
+        try {
+            Awaitility.await()
+                    .pollInterval(pollInterval)
+                    .atMost(atMost)
+                    .failFast(pc::isClosedOrFailed)
+                    .untilAsserted(() -> {
+                        // nudge FIRST: must go before the failing assertion, otherwise it is never reached
+                        getKcu().produceMessages(getTopic(), 1, "nudge-");
+                        nudgeCounter.incrementAndGet();
+                        assertion.run();
+                    });
+        } catch (ConditionTimeoutException timeout) {
+            logTailPositionDiagnosis(nudgeCounter.get());
+            throw timeout;
+        }
+    }
+
+    /**
+     * Best-effort diagnosis for {@link #awaitWithTopicNudge}: compares what the broker holds against what
+     * the group has committed, to make offset-reset positioning races self-identifying in CI logs.
+     */
+    private void logTailPositionDiagnosis(long nudgesSent) {
+        try {
+            var tp = new TopicPartition(getTopic(), 0);
+            long endOffset = getKcu().getAdmin()
+                    .listOffsets(UniMaps.of(tp, OffsetSpec.latest()))
+                    .partitionResult(tp).get(5, TimeUnit.SECONDS).offset();
+            var committed = getKcu().getAdmin()
+                    .listConsumerGroupOffsets(getKcu().getGroupId())
+                    .partitionsToOffsetAndMetadata().get(5, TimeUnit.SECONDS)
+                    .get(tp);
+            log.error("awaitWithTopicNudge timed out. Diagnosis: topic {} end offset={}, group '{}' committed={}, " +
+                            "nudges sent={}. If the consumer saw nothing while the end offset kept advancing, suspect " +
+                            "an offset reset (e.g. LATEST) that resolved PAST the records the test expected it to see.",
+                    getTopic(), endOffset, getKcu().getGroupId(), committed, nudgesSent);
+        } catch (Exception diagnosisProblem) {
+            log.warn("awaitWithTopicNudge timed out and the tail-position diagnosis itself failed", diagnosisProblem);
+        }
     }
 
 }

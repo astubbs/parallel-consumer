@@ -23,7 +23,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *   produced the false-positive class root-caused during eager calibration. Under cooperative-sticky,
  *   unaffected partitions keep processing straight through rebalances, so the legitimate
  *   lag-stagnation window shrinks to a single heavy dwell + slack - far more probe headroom.</li>
- *   <li><b>Exposure to the actual quarry was hypothesized to rise.</b> The open #857
+ *   <li><b>Exposure to the actual quarry was hypothesized to rise.</b> The open confluentinc#857
  *   commit-during-revoke deadlock ({@code synchronized(commitCommand)} in
  *   {@code onPartitionsRevoked} vs {@code commitOffsetsThatAreReady}) fires per-revoke, and the
  *   going-in hypothesis was that cooperative mode produces MORE FREQUENT, smaller revokes = more
@@ -49,7 +49,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *   empirically, not just by inspection.</li>
  *   <li><b>No Class 2 trigger under cooperative either</b> (4 defect-arm seeds, 0 hits). And the
  *   measured mechanism honestly REVISES the hypothesis: sticky assignment avoids unnecessary
- *   movement, so revoke events DROPPED ~6x vs eager (5-15 per run vs ~57) - fewer #857 draws, not
+ *   movement, so revoke events DROPPED ~6x vs eager (5-15 per run vs ~57) - fewer confluentinc#857 draws, not
  *   more; what rises is per-event sharpness (partitions keep processing through rebalances, so the
  *   commit path is active whenever a revoke arrives).</li>
  *   <li><b>Dwell does NOT discriminate arms under cooperative</b>: defect 74-78s vs fixed 74-101s

@@ -49,10 +49,14 @@ public class ShardKey {
     public static class KeyOrderedKey extends ShardKey {
 
         /**
-         * Note: We use just the topic name here, and not the partition, so that if we were to receive records from the
-         * same key from the partitions we're assigned, they will be put into the same queue.
+         * Partition-scoped, despite KEY ordering being about the key: the shard is identified by
+         * (topic, partition, key), not (topic, key).
+         * <p>
+         * This is what keeps {@code ProcessingShard}'s offset-keyed {@code entries} map free of collisions. Offsets
+         * are only unique WITHIN a partition, so two records with the same key on different partitions can share an
+         * offset - and a topic-scoped shard would put them in one map under one key, silently losing one.
          */
-        TopicPartition topicName;
+        TopicPartition topicPartition;
 
         /**
          * The key of the record being referenced. Nullable if record is produced with a null key.
@@ -69,7 +73,7 @@ public class ShardKey {
             } else {
                 this.key = new KeyWithEquals(key);
             }
-            this.topicName = topicPartition;
+            this.topicPartition = topicPartition;
         }
     }
 

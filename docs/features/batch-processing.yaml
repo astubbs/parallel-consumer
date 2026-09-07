@@ -1,0 +1,32 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Batch processing
+category: processing
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.5.0.0
+  evidence:
+    tag: 0.5.0.0
+    path: README.adoc
+    basis: The PollContext change made batch support available across the processing APIs.
+readme_anchor: batching
+summary: Deliver multiple records to one processing invocation when a downstream operation benefits from batching.
+use_this_when:
+  - Your downstream API accepts batches, such as a bulk indexing or write endpoint.
+  - You can handle a batch retry as a unit of work.
+setup:
+  option: ParallelConsumerOptions.batchSize
+  rule: Choose a batch-processing API after setting a batch size.
+opt_in:
+  mechanism: Set batchSize and use a batch processing API.
+  isolated_from_stable_modules: false
+boundaries:
+  - Single-record PollContext accessors and normal processing APIs are invalid while batching is configured.
+  - An exception returns every record in the batch to retry; the next attempt need not contain the same batch grouping.
+references:
+  - label: Core batch example
+    path: parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java

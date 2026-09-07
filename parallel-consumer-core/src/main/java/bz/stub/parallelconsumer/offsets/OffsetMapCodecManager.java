@@ -6,7 +6,8 @@ package bz.stub.parallelconsumer.offsets;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
@@ -75,7 +76,12 @@ public class OffsetMapCodecManager<K, V> {
 
     private final PCMetrics pcMetrics;
 
-    private static ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy errorPolicy = ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL;
+    /**
+     * What the decode path does with commit metadata this build cannot read. Read from the module's options (the DI
+     * system) per instance - it used to be a mutable static written by this constructor, which meant the last
+     * {@link OffsetMapCodecManager} constructed in the JVM decided the policy for every other one.
+     */
+    private final InvalidOffsetMetadataHandlingPolicy errorPolicy;
 
     /**
      * Decoding result for encoded offsets
@@ -112,12 +118,10 @@ public class OffsetMapCodecManager<K, V> {
      */
     public static Optional<OffsetEncoding> forcedCodec = Optional.empty();
 
-    // todo remove consumer #233
+    // todo remove consumer - confluentinc#233
     public OffsetMapCodecManager(PCModule<K, V> module) {
         this.module = module;
-        if (module != null){
-            this.errorPolicy = module.options().getInvalidOffsetMetadataPolicy();
-        }
+        this.errorPolicy = module.options().getInvalidOffsetMetadataPolicy();
         pcMetrics = module.pcMetrics();
         initMeters();
     }
@@ -129,7 +133,7 @@ public class OffsetMapCodecManager<K, V> {
     /**
      * Load all the previously completed offsets that were not committed
      */
-    // todo this is the only method that needs the consumer - offset encoding is being conflated with decoding upon assignment #233
+    // todo this is the only method that needs the consumer - offset encoding is being conflated with decoding upon assignment - confluentinc#233
     // todo make package private?
     // todo rename
     public Map<TopicPartition, PartitionState<K, V>> loadPartitionStateForAssignment(final Collection<TopicPartition> assignment) {
@@ -147,7 +151,7 @@ public class OffsetMapCodecManager<K, V> {
             }
             attempts++;
             if (attempts > 10) // shouldn't need more than 1 ever
-                throw new InternalRuntimeException("Failed to get partition assignment - continuously woken up.", lastWakeupException);
+                throw new PCInternalRuntimeException("Failed to get partition assignment - continuously woken up.", lastWakeupException);
         }
 
         var partitionStates = new HashMap<TopicPartition, PartitionState<K, V>>();
@@ -178,22 +182,99 @@ public class OffsetMapCodecManager<K, V> {
         return partitionStates;
     }
 
-    private HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(OffsetAndMetadata offsetData) throws OffsetDecodingError {
-        return deserialiseIncompleteOffsetMapFromBase64(offsetData.offset(), offsetData.metadata());
+    /**
+     * Decodes the offset map committed against one partition, under <em>this manager's</em> configured
+     * {@link ParallelConsumerOptions#getInvalidOffsetMetadataPolicy()}.
+     * <p>
+     * Deliberately not named {@code deserialiseIncompleteOffsetMapFromBase64} like the statics it delegates to: an
+     * instance method sharing a name with static overloads reads at the call site as though the policy argument were
+     * optional, when in fact the instance form is the only one that consults the user's configuration. SpotBugs flags
+     * the shape as {@code MOM_MISLEADING_OVERLOAD_MODEL}.
+     *
+     * @param tp         the partition, carried purely so an unreadable payload can name itself in the log
+     * @param offsetData the committed offset and its free-form metadata field
+     * @throws OffsetDecodingError if the metadata is not valid base64
+     */
+    private HighestOffsetAndIncompletes decodeOffsetMapForPartition(TopicPartition tp, OffsetAndMetadata offsetData) throws OffsetDecodingError {
+        return deserialiseIncompleteOffsetMapFromBase64(offsetData.offset(), offsetData.metadata(), errorPolicy, tp);
     }
 
+    /**
+     * Decodes an offset payload under the strict {@link InvalidOffsetMetadataHandlingPolicy#FAIL} policy - for callers
+     * with no configured consumer to take a policy from, which in practice means tests.
+     * <p>
+     * {@code FAIL} is chosen here rather than inherited: this overload has no user to ask, and silently discarding an
+     * offset map is not a decision a helper should make on a caller's behalf. Note this is the opposite of the
+     * <em>runtime</em> default, which is {@link InvalidOffsetMetadataHandlingPolicy#IGNORE}.
+     *
+     * @param committedOffsetForPartition the committed offset the payload is relative to - incompletes are encoded as
+     *                                    offsets from this base
+     * @param base64EncodedOffsetPayload  the {@code metadata} field of the committed offset
+     * @return the highest offset seen, and the incomplete offsets below it
+     * @throws OffsetDecodingError if the payload is not valid base64
+     * @see #deserialiseIncompleteOffsetMapFromBase64(long, String, InvalidOffsetMetadataHandlingPolicy, TopicPartition)
+     */
     public static HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(long committedOffsetForPartition, String base64EncodedOffsetPayload) throws OffsetDecodingError {
+        return deserialiseIncompleteOffsetMapFromBase64(committedOffsetForPartition, base64EncodedOffsetPayload, InvalidOffsetMetadataHandlingPolicy.FAIL, null);
+    }
+
+    /**
+     * Decodes an offset payload under an explicit policy, without a partition to name in diagnostics.
+     * <p>
+     * Retained at its original three-argument shape: this is public API, and an earlier revision of this change
+     * replaced it with the four-argument form below rather than adding to it. That broke already-compiled callers
+     * with {@code NoSuchMethodError} and forced source callers to pass a {@link TopicPartition} they had no use for.
+     * The default-policy change this PR makes never required removing it.
+     *
+     * @see #deserialiseIncompleteOffsetMapFromBase64(long, String, InvalidOffsetMetadataHandlingPolicy, TopicPartition)
+     */
+    public static HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(long committedOffsetForPartition,
+                                                                                       String base64EncodedOffsetPayload,
+                                                                                       InvalidOffsetMetadataHandlingPolicy errorPolicy) throws OffsetDecodingError {
+        return deserialiseIncompleteOffsetMapFromBase64(committedOffsetForPartition, base64EncodedOffsetPayload, errorPolicy, null);
+    }
+
+    /**
+     * Decodes the base64 offset payload committed against a partition, into the highest offset seen and the set of
+     * incomplete offsets below it.
+     *
+     * @param committedOffsetForPartition the committed offset the payload is relative to - incompletes are encoded as
+     *                                    offsets from this base
+     * @param base64EncodedOffsetPayload  the {@code metadata} field of the committed offset
+     * @param errorPolicy                 what to do with a payload this build cannot read - every such case, not only
+     *                                    metadata recognisable as Kafka Streams'. See
+     *                                    {@link EncodedOffsetPair#decodeToIncompletes}
+     * @param tp                          the partition the metadata was committed against, for diagnosis - may be
+     *                                    {@code null} when the caller does not know it
+     * @return the highest offset seen, and the incomplete offsets below it
+     * @throws OffsetDecodingError if the payload is not valid base64. An unreadable <em>payload</em> does not arrive
+     *                             here: it is settled by {@code errorPolicy} further in
+     */
+    public static HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(long committedOffsetForPartition,
+                                                                                       String base64EncodedOffsetPayload,
+                                                                                       InvalidOffsetMetadataHandlingPolicy errorPolicy,
+                                                                                       TopicPartition tp) throws OffsetDecodingError {
         byte[] decodedBytes;
         try {
             decodedBytes = OffsetSimpleSerialisation.decodeBase64(base64EncodedOffsetPayload);
         } catch (IllegalArgumentException a) {
-            throw new OffsetDecodingError(msg("Error decoding offset metadata, input was: {}", base64EncodedOffsetPayload), a);
+            // Metadata that is not even base64 is unreadable in exactly the sense the policy governs, so it goes
+            // through the same handler as every other case. It used to throw OffsetDecodingError, which
+            // loadPartitionStateForAssignment catches unconditionally - so a deployment that chose FAIL silently
+            // dropped the offset map and replayed completed records instead of stopping. Arbitrary bytes left by
+            // another framework take this path readily, which made it the widest hole in the policy's coverage.
+            return EncodedOffsetPair.handleUnreadableMetadata(committedOffsetForPartition,
+                    errorPolicy,
+                    msg("the metadata is not valid base64"),
+                    () -> new CorruptOffsetMetadataException("metadata is not valid base64",
+                            EncodedOffsetPair.describeSource(tp, committedOffsetForPartition)),
+                    tp);
         }
-        return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes);
+        return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes, errorPolicy, tp);
     }
 
     PartitionState<K, V> decodePartitionState(TopicPartition tp, OffsetAndMetadata offsetData) throws OffsetDecodingError {
-        HighestOffsetAndIncompletes incompletes = deserialiseIncompleteOffsetMapFromBase64(offsetData);
+        HighestOffsetAndIncompletes incompletes = decodeOffsetMapForPartition(tp, offsetData);
         log.debug("Loaded incomplete offsets from offset payload {}", incompletes);
         var epoch = module.workManager().getPm().getEpochOfPartition(tp);
         return new PartitionState<>(epoch, module, tp, incompletes);
@@ -219,8 +300,12 @@ public class OffsetMapCodecManager<K, V> {
      * Can remove string encoding in favour of the boolean array for the `BitSet` if that's how things settle.
      */
     byte[] encodeOffsetsCompressed(long baseOffsetForPartition, PartitionState<K, V> partitionState) throws NoEncodingPossibleException {
-        var incompleteOffsets = partitionState.getIncompleteOffsetsBelowHighestSucceeded();
+        // Sample the high-water mark ONCE and derive both the incomplete-offsets snapshot and the encoder's range
+        // top from that single sample, so the two cannot disagree by construction. Two separate reads here raced
+        // concurrent completions into silent record loss - the full mechanism is on
+        // PartitionState#getIncompleteOffsetsBelow; guarded by OffsetEncoderWidenedRangeRaceTest.
         long highestSucceeded = partitionState.getOffsetHighestSucceeded();
+        var incompleteOffsets = partitionState.getIncompleteOffsetsBelow(highestSucceeded);
         if (log.isDebugEnabled()) {
             log.debug("Encoding partition {}, highest succeeded {}, incomplete offsets to encode {}",
                     partitionState.getTp(),
@@ -234,7 +319,7 @@ public class OffsetMapCodecManager<K, V> {
             simultaneousEncoder = new OffsetSimultaneousEncoder(baseOffsetForPartition, highestSucceeded, incompleteOffsets);
             offsetEncodingTimer.recordCallable(simultaneousEncoder::invoke);
         } catch (Exception e) {
-            throw new InternalRuntimeException("Error encoding offsets", e);
+            throw new PCInternalRuntimeException("Error encoding offsets", e);
         }
 
         //
@@ -265,12 +350,40 @@ public class OffsetMapCodecManager<K, V> {
     }
 
     /**
-     * Print out all the offset status into a String, and potentially use zstd to effectively do run length encoding
-     * compression
+     * Decodes an offset map under the strict {@link InvalidOffsetMetadataHandlingPolicy#FAIL} policy - see the sibling
+     * of {@link #deserialiseIncompleteOffsetMapFromBase64(long, String)} for why a policy-less overload picks the
+     * strict one rather than the runtime default.
      *
-     * @return Set of offsets which are not complete, and the highest offset encoded.
+     * @param nextExpectedOffset the committed offset the map is relative to
+     * @param decodedBytes       the payload, magic byte first
+     * @return the highest offset seen, and the incomplete offsets below it
+     * @see #decodeCompressedOffsets(long, byte[], InvalidOffsetMetadataHandlingPolicy, TopicPartition)
      */
     static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset, byte[] decodedBytes) {
+        return decodeCompressedOffsets(nextExpectedOffset, decodedBytes, InvalidOffsetMetadataHandlingPolicy.FAIL, null);
+    }
+
+    /**
+     * Decodes the offset map out of already-base64-decoded bytes, whose leading byte is the {@link OffsetEncoding}
+     * magic number.
+     * <p>
+     * Empty input is not an error and never reaches the decoders: it means the commit carried no offset map, so
+     * nothing was incomplete below the committed offset. That branch and the {@code IGNORE} branch of
+     * {@link EncodedOffsetPair#decodeToIncompletes} must agree, and both answer {@code nextExpectedOffset - 1} - the
+     * committed offset is the next one to be POLLED, so the highest we can claim to have seen is the one below it.
+     *
+     * @param nextExpectedOffset the committed offset the map is relative to
+     * @param decodedBytes       the payload, magic byte first; empty means no map was committed
+     * @param errorPolicy        what to do with a payload this build cannot read - every such case, not only metadata
+     *                           recognisable as Kafka Streams'. See {@link EncodedOffsetPair#decodeToIncompletes}
+     * @param tp                 the partition the metadata was committed against, for diagnosis - may be {@code null}
+     *                           when the caller does not know it
+     * @return the highest offset seen, and the incomplete offsets below it
+     */
+    static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset,
+                                                               byte[] decodedBytes,
+                                                               InvalidOffsetMetadataHandlingPolicy errorPolicy,
+                                                               TopicPartition tp) {
 
         // if no offset bitmap data
         if (decodedBytes.length == 0) {
@@ -279,8 +392,7 @@ public class OffsetMapCodecManager<K, V> {
             long highestSeenOffsetIsThen = nextExpectedOffset - 1;
             return HighestOffsetAndIncompletes.of(highestSeenOffsetIsThen);
         } else {
-            var result = EncodedOffsetPair.unwrap(decodedBytes);
-            return result.getDecodedIncompletes(nextExpectedOffset, errorPolicy);
+            return EncodedOffsetPair.decodeToIncompletes(decodedBytes, nextExpectedOffset, errorPolicy, tp);
         }
     }
 

@@ -1,0 +1,59 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: A structured wiki of the code's current situation, kept in the repository
+category: engineering
+module: repository
+maturity: production-use
+availability:
+  status: published
+  since: 0.6.0.0
+  evidence:
+    tag: 0.6.0.0
+    path: docs/inflight/AGENTS.md
+    basis: >
+      The directory, its one-file-per-item rule and its classification contract are in the tree and
+      enforced by convention plus the session-start injector; the split from a single file happened
+      on 2026-08-04 after every PR began colliding on it.
+summary: >
+  What is true about the code right now lives in the repository as one file per item - a layer below
+  GitHub Issues rather than a mirror of them. Low enough friction that the small true things actually
+  get written down, and delivered into an agent's context at session start rather than searched for.
+use_this_when:
+  - You are running agents on a codebase and need them to inherit the unwritten knowledge a team
+    would absorb by osmosis - what was tried, what lies, what must happen first.
+  - You are evaluating whether this fork is durably maintained rather than momentarily active.
+  - You want to know what is currently broken, deferred or undecided without an account on anything.
+  - You are running agents on a codebase and need them to inherit state they did not create.
+setup:
+  artifact: none - it is the repository
+  steps:
+    - Read docs/inflight/AGENTS.md for the contract - one file per item, named by category prefix and slug.
+    - Classify by CONSEQUENCE (what it costs someone to not know), state separately, both as HTML comments.
+    - Delete a note when its work lands; a satisfied note kept as a narrative is worse than no note.
+opt_in:
+  required: false
+  isolated_from_stable_modules: false
+boundaries:
+  - >
+    It is not a replacement for GitHub Issues and does not try to be. Issues remain the public,
+    linkable record; this holds what an issue cannot - transient cross-branch state, and context a
+    `gh` or `git` command cannot answer. Recording what a command CAN answer is explicitly forbidden,
+    because a second copy is wrong within a day and a reader cannot tell which is stale.
+  - >
+    Distribution is git's, with git's consequences. A note is only as current as the branch you are
+    on, and two branches can disagree. That is deliberate - a note travels with the work that
+    produced it - but it means a note read on a stale branch can describe a world that no longer
+    exists.
+  - >
+    Classification is enforced - bin/check-inflight-tags.sh fails CI on an unknown or mismatched tag -
+    but DELETION is not. A note whose work landed keeps appearing until a human removes it, and no
+    check can tell the difference between a note that is still true and one nobody has retired.
+  - >
+    The value depends on the notes being written honestly, including what was NOT established. A
+    corpus of optimistic notes is worse than none, because it reads as coverage.
+references:
+  - docs/inflight/AGENTS.md
+  - docs/agent-harness.md
+  - docs/compound-engineering.md
