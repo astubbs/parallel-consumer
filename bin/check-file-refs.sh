@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Flags a cited repo file path that does not exist - the same rule the `PR Checklist` workflow
+# Flags a cited repo file path that does not exist - the same rule the `repo: hygiene` gate
 # enforces (AGENTS.md -> "Cite by anchor, never by line number").
 #
 # WHY THIS EXISTS

@@ -59,10 +59,12 @@ warning or `maybeTruncateBelowOrAbove` - the other references are javadoc in
 no commit data is never asserted to start quietly. A test wants both cases: first offset 0, and first offset
 above 0.
 
-<!-- post-merge: checked -->
+<!-- post-merge: checked-begin -->
 astubbs#106 (stop walking every offset), astubbs#306 (encoding density) and astubbs#207
 (`invalidOffsetMetadataPolicy` reachability) all touch this area and address neither case. The mirror
-body implies astubbs#106 might; it does not.
+body implies astubbs#106 might; it does not - re-confirmed against its merged tree, which changes only
+the offsets/ encoders and leaves `PartitionState#maybeTruncateBelowOrAbove` untouched.
+<!-- post-merge: checked-end -->
 
 ## Draft replacement for the mirror's `## Fork status` (NOT posted)
 

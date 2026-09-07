@@ -89,6 +89,9 @@
         <skipTests>false</skipTests>
         <skipITs>${skipTests}</skipITs>
         <skipUTs>${skipTests}</skipUTs>
+        <!-- Failsafe <excludes> for shard selection - see the failsafe plugin block. The default
+             deliberately matches no file, so an unset build runs the whole integration suite. -->
+        <it.excluded.classes>**/__no_class_matches_this__.java</it.excluded.classes>
 
         <!-- JUnit 5 test groups (failsafe). Override on the command line:
              -Dincluded.groups=performance    (run only performance tests)
@@ -96,7 +99,10 @@
              -Dincluded.groups=lincheck       (run only the Lincheck lane - use bin/lincheck-test.sh, which
                                                also activates -Plincheck for the JVM args it needs)
              -Dexcluded.groups=               (run everything incl. performance, chaos + quarantined)
-             -Dexcluded.groups=transactions,performance,chaos  (skip multiple groups)
+             -Dexcluded.groups=performance,chaos,quarantined,lincheck,transactions  (skip multiple groups)
+             NB excluding `transactions` deselects nearly every @ProvesClaim method, and
+             TransactionalClaimCoverageTest FAILS rather than reporting coverage it did not exercise -
+             that is the gate working. Exclude the group only when you accept losing that report.
              NB overrides REPLACE the default list - include performance, chaos AND quarantined when
              excluding. `quarantined` = known-failing-on-master tests (see @Quarantined): out of the
              gating suites so green means mergeable, but still run by the non-gating CI lane
@@ -375,6 +381,21 @@
             <groupId>com.google.errorprone</groupId>
             <artifactId>error_prone_annotations</artifactId>
             <version>${error-prone.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Supplies @ThreadConfined, which RacerD (the infer lane, bin/infer-test.sh) reads: a type, method
+             or field so marked is taken to run on one thread, so its accesses are not reported as racing
+             with each other, and an unmarked access to the same state elsewhere still is. It is a
+             declaration the analyser consumes, not one it verifies - the runtime assertion beside each use
+             is what verifies it. @GuardedBy cannot say this: it names a lock, and confined state holds
+             none. `provided` for the same reason as the entry above: the annotation is CLASS-retention, so
+             javac needs it, nothing reads it at runtime, and consumers of this library must not inherit it
+             on their classpath. The rule, and which of this jar's other annotations are worth writing here:
+             parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md -->
+        <dependency>
+            <groupId>com.facebook.infer.annotation</groupId>
+            <artifactId>infer-annotation</artifactId>
+            <version>0.18.0</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -1076,6 +1097,19 @@
                          still run (and fail) in the gating Unit Tests lane (ce-review P1 finding). -->
                     <groups>${included.groups}</groups>
                     <excludedGroups>${excluded.groups}</excludedGroups>
+                    <!-- The two elements above go to the JUnit Platform, which does not pass them on, so a test
+                         cannot otherwise see which tests its own run selected. RunTagFilter reads these; the gate
+                         that needs them is TransactionalClaimCoverageTest, which certifies that every documented
+                         transactional guarantee has a proof and could not previously tell that a run had excluded
+                         every one of those proofs by tag. Forwarded from the SAME properties the filters use, so
+                         the two cannot disagree, and set on failsafe as well so moving a gate between the lanes
+                         does not silently blind it. Deleting this block does not quietly disable the gate:
+                         RunTagFilter raises, because a filter it cannot read must never read as "nothing was
+                         filtered". -->
+                    <systemPropertyVariables>
+                        <pc.run.includedGroups>${included.groups}</pc.run.includedGroups>
+                        <pc.run.excludedGroups>${excluded.groups}</pc.run.excludedGroups>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>
@@ -1095,6 +1129,24 @@
                         <!-- Integration tests need to be in a package named `integrationTest` -->
                         <include>**/integrationTest*/**/*.java</include>
                     </includes>
+                    <!-- Shard selection for the catch-all lane. This exists rather than a
+                         -Dit.test=!Class because SETTING it.test REPLACES the <includes> above,
+                         and both source roots compile into the same target/test-classes - so
+                         `-Dit.test=!X` silently drops the integrationTest package restriction and
+                         runs the whole UNIT suite under failsafe as well. Measured: 168 classes
+                         and 981 tests instead of 42 and 204, and it passed, because running MORE
+                         tests fails nothing. An <excludes> leaves the include filter intact, so
+                         the catch-all stays inside the integration packages by construction.
+                         Default matches nothing. bin/ci-integration-test.sh is the only caller. -->
+                    <excludes>
+                        <exclude>${it.excluded.classes}</exclude>
+                        <!-- Configuring <excludes> REPLACES failsafe's defaults rather than adding to them,
+                             and the default it replaces is this one: inner classes. Without it the first
+                             @Nested integration test class would run twice, once under its outer class
+                             and once alone, with both shards green - and bin/lib/compiled-classes.mjs
+                             skips every `$` class on the premise that this default is in force. -->
+                        <exclude>**/*$*</exclude>
+                    </excludes>
                     <jvm>${jvm.location}/bin/java</jvm>
                     <skipTests>${skipTests}</skipTests>
                     <skipITs>${skipITs}</skipITs>
@@ -1117,6 +1169,12 @@
                          -Dgroups is silently ignored - the same trap as -DforkCount vs -Dsurefire.forkCount. -->
                     <groups>${included.groups}</groups>
                     <excludedGroups>${excluded.groups}</excludedGroups>
+                    <!-- Surefire's copy above owns the reasoning. Both plugins carry it deliberately, and
+                         RunTagFilterTest fails if only one does. -->
+                    <systemPropertyVariables>
+                        <pc.run.includedGroups>${included.groups}</pc.run.includedGroups>
+                        <pc.run.excludedGroups>${excluded.groups}</pc.run.excludedGroups>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>

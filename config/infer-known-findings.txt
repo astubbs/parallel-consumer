@@ -48,11 +48,6 @@
 1 NULLPTR_DEREFERENCE ProcessingShard.isWorkContainerStale
 1 NULLPTR_DEREFERENCE WorkManager.checkIfWorkIsStale
 1 NULLPTR_DEREFERENCE WorkManager.handleFutureResult
-1 THREAD_SAFETY_VIOLATION AbstractParallelEoSStreamProcessor.controlLoop
-1 THREAD_SAFETY_VIOLATION AbstractParallelEoSStreamProcessor.isTimeToCommitNow
-1 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.close
-1 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.hasNext
-2 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.next
 # BUFFER_OVERRUN_L1 on the rider envelope, three sightings of one shape. OffsetRiderEnvelope.wrap reads
 # inner[0] behind an explicit `inner.length > 0 &&` guard to refuse a nested envelope; Infer's interval
 # domain reports "Offset: 0 Size: 0" against the guarded read and then propagates it to the two callers

@@ -41,6 +41,20 @@ import java.util.concurrent.atomic.AtomicLong;
  * than a distinct defect. A run that drains reproduces a known result; a run that stays FLAT is the
  * finding worth reporting.
  * <p>
+ * <b>The instance-stall line - also answered, 2026-09-07, do not re-derive</b>: seed
+ * {@code 6077035105695} replays the shape behind every {@code INSTANCE_STALL/NO_WORK_COMPLETED}
+ * firing on this scenario - one live member's returned-result count frozen while its records-out
+ * climbs - on every run, and a thread dump taken inside that window
+ * ({@code -Dchaos.instanceStallDumpAfterSeconds=20} with the diagnostic above) shows all ten of its
+ * workers inside {@code HEAVY_SLEEP}, the control thread idle on its mailbox, and most of the
+ * records out belonging to partitions it no longer owns. It is worker saturation by redelivered
+ * heavy dwells: the eager assignor revokes the whole assignment every few seconds under this churn,
+ * so each 45s dwell is stale before it ends and is redelivered while the old copy keeps sleeping. A
+ * cooperative-assignor control arm on the same seed removes the amplification and leaves one honest
+ * dwell. The detector therefore fires on the length of the tail, not on a PC defect; the record,
+ * the dumps and the arithmetic are in {@code docs/inflight/test-857-churn-storm-async-stalls.md},
+ * "DIAGNOSED, 2026-09-07".
+ * <p>
  * Seed protocol: {@code -Dchaos.seed=<long>} replays a schedule; unset = random seed, always logged.
  * Excluded from default suites via {@code @Tag("chaos")}; run with {@code -Dincluded.groups=chaos}.
  * <p>
