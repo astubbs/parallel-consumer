@@ -75,10 +75,20 @@
     </dependencyManagement>
 
     <dependencies>
-        <!-- Core's test-jar only - never core's main jar. This module asserts on its own case,
+        <!-- Core's test-jar, for the shared TestConventionRules that TestConventionsArchTest
+             imports, as vertx, reactor and mutiny do (KTD11). This module asserts on its own case,
              outcome and report types, not on the engine's, so the generated ManagedTruth subjects
-             buy nothing; the test-jar is here because it ships the shared TestConventionRules that
-             TestConventionsArchTest imports, as it does for vertx, reactor and mutiny (KTD11). -->
+             buy nothing - but the test-jar cannot run without core's main jar beside it: it
+             registers a JUnit TestExecutionListener through ServiceLoader that reaches into core's
+             internal utilities, and without them every test class logs a NoClassDefFoundError from
+             the listener and the per-test reporting is silently dead. So core's main jar is here
+             too, at test scope, and nothing in this module may import from it. -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
