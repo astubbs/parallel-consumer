@@ -2450,6 +2450,47 @@ question, whether the co-occurrence with any branch is coincidence, gets one mor
 Not replayed: the eighth sighting's seed replayed clean and the 2026-09-02 seeds did too, so a single
 replay would settle nothing either way. Recorded so the rate is counted, per the section above.
 
+## 2026-09-07, `INSTANCE_STALL` fires again - on astubbs#453's own CI, whose diff cannot reach the chaos suite <!-- post-merge: checked -->
+
+**Same detector, same class, the sharded lane's own configuration.** `Chaos Pain Suite 4/4` (the
+shard carrying `ChaosRevokeUnderWorkIT` and `ChaosChurnStormIT`, one fork, its own VM - the gate's
+configuration exactly), `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` killed by the
+gating probe `INSTANCE_STALL/NO_WORK_COMPLETED`: *instance 0 holds work (queued=0,
+outForProcessing=26) but has returned no work result for 150s (bound 150s) at 20028 results
+returned*. The run summary also showed twenty-one non-gating `CLASS2_STALL/LAG_STAGNATION`
+observations, as with every sighting above.
+
+<!-- post-merge: checked-begin - a dated sighting against a run id, a job id and a head sha, all durable -->
+Seen on [astubbs/parallel-consumer#453](https://github.com/astubbs/parallel-consumer/pull/453)'s CI
+([run 33954010366](https://github.com/astubbs/parallel-consumer/actions/runs/33954010366/job/101273950868),
+job 101273950868), at head `0afe4c4c4`, run created 2026-09-05T07:59Z.
+<!-- post-merge: checked-end -->
+
+**Seed `3937586179135624324`**, replay line as the log printed it:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=3937586179135624324
+
+Not replayed.
+
+<!-- post-merge: checked-begin - describes the branch's diff in the past tense -->
+**The diff cannot reach the chaos suite, so no diagnosis is attempted here.** astubbs#453's only
+change under `parallel-consumer-core` is a `@Getter(AccessLevel.PROTECTED)` annotation plus javadoc
+on `AbstractParallelEoSStreamProcessor.shutdownTimeout` - no behaviour change, and nothing on the
+poll, commit, rebalance or shutdown path. Every other touched file sits under
+`parallel-consumer-vertx` (module code and its tests) or is the one `docs/inflight/` note the PR
+carries; the chaos suite runs core-module tests only.
+`gh pr diff 453 -R astubbs/parallel-consumer --name-only` lists the seven touched files, and
+`gh pr diff 453 -R astubbs/parallel-consumer -- parallel-consumer-core` shows the one-line core
+change directly.
+<!-- post-merge: checked-end -->
+
+`bin/inflight.mjs codecov test churnStormMeetsSlosAndBalancesLedger` returned 12 recent runs, all
+`pass` (page-bound, so an absence proves nothing) - this run's fail-fast probe kill does not appear
+among them. Enumerate the `INSTANCE_STALL/NO_WORK_COMPLETED` sightings on this class with
+`grep -n 'INSTANCE_STALL/NO_WORK_COMPLETED' docs/inflight/bug-857-family.md` rather than trusting a
+count written here.
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a

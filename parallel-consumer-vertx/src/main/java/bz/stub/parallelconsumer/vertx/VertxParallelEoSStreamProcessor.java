@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
 import bz.stub.parallelconsumer.internal.MdcPropagation;
 import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
@@ -22,6 +23,7 @@ import io.vertx.ext.web.client.HttpRequest;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.client.WebClientOptions;
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
@@ -72,14 +74,34 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
     private static final String VERTX_TYPE = "vert.x-type";
 
     /**
-     * The Vertx engine to use
+     * The Vertx engine to use.
+     * <p>
+     * Package-private getter, not protected: the only readers are same-package tests observing whether close
+     * released the engine this processor built, and PROTECTED would put a test-only seam on the extension surface
+     * of a public class.
      */
+    @Getter(AccessLevel.PACKAGE)
     private final Vertx vertx;
 
     /**
-     * The Vertx webclient for making HTTP requests
+     * Whether {@link #vertx} was built by this processor rather than supplied by the caller - and so is this
+     * processor's to close. Decided once, in the constructor that does the building, and read only by
+     * {@link #releaseOwnedVertxEngine(Duration)}.
      */
+    private final boolean ownsVertx;
+
+    /**
+     * The Vertx webclient for making HTTP requests. Package-private getter for the same reason as {@link #vertx}.
+     */
+    @Getter(AccessLevel.PACKAGE)
     private final WebClient webClient;
+
+    /**
+     * Whether {@link #webClient} was built by this processor. Independent of {@link #ownsVertx}: a caller may share
+     * their {@link Vertx} and still leave the {@link WebClient} for this processor to build, and then only the
+     * client is this processor's to close.
+     */
+    private final boolean ownsWebClient;
 
     /**
      * Extension point for running after Vertx {@link io.vertx.core.Verticle}s finish.
@@ -87,22 +109,29 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
     private Optional<Runnable> onVertxCompleteHook = Optional.empty();
 
     /**
-     * Simple constructor. Internal Vertx objects will be created.
+     * Simple constructor. This processor builds its own Vertx engine and {@link WebClient}, owns both, and closes
+     * both when it closes.
      */
     public VertxParallelEoSStreamProcessor(ParallelConsumerOptions options) {
-        this(Vertx.vertx(), null, options);
+        this(null, null, options);
     }
 
     /**
      * Provide your own instances of the Vertx engine and it's webclient.
      * <p>
-     * Use this to share a Vertx runtime with different systems for efficiency, or to customise configuration.
+     * Use this to share a Vertx runtime with different systems for efficiency, or to customise configuration. An
+     * instance you supply here stays yours: this processor leaves it running when it closes, for you to close when
+     * every system sharing it is done. Pass {@code null} for either argument and this processor builds that one
+     * itself, owns it, and closes it when it closes.
      * <p>
      * By default Vert.x's {@link WebClient} uses quite small connection limits to servers. PC overrides this to {@link
      * ParallelConsumerOptions#getMaxConcurrency()}. You can configure these yourself by providing a configured Vert.x
      * {@link WebClient} with {@link WebClientOptions} set to how you please. Consider also looking at other options
      * below.
      *
+     * @param vertx     the engine to run on, or {@code null} to have this processor build and own one
+     * @param webClient the client to make requests with, or {@code null} to have this processor build and own one on
+     *                  {@code vertx}
      * @see WebClientOptions#setMaxPoolSize
      * @see WebClientOptions#setMaxWaitQueueSize(int)
      * @see WebClientOptions#setPipelining(boolean)
@@ -126,12 +155,12 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 .setHttp2MaxPoolSize(maxConcurrency) // defaults to 1
                 ;
 
-        if (vertx == null)
-            vertx = Vertx.vertx(vertxOptions);
-        this.vertx = vertx;
-        if (webClient == null)
-            webClient = WebClient.create(vertx, webClientOptions);
-        this.webClient = webClient;
+        // Ownership follows construction: what this processor builds, it closes; what the caller supplied, the caller
+        // closes. Decided here and nowhere else, so the teardown cannot disagree with the constructor about it.
+        this.ownsVertx = vertx == null;
+        this.vertx = ownsVertx ? Vertx.vertx(vertxOptions) : vertx;
+        this.ownsWebClient = webClient == null;
+        this.webClient = ownsWebClient ? WebClient.create(this.vertx, webClientOptions) : webClient;
     }
 
     /**
@@ -403,17 +432,73 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
     }
 
     /**
-     * Close the concurrent Vertx consumer system
+     * Close the concurrent Vertx consumer system.
+     * <p>
+     * This is the single method every {@link bz.stub.parallelconsumer.internal.DrainingCloseable} entry
+     * point resolves to: the no-argument {@code close()}, {@code closeDrainFirst()} and
+     * {@code closeDontDrainFirst()} default methods call {@code close(DrainingMode)} directly, and
+     * {@link AbstractParallelEoSStreamProcessor#close(Duration, DrainingMode)} records the caller's timeout
+     * in a field and then delegates to {@code close(DrainingMode)} too - so overriding only this overload,
+     * rather than the {@link Duration}-taking one, is what makes every entry point release the Vert.x
+     * engine. (Overriding both would double-run this teardown: the base class's {@code close(Duration,
+     * DrainingMode)} calls {@code close(drainMode)} internally, which dispatches virtually back to
+     * whichever override is more derived.)
+     * <p>
+     * The Vert.x teardown runs whether or not {@code super.close(...)} threw, so a failing shutdown still releases
+     * what this processor owns rather than stranding it - but never at the price of the diagnosis. A teardown
+     * failure while {@code super.close(...)} is already failing is attached to that failure as suppressed, so the
+     * caller sees the real shutdown error with the teardown's underneath it; only when there is no close failure
+     * to outrank it is the teardown's own exception thrown. That is the guard
+     * {@link AbstractParallelEoSStreamProcessor}'s own {@code doClose} puts around each step of its
+     * {@code finally}, applied one level up - written as a sequence rather than a {@code finally} because a throw
+     * from a {@code finally} is exactly the replacing shape it exists to prevent.
      *
-     * @param timeout   how long to wait before giving up
      * @param drainMode wait for messages already consumed from the broker to be processed before closing
      */
     @SneakyThrows
     @Override
-    public void close(Duration timeout, DrainingMode drainMode) {
+    public void close(DrainingMode drainMode) {
         log.info("Vert.x async consumer closing...");
-        super.close(timeout, drainMode);
-        webClient.close();
+        Throwable closeFailure = null;
+        try {
+            super.close(drainMode);
+        } catch (Throwable closeThrew) {
+            closeFailure = closeThrew;
+        }
+
+        try {
+            releaseOwnedVertxEngine(getShutdownTimeout());
+        } catch (Throwable teardownThrew) {
+            if (closeFailure == null) {
+                throw teardownThrew;
+            }
+            log.warn("Releasing the Vert.x engine failed while close was already failing - attached to the close " +
+                    "failure as suppressed, so it does not replace it. Cause: {}", describeWithRootCause(teardownThrew));
+            closeFailure.addSuppressed(teardownThrew);
+        }
+
+        if (closeFailure != null) {
+            throw closeFailure;
+        }
+    }
+
+    /**
+     * Releases whatever Vert.x resources this processor built - see {@link #ownsVertx} and
+     * {@link #ownsWebClient} - and leaves anything the caller supplied running for them to close. The wait for the
+     * engine to close is bounded by {@code timeout}: the caller's own {@link Duration} when they closed through
+     * {@link AbstractParallelEoSStreamProcessor#close(Duration, DrainingMode)}, and the configured
+     * {@link ParallelConsumerOptions#getShutdownTimeout()} otherwise.
+     */
+    private void releaseOwnedVertxEngine(Duration timeout) throws InterruptedException, TimeoutException {
+        if (ownsWebClient) {
+            webClient.close();
+        } else {
+            log.debug("The WebClient was supplied by the caller - leaving it open for them to close");
+        }
+        if (!ownsVertx) {
+            log.debug("The Vertx engine was supplied by the caller - leaving it running for them to close");
+            return;
+        }
         Future<Void> close = vertx.close();
         var timer = Time.SYSTEM.timer(timeout);
         while (!close.isComplete()) {
@@ -421,7 +506,7 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
             Thread.sleep(100);
             timer.update();
             if (timer.isExpired()) {
-                throw new TimeoutException("Waiting for system to close");
+                throw new TimeoutException("Timed out after " + timeout + " waiting for the Vert.x engine to close");
             }
         }
     }

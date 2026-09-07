@@ -716,7 +716,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                             if (numberToMessWith > 0) {
                                 log.info("Will mess with {} instances", numberToMessWith);
                                 IntStream.range(0, numberToMessWith).forEach(value -> {
-                                    int instanceToGet = (int) ((size - 1) * Math.random());
+                                    int instanceToGet = (int) (size * Math.random());
                                     ManagedPCInstance victim = secondaryPcs.get(instanceToGet);
                                     log.info("Victim is instance: " + victim.getInstanceId());
                                     victim.toggle(pcExecutor);
