@@ -85,7 +85,7 @@ public enum TransactionalClaim {
      */
     OFFSET_AND_RECORDS_ATOMIC(Source.OPTIONS_JAVADOC,
             "A source offset, and it's produced records will be committed as an atomic set.",
-            Status.PROVED, "PROVED on both commit paths. The revoke path: ProducerManagerTest#aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced, which also proves C9 - both claims are about the same commit, and a transaction carrying offset 1s output while committing offset 1 rather than 2 is the atomic set broken. RED observed 2026-09-03 while that commit ran inline on the poll thread without draining the mailbox; GREEN observed 2026-09-07 with the commit delegated to the control thread; the C9 entry carries the controls. This claims own exemption below does NOT cover the revoke case: that exemption is about marker-delivery ordering WITHIN one commit, whereas an undrained completion means the offset is never committed by that transaction at all. The operator ruling of 2026-09-07 that refuted both claims together is answered the same way, together. THE CONTROL-LOOP PROOF, UNCHANGED: "
+            Status.PROVED, "PROVED on both commit paths. The revoke path: ProducerManagerTest#aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced, which also proves C9 - both claims are about the same commit, and a transaction carrying offset 1s output while committing offset 1 rather than 2 is the atomic set broken. RED observed 2026-09-03 while that commit ran inline on the poll thread without draining the mailbox; GREEN observed 2026-09-07 with the commit delegated to the control thread; the C9 entry carries the controls. This claims own exemption below does NOT cover the revoke case: that exemption is about marker-delivery ordering WITHIN one commit, whereas an undrained completion means the offset is never committed by that transaction at all. The operator ruling of 2026-09-07 that refuted both claims together is answered the same way, together. The same documented exception as C9 applies: the revocation commits deadline fallback is at-least-once for that rebalance, logged at WARN. THE CONTROL-LOOP PROOF, UNCHANGED: "
             + "TransactionalCrashReplayIT#replayCommitsTheResultsAndTheirSourceOffsetTogether asserts "
             + "both halves at both ends of a crash: before, no payload result visible AND the source offset still "
             + "on the priming record; after, the offset reaching its target is PAIRED with every result being "
@@ -230,6 +230,11 @@ public enum TransactionalClaim {
             + "observed that a revoke which commits nothing leaves the output in the open transaction for the next "
             + "commit to publish without its offset, which is why the delegated commit is the fix and the decline is "
             + "only the deadline fallback, logged at WARN. "
+            + "DOCUMENTED EXCEPTION: that fallback. When the revocation commit's bounded wait "
+            + "(commitLockAcquisitionTimeout) expires with no pass having served it, the revoke declines and the "
+            + "output already in the open transaction is published by a later commit without its offset - "
+            + "at-least-once for that rebalance, at WARN naming the partitions. The claim holds whenever the control "
+            + "thread serves the revocation, which is every case the proofs and the broker-level check exercise. "
             + "docs/solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md"),
 
     /**

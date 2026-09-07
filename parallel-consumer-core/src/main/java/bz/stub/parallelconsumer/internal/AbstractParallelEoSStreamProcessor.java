@@ -157,11 +157,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * between its drain and its commit, and the future the callback waits on.
      */
     private static final class RevokeCommitRequest {
-        final Collection<TopicPartition> partitions;
+        /**
+         * The revoked partitions with the assignment epoch each had when the request was posted. The served pass
+         * fences a partition only while its epoch still matches: a pass that runs late - after the waiter timed out,
+         * truncated, and the partition came back to this instance under a new epoch - must not fence the new
+         * generation ({@link bz.stub.parallelconsumer.state.PartitionStateManager#fenceForRevocation}).
+         */
+        final Map<TopicPartition, Long> partitionEpochsAtRequest;
         final CompletableFuture<Void> done = new CompletableFuture<>();
 
-        RevokeCommitRequest(Collection<TopicPartition> partitions) {
-            this.partitions = partitions;
+        RevokeCommitRequest(Map<TopicPartition, Long> partitionEpochsAtRequest) {
+            this.partitionEpochsAtRequest = partitionEpochsAtRequest;
+        }
+
+        Collection<TopicPartition> partitions() {
+            return partitionEpochsAtRequest.keySet();
         }
     }
 
@@ -739,7 +749,25 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * the commit goes through {@link #tryCommitOffsetsOnRevoke}'s tryLock: uncontended by construction (this thread
      * is the only other taker of {@code commitLock} and is not holding it), and {@code ArchitectureTest}'s
      * rebalance-callback rule forbids reaching a blocking {@code lock()} from here whichever thread it turns out
-     * to be on.
+     * to be on. No fence is needed on this branch, and its absence is deliberate: {@link #innerDoClose} shuts the
+     * worker pool down and awaits it before it closes the poll system and then the consumer, so by the time these
+     * callbacks fire no worker exists to resume with a record of a revoked partition - the gap the fence closes on
+     * the served pass cannot open here.
+     * <p>
+     * <b>A revocation that arrives while the instance is closing is served by the close, not by a pass.</b> Once the
+     * control thread has entered {@link #innerDoClose} no further pass runs, so a request posted then would only
+     * wait out its deadline - while the close waits on the poll thread in {@code closeAndWait}, and the member's
+     * LeaveGroup waits on both. Instead the close's own drain-and-commit (workers already stopped, so it is
+     * complete) completes whatever request is pending at that point, the control task fails anything still pending
+     * when it exits, and a callback that finds the instance already closed or failed declines at once.
+     * <p>
+     * <b>The wake-up is sent only while the control thread is parked on the mailbox.</b> {@link #notifySomethingToDo}
+     * interrupts the control thread whenever the producer write lock is not held - which includes the control thread
+     * still WAITING for that lock in {@code acquireCommitLock}'s timed {@code tryLock}, where an interrupt is not a
+     * wake-up but an {@code InterruptedException} that the control loop treats as failure and closes the instance
+     * on. A revocation lands at exactly such moments. So this path checks {@link #currentlyPollingWorkCompleteMailBox}
+     * first - the contract the wake-up's own javadoc states - and otherwise lets the pass pick the request up when
+     * its bounded mailbox wait ends. The other callers of {@code notifySomethingToDo} keep their behaviour.
      * <p>
      * <b>The served pass also fences the revoked partitions, between its drain and its commit.</b> The commit alone
      * left a second, narrower door open: once it releases the producer write lock, a worker parked on the produce
@@ -762,32 +790,113 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             return;
         }
 
-        var request = new RevokeCommitRequest(partitions);
+        if (isClosedOrFailed()) {
+            logDeclinedRevokeCommit(partitions, new IllegalStateException("the instance is closed or has failed, " +
+                    "so no control-loop pass will serve a revocation commit"));
+            return;
+        }
+
+        Map<TopicPartition, Long> epochsAtRequest = new HashMap<>();
+        for (TopicPartition partition : partitions) {
+            epochsAtRequest.put(partition, wm.getPm().getEpochOfPartition(partition));
+        }
+        var request = new RevokeCommitRequest(epochsAtRequest);
         var displaced = revokeCommitRequest.getAndSet(request);
         if (displaced != null) {
             // One revocation callback runs at a time, so a request still pending here is one whose waiter gave up.
             // Fail it rather than leave a waiter-less future for the control thread to complete.
             displaced.done.completeExceptionally(new IllegalStateException("superseded by a later revocation"));
         }
-        notifySomethingToDo();
+        wakeControlThreadIfParkedOnTheMailbox();
         var deadline = options.getCommitLockAcquisitionTimeout();
         log.info("Revocation of {}: asked the control thread to drain, fence and commit, waiting up to {}.", partitions, deadline);
         try {
             request.done.get(deadline.toMillis(), MILLISECONDS);
             log.info("Revocation of {}: the control thread drained and committed inside the callback.", partitions);
         } catch (TimeoutException e) {
-            // Withdraw the request. A commit the control thread runs after this point is an ordinary commit of
-            // whatever is dirty then - harmless, but nobody is waiting on it.
-            revokeCommitRequest.compareAndSet(request, null);
-            logDeclinedRevokeCommit(partitions, e);
+            // Withdraw the request if it is still ours to withdraw. If the control thread has already taken it,
+            // the pass in progress will commit and fence for exactly these partitions - so wait for that rather
+            // than truncate underneath it: truncation must follow the commit, and a fence must land before the
+            // partition can come back under a new epoch (the epoch check in the pass is the second line of defence).
+            boolean withdrawn = revokeCommitRequest.compareAndSet(request, null);
+            if (withdrawn) {
+                logDeclinedRevokeCommit(partitions, e);
+            } else {
+                waitForTheTakenRequest(request, partitions, deadline);
+            }
         } catch (ExecutionException e) {
             logDeclinedRevokeCommit(partitions, e.getCause());
         } catch (InterruptedException e) {
             // Restore the flag rather than swallowing the interrupt: this runs inside the poll thread's rebalance
             // callback, and dropping it strands whatever is waiting on it.
             Thread.currentThread().interrupt();
-            revokeCommitRequest.compareAndSet(request, null);
+            boolean withdrawn = revokeCommitRequest.compareAndSet(request, null);
+            logDeclinedRevokeCommit(partitions, withdrawn ? e
+                    : new IllegalStateException("interrupted while the control thread was serving the request; " +
+                    "its commit may still complete", e));
+        }
+    }
+
+    /**
+     * The deadline expired after the control thread had taken the request - so a pass is serving it now, bounded by
+     * that pass's own write-lock timeout and one commit. Waiting once more keeps truncation after the commit.
+     */
+    private void waitForTheTakenRequest(RevokeCommitRequest request, Collection<TopicPartition> partitions, Duration deadline) {
+        log.info("Revocation of {}: the deadline passed while the control thread was already serving the request - " +
+                "waiting for that pass rather than truncating underneath its commit.", partitions);
+        try {
+            request.done.get(deadline.toMillis(), MILLISECONDS);
+            log.info("Revocation of {}: the control thread drained and committed, late but inside the callback.", partitions);
+        } catch (TimeoutException | ExecutionException e) {
+            logDeclinedRevokeCommit(partitions, e instanceof ExecutionException ? e.getCause() : e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             logDeclinedRevokeCommit(partitions, e);
+        }
+    }
+
+    /**
+     * @see #commitOnRevokeViaTheControlThread the paragraph on the wake-up, for why this is narrower than
+     * {@link #notifySomethingToDo}
+     */
+    private void wakeControlThreadIfParkedOnTheMailbox() {
+        if (currentlyPollingWorkCompleteMailBox.get()) {
+            interruptControlThread();
+        } else {
+            log.debug("Control thread is not parked on the mailbox - the revocation commit request is picked up " +
+                    "at the end of its current pass");
+        }
+    }
+
+    /**
+     * The close serves whatever revocation commit request is pending: its own drain-and-commit has just run with the
+     * workers stopped, which is everything a served pass would have done for those partitions.
+     *
+     * @param closeCommitFailure the exception the close's commit threw, or null when it succeeded
+     */
+    private void completePendingRevokeCommitFromClose(Exception closeCommitFailure) {
+        RevokeCommitRequest pending = revokeCommitRequest.getAndSet(null);
+        if (pending == null) {
+            return;
+        }
+        if (closeCommitFailure == null) {
+            log.info("Revocation of {} arrived while closing - served by the close's own drain and commit.",
+                    pending.partitions());
+            pending.done.complete(null);
+        } else {
+            pending.done.completeExceptionally(closeCommitFailure);
+        }
+    }
+
+    /**
+     * Nothing will serve a request once the control task has exited; fail it so the callback declines now rather than
+     * at its deadline.
+     */
+    private void failPendingRevokeCommitOnControlThreadExit() {
+        RevokeCommitRequest pending = revokeCommitRequest.getAndSet(null);
+        if (pending != null) {
+            pending.done.completeExceptionally(new IllegalStateException("the control thread has exited, so no " +
+                    "pass will serve this revocation commit"));
         }
     }
 
@@ -1274,9 +1383,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     "If the transactional commit lock cannot be acquired below, this is the likely reason.",
                     state, requestedDrainMode);
         }
+        Exception closeCommitFailure = null;
         try {
             commitOffsetsThatAreReady();
         } catch (Exception e) {
+            closeCommitFailure = e;
             // One attempt only: ConsumerManager#commitSync stops retrying once the poll system is
             // closing ("allow to try to commit at least once during close"), because retrying would
             // stall shutdown while nothing is polling. Say so, rather than leaving the reader to
@@ -1296,6 +1407,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
         }
         // only close consumer once producer has committed it's offsets (tx'l)
+        completePendingRevokeCommitFromClose(closeCommitFailure);
         log.debug("Closing and waiting for broker poll system...");
         try {
             brokerPollSubsystem.closeAndWait();
@@ -1431,6 +1543,25 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             controlThread.setName(CONTROL_THREAD);
             this.getMyId().ifPresent(id -> controlThread.setName(CONTROL_THREAD + "-" + id));
             this.blockableControlThread = controlThread;
+            try {
+                runControlLoopUntilClosed(userFunctionWrapped, callback);
+            } finally {
+                failPendingRevokeCommitOnControlThreadExit();
+            }
+            log.info("Control loop ending clean (state:{})...", state);
+            return true;
+        };
+        Future<Boolean> controlTaskFutureResult = executorService.submit(controlTask);
+        this.controlThreadFuture = Optional.of(controlTaskFutureResult);
+    }
+
+    /**
+     * The control task's loop, extracted so that the task can fail a pending revocation commit request on every way
+     * out of it - see {@link #failPendingRevokeCommitOnControlThreadExit}.
+     */
+    private <R> void runControlLoopUntilClosed(Function<PollContextInternal<K, V>, List<R>> userFunctionWrapped,
+                                               Consumer<R> callback) throws Exception {
+        {
             while (state != CLOSED) {
                 log.debug("Control loop start");
                 try {
@@ -1462,11 +1593,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     throw failureReason;
                 }
             }
-            log.info("Control loop ending clean (state:{})...", state);
-            return true;
-        };
-        Future<Boolean> controlTaskFutureResult = executorService.submit(controlTask);
-        this.controlThreadFuture = Optional.of(controlTaskFutureResult);
+        }
     }
 
     /**
@@ -1562,7 +1689,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // them. Without this, a worker parked on the produce lock resumes the moment the commit releases it,
             // before the poll thread has truncated, and produces output whose offset is never committed -
             // PartitionState#fencedForRevocation carries the measurement.
-            wm.fenceForRevocation(revokeCommit.partitions);
+            wm.fenceForRevocation(revokeCommit.partitionEpochsAtRequest);
         }
 
         //

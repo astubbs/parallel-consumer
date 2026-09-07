@@ -214,6 +214,52 @@ never takes that lock in transactional mode, so astubbs#408's contended-decline 
 that mode; what it still owns is whether the five-minute bound is right, and its amendment to
 `RebalanceEoSDeadlockTest`. That note carries the detail.
 
+## What the review of the fix found, and what it changed
+
+Six local reviewers and an independent cross-model pass (Codex) reviewed the branch before it left
+draft. Three findings changed the code:
+
+- **A revocation arriving after the control thread has entered close was never served.** No further
+  pass runs, so the callback would have waited out its deadline while close waited on the poll thread
+  in `closeAndWait` and the member's LeaveGroup waited on both. Now the close's own drain-and-commit
+  completes a pending request (workers are already stopped, so it is complete), the control task fails
+  anything still pending when it exits, and a callback that finds the instance closed or failed
+  declines at once. Found by three reviewers independently, including the cross-model pass.
+- **The wake-up could close the instance.** `notifySomethingToDo` interrupts the control thread
+  whenever the write lock is not held - which includes the control thread still *waiting* for that
+  lock in `acquireCommitLock`'s timed `tryLock`, where an interrupt is an `InterruptedException` the
+  control loop treats as failure. The revoke path now wakes the control thread only while it is
+  parked on the mailbox (`currentlyPollingWorkCompleteMailBox`), the contract the wake-up's javadoc
+  already stated; the other callers are unchanged. The same interrupt-in-`tryLock` hazard is recorded
+  in an inflight note that exists only on the `docs/225-producer-fencing-brainstorm` branch
+  (`bug-commit-lock-wait-closes-on-wake-up-interrupt`), traced and not fixed there.
+- **A late served pass could fence a re-assignment.** The request is taken at the top of a pass; a
+  waiter that timed out could not withdraw a taken request, truncated, and a same-instance
+  re-assignment could install a fresh state that the late pass then fenced - stale until the next
+  rebalance. Two changes: the timeout path now waits for a taken request, so truncation strictly
+  follows the served commit; and the request carries each partition's assignment epoch, so the pass
+  fences only a state whose live epoch still matches, and skips a missing or removed one (the removed
+  state is a process-wide singleton, which the fence must never mutate). The cross-model pass found
+  this one alone.
+
+One finding was rejected by validation and kept as a note in the code: the close-path branch omits
+the fence deliberately, because close stops the worker pool before it closes the consumer, so no
+worker exists to resume with a revoked partition's record. And the register now states the one
+documented exception to C9 and C4: the deadline fallback is at-least-once for that rebalance, at WARN.
+
+Prior art the fix engages, by the constraint it meets or revises:
+
+- [`docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`](../architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md),
+  "Constraints any fix must respect": the fatal edge is control-blocks-on-poll; this fix waits the
+  other way, and leaves the consumer-commit modes on the inline commit that constraint describes.
+- [`docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md):
+  the origin of the tryLock-only rule for rebalance callbacks that the bounded wait revises, with
+  `ArchitectureTest`'s deny list deliberately not naming the timed form.
+- [`docs/solutions/logic-errors/stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md`](stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md):
+  established the final-epoch fact the fence rests on, from the other direction.
+- [`docs/solutions/architecture-patterns/a-query-must-never-mutate-derive-thread-safety-from-callers.md`](../architecture-patterns/a-query-must-never-mutate-derive-thread-safety-from-callers.md):
+  the guard was added after the change made the model true, which is the order that write-up asks for.
+
 ## The register, the README, and the quarantine
 
 C9 `NO_PRODUCE_WITHOUT_ITS_OFFSET` and C4 `OFFSET_AND_RECORDS_ATOMIC` return to `PROVED`, each with

@@ -587,13 +587,7 @@ class ProducerManagerTest {
             };
 
             // offset 0 - clean pass, so that a success exists to make the state dirty (KTD10)
-            pc.registerWork(mu.createFreshWork());
-            pc.controlLoop(userFunc, ignore -> {
-            });
-
-            await("offset 0's completion reaches the mailbox")
-                    .atMost(ofSeconds(20))
-                    .untilAsserted(() -> assertThat(pc.getWorkMailBox()).hasSize(1));
+            produceOffsetZeroAndLetItReachTheMailbox(pc, userFunc);
 
             // offset 1 - the one that will park while holding the produce lock
             pc.registerWork(mu.createFreshWork());
@@ -1140,16 +1134,8 @@ class ProducerManagerTest {
         }).when(module.producerWrap()).sendOffsetsToTransaction(anyMap(), any(ConsumerGroupMetadata.class));
 
         try (var pc = module.pc()) {
-            pc.subscribe(UniLists.of(mu.getTopic()));
-            pc.onPartitionsAssigned(mu.getPartitions());
-            pc.setState(State.RUNNING);
-
-            Function<PollContextInternal<String, String>, List<Object>> userFunc = context -> {
-                acquireProduceLockInto(context);
-                producerManager.produceMessages(makeRecord());
-                assertProduceLockStillOwnedByContext(context);
-                return UniLists.of();
-            };
+            startRunning(pc, mu.getPartitions());
+            var userFunc = produceOneRecordPerBatch();
 
             arrangeOffsetZeroDrainedAndOffsetOneUndrained(pc, userFunc);
 
@@ -1171,10 +1157,21 @@ class ProducerManagerTest {
      * drives passes until the callback returns. A callback that never returns fails the await; a callback that threw
      * is rethrown here rather than lost on the other thread.
      */
-    @SneakyThrows
     private void revokeOnAnotherThreadWhileDrivingTheControlLoop(AbstractParallelEoSStreamProcessor<String, String> pc,
                                                                  Function<PollContextInternal<String, String>, List<Object>> userFunc,
                                                                  List<TopicPartition> partitions) {
+        revokeOnAnotherThreadWhileDrivingTheControlLoop(pc, userFunc, partitions, new AtomicReference<>());
+    }
+
+    /**
+     * @param passFailure receives the first exception a driven pass throws, for the arm that expects one; a pass that
+     *                    throws is not a failure of this helper, which keeps driving until the callback returns
+     */
+    @SneakyThrows
+    private void revokeOnAnotherThreadWhileDrivingTheControlLoop(AbstractParallelEoSStreamProcessor<String, String> pc,
+                                                                 Function<PollContextInternal<String, String>, List<Object>> userFunc,
+                                                                 List<TopicPartition> partitions,
+                                                                 AtomicReference<Throwable> passFailure) {
         var revokeReturned = new CountDownLatch(1);
         var revokeFailure = new AtomicReference<Throwable>();
         var revoke = new Thread(() -> {
@@ -1190,8 +1187,12 @@ class ProducerManagerTest {
         await("the revoke callback returns, served by the hand-driven control loop")
                 .atMost(ofSeconds(20))
                 .untilAsserted(() -> {
-                    pc.controlLoop(userFunc, ignore -> {
-                    });
+                    try {
+                        pc.controlLoop(userFunc, ignore -> {
+                        });
+                    } catch (Exception passThrew) {
+                        passFailure.compareAndSet(null, passThrew);
+                    }
                     Truth.assertThat(revokeReturned.getCount()).isEqualTo(0);
                 });
         revoke.join(ofSeconds(20).toMillis());
@@ -1215,14 +1216,8 @@ class ProducerManagerTest {
         var producerWrap = module.producerWrap();
 
         try (var pc = module.pc()) {
-            pc.subscribe(UniLists.of(mu.getTopic()));
-            pc.onPartitionsAssigned(mu.getPartitions());
-            pc.setState(State.RUNNING);
-            Function<PollContextInternal<String, String>, List<Object>> userFunc = context -> {
-                acquireProduceLockInto(context);
-                producerManager.produceMessages(makeRecord());
-                return UniLists.of();
-            };
+            startRunning(pc, mu.getPartitions());
+            var userFunc = produceOneRecordPerBatch();
             arrangeOffsetZeroDrainedAndOffsetOneUndrained(pc, userFunc);
 
             var started = System.nanoTime();
@@ -1367,16 +1362,8 @@ class ProducerManagerTest {
         var survivingPartition = new TopicPartition(mu.getTopic(), revokedPartition.partition() + 1);
 
         try (var pc = module.pc()) {
-            pc.subscribe(UniLists.of(mu.getTopic()));
-            pc.onPartitionsAssigned(UniLists.of(revokedPartition, survivingPartition));
-            pc.setState(State.RUNNING);
-
-            Function<PollContextInternal<String, String>, List<Object>> userFunc = context -> {
-                acquireProduceLockInto(context);
-                producerManager.produceMessages(makeRecord());
-                assertProduceLockStillOwnedByContext(context);
-                return UniLists.of();
-            };
+            startRunning(pc, UniLists.of(revokedPartition, survivingPartition));
+            var userFunc = produceOneRecordPerBatch();
 
             arrangeOffsetZeroDrainedAndOffsetOneUndrained(pc, userFunc);
 
@@ -1441,13 +1428,7 @@ class ProducerManagerTest {
     @SneakyThrows
     private void arrangeOffsetZeroDrainedAndOffsetOneUndrained(AbstractParallelEoSStreamProcessor<String, String> pc,
                                                               Function<PollContextInternal<String, String>, List<Object>> userFunc) {
-        // offset 0 - distributed here, drained on the next pass, which is what makes the partition dirty
-        pc.registerWork(mu.createFreshWork());
-        pc.controlLoop(userFunc, ignore -> {
-        });
-        await("offset 0's completion reaches the mailbox")
-                .atMost(ofSeconds(20))
-                .untilAsserted(() -> assertThat(pc.getWorkMailBox()).hasSize(1));
+        produceOffsetZeroAndLetItReachTheMailbox(pc, userFunc);
 
         // this pass drains offset 0 (marking the partition dirty) and distributes offset 1
         pc.registerWork(mu.createFreshWork());
@@ -1483,7 +1464,76 @@ class ProducerManagerTest {
      */
     private EpochAndRecordsMap<String, String> oneRecordOn(TopicPartition partition,
                                                             AbstractParallelEoSStreamProcessor<String, String> pc) {
-        var record = new ConsumerRecord<>(partition.topic(), partition.partition(), 0L, "a-key", "a-value");
-        return new EpochAndRecordsMap<>(new ConsumerRecords<>(UniMaps.of(partition, UniLists.of(record))), pc.getWm().getPm());
+        return new EpochAndRecordsMap<>(ModelUtils.pollOf(partition, 0), pc.getWm().getPm());
+    }
+
+    /** Subscribed, assigned, running - the state every hand-driven revoke experiment starts from. */
+    private void startRunning(AbstractParallelEoSStreamProcessor<String, String> pc, List<TopicPartition> partitions) {
+        pc.subscribe(UniLists.of(mu.getTopic()));
+        pc.onPartitionsAssigned(partitions);
+        pc.setState(State.RUNNING);
+    }
+
+    /** The producing user function the revoke experiments share: one record out per batch in, under the produce lock. */
+    private Function<PollContextInternal<String, String>, List<Object>> produceOneRecordPerBatch() {
+        return context -> {
+            acquireProduceLockInto(context);
+            producerManager.produceMessages(makeRecord());
+            assertProduceLockStillOwnedByContext(context);
+            return UniLists.of();
+        };
+    }
+
+    /**
+     * Registers offset 0, runs the pass that distributes it, and waits for its completion to reach the mailbox - the
+     * first step of every experiment that needs a dirty partition on the next pass.
+     */
+    @SneakyThrows
+    private void produceOffsetZeroAndLetItReachTheMailbox(AbstractParallelEoSStreamProcessor<String, String> pc,
+                                                          Function<PollContextInternal<String, String>, List<Object>> userFunc) {
+        pc.registerWork(mu.createFreshWork());
+        pc.controlLoop(userFunc, ignore -> {
+        });
+        await("offset 0's completion reaches the mailbox")
+                .atMost(ofSeconds(20))
+                .untilAsserted(() -> assertThat(pc.getWorkMailBox()).hasSize(1));
+    }
+
+    /**
+     * A served pass that throws must fail the request, so the callback declines promptly instead of sitting out
+     * its deadline - the control loop's catch is what does that. Here the commit inside the served pass fails
+     * (sendOffsetsToTransaction throws), the pass propagates, and the revoke thread must be back well inside the
+     * five-minute default deadline with nothing committed and the partition truncated.
+     */
+    @SneakyThrows
+    @Test
+    void aServedPassThatThrowsFailsTheRequestSoTheRevokeDeclinesPromptly() {
+        setup(ParallelConsumerOptions.<String, String>builder()
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER), false);
+        var producerWrap = module.producerWrap();
+        var commitFailure = new RuntimeException("the broker rejected the offsets (simulated)");
+        Mockito.doThrow(commitFailure).when(producerWrap).sendOffsetsToTransaction(anyMap(), any(ConsumerGroupMetadata.class));
+
+        try (var pc = module.pc()) {
+            startRunning(pc, mu.getPartitions());
+            var userFunc = produceOneRecordPerBatch();
+            arrangeOffsetZeroDrainedAndOffsetOneUndrained(pc, userFunc);
+
+            var started = System.nanoTime();
+            var passFailure = new AtomicReference<Throwable>();
+            revokeOnAnotherThreadWhileDrivingTheControlLoop(pc, userFunc, mu.getPartitions(), passFailure);
+            var waited = Duration.ofNanos(System.nanoTime() - started);
+
+            Truth.assertWithMessage("the served pass propagated the commit failure")
+                    .that(passFailure.get())
+                    .isNotNull();
+            Truth.assertWithMessage("the callback came back promptly on the failed pass, not at its deadline")
+                    .that(waited.compareTo(ofSeconds(30)) < 0)
+                    .isTrue();
+            verify(producerWrap, never()).commitTransaction();
+            Truth.assertWithMessage("truncation still ran")
+                    .that(pc.getWm().getPm().getPartitionState(mu.getPartition()).isRemoved())
+                    .isTrue();
+        }
     }
 }

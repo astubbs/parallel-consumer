@@ -214,18 +214,34 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
      * write lock: from here on nothing may start or produce for these partitions, so that the offsets about to be
      * committed are the last word this instance has on them. {@link PartitionState#fenceForRevocation} owns the
      * reasoning; truncation ({@link #onPartitionsRevoked}) follows on the poll thread once the commit has returned.
+     * <p>
+     * <b>A fence belongs to one assignment generation, which is why the caller passes epochs and not partitions.</b>
+     * The pass that serves a revocation can run after the revocation's waiter gave up: the poll thread then
+     * truncates, and the partition can come back to this instance under a new epoch with a fresh state before the
+     * late pass reaches this point. Fencing whatever state occupies the key at that moment would fence the NEW
+     * generation, silently, until the next rebalance - the independent cross-model review of the fix found it. So a
+     * partition is fenced only while its live epoch still equals the one the request was posted with; a state that
+     * is missing (a failed assignment, astubbs#451) or already removed is left alone, the removed one because it is
+     * the shared {@link RemovedPartitionState} singleton and already reads as stale.
+     *
+     * @param partitionEpochsAtRequest the revoked partitions, each with the assignment epoch it had when the revocation
+     *                                 was posted
      */
-    public void fenceForRevocation(Collection<TopicPartition> partitions) {
-        for (TopicPartition partition : partitions) {
+    public void fenceForRevocation(Map<TopicPartition, Long> partitionEpochsAtRequest) {
+        partitionEpochsAtRequest.forEach((partition, epochAtRequest) -> {
             var state = getPartitionState(partition);
-            if (state == null) {
-                // An epoch with no state: a failed assignment left it that way (astubbs#451), and the revoke sweep
-                // that follows tolerates the same gap. Nothing was ever dispatched for it, so there is nothing to fence.
-                log.debug("No state to fence for {} - never assigned, or its assignment failed", partition);
-                continue;
+            if (state == null || state.isRemoved()) {
+                log.debug("No state to fence for {} - never assigned, its assignment failed, or already truncated", partition);
+                return;
+            }
+            Long liveEpoch = getEpochOfPartition(partition);
+            if (!Objects.equals(liveEpoch, epochAtRequest)) {
+                log.info("Not fencing {}: it was revoked at epoch {} but is now assigned at epoch {}, so the fence " +
+                        "belongs to a generation that has already been truncated", partition, epochAtRequest, liveEpoch);
+                return;
             }
             state.fenceForRevocation();
-        }
+        });
     }
 
     void onPartitionsRemoved(final Collection<TopicPartition> partitions) {

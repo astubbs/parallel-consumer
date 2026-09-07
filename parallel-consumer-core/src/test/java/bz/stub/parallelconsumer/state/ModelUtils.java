@@ -85,6 +85,19 @@ public class ModelUtils {
 
     final String groupId = "cg-1";
 
+    /**
+     * One poll's worth of records on {@code partition} at the given offsets, keyed distinctly so that KEY ordering
+     * hands them out together. For tests that need a partition other than {@link #getPartition()}, or several
+     * offsets in one batch, which {@link #createFreshWork()} cannot express.
+     */
+    public static ConsumerRecords<String, String> pollOf(TopicPartition partition, long... offsets) {
+        List<ConsumerRecord<String, String>> records = new ArrayList<>();
+        for (long offset : offsets) {
+            records.add(new ConsumerRecord<>(partition.topic(), partition.partition(), offset, "key-" + offset, "value-" + offset));
+        }
+        return new ConsumerRecords<>(UniMaps.of(partition, records));
+    }
+
     public ConsumerGroupMetadata consumerGroupMeta() {
         return new ConsumerGroupMetadata(groupId);
     }

@@ -6,11 +6,12 @@ package bz.stub.parallelconsumer.state;
 
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
-import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -36,10 +37,7 @@ class PartitionStateRevocationFenceTest {
         // two records of the one assignment, taken together: the first completed and drained, so the partition is
         // dirty; the second still fresh and in hand, as a worker parked on the produce lock would hold it
         var tp = mu.getPartition();
-        var records = new ConsumerRecords<>(UniMaps.of(tp, UniLists.of(
-                new ConsumerRecord<>(tp.topic(), tp.partition(), 0, "key-0", "value"),
-                new ConsumerRecord<>(tp.topic(), tp.partition(), 1, "key-1", "value"))));
-        wm.registerWork(new EpochAndRecordsMap<>(records, pm));
+        wm.registerWork(new EpochAndRecordsMap<>(ModelUtils.pollOf(tp, 0, 1), pm));
         var taken = wm.getWorkIfAvailable();
         assertWithMessage("fixture: both registered containers must be selectable").that(taken).hasSize(2);
         var completed = taken.get(0);
@@ -54,7 +52,7 @@ class PartitionStateRevocationFenceTest {
                 .that(wm.isDirty())
                 .isTrue();
 
-        wm.fenceForRevocation(mu.getPartitions());
+        wm.fenceForRevocation(epochsNow(wm, mu.getPartitions()));
 
         assertWithMessage("fenced: the same container at the same epoch is stale - the epoch did not move, the "
                 + "fence is what says so")
@@ -81,10 +79,70 @@ class PartitionStateRevocationFenceTest {
         var wm = module.workManager();
         var neverAssigned = new TopicPartition(mu.getTopic(), 7);
 
-        wm.fenceForRevocation(UniLists.of(neverAssigned));
+        wm.fenceForRevocation(UniMaps.of(neverAssigned, 0L));
 
         assertWithMessage("the fence tolerated the missing state rather than throwing on the control thread")
                 .that(wm.getPm().getPartitionState(neverAssigned))
                 .isNull();
+    }
+
+    /**
+     * The served pass can run after its waiter timed out, truncated, and the partition came back to this instance
+     * under a new epoch. A fence posted for the old generation must not touch the new one - or the fresh assignment
+     * reads as stale until the next rebalance. Found by the independent cross-model review of the fix.
+     */
+    @Test
+    void aFencePostedForAnOlderEpochLeavesTheReassignedPartitionAlone() {
+        var module = new PCModuleTestEnv();
+        var mu = new ModelUtils(module);
+        var wm = module.workManager();
+        var tp = mu.getPartition();
+        wm.onPartitionsAssigned(mu.getPartitions());
+        var epochsWhenRevoked = epochsNow(wm, mu.getPartitions());
+
+        // the waiter gave up: truncation, then the same partition assigned again to this instance
+        wm.onPartitionsRevoked(mu.getPartitions());
+        wm.onPartitionsAssigned(mu.getPartitions());
+        wm.registerWork(new EpochAndRecordsMap<>(ModelUtils.pollOf(tp, 0), wm.getPm()));
+        var freshWork = wm.getWorkIfAvailable();
+        assertWithMessage("fixture: the re-assignment accepted new work").that(freshWork).hasSize(1);
+
+        // the late pass serves the OLD request
+        wm.fenceForRevocation(epochsWhenRevoked);
+
+        assertWithMessage("the fresh assignment must not be fenced by a revocation of the previous generation")
+                .that(wm.checkIfWorkIsStale(freshWork.get(0)))
+                .isFalse();
+    }
+
+    /**
+     * A fence reaching an already-truncated partition finds the shared removed-state singleton, which reads as
+     * stale already and must never be mutated - it is one object for every removed partition in the process.
+     */
+    @Test
+    void aFenceOnAnAlreadyTruncatedPartitionLeavesTheRemovedSingletonAlone() {
+        var module = new PCModuleTestEnv();
+        var mu = new ModelUtils(module);
+        var wm = module.workManager();
+        wm.onPartitionsAssigned(mu.getPartitions());
+        var epochsWhenRevoked = epochsNow(wm, mu.getPartitions());
+        wm.onPartitionsRevoked(mu.getPartitions());
+        var removed = wm.getPm().getPartitionState(mu.getPartition());
+        assertWithMessage("fixture: truncation installed the removed state").that(removed.isRemoved()).isTrue();
+
+        wm.fenceForRevocation(epochsWhenRevoked);
+
+        assertWithMessage("the removed singleton is untouched - it is shared by every removed partition")
+                .that(removed)
+                .isSameInstanceAs(RemovedPartitionState.getSingleton());
+    }
+
+    /** The epochs a revocation callback would capture when it posts its request. */
+    private static Map<TopicPartition, Long> epochsNow(WorkManager<String, String> wm, List<TopicPartition> partitions) {
+        Map<TopicPartition, Long> epochs = new HashMap<>();
+        for (TopicPartition partition : partitions) {
+            epochs.put(partition, wm.getPm().getEpochOfPartition(partition));
+        }
+        return epochs;
     }
 }

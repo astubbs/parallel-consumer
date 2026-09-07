@@ -131,8 +131,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     /**
      * @see PartitionStateManager#fenceForRevocation
      */
-    public void fenceForRevocation(Collection<TopicPartition> partitions) {
-        pm.fenceForRevocation(partitions);
+    public void fenceForRevocation(Map<TopicPartition, Long> partitionEpochsAtRequest) {
+        pm.fenceForRevocation(partitionEpochsAtRequest);
     }
 
     /**

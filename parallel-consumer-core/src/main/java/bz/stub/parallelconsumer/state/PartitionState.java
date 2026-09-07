@@ -189,7 +189,9 @@ public class PartitionState<K, V> {
      * <p>
      * <b>Why the epoch cannot do this job.</b> {@link #partitionsAssignmentEpoch} is final, captured at
      * construction; bumping the manager's epoch map leaves this state comparing containers against its own old
-     * epoch, and they match. Truncation replaces the state, which is what makes the epoch scheme work - but
+     * epoch, and they match - the fact
+     * {@code docs/solutions/logic-errors/stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md}
+     * established from the other direction ("a final long set at construction"). Truncation replaces the state, which is what makes the epoch scheme work - but
      * truncation runs on the broker-poll thread after the revocation commit returns, and the gap between that
      * commit releasing the producer write lock and the truncation is wide enough for a worker parked on the
      * produce lock to start a record of the revoked partition, produce its output into the next transaction,
