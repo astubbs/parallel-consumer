@@ -24,7 +24,10 @@ deploys via the `maven-central` profile, tags `v<version>` and cuts a GitHub rel
 block used to stop there - but the registry has not stayed empty.
 [`docs/quarantined-tests.md`](../quarantined-tests.md) carries
 `MultiInstanceRebalanceTest.largeNumberOfInstances`, an unowned entry for a rebalance stall that is
-measured but not explained, so that file's rule 5 - a release is blocked while the list is non-empty -
+measured but not explained, and since astubbs#440 also
+`RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`,
+quarantined on a sighting ledger rather than a diagnosis - so that file's rule 5 - a release is blocked
+while the list is non-empty -
 still bites and `release.yml`'s "no release while tests are quarantined" gate does not pass today.
 Read the registry rather than this line: it is the enforced copy, and the gate reads it, not this
 note. The "no disabled tests" gate below is a **separate** one, and it being met says nothing about
