@@ -28,13 +28,28 @@
 # exactly what this script exists to abolish, every name in it is ASSERTED TO EXIST: rename one of
 # these scripts and this runner fails loudly instead of quietly checking less than you think.
 #
-# Exit codes: 0 everything that could run passed, 1 at least one FAILED, 2 nothing ran at all.
+# Exit codes: 0 everything that could run passed, 1 at least one FAILED (under --strict: or at least
+# one CANNOT), 2 nothing ran at all.
 #
 # Usage:
 #   bin/check-all.sh                 # the tree gates - what to run before a push
 #   bin/check-all.sh --pr            # also the PR-state reporters (merge prep)
-#   bin/check-all.sh --with-tests    # also the self-tests (what CI runs)
+#   bin/check-all.sh --with-tests    # also the self-tests
 #   bin/check-all.sh --tests-only    # only the self-tests
+#   bin/check-all.sh --strict        # CANNOT (exit 2) fails the sweep - what CI runs, with --with-tests
+#
+# WHY CI RUNS --strict, AND THE DEFAULT DOES NOT. By default a CANNOT is reported in its own column
+# and does not flip the exit code, because on a laptop it is usually legitimate: no `gh` credential,
+# no network, ShellCheck not installed - and the header line below says CI is the first place that
+# gate actually runs. That sentence is only true if CI cannot ALSO land in CANNOT and stay green.
+# It could: the sweep exits 0 with a CANNOT as long as something else ran, so a hosted image that
+# stopped shipping PyYAML or ShellCheck would turn check-docs-data.sh or check-shell-lint.sh into a
+# CANNOT that nothing reads - a false green, and the exact shape this script exists to prevent. On a
+# hosted runner a CANNOT is never a legitimate skip: it is a tool missing from the image, or a fork
+# point missing from a shallow checkout, and the remedy is to install it in the job, not to pass.
+# So repo-hygiene.yml runs `--with-tests --strict`, and its explicit "Confirm X is present" steps
+# name each dependency at the point a reader looks. Exit 3, "nothing in scope", is untouched by
+# --strict: a gate that measured and found nothing to measure is a result, not a missing tool.
 #
 # THE DEFAULT IS GATES ONLY, AND THAT IS THE POINT. The gates answer "is my tree healthy" in about
 # 25 seconds. The self-tests answer "do the gates themselves still work", take minutes - two of them
@@ -42,7 +57,7 @@
 # them made the routine command slow enough to skip, and a pre-push sweep that gets skipped protects
 # nothing, which is the same failure `check-all` was written to fix.
 #
-# NOTHING IS LOST IN CI: .github/workflows/repo-hygiene.yml runs `--with-tests`, so the self-tests
+# NOTHING IS LOST IN CI: .github/workflows/repo-hygiene.yml runs `--with-tests --strict`, so the self-tests
 # run there in one go. It no longer NAMES them - that workflow used to carry a job per self-test, and
 # a self-test added to bin/ ran nowhere until somebody remembered to wire it. So a self-test added
 # tomorrow is swept with no edit there and no edit here, which is the same discovery property the top
@@ -54,10 +69,12 @@ cd "$(dirname "$0")/.."
 
 MODE=gates
 WITH_PR=0
+STRICT=0
 for arg in "$@"; do
     case "$arg" in
         --pr)         WITH_PR=1 ;;
         --with-tests) MODE=all ;;
+        --strict)     STRICT=1 ;;
         # Kept because scripts and habits name it; it is now what happens anyway.
         --gates-only) MODE=gates ;;
         --tests-only) MODE=tests ;;
@@ -316,11 +333,21 @@ printf 'check-all: %s ran - %s passed, %s failed, %s could not run, %s nothing-i
 
 if [ "$cannot" -gt 0 ]; then
     printf 'check-all: COULD NOT RUN:%s\n' "$cannot_names"
-    echo   "check-all:   these measured nothing. Usually a missing tool or credential - fix it, or"
-    echo   "check-all:   know that CI is the first place that gate actually runs."
+    if [ "$STRICT" -eq 1 ]; then
+        echo   "check-all:   STRICT: a gate that could not run is a FAILURE here. On a CI runner this is a" >&2
+        echo   "check-all:   missing tool or credential on the image, never a legitimate skip - install it in" >&2
+        echo   "check-all:   the job (see the 'Confirm ... is present' steps in repo-hygiene.yml)." >&2
+    else
+        echo   "check-all:   these measured nothing. Usually a missing tool or credential - fix it, or"
+        echo   "check-all:   know that CI is the first place that gate actually runs (and it runs --strict)."
+    fi
 fi
 if [ "$fail" -gt 0 ]; then
     printf 'check-all: FAILED:%s\n' "$failed_names" >&2
+    exit 1
+fi
+if [ "$STRICT" -eq 1 ] && [ "$cannot" -gt 0 ]; then
+    printf 'check-all: FAILED (strict - could not run):%s\n' "$cannot_names" >&2
     exit 1
 fi
 echo "check-all: no gate failed."

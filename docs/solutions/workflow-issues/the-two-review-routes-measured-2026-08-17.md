@@ -8,7 +8,7 @@ component: development_workflow
 severity: medium
 root_cause: config_error
 resolution_type: documentation
-status: "Measured, not fixed. The dispatch route's silent no-post has no guard; `claude-review` stays green on whatever comment was posted last, however stale."
+status: "Measured, not fixed, and reproduced on 2026-09-06. The dispatch route's silent no-post has no guard. Its two consequences are separable: the no-post always happens, and the false-green only follows when an earlier reviewer comment exists for the gate to rest on."
 applies_when:
   - Choosing how to request the automated reviewer on a PR
   - A review run reports success and no review appears on the PR
@@ -53,6 +53,31 @@ indistinguishable from no review at all."* It happened anyway, on the run that h
 was `created_at` 9 seconds into the run and `updated_at` at the end - so the sticky comment *is* the
 progress announce, posted first and rewritten into the finished review. That is exactly the announce
 the dispatch route lost when `track_progress` had to be hard-set `false`.
+
+## Reproduced on 2026-09-06, and it separates the two consequences
+
+Run [`34066111691`](https://github.com/astubbs/parallel-consumer/actions/runs/34066111691), dispatched
+against astubbs/parallel-consumer#438 with a `-f focus` steer. Same shape as 2026-08-14: concluded
+`success`, the refuse-to-report-success guard passed, no comment appeared. So this is a recurrence,
+not a one-off, and roughly a month separates the two.
+
+**What the second occurrence adds is an isolation the first could not give.** astubbs#438 had *no*
+prior reviewer comment, so there was nothing for the gate to rest on and `claude-review` correctly
+stayed red. That splits what the section below states as one failure into two independent ones:
+
+- **the silent no-post**, which happens every time the defect fires; and
+- **the false green**, which follows *only* when an earlier reviewer comment exists on the PR.
+
+A PR being reviewed for the first time therefore fails safe. A PR being re-reviewed after a change
+does not, and that is the dangerous case - the one where a reader most expects the check to be about
+the current head.
+
+**It also reproduced under an agent that had this write-up available and did not read it.** The route
+was chosen from `docs/ci.md` and `AGENTS.md`, which described the dispatch route at the point of
+choice without carrying the risk. That is now fixed at the source: `docs/ci.md` states the
+consequence and the verify-a-comment-arrived rule where the dispatch command is given. The general
+lesson is that a measurement filed only in `docs/solutions/` does not reach the person choosing, and
+a one-line pointer at the decision point is what closes it.
 
 ## Why it matters more than "one route is nicer"
 

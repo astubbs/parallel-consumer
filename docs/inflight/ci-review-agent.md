@@ -4,6 +4,23 @@
 <!-- inflight-impact: misdirection -->
 <!-- inflight-state: deferred - after v6, affects how we work rather than what ships -->
 
+<!-- Deferred state reconsidered 2026-09-06 after the silent no-post recurred. The tag is
+     deliberately UNCHANGED, and the reasoning is worth stating rather than leaving as a
+     non-decision: the deferral is right for this FILE, which collects many reviewer gaps of
+     genuinely v6-or-later weight, and un-deferring all of them to reach one is the wrong move.
+     What the recurrence argues for instead is a SPLIT - the no-post guard is a single post-condition
+     step calling bin/check-review-posted.sh, which already exists and which the gate already uses,
+     and this file calls it the highest-value fix it carries. Under docs/inflight/AGENTS.md that is
+     the "split when what remains is a different item" outcome, not a state change. Recorded here
+     rather than acted on because the split is its own piece of work and does not belong to the pull
+     request that noticed it. -->
+
+**The cheap half of that was not deferred and has landed**: `docs/ci.md` now carries the
+consequence and the verify-a-comment-arrived rule at the point where the dispatch command is given.
+The recurrence happened to an agent that had the measurement available and chose the route from
+`docs/ci.md`, which described the dispatch route without the risk - so the routing mitigation this
+file already recommended was unreachable from where the decision is actually made.
+
 
 How the reviewer and its gate work, and the contract for asking for a review, are in
 [`docs/ci.md`](../ci.md). This file is only the open gaps.
@@ -58,6 +75,17 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   PR", and the gate uses it - the reviewer job simply never asks it about its own output. Running
   it as a post-condition on the reviewer job turns "billed, ran, said nothing" from green into red
   with the reason attached. Highest-value fix in this file after the check-run entry below.
+
+  <!-- post-merge: checked-begin - the reference to astubbs#438 is historical: the run was
+       dispatched against that PR and stays true once it merges, so this reads the same after. -->
+  **It fired again on 2026-09-06** - run `34066111691`, dispatched with a steer against
+  astubbs/parallel-consumer#438, concluded `success`, posted nothing. Roughly a month after the
+  first measurement, so it is a recurrence rather than a one-off, and the guard behaved exactly as
+  described above: it passed. The evidence is in
+  [`docs/solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md`](../solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md),
+  which now also records what the second occurrence isolates - the no-post and the false-green are
+  separable, and a first-time review fails safe while a re-review does not.
+  <!-- post-merge: checked-end -->
 
 - **Nothing announces a dispatched review at its start, so an in-flight billed review is
   invisible - and so is the `-f focus` steer.** Until it posts, the only record that a review was
