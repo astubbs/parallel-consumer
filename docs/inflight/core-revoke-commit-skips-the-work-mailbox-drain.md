@@ -143,32 +143,26 @@ change and its own reviewer"* (astubbs/parallel-consumer#262's residuals commit)
   this symptom from the field. This mechanism is a candidate cause; attribution needs its own
   experiment, and the two must not be conflated on the strength of matching symptoms.
 
-## Can the concurrency annotations express this? Not yet - and declaring it would make things worse
+## The annotation this seam cannot truthfully carry yet - and what the fix owes
 
-Asked at merge prep, and worth answering in the record because the intuitive answer is wrong.
+Asked at merge prep: can the concurrency annotations expose this better? **No, and declaring one
+would make it worse.** The rule and its reasoning are not restated here -
+[`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`](../../parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md)
+**owns them**, under "Declare thread confinement with `@ThreadConfined`, and assert it at the entry
+point": the analyser consumes the declaration and never checks it, so an unenforced one silences
+RacerD rather than informing it, and `RetryQueue.RetryQueueIterator` is the worked pattern.
 
-**A confinement declaration here would be FALSE, and false is worse than absent.** RacerD reads
-`com.facebook.infer.annotation.ThreadConfined` and **consumes declarations without checking them** -
-so `@ThreadConfined(CONTROL_THREAD)` on the state the drain mutates would not expose this defect, it
-would silence the detector that might otherwise find it. `RetryQueue`'s own usage records the rule:
-an annotation nobody enforces is a comment that silences a detector.
+**What is specific to this defect is that there is nothing truthful to declare, and why.** A
+confinement claim over the state the revoke-path drain would mutate is exactly the claim this note
+says is violated. That owner's own "check the premise before you write it" paragraph reaches the
+same seam from the other side, citing
+`AbstractParallelEoSStreamProcessor.lastCommitTime` - described as control-thread-confined by every
+record that mentioned it, and written by `tryCommitOffsetsOnRevoke()` on the poll thread. Two
+investigations, one starting from the mailbox drain and one from a field's writers, landed on the
+same place without knowing about each other. That is corroboration, not coincidence.
 
-**astubbs/parallel-consumer#433 hit this exact seam from the other direction and backed off.** While
-putting the infer annotations on the compile classpath it evaluated two confinement candidates.
-`RetryQueueIterator` was confined and got the declaration plus an `assertOnOwningThread` guard.
-`lastCommitTime` looked equally confinable - every record of it said one control-thread method wrote
-it and another read it - until somebody grepped every writer and found `tryCommitOffsetsOnRevoke()`
-writes it too, from inside `onPartitionsRevoked`, which the broker poll thread runs. It is `volatile`
-instead, and the field's javadoc in `AbstractParallelEoSStreamProcessor` says so in terms.
-
-That is **independent corroboration of this note's central claim**, reached by a different route: one
-investigation started from the mailbox drain and one from a field's writers, and both landed on the
-revoke path running control-thread work on the poll thread. Neither knew about the other.
-
-**What the annotations are for here is the FIX, not the diagnosis.** `@GuardedBy` does not fit -
-this is confinement, not lock discipline, and the core `AGENTS.md` warns it silently checks nothing
-on a `ReadWriteLock` anyway. The shape that fits is the one `RetryQueueIterator` uses: once the
-thread-ownership decision at this seam is actually taken, declare the confinement **and** assert it
-on the owning thread in the same change, so the decision cannot quietly rot back. Until that decision
-exists there is nothing truthful to declare, which is precisely why this note is still open.
-
+**THE OBLIGATION THIS NOTE CARRIES, for whoever closes it.** The thread-ownership decision at this
+seam is the open item. When it is taken, the declaration and its runtime assertion go in **the same
+change as the fix** - the reason is the one the owner gives for `@GuardedBy`: the decision is obvious
+while you are making it and archaeology a month later. Closing this note without them leaves the seam
+free to rot back to exactly the state it is in now, and nothing would fail when it did.
