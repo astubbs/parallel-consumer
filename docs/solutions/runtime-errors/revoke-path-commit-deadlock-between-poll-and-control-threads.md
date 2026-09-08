@@ -314,7 +314,9 @@ replaced by `commitLock.lock()`. Five repetitions per cell, `-Dpc.log.level=info
 
 The declines are the load-bearing column, for the reason the header block gives: they prove the
 window opened rather than the run quietly missing the race. Both fix cells also logged the
-uncontended branch (5 and 5), so the revoke fork demonstrably executed in every cell.
+uncontended branch 5 times each - occurrences of the log line, the same unit as the declines column,
+not a count of repetitions, which is why the eager cell's 6 declines exceeds its 5 repetitions. So
+the revoke fork demonstrably executed in every cell.
 
 **The control also settles a question this file asked six times and could not have answered.** The
 six thread-dump captures in [`../../inflight/bug-857-family.md`](../../inflight/bug-857-family.md)
