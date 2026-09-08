@@ -3,7 +3,7 @@
 <!-- inflight-type: register -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: stall -->
-<!-- inflight-vetted: 2026-09-08 - applied: retyped as a register, which is what it describes itself as; the revoke-path deadlock's mechanism section retired per this file's own criterion now that astubbs#29 has merged, the reproducer section replaced with what the rewritten test and its new sibling probe establish, and the fifth item's `withDiagnostic` claim corrected; checked: astubbs#29 is MERGED with its fix in `AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke` (`commitLock.tryLock()`), `Rebalance857CommitSyncDeadlockProbeIT` exists, `RebalanceEoSDeadlockTest`'s javadoc documents its transactional mode as deliberate (it guards confluentinc#541), `MultiInstanceRebalanceTest` passes a `describeFleet(allPCRunners)` supplier to `withDiagnostic`, and astubbs#119 plus the fourth and fifth items are still open -->
+<!-- inflight-vetted: 2026-09-08 - applied: retyped as a register, which is what it describes itself as; the revoke-path deadlock's mechanism section retired per this file's own criterion now that astubbs#29 has merged, the reproducer section replaced with what the rewritten test and its new sibling probe establish, and the fifth item's `withDiagnostic` claim corrected; checked: astubbs#29 is MERGED with its fix in `AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke` (`commitLock.tryLock()`), `Rebalance857CommitSyncDeadlockProbeIT` exists, `RebalanceEoSDeadlockTest`'s javadoc documents its transactional mode as deliberate (it guards confluentinc#541), `MultiInstanceRebalanceTest` passes a `describeFleet(allPCRunners)` supplier to `withDiagnostic`, and astubbs#119 plus the fourth item are still open. PROPOSED closed for the FIFTH item only, re-read 2026-09-08: both of the claims that made it read as blocked are false against this tree - `withDiagnostic` IS wired, and the stall has been reproduced repeatedly since, most recently 4 in 60 with the coordinator loggers raised. Its mechanism is measured in the EXPLAINED section of `test-largenumberofinstances-residual-failures-measured-not-explained.md` and is the consumer-group protocol, not PC. Checked further that no PC-side hold survives on today's master: `ClosingMemberRebalanceIT` 5/5 green, and 5/5 red under a one-term sabotage, so the green is not vacuous -->
 <!-- post-merge: checked-begin - every astubbs#29 mention below states what its fix DOES (the AB-BA pair it replaces, the modes its cycle can close in, what its reproducer cannot settle), not that it is open; the three state claims that were here have been rewritten -->
 
 
@@ -216,7 +216,7 @@ partition committed-frozen for 100s of the *quiet* phase against ~40s of legitim
 replay changes nothing about the code paths. What the replay establishes is that "can" was doing
 work it could not support: mode-compatibility narrows the candidates and never attributes.
 
-## A fifth open item, 2026-09-01: a rebalance stall the astubbs#29 fix does not close either
+## A fifth item, 2026-09-01, RESOLVED 2026-09-05: a rebalance stall the astubbs#29 fix does not close either - and neither does any PC change
 
 `MultiInstanceRebalanceTest.largeNumberOfInstances`, `PERIODIC_CONSUMER_ASYNCHRONOUS`/`UNORDERED`.
 Reproduced twice: once in ten consecutive runs on an idle Linux box, and once on CI at `55edffaf4`.
@@ -248,6 +248,72 @@ diagnostic supplied". `MultiInstanceRebalanceTest` now passes it a `describeFlee
 fresh reproduction should carry the fleet's own view of which instances were live - nobody has
 reproduced it since. `test-largenumberofinstances-residual-failures-measured-not-explained.md` owns
 the thread and the three instrumentation gaps.
+
+### Why this section read as open for three days after it was answered - 2026-09-08
+
+**Two claims above are the reason, and both are false against this tree.** Anyone arriving here to
+pick the fifth item up inherits a blocked investigation that is not blocked, so they are corrected
+here rather than left for the next reader to discover:
+
+- *"`ProgressTracker.withDiagnostic(...)` was not wired there"* - it **is** wired, on master.
+  `MultiInstanceRebalanceTest` passes `describeFleet(allPCRunners)` to it (grep `withDiagnostic` in
+  that class), so the "no consumer diagnostic supplied" tail this section treats as the blocker has
+  not been the state of the tree since astubbs#444.
+- *"nobody has reproduced it since"* - it has been reproduced repeatedly, across seven trees at
+  about one run in fifteen, and the reproduction that mattered carried the coordinator loggers and
+  the fleet diagnostic. The
+  [`test-largenumberofinstances-residual-failures-measured-not-explained.md`](test-largenumberofinstances-residual-failures-measured-not-explained.md)
+  `## EXPLAINED - 2026-09-05` section is the measurement, and its filename still says
+  "not-explained" for citation reasons its own header explains - which is a second way this reads as
+  open when it is not.
+
+**The answer to this section's sharp question.** *Is the unresponsive member one the harness stopped,
+or one still running?* One the harness stopped - and it is silent because Kafka's own
+`consumer.close()` is waiting in `awaitPendingRequests` for a LeaveGroup response the coordinator
+will not send until the join phase completes, and under this profile's churn a join phase was
+observed held open for 17s. While it is open `consumer.poll()` returns nothing to **any** member,
+including survivors that never toggled - which is the `FLAT` count. No coordinator request was slow
+in any failing run. Every PC-side candidate (the fair `RetryQueue` lock, the `CLOSING` poll guard,
+the discharge poll) was refuted by measurement, not by argument.
+
+**So it is neither a wedge nor a harness artefact.** The freeze is real and fleet-wide, and it
+*recovers* when the phase completes - so no work is stranded and no instance stays wedged in the
+group. What turns it into a red is the detector's 12s no-progress window closing inside a real
+protocol freeze, which is the class
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
+owns. The durable write-up of the mechanism, and the lane move that follows from it, arrive with
+astubbs#473; [`test-largenumberofinstances-cannot-gate-a-merge.md`](test-largenumberofinstances-cannot-gate-a-merge.md)
+is the decision record.
+
+### The PC-side half re-verified on today's master, with the control arm that makes the green mean something
+
+Master has moved through the revoke and close seam since the 2026-09-05 measurement (astubbs#451,
+astubbs#466, astubbs#468), so "PC holds nothing" was worth re-asking rather than inherited. Two arms
+on `ClosingMemberRebalanceIT`, differing by **exactly one term** - a 20s sleep at the top of
+`BrokerPollSystem`'s `doClose()`, which holds a member not-polling and not-left, the defect shape
+itself. Local M2 Mac, JDK 17, load average recorded per arm; predictions written before each run.
+
+| arm | one term | prediction | outcome |
+|---|---|---|---|
+| clean master | - | PASS | **5/5 pass**, 35.4s (load 5.1-7.1) |
+| sabotaged | 20s sleep in `doClose()` | FAIL on the close bound | **5/5 fail**, `expected to be less than: 10.0 but was 20.009590667` (load 13.0) |
+
+**The sabotage arm is why the clean arm counts.** Every property this test asserts already holds on
+master, so a green alone says nothing about whether the test can see the failure - the trap
+astubbs#485 recorded when one replay in two turned out to be VOID because its window never opened.
+
+**And it reproduces this section's own signature line, deterministically.** The sabotaged arm's
+ambient probe emitted `ZOMBIE_MEMBER/REBALANCE_BLOCKED: dwelling in PreparingRebalance for 15s
+(bound 15s) - a member is not answering the rebalance`, verbatim. So that line is **not** a
+discriminator between the two stories: a PC-side hold produces it, and so does a coordinator holding
+its join phase open with PC off the critical path. Any future sighting has to be told apart by what
+the closing members' threads are actually in, not by the probe's verdict.
+
+**What was deliberately NOT run, and why that is the honest choice.** The capacity profile itself
+reproduces at 0 in 22 on an M2 desktop and about 1 in 15 on the Linux runner. A local replay here
+could only have produced a green that carries no information, and the box was at load 5-14
+throughout - a confound, not a control. Reproducing the profile's stall needs the Linux runner and
+`bin/exp-measure-large-instances-failure-rate.sh`, which is what astubbs#444 already did.
 
 ## What settled the deadlock, and what `RebalanceEoSDeadlockTest` is for
 
