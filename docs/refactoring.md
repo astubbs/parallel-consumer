@@ -934,6 +934,13 @@ rather than fixed there so the gate's scope stayed one decision.
   `getThrowableProxy()` filtering is already covered by `LogCapture.events()`, so no widening of the
   helper is needed.
 
+### Test infrastructure - `RandomUtils.nextInt()` is deprecated, and every chaos topic name uses it
+
+- **Replace the deprecated `org.apache.commons.lang3.RandomUtils.nextInt()` used to make a unique
+  topic name.** Four call sites, all in `integrationTests/chaostests` (grep `RandomUtils.nextInt()`),
+  and `-Xlint:all` warns on each. Do all four together or none: fixing one leaves a file that reads
+  as the odd one out, which is why the soak scenario that surfaced the warning deliberately did not.
+
 ### Cross-module test clones (the file-similarity backlog behind astubbs#40)
 
 Deferred half of [#40](https://github.com/astubbs/parallel-consumer/issues/40). Its first half - the
