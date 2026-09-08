@@ -96,8 +96,8 @@ This is a rule because a filename cannot be qualified. Prose has
 number below the threshold is a coin flip between two repos that both have one. A filename is bare by
 construction, so the convention is the only thing standing between a reader and the wrong issue.
 
-**Older names predate this and disagree** - `bug-857-family.md` and `branch-912-vertx-leak.md` carry
-confluentinc numbers, `perf-192-followups.md` carries a fork one. They are left alone rather than
+**Older names predate this and disagree** - `bug-857-family.md` carries a
+confluentinc number, `perf-192-followups.md` carries a fork one. They are left alone rather than
 swept, because renaming a note breaks every citation of it for no gain in what the note says. Read an
 existing number by its prefix and check it; write new ones the way this section says.
 
@@ -201,9 +201,10 @@ state it twice; that is how the two drift apart.
 ## Tagging a note
 
 **This section is the source of truth for what each tag MEANS.** The machine-readable sets live in
-`bin/lib/inflight-tags.sh`, sourced by both the gate (`bin/check-inflight-tags.sh`, which names this
-file when it fails) and the session index - so a value here and a value there must never disagree:
-change this table and that lib in the same commit.
+`bin/lib/inflight-tags.mjs`, imported by the session index and read by the gate
+(`bin/check-inflight-tags.sh`, which names this file when it fails) through the thin
+`bin/lib/inflight-tags.sh` wrapper - so a value here and a value there must never disagree: change
+this table and that lib in the same commit.
 <!-- file-refs: N/A - the tag gate and its shared vocabulary lib ship in astubbs#324; this doc is their owner and lands first, so the notes it describes are never explained by a retired scheme -->
 
 The fields are HTML comments after the heading. Only `inflight-type` is always required:
@@ -213,7 +214,11 @@ The fields are HTML comments after the heading. Only `inflight-type` is always r
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-state: closed - will not do -->
+<!-- inflight-vetted: 2026-09-07 - re-read against the tree; the race is still there -->
 ```
+
+`inflight-vetted` is the odd one out: it classifies nothing and is written by a re-reading, not by
+the author. [Vetting a note](#vetting-a-note) owns it.
 
 - **`inflight-type`** - what KIND of item it is. One of **`bug`**, **`feature`**, **`task`**,
   **`register`**. This is a tracker, so it uses a tracker's vocabulary - with one addition a tracker
@@ -253,7 +258,7 @@ prefixes - `misdirection` covers notes filed under `ci-`, `test-`, `branch-`, `d
 
 **A single consequence axis was tried and rejected - do not re-propose it.**
 `<!-- inflight-class: X -->` folded kind and consequence into one field, so it could not say that a
-feature addressing a crash belongs beside the crashes - the case `bin/lib/inflight-tags.sh`'s header
+feature addressing a crash belongs beside the crashes - the case `bin/lib/inflight-tags.mjs`'s header
 names when it explains why the impact sets are partitioned by type. The three axes here are its
 successor and carry the sentence above forward unchanged. Branch
 `ci/inflight-index-by-type-and-priority`, merged superseded into astubbs#400.
@@ -300,7 +305,7 @@ reason - the first is `type: feature`, the second is a `state`.
   **The set is closed on purpose.** A free-text field becomes tag soup within a month and then
   partitions nothing, which is the failure this whole scheme exists to prevent. Add a value by
   reading the corpus and finding a group the existing values cannot express - the way the impacts
-  were derived - and put it in `bin/lib/inflight-tags.sh` AND this table in the same commit.
+  were derived - and put it in `bin/lib/inflight-tags.mjs` AND this table in the same commit.
   `bin/check-inflight-tags.sh` validates each value separately, so one typo names itself instead of
   silently founding a group of one.
 
@@ -316,7 +321,7 @@ reason - the first is `type: feature`, the second is a `state`.
   count too, which is why none is written here.
 
 **Add a value when the corpus needs one, do not force a note into a poor fit** - the set was derived
-by reading the notes, not chosen in advance. Add it to this table AND to `bin/lib/inflight-tags.sh`
+by reading the notes, not chosen in advance. Add it to this table AND to `bin/lib/inflight-tags.mjs`
 in the same commit, and say why. The gate checks SHAPE, never judgement: it cannot tell you that a
 valid impact is the wrong one for that note, and six such corrections were needed when this scheme
 landed.
@@ -330,3 +335,59 @@ with a count, never silently.
 session start, so the anti-inflation duty moved from a "high" marker (the old scheme) to the ledger
 itself: when you add a note, look at the others and ask whether one has stopped earning its place -
 delete it or give it a state; the work landing is not the only reason to remove one.
+
+## Vetting a note
+
+**A note records when it was last confirmed to be true, because nothing else can.** `git log` dates
+the last *edit*, and on this directory that is the same day for nearly every file - the package
+rename of 2026-08-26/27 rewrote all of them - so "is this still real?" had no answer short of
+re-reading the note against the tree. The anti-inflation duty above ("when you add a note, look at
+the others") fires at add time, and it did not hold: on 2026-09-07 the baseline carried 145 open
+notes over roughly 16k lines, with no record of anyone having re-read any of them. A periodic sweep
+is the honest replacement, and the marker is what makes a sweep incremental rather than a re-read of
+everything each time.
+
+- **`inflight-vetted`** - `<!-- inflight-vetted: YYYY-MM-DD - what was checked -->`. The date a
+  reader last re-read the note against the tree and found it still true, and *what they checked* -
+  the class they opened, the test they ran, the issue they read. Optional; absent means never
+  vetted. **Written only on the outcome where the note is still true and unchanged.** The other four
+  outcomes change the note or remove it, and that change is its own record.
+
+**A vet has five outcomes, four of which are the rules above.** Read the note, then check its claim
+against the tree at the baseline - not against a memory of it:
+
+1. **Still true, unchanged** - stamp it. The only outcome that writes the marker.
+2. **Still true, not now** - `inflight-state: deferred - <what it waits on>`. That is the schedule;
+   no marker, because the decision is the record.
+3. **Partly true** - shrink it to what is still open (the second of the four outcomes above), then
+   stamp what remains.
+4. **True, but owned elsewhere now** - migrate what outlives it, then `git rm` (the first and
+   fourth of the four).
+5. **No longer true** - `git rm`, or `closed - <why>` when the reasoning is worth a later reader
+   finding.
+
+**This section is the per-note contract; [`docs/grooming.md`](../grooming.md) owns the sweep around
+it** - when to run one, how it is split between agents, the dispatch prompt, and where the results
+are consolidated. Follow that document each time rather than re-deriving the sweep.
+
+**The worklist is `bin/inflight.mjs vet`.** Every open note on the baseline, unvetted first, in the
+index's group order and then **oldest first** by the date the note was first added on any ref -
+each annotated with the cheap signals a script can see: every fork number it cites is merged or
+closed, the number in its filename is settled, a cited path or symbol no longer resolves on the
+baseline, a stated delete-when condition. **A signal is a reason to open the note, never a verdict**:
+a note cites a merged pull request because that is where the problem was found, and a symbol is
+missing because the note proposes it. `--area <prefix>` scopes the list to one area, which is how a
+sweep is split between agents - one file per note means the areas cannot collide.
+
+**An agent proposes; a `bug` at `stall` or worse is the owner's to close.** A vet is a claim check,
+not a decision, and the highest-impact notes - `misdirection` through `stall` in the table above -
+are exactly the ones where a confident "no longer real" costs the most when it is wrong. For those,
+an agent that concludes anything but "still true" writes the marker with the proposal in it and
+changes nothing else: `<!-- inflight-vetted: 2026-09-07 - PROPOSED closed: fixed by astubbs#451,
+the guard is in \`revoke()\` -->`. The re-reading happened and is recorded; the state change waits
+for the owner, and `grep -l 'inflight-vetted:.*PROPOSED' docs/inflight/*.md` is the list of what
+is waiting.
+
+`bin/check-inflight-tags.sh` refuses a marker that is not `YYYY-MM-DD - <what>`: the tool reads it
+with one regex, and a marker it cannot parse reads as "never vetted", silently undoing the vet it
+records.

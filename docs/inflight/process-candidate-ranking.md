@@ -1,6 +1,7 @@
 # Next candidates, ranked
 
 <!-- inflight-type: register -->
+<!-- inflight-vetted: 2026-09-07 - all eight ranked decisions are still open issues awaiting the same reply (astubbs#161, astubbs#181, astubbs#163, astubbs#189, astubbs#162, astubbs#241, astubbs#173, astubbs#178) and every note they name is present, so the ranking stands unchanged; four settled lines removed instead - the astubbs#155/astubbs#169/astubbs#170 scheduling sentence and the logging-verbosity pick (merged as astubbs#203 and astubbs#428), the astubbs#40 dedup pick (astubbs#206), and confluentinc#906 out of the contributor-friction pick (astubbs#194 closed) -->
 
 
 ## Decisions waiting on the maintainer, ranked
@@ -54,8 +55,66 @@ named on each line owns it.
 four-step definition of done in `core-139-public-api-thread-safety-contract.md` - real work, not a
 call. astubbs#175 has no decision left in it; its one live strand is the AB-BA wedge that
 <!-- post-merge: checked - names that PR as the work the strand belonged to, in the past tense, so it reads the same once it has landed -->
-astubbs/parallel-consumer#29 carried. astubbs#155, astubbs#169 and astubbs#170 have their fixes written and correctly linked -
-what they need is the three draft PRs de-conflicted and merged, which is scheduling.
+astubbs/parallel-consumer#29 carried.
+
+## What gates v6, as the sweep read it
+
+[`release-when-is-v6-good-enough.md`](release-when-is-v6-good-enough.md) set the bar as "the bugs
+that are already open". Six area sweeps each named what they read as gating (the owner's pass over
+the sweep's proposals is done - [`process-inflight-vet-sweep.md`](process-inflight-vet-sweep.md)
+records it); this is the union,
+ordered by user-visible consequence, with the confidence each agent stated. The mechanical gate
+comes first because nothing else matters until it clears.
+
+- **The quarantine registry is non-empty, and every entry is unowned.** `release.yml` refuses the
+  cut while [`docs/quarantined-tests.md`](../quarantined-tests.md) lists anything; read that file,
+  not this line.
+- **Verified defects, in the code as written today:**
+  1. `bug-857-transactional-revoke-wait.md` - was the unbounded wait inside the revoke callback,
+     with a user report carrying upstream's verified-bug label. astubbs#466 (merged the day the sweep
+     ran) replaced the spin with a wait bounded by `commitLockAcquisitionTimeout`; whether that bound
+     is right is what is left, and astubbs#408 holds it. The sweep also read
+     `core-revoke-commit-skips-the-work-mailbox-drain.md` as gating - a deterministic exactly-once
+     break with C9 refuted - and the same commit fixed it; the note is gone and the record is in
+     `docs/solutions/logic-errors/`.
+  2. A dead poll thread holding its partitions for `max.poll.interval.ms` in the default commit mode -
+     read as gating, and traced end to end but untested and unfixed when the sweep ran. Now tested
+     and fixed: `maybeCloseConsumer` gained an arm for a poll thread that ended without closing the
+     consumer, the note is gone, and the record is in
+     `docs/solutions/logic-errors/a-duty-assigned-by-role-is-unassigned-when-the-role-holder-dies-2026-09-08.md`.
+  3. `pr-431-must-pair-its-queue-removal-with-the-shard-removal.md` with
+     `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the retry-queue orphan window; master
+     is still shard-first and astubbs#431 is a draft.
+  4. `bug-unvalidated-batchsize.md` - `batchSize(0)` silently processes nothing; one `validate()`
+     bound closes all three shapes (astubbs#311). The cheapest real fix in the set.
+  5. `bug-max-failure-history-is-inert.md` - a public option that does nothing; removing it is
+     breaking, so it is settled before the major or carried forever.
+  6. `bug-offset-commit-timeout-does-two-jobs.md` - the default makes a retry unreachable; the fix is
+     a design choice among three.
+  7. `bug-162-offset-state-truncation.md` - a WARN operators alert on, firing falsely for every new
+     group; decision 5 in the section above.
+  8. `bug-unbounded-log-lines.md` - record keys and values printed at WARN on a line that asks to be
+     pasted into a public issue; cheap to fix.
+- **Contract and compatibility, where a major is the only window:**
+  `core-bytearray-encodings-have-no-codec.md` (two magic bytes),
+  `core-pc-owns-the-clients-it-uses.md` (the consumer-instance option). The sweep also listed
+  `core-139-public-api-thread-safety-contract.md` here; the owner ruled astubbs#139 out of v6 scope
+  on 2026-09-08 and the note is deferred after v6.
+- **Instruments the release decision is read through, currently lying or unproven:**
+  `test-chaos-autopsy-omits-fleet-violations.md` (a clean autopsy after a fleet-violation kill,
+  confirmed in code), `test-perf-lane-asserts-a-deadline-on-a-varying-machine.md` (a required check
+  that fails on arithmetic), `test-no-progress-window-may-not-transfer-to-w1.md` (sightings at the
+  bound, none replayed), `ci-codecov-flags-not-like-for-like.md` (proposal 9),
+  `ci-broker-container-exit-126-is-undiagnosable.md`.
+- **Decisions, not engineering:** the astubbs#161 and astubbs#181 replies (items 1 and 2 at the top
+  of this file); the "is it enough?" call, whose own target date has passed; and astubbs#257's
+  changelog wording, which has one window because the section is generated from the log.
+- **Read as not gating, by the agent that vetted each:** the new modules (astubbs#271, astubbs#269,
+  astubbs#268 - capabilities, not defects); the `deps-` majors; every `issue-response-*` draft; the
+  `static-` registers (advisory lanes); the `branch-` notes; the `test-debt` and feature notes; the
+  unfenced `PartitionState` booleans and the plain-int counter (real, unmeasured, possibly absorbed
+  by the shared-nothing rework); and the poisoned-transaction pair, where today's behaviour is
+  strictly better than what it replaced.
 
 ## Ready picks
 
@@ -70,19 +129,13 @@ Collisions are in `pr-blockers-and-collisions.md`. The ranked backlog and full v
   for them is the wrong one for their deployment. Kafka's client throws a retriable exception and
   lets the caller choose; PC only terminates. Research, both sides of the upstream argument, and why
   fixing astubbs#177 does not close it: `core-commit-failure-seam.md`.
-- **`confluentinc#912` vertx leak** - branch done, needs rebase + PR (`branch-912-vertx-leak.md`). Best
-  immediate pick.
 - **Auto-scaling (astubbs#227)** - runtime-discovered per-instance concurrency; candidate killer
   feature alongside key ordering, priority raised 2026-08-18 (`core-auto-scaling.md`). Spec
   stage; two bitrotted prototypes to mine; async-timing metrics fix is the prerequisite.
-- **Logging-verbosity cleanup** - batch `confluentinc#629` / `#631` / `#640` into one PR
-  (`ConsumerOffsetCommitter`, `RemovedPartitionState`, `AbstractParallelEoSStreamProcessor`). Low
-  effort, high return.
-- **Contributor-friction build fixes** - `confluentinc#162` (mvn compile without test-jar),
-  `confluentinc#861` (`ManagedTruth` not found), `confluentinc#906` (pom version mismatch).
+- **Contributor-friction build fixes** - `confluentinc#162` (mvn compile without test-jar) and
+  `confluentinc#861` (`ManagedTruth` not found). The third, `confluentinc#906` (pom version
+  mismatch), is settled - astubbs#194 is closed.
 - **Security dependency bumps** - `confluentinc#851` (postgres), `confluentinc#913` (assertj); pom-only.
-- **[#40](https://github.com/astubbs/parallel-consumer/issues/40)** - dedup the `MockConsumer*` test
-  classes (test-only; the duplication bot keeps flagging them).
 - **`confluentinc#915` batch construction strategy** - cherry-pick, closes the 4-year-old
   `confluentinc#266`. Medium effort.
 - **Point ArchUnit at main code** (`static-archunit-main-code-rules.md`) - the harness is already

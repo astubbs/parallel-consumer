@@ -1,0 +1,284 @@
+package bz.stub.parallelconsumer.internal;
+
+/*-
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import bz.stub.parallelconsumer.internal.utils.LogCapture;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.IThrowableProxy;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.clients.consumer.OffsetCommitCallback;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.GroupAuthorizationException;
+import org.apache.kafka.common.errors.RebalanceInProgressException;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.mockito.ArgumentCaptor;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+import static bz.stub.parallelconsumer.internal.AsyncCommitterFixture.GROUP;
+import static bz.stub.parallelconsumer.internal.AsyncCommitterFixture.consumerManagerMock;
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
+import static java.util.Collections.nCopies;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+
+/**
+ * The line a failed asynchronous commit emits is a contract with the operator, so these tests read what the committer
+ * actually <em>emits</em> - not the format string, and not the summariser in isolation.
+ * <p>
+ * <b>One line, at WARN.</b> A request really did fail, which is worth seeing; what it is not is an ERROR, because
+ * nothing was lost and nothing needs anyone tonight - the partitions were never marked clean, so they are still dirty
+ * and a later request carries the same offsets. The level is asserted in both directions: an ERROR reappearing here
+ * would be a false alarm on a routine coordinator hiccup, and a second line would double every such alarm.
+ * <p>
+ * What the line must carry is every topic, partition and offset the commit attempted (astubbs#168 / confluentinc#629
+ * asked for exactly those). What it must not carry is each entry's {@code metadata}: PC's base64-encoded offset map,
+ * up to {@link OffsetMapCodecManager#DefaultMaxMetadataSize} characters <em>per partition</em>, which grew the line to
+ * partitions x 4KB on the one occasion it most needs to survive log truncation. Interpolating the map again would
+ * restore both properties' opposite and no ordinary assertion would notice - which is what
+ * {@link LogCapture} is for.
+ *
+ * @author Antony Stubbs
+ */
+// SAME_THREAD is the load-bearing one, and it fixes an OBSERVED failure, not a hypothetical: this module's pom sets
+// junit.jupiter.execution.parallel.mode.default=concurrent, so the METHODS of one class run in parallel with each
+// other. Both methods below capture the SAME logger, and LogCapture's level is shared state - whichever closes first
+// restores the level to INFO and silently swallows the other's DEBUG line, which is exactly how the DEBUG assertion
+// came to read an empty list. Scoping reads by topic name cannot fix that; only serialising the methods can.
+// Not @Isolated: that separates CLASSES, and the pom leaves mode.classes.default at JUnit's same_thread, so classes
+// do not overlap today anyway. LoadFactorCeilingReportingTest carries both because its logger is a busy one whose
+// raised level perturbs the timing-sensitive close/shutdown tests; ConsumerOffsetCommitter's is quiet.
+@Execution(ExecutionMode.SAME_THREAD)
+// DefaultMaxMetadataSize is a MUTABLE static that OffsetEncodingBackPressureTest and its unit sibling write. Taking
+// the READ side of the lock those two already hold for writing is what WorkManagerOffsetMapCodecManagerTest and
+// OffsetEncodingTests do. Belt-and-braces rather than load-bearing while classes run sequentially - it is what keeps
+// this test correct if mode.classes.default is ever turned on, and it costs nothing.
+@ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ)
+class ConsumerOffsetCommitterAsyncFailureLoggingTest {
+
+    /**
+     * The logger is shared JVM-wide, so every read is filtered on a string unique to this test - {@link LogCapture}'s
+     * second obligation.
+     */
+    private static final String TOPIC = ConsumerOffsetCommitterAsyncFailureLoggingTest.class.getSimpleName();
+
+    /**
+     * The DEBUG detail line's own prefix. Read together with {@link #TOPIC} rather than on its own - it is shared
+     * text, so it identifies the statement while the topic identifies this test.
+     */
+    private static final String FULL_MAP_LINE = "Failed commit in full";
+
+    /**
+     * Everything in the failure line that is <b>not</b> per-entry: the log statement's own constant text plus the
+     * summary's {@code "N partitions: "} prefix. Counted from the statement, with a little headroom for a reword.
+     * <p>
+     * It was 64 when the statement read {@code "Error committing offsets: {}, exception: "}. The line now also states
+     * what the failure MEANS for the offsets - that they stay dirty and are committed when a later request is
+     * acknowledged, which is the behaviour change of
+     * {@code docs/solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md} -
+     * so the constant text roughly doubled and this moved with it.
+     * <p>
+     * <b>Raising this does not weaken the guard, and raising it much further would.</b> What the assertion catches is
+     * the offset map being interpolated back into the line, which costs
+     * {@link OffsetMapCodecManager#DefaultMaxMetadataSize} <em>per partition</em> - orders of magnitude above anything
+     * a message reword can account for. A budget large enough to absorb that would be the weakening; this is not
+     * close. The per-entry term is the half that must never move, and has not.
+     */
+    private static final int STATEMENT_TEXT_BUDGET = 160;
+
+    /**
+     * The same budget for the <b>permanent-failure ERROR</b>, which says more because it has more to say: that every
+     * later request fails identically, that the committed offset will not advance, and that nobody should wait for it
+     * to fix itself. Measured at 231 characters of statement text plus the summary's {@code "N partitions: "} prefix,
+     * with headroom for a reword.
+     * <p>
+     * <b>Separate from {@link #STATEMENT_TEXT_BUDGET} rather than raising it, so neither line goes slack.</b> One
+     * shared budget wide enough for this statement would stop constraining the WARN at all. Both stay orders of
+     * magnitude below what the assertion actually guards against - {@link OffsetMapCodecManager#DefaultMaxMetadataSize}
+     * <em>per partition</em>, which is 4096 each and is what interpolating the map costs. A level change must not
+     * become the door that comes back through.
+     */
+    private static final int ERROR_STATEMENT_TEXT_BUDGET = 260;
+
+    @Test
+    void asyncCommitFailureLineNamesEveryPartitionAndOffsetButNotTheMetadata() {
+        var consumerMgr = consumerManagerMock();
+        var committer = committerFor(consumerMgr);
+        String metadata = largestOffsetMapPcWillWrite();
+        Map<TopicPartition, OffsetAndMetadata> offsets = twoPartitionCommit(metadata);
+
+        try (var logs = LogCapture.of(ConsumerOffsetCommitter.class, Level.DEBUG)) {
+            committer.commitOffsets(offsets, GROUP);
+
+            completeCallbackWith(consumerMgr, offsets, new RebalanceInProgressException(
+                    "Offset commit cannot be completed since the consumer is undergoing a rebalance (mocked)"));
+
+            assertWithMessage("a deferred commit is not an operator emergency - the offsets are still dirty and a "
+                    + "later request carries them")
+                    .that(logs.messagesAt(Level.ERROR, TOPIC))
+                    .isEmpty();
+            String failureLine = logs.onlyMessageAt(Level.WARN, TOPIC);
+            assertThat(failureLine).contains(TOPIC + "-0: offset 1000, " + metadata.length() + " chars of metadata");
+            assertThat(failureLine).contains(TOPIC + "-1: offset 5, no metadata");
+            assertThat(failureLine).doesNotContain(metadata);
+            assertThat(failureLine).doesNotContain("OffsetAndMetadata{");
+            // Derived, not measured, and derived the way RecordBatchSummaryTest.commitSummaryCostPerPartitionDoesNotDependOnMetadataSize
+            // is: 64 characters per entry beyond the topic name covers "-<partition>: offset <offset>, <length> chars of
+            // metadata; " even at a 10-digit partition, a 19-digit offset and a 4-digit length, and STATEMENT_TEXT_BUDGET
+            // covers everything in the line that is NOT per-entry. The number that matters is what it is nowhere near:
+            // metadata.length(), which is what interpolating the map cost.
+            assertThat(failureLine.length()).isLessThan(2 * (TOPIC.length() + 64) + STATEMENT_TEXT_BUDGET);
+
+            // the exception is the other half of the diagnostic, and messagesAt() projects it away - so dropping the
+            // trailing argument would leave every assertion above still passing
+            assertThat(throwableOfOnlyEventAt(logs, Level.WARN))
+                    .isEqualTo(RebalanceInProgressException.class.getName());
+
+            // the unabridged map is still available, one level down, where it has to be asked for
+            assertThat(logs.onlyMessageAt(Level.DEBUG, TOPIC, FULL_MAP_LINE)).contains(metadata);
+        }
+    }
+
+    /**
+     * Pairs with the test above so its {@code doesNotContain} assertions are not vacuous: the capture does see this
+     * committer's lines when there are any, so seeing none here is the {@code exception != null} guard working rather
+     * than a capture that reads nothing.
+     * <p>
+     * The DEBUG half is the one that matters. Both log statements sit behind that one guard, so moving or duplicating
+     * the unabridged dump outside it would put the whole map - every partition's metadata, the thing astubbs#168 is
+     * about - on the hot path of every SUCCESSFUL commit, while the test above still passed.
+     */
+    @Test
+    void asyncCommitSuccessLogsNoFailureLineAndDumpsNoOffsetMap() {
+        var consumerMgr = consumerManagerMock();
+        var committer = committerFor(consumerMgr);
+        Map<TopicPartition, OffsetAndMetadata> offsets = twoPartitionCommit(largestOffsetMapPcWillWrite());
+
+        try (var logs = LogCapture.of(ConsumerOffsetCommitter.class, Level.DEBUG)) {
+            committer.commitOffsets(offsets, GROUP);
+
+            completeCallbackWith(consumerMgr, offsets, null);
+
+            assertThat(logs.messagesAt(Level.ERROR, TOPIC)).isEmpty();
+            assertThat(logs.messagesAt(Level.WARN, TOPIC)).isEmpty();
+            assertThat(logs.messagesAt(Level.DEBUG, FULL_MAP_LINE)).isEmpty();
+        }
+    }
+
+    /**
+     * The other half of the level contract, and the one that keeps the WARN above honest: a failure the next request
+     * cannot fix is an <b>ERROR</b>.
+     * <p>
+     * The WARN's promise is that these offsets are committed when a later request is acknowledged. For a coordinator
+     * hiccup that is true and the operator can go back to sleep. For a permanent failure - the group authorization
+     * revoked, this instance fenced - it is false: every later request fails the same way, the partitions stay dirty
+     * for as long as the process runs, the committed offset never advances, and nothing gets better without a person.
+     * Logging that at WARN with a promise of eventual success is the false alarm's mirror image, and worse, because
+     * the operator is told to wait for something that will not happen.
+     * <p>
+     * <b>The classification is the sync path's, not a new one.</b> {@code commitDeferringOnRebalance()} catches
+     * exactly {@code RebalanceInProgressException} and {@code CommitFailedException} and lets everything else escape,
+     * so this asserts the async mode reports at ERROR precisely what the synchronous mode would have let out. Found by
+     * the Codex review on astubbs/parallel-consumer#470.
+     */
+    @Test
+    void aPermanentAsyncCommitFailureIsAnErrorBecauseNoLaterRequestCanFixIt() {
+        var consumerMgr = consumerManagerMock();
+        var committer = committerFor(consumerMgr);
+        Map<TopicPartition, OffsetAndMetadata> offsets = twoPartitionCommit(largestOffsetMapPcWillWrite());
+
+        try (var logs = LogCapture.of(ConsumerOffsetCommitter.class, Level.DEBUG)) {
+            committer.commitOffsets(offsets, GROUP);
+
+            completeCallbackWith(consumerMgr, offsets, new GroupAuthorizationException("mocked - not retriable"));
+
+            assertWithMessage("a failure no later request can fix must not be reported with the deferral promise")
+                    .that(logs.messagesAt(Level.WARN, TOPIC))
+                    .isEmpty();
+            String failureLine = logs.onlyMessageAt(Level.ERROR, TOPIC);
+            assertWithMessage("the ERROR must say the retries will not succeed on their own, or it is only a louder "
+                    + "version of the WARN")
+                    .that(failureLine).contains("will not succeed without intervention");
+
+            // the astubbs#168 (confluentinc#629) bound is the same on this line as on the WARN - a level change must
+            // not become the door the offset map comes back through
+            assertThat(failureLine).doesNotContain(largestOffsetMapPcWillWrite());
+            assertThat(failureLine).contains(TOPIC + "-1: offset 5, no metadata");
+            assertThat(failureLine.length()).isLessThan(2 * (TOPIC.length() + 64) + ERROR_STATEMENT_TEXT_BUDGET);
+
+            assertThat(throwableOfOnlyEventAt(logs, Level.ERROR))
+                    .isEqualTo(GroupAuthorizationException.class.getName());
+        }
+    }
+
+    /**
+     * The success marking is nobody's business here, so the {@code WorkManager} is a bare mock - what an
+     * acknowledgement then does to a partition is {@link ConsumerOffsetCommitterOverlappingAsyncCommitTest}'s
+     * subject.
+     */
+    private static ConsumerOffsetCommitter<String, String> committerFor(ConsumerManager<String, String> consumerMgr) {
+        return AsyncCommitterFixture.asyncCommitter(consumerMgr, AsyncCommitterFixture.workManagerMock());
+    }
+
+    /**
+     * Read inside a test rather than into a constant, so it is read under the class's resource lock - a field
+     * initialiser runs whenever the class first loads, which no lock covers.
+     */
+    private static String largestOffsetMapPcWillWrite() {
+        return String.join("", nCopies(OffsetMapCodecManager.DefaultMaxMetadataSize, "x"));
+    }
+
+    /**
+     * One partition carrying the largest offset map PC will ever write, one carrying none - the two shapes the line
+     * has to render differently.
+     */
+    private static Map<TopicPartition, OffsetAndMetadata> twoPartitionCommit(String metadata) {
+        Map<TopicPartition, OffsetAndMetadata> offsets = new HashMap<>();
+        offsets.put(new TopicPartition(TOPIC, 0), new OffsetAndMetadata(1000, metadata));
+        offsets.put(new TopicPartition(TOPIC, 1), new OffsetAndMetadata(5));
+        return offsets;
+    }
+
+    /**
+     * Captures the callback the committer handed to {@code commitAsync} and completes it as the broker's response
+     * thread would - with {@code null} for a success.
+     */
+    private static void completeCallbackWith(ConsumerManager<String, String> consumerMgr,
+                                             Map<TopicPartition, OffsetAndMetadata> offsets,
+                                             Exception exception) {
+        var callback = ArgumentCaptor.forClass(OffsetCommitCallback.class);
+        verify(consumerMgr).commitAsync(eq(offsets), callback.capture());
+        callback.getValue().onComplete(offsets, exception);
+    }
+
+    /**
+     * @return the class name of the throwable attached to the one captured event at this level - what
+     * {@link LogCapture#messagesAt} cannot show, since it formats the message and drops the throwable
+     */
+    private static String throwableOfOnlyEventAt(LogCapture logs, Level level) {
+        List<ILoggingEvent> events = logs.events().stream()
+                .filter(event -> event.getLevel() == level)
+                .filter(event -> event.getFormattedMessage().contains(TOPIC))
+                .collect(Collectors.toList());
+        assertThat(events).hasSize(1);
+        IThrowableProxy thrown = events.get(0).getThrowableProxy();
+        // asserted rather than dereferenced, so dropping the trailing argument reports "no throwable attached" instead
+        // of an NPE inside the helper
+        assertWithMessage("no throwable attached to the %s event - was the exception argument dropped?", level)
+                .that(thrown).isNotNull();
+        return thrown.getClassName();
+    }
+
+}

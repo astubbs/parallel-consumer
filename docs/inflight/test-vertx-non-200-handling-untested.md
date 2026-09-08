@@ -2,10 +2,15 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-state: closed - the gap is covered: VertxTest.serverErrorStatusStillCommits and transportFailureIsDistinctFromANonSuccessStatus landed in c30aaee15 (astubbs#116) and pin the contract (a 500 is a delivered response, onUserFunctionSuccess runs, the offset commits; only a transport error fails the future). The stub was deleted in cadf4c952 and the new javadoc says so; the note is kept rather than removed because the owner ruling it records - a disabled empty test is a TODO with a name and a location - is written down nowhere else -->
 
-**Priority: high.** The vertx module ships response-code handling that nothing exercises, and we have
-live vertx defects (astubbs/parallel-consumer#116 / astubbs/parallel-consumer#122), so this is a gap
-that can be hiding real bugs rather than a tidy-up.
+<!-- post-merge: checked-begin -->
+**Priority: high.** The vertx module ships response-code handling that nothing exercises, and this
+area has already produced real defects (astubbs/parallel-consumer#116,
+astubbs/parallel-consumer#122), so this is a gap that can be hiding real bugs rather than a tidy-up.
+Whether those two are open is beside the point the sentence makes: they are evidence the area bites,
+and that stays true once they close.
+<!-- post-merge: checked-end -->
 
 ## What exists
 
@@ -42,4 +47,5 @@ that only proves "no exception" would repeat the class of test this audit found 
 ## Related
 
 - `docs/test-hardening/inactive-tests-audit-2026-08-08.md` §1.3 and §3.1
-- astubbs/parallel-consumer#116, astubbs/parallel-consumer#122 - live vertx defects
+<!-- post-merge: checked -->
+- astubbs/parallel-consumer#116, astubbs/parallel-consumer#122 - defects found in this area

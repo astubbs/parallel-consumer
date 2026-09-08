@@ -335,7 +335,8 @@ public class ManagedPCInstance implements Runnable {
         try {
             pc.close();
         } catch (Exception e) {
-            log.warn("Instance {} close of abandoned PC failed: {}", instanceId, e.getMessage());
+            log.warn("Instance {} close of abandoned PC failed: {}: {}", instanceId,
+                    e.getClass().getSimpleName(), e.getMessage()); // type too - see the sibling catch in stopAsync
         } finally {
             closingPcs.remove(pc);
         }
@@ -389,7 +390,12 @@ public class ManagedPCInstance implements Runnable {
             try {
                 pcToClose.close();
             } catch (Exception e) {
-                log.warn("Instance {} background close error: {}", instanceId, e.getMessage());
+                // the TYPE, not just the message: this close fails with a TimeoutException whose
+                // getMessage() is null, so the old line read "background close error: null" and named
+                // neither the failure nor that the PC is now stuck in CLOSING - a group member that
+                // will never poll again. Same defect as the stall dump's swallowed type.
+                log.warn("Instance {} background close error: {}: {}", instanceId,
+                        e.getClass().getSimpleName(), e.getMessage());
             } finally {
                 closingPcs.remove(pcToClose);
             }

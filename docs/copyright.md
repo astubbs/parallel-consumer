@@ -68,8 +68,8 @@ worktrees.
   rot, and it counts what it grandfathered rather than skipping quietly. **The limit matters as much
   as the rule**: a file that *was* marked and has since lost its header is still a violation.
 - **A Confluent claim is `Copyright (C) ... Confluent` on ONE line.** A fork-original file may
-  discuss the fork's provenance in its header prose - `.github/workflows/copyright.yml` and
-  `bin/deps-version-rules.xml` both do - without that reading as a claim.
+  discuss the fork's provenance in its header prose - `bin/deps-version-rules.xml` does, and so did
+  the copyright workflow before it was folded into `repo-hygiene.yml` - without that reading as a claim.
 - **A header that is present can still be wrong**, and the scanner checks all three cases: the
   notice must sit inside a comment in that language's syntax, never above a `#!` shebang, and never
   above an `<?xml ...?>` declaration. Note also that an XML comment may not contain `--`, so the

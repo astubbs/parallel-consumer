@@ -85,7 +85,8 @@ public enum TransactionalClaim {
      */
     OFFSET_AND_RECORDS_ATOMIC(Source.OPTIONS_JAVADOC,
             "A source offset, and it's produced records will be committed as an atomic set.",
-            Status.PROVED, "TransactionalCrashReplayIT#replayCommitsTheResultsAndTheirSourceOffsetTogether asserts "
+            Status.PROVED, "PROVED on both commit paths. The revoke path: ProducerManagerTest#aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced, which also proves C9 - both claims are about the same commit, and a transaction carrying offset 1s output while committing offset 1 rather than 2 is the atomic set broken. RED observed 2026-09-03 while that commit ran inline on the poll thread without draining the mailbox; GREEN observed 2026-09-07 with the commit delegated to the control thread; the C9 entry carries the controls. This claims own exemption below does NOT cover the revoke case: that exemption is about marker-delivery ordering WITHIN one commit, whereas an undrained completion means the offset is never committed by that transaction at all. The operator ruling of 2026-09-07 that refuted both claims together is answered the same way, together. The same documented exception as C9 applies: the revocation commits deadline fallback is at-least-once for that rebalance, logged at WARN. THE CONTROL-LOOP PROOF, UNCHANGED: "
+            + "TransactionalCrashReplayIT#replayCommitsTheResultsAndTheirSourceOffsetTogether asserts "
             + "both halves at both ends of a crash: before, no payload result visible AND the source offset still "
             + "on the priming record; after, the offset reaching its target is PAIRED with every result being "
             + "visible - sampled together on each poll rather than awaited one after the other, because two "
@@ -106,7 +107,10 @@ public enum TransactionalClaim {
             + "read_committed consumer PT15S later', which also shows the grace window absorbing concurrent "
             + "transaction-marker delivery without swallowing a real violation. VALID ONLY AT batchSize=1: at batchSize>=2 the produce-lock "
             + "double-release stops the instance committing at all, which is recorded under "
-            + "RESULTS_EXACTLY_ONCE_UNDER_FAILURE and in docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md"),
+            + "RESULTS_EXACTLY_ONCE_UNDER_FAILURE and in docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md. "
+            + "A SECOND arm, at the unit seam: ParallelEoSStreamProcessorTest#invalidPidMappingFailsTheBatchInsteadOfMarkingItSucceeded "
+            + "- the produce path's InvalidPidMappingException close used to return the batch as succeeded, so the offset could "
+            + "commit with no records; RED observed before the rethrow (offset committed, record never re-dispatched), GREEN after."),
 
     /**
      * C5 - selecting transactional mode silently changes the commit interval default.
@@ -114,17 +118,25 @@ public enum TransactionalClaim {
     COMMIT_INTERVAL_AUTO_REDUCED(Source.OPTIONS_JAVADOC,
             "gets automatically reduced from the default of 5 seconds to 100ms",
             Status.PROVED, "TransactionalBulkCommitTest#transactionalModeWithNoExplicitCommitIntervalResolvesTo100ms "
-            + "and its two sibling arms, which assert the literal durations after validate() rather than the "
-            + "DEFAULT_* constants, so changing a constant without changing the javadoc still fails. Negative "
-            + "control observed (U11): forcing commitInternalHasNotBeenSet to false in "
-            + "ParallelConsumerOptions#transactionsValidation - one term, everything else identical - failed "
-            + "exactly one of the four arms, 'expected PT0.1S but was PT5S'. The other three still passed, which is "
-            + "what makes the control narrow enough to attribute. Reverted; main is untouched. "
-            + "SEPARATE DEFECT found while proving this, recorded in "
-            + "docs/inflight/bug-commit-interval-identity-check.md: the same gate uses reference identity (==) "
-            + "against DEFAULT_COMMIT_INTERVAL, so a user who explicitly sets Duration.ofSeconds(5) is equals-but-"
-            + "not-identical and gets silently overridden to 100ms - 50x the broker load they configured. Not part "
-            + "of C5's documented sentence, so it is recorded beside the claim rather than asserted as part of it"),
+            + "and its two sibling arms, which cover the unset cases, plus the explicit ones in "
+            + "ParallelConsumerOptionsTest - #explicitFiveSecondsInTransactionalModeIsKept, "
+            + "#explicitDefaultConstantInTransactionalModeIsKept and "
+            + "#clearingTheIntervalThroughTheDeprecatedSetterReturnsItToUnset. All assert the literal durations after "
+            + "validate() rather than the DEFAULT_* constants, so changing a constant without changing the javadoc "
+            + "still fails. Negative control observed (U11) against the PRE-astubbs#422 code: forcing "
+            + "commitInternalHasNotBeenSet to false in ParallelConsumerOptions#transactionsValidation - one term, "
+            + "everything else identical - failed exactly one of the four arms then present, 'expected PT0.1S but "
+            + "was PT5S'. That variable no longer exists, so a fresh control was observed against the new code: "
+            + "making ParallelConsumerOptions#getCommitInterval() return DEFAULT_COMMIT_INTERVAL for the unset case "
+            + "regardless of the commit mode - again one term - failed exactly the two arms that read an unset "
+            + "interval under transactions, #transactionalModeWithNoExplicitCommitIntervalResolvesTo100ms and "
+            + "#clearingTheIntervalThroughTheDeprecatedSetterReturnsItToUnset, both 'expected: PT0.1S but was : "
+            + "PT5S', while the kept-explicit arms and the non-transactional control stayed green. Narrow enough to "
+            + "attribute. Reverted; main is untouched. "
+            + "The identity defect this entry used to record beside the claim - an explicitly passed "
+            + "DEFAULT_COMMIT_INTERVAL treated as unset and silently reduced to 100ms - is fixed by astubbs#422; "
+            + "ParallelConsumerOptionsTest#explicitDefaultConstantInTransactionalModeIsKept is its regression test "
+            + "and was observed red before the fix"),
 
     /**
      * C6 - this one is Kafka's guarantee, not ours. We document it, so we record it and test it once; we do not
@@ -193,13 +205,37 @@ public enum TransactionalClaim {
     NO_PRODUCE_WITHOUT_ITS_OFFSET(Source.OPTIONS_JAVADOC,
             "The system must prevent records from being produced to the brokers whose source consumer record "
                     + "offsets has not been included in this transaction.",
-            Status.PROVED, "ProducerManagerTest#commitLockIsGrantedOnlyAfterTheProducedWorkReachesTheMailbox, with "
-            + "ProducerManagerTest#producedRecordsCantBeInTransactionWithoutItsOffsetDirect covering the outcome and "
-            + "the docs/plans/2026-08-03-001 §11 guard. Negative control observed (U3): releasing the produce lock "
+            Status.PROVED, "PROVED on both commit paths - the control loop's and the revoke's. "
+            + "The control-loop half: ProducerManagerTest#commitLockIsGrantedOnlyAfterTheProducedWorkReachesTheMailbox, "
+            + "with ProducerManagerTest#producedRecordsCantBeInTransactionWithoutItsOffsetDirect covering the outcome "
+            + "and the docs/plans/2026-08-03-001 §11 guard. Negative control observed (U3): releasing the produce lock "
             + "before the mailbox handoff, with the 400ms window §11's experiment used, failed 3/3 with 'the work "
             + "reaches the controller's mailbox only after its record was sent' - the commit had completed while the "
             + "work was still not in the mailbox. Position control: the same 400ms spent inside the lock, before the "
-            + "handoff, passed 2/2, so it is the ordering and not the added latency"),
+            + "handoff, passed 2/2, so it is the ordering and not the added latency. "
+            + "The revoke half: ProducerManagerTest#aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced. "
+            + "Holding the commit lock is only half the contract; the other half is DRAINING the mailbox before "
+            + "collecting offsets, because PartitionState#onSuccess - the only thing that marks a partition dirty on a "
+            + "success - is reachable from AbstractParallelEoSStreamProcessor#processWorkCompleteMailBox and nowhere "
+            + "else in main. RED observed, 2026-09-03, 5/5 deterministically, while the revoke path committed inline "
+            + "on the broker-poll thread without draining: it sent offset 1 where 2 is required, a transaction "
+            + "containing a record whose source offset it omitted. Control arm observed: "
+            + "#aRevokeTimeCommitIncludesThatOffsetWhenTheMailboxIsDrainedFirst is identical but for a "
+            + "processWorkCompleteMailBox call inserted before the revoke, and passed - so the drain is the term. "
+            + "GREEN observed, 2026-09-07, once the revoke path in transactional mode hands its commit to the control "
+            + "thread and waits (AbstractParallelEoSStreamProcessor#commitOnRevokeViaTheControlThread), whose "
+            + "sequence drains after taking the write lock; the control for the fix is the same test against the "
+            + "previous main code, red at the same assertion. NOT fixed by declining: "
+            + "#afterARevokeThatCommitsNothingTheNextCommitPublishesTheRevokedPartitionsOutputWithoutItsOffset "
+            + "observed that a revoke which commits nothing leaves the output in the open transaction for the next "
+            + "commit to publish without its offset, which is why the delegated commit is the fix and the decline is "
+            + "only the deadline fallback, logged at WARN. "
+            + "DOCUMENTED EXCEPTION: that fallback. When the revocation commit's bounded wait "
+            + "(commitLockAcquisitionTimeout) expires with no pass having served it, the revoke declines and the "
+            + "output already in the open transaction is published by a later commit without its offset - "
+            + "at-least-once for that rebalance, at WARN naming the partitions. The claim holds whenever the control "
+            + "thread serves the revocation, which is every case the proofs and the broker-level check exercise. "
+            + "docs/solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md"),
 
     /**
      * C10 - holding the commit lock stops processing for the duration of the commit.
@@ -292,7 +328,8 @@ public enum TransactionalClaim {
             + "astubbs#257 fixes it and is merged into this branch: that arm now passes, whole class 5/5 in 72s "
             + "where it previously took 178s to fail. The defect IS the negative control - it was found before the "
             + "fix landed, not injected afterwards. Write-up in "
-            + "docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md");
+            + "docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md. "
+            + "SCOPE, 2026-09-07: a route to duplication exists and is NOT yet observed. The revoke-path defect refuting C9 and C4 omits a produced record's source offset, so the next owner redelivers that input and produces its output again - a duplicate in the output topic, which is exactly what this claim denies. Every step of that chain is sound, but no duplicate has been seen: field impact is unmeasured and no broker-level reproduction was attempted. This claim is therefore left PROVED DELIBERATELY rather than by oversight, because its RED and its GREEN were each OBSERVED, and refuting it on a reasoning chain would make it the register's first argued status - breaking the observed-versus-argued distinction that is the whole reason this register is worth more than prose. WHAT WOULD SETTLE IT: a broker-level rebalance reproduction showing a duplicated result in the output topic. Operator ruling, 2026-09-07. SETTLED THE SAME DAY, IN BOTH DIRECTIONS, by RebalanceEoSDeadlockTest#noDeadlockOnRevoke reading the output topic with a read_committed consumer after the revoked partitions return: RED observed against the old revoke path - 3, 3, 3, 4 and 5 duplicated results of about 110, five runs of five - and GREEN observed, 0 of 106 to 108 five runs of five, once the revoke commit is handed to the control thread and the revoked partitions are fenced inside the write lock. The status never moved: the duplicate was observed only on code that no longer exists, on the branch that removed it. docs/solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md");
 
     /**
      * Where a claim is published, and how to find the text that must still contain it.

@@ -5,7 +5,6 @@ package bz.stub.parallelconsumer.integrationTests;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
 import bz.stub.parallelconsumer.internal.utils.ProgressTracker;
 import bz.stub.parallelconsumer.internal.utils.TrimListRepresentation;
@@ -67,18 +66,26 @@ import static org.awaitility.Awaitility.waitAtMost;
  *   subject), and the assertion is <em>progress</em> - the consumed count must advance within
  *   {@link ProgressProbe#NO_PROGRESS_WINDOW} while work remains - never "all N records within T",
  *   which fails a slow run and a stalled run identically.</li>
- *   <li><b>Capacity profiles</b> ({@code @Tag("performance")}): the original
+ *   <li><b>Capacity profiles</b> ({@code @Tag(PERFORMANCE_TAG) @Tag(CAPACITY_TAG)}): the original
  *   {@link Churn#RANDOM_STORM random chaos-monkey storm} at full aggression, on the shared
  *   (contended) broker. Their pass <em>rate</em> over many runs is the measurement, and a single
  *   run's outcome is weak evidence about PC.
- *   <p><b>The performance lane GATES.</b> {@code Performance Tests} is a required check, so a single
- *   red run here blocks a merge. This javadoc previously claimed the lane "never gates a merge",
- *   which was false and cost three CI cycles on astubbs/parallel-consumer#29 before anyone checked.
- *   Running them under a gate anyway is deliberate (2026-09-01): a capacity profile that silently
- *   degrades teaches nobody anything, and a shifting baseline is precisely what we want to be told
- *   about. The cost is that an unlucky run blocks a merge - read a red one as a prompt to look, not
- *   as a verdict, and check the {@code AMBIENT PROBE AUTOPSY} block before diagnosing by hand.</li>
+ *   <p><b>They are MEASURED, not gated - changed 2026-09-07, and the reversal is the point.</b> They
+ *   used to run under the required {@code Performance Tests} check on the argument that a silently
+ *   degrading baseline teaches nobody anything. That argument was right about wanting the number and
+ *   wrong about where to read it, and what settled it was measuring the residual rather than arguing
+ *   about it: {@link #largeNumberOfInstances()}'s failures are the Kafka consumer group protocol
+ *   under this profile's churn rate - 4 in 60 on the Linux runner, 0 in 22 on an M2 desktop, with no
+ *   coordinator request ever slow. A required check that fails one run in fifteen for a reason no
+ *   change to PC can move blocks merges while carrying no information about the change being merged.
+ *   So {@link #CAPACITY_TAG} takes them out of the gating lane and leaves them in the scheduled
+ *   {@code experiments} runs, where a rate is what gets reported. The baseline is not given up - it
+ *   moves from a tick to a trend. Reasoning and the options weighed:
+ *   {@code docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md}.</li>
  * </ul>
+ * What keeps the code paths gated once the capacity profiles leave is
+ * {@link #scriptedChurnRoundsCompleteWithoutStall()} - the deterministic correctness twin, 17/17,
+ * same assignor, commit mode and ordering. Do not tag it {@code capacity}.
  * The astubbs#68 precedent cuts both ways here: giving every test an uncontended broker made the
  * suite green and thereby <em>hid</em> the confluentinc#857 deadlock - so uncontended is right for
  * the correctness arm (isolate the subject) and deliberately wrong for the capacity arm (contention
@@ -108,6 +115,30 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      */
     static final String PERF_SCALE_PROPERTY = "perf.scale";
 
+    /**
+     * The tag every performance-lane test carries, capacity profiles included - it is what
+     * {@code bin/performance-test.sh} SELECTS on, so removing it from the capacity profiles would take
+     * them out of the experiment runners too ({@code bin/lib/chaos-experiment-common.sh}'s
+     * {@code pc_run_performance} passes {@code -Dincluded.groups=performance}).
+     */
+    static final String PERFORMANCE_TAG = "performance";
+
+    /**
+     * The tag that takes a profile OUT of the gating lane while leaving it in the performance suite.
+     * <p>
+     * {@code bin/performance-test.sh} - the required {@code Performance Tests} check - excludes it;
+     * the experiment runners, which pass an empty {@code -Dexcluded.groups=}, still select it. That
+     * asymmetry is the whole point: a capacity profile's pass RATE over many runs is its output, and a
+     * single run's outcome carries no information about the change being merged, so it may be measured
+     * on a schedule but must not gate. Decided 2026-09-07 and reasoned in
+     * {@code docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md}.
+     * <p>
+     * <b>Adding this tag to a NEW test is a decision to stop gating it</b> - and nothing goes red to
+     * say so, because a lane that selects nothing passes. {@link #capacityProfilesAreOutOfTheGatingLane}
+     * is the check that a profile carrying it is deliberate rather than inherited.
+     */
+    static final String CAPACITY_TAG = "capacity";
+
     /** Scale factor for capacity profiles only - see {@link #PERF_SCALE_PROPERTY}. */
     static double capacityScale() {
         assertCallerIsACapacityProfile();
@@ -130,7 +161,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * <p>
      * Fails on the calling TEST method's own annotations, so it cannot be satisfied by a helper in
      * between: the first frame back in this class that is a test method must carry
-     * {@code @Tag("performance")}.
+     * {@code @Tag(CAPACITY_TAG)}.
      */
     private static void assertCallerIsACapacityProfile() {
         for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
@@ -143,7 +174,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
             }
             if (!verdict) {
                 throw new AssertionError(String.format(
-                        "%s() read %s, but only capacity profiles (@Tag(\"performance\")) may scale. "
+                        "%s() read %s, but only capacity profiles (@Tag(\"capacity\")) may scale. "
                                 + "Correctness profiles are deterministic by construction and their "
                                 + "numbers are part of that argument - scale the capacity arm instead.",
                         frame.getMethodName(), PERF_SCALE_PROPERTY));
@@ -169,8 +200,16 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
             if (!isTest) {
                 continue;
             }
-            Tag tag = m.getAnnotation(Tag.class);
-            return tag != null && "performance".equals(tag.value());
+            // getAnnotationsByType, not getAnnotation: @Tag is @Repeatable, and the capacity profiles
+            // carry two of them - getAnnotation(Tag.class) returns NULL for a repeated annotation, so
+            // the single-tag read would have quietly reclassified every capacity profile as a gate the
+            // moment CAPACITY_TAG was added beside PERFORMANCE_TAG.
+            for (Tag tag : m.getAnnotationsByType(Tag.class)) {
+                if (CAPACITY_TAG.equals(tag.value())) {
+                    return true;
+                }
+            }
+            return false;
         }
         return null;
     }
@@ -288,6 +327,43 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                 .hasMessageContaining("only capacity profiles");
     }
 
+    /**
+     * Pins which profiles gate and which only measure, because the failure mode of getting it wrong is
+     * a lane that selects nothing and passes - the same silent no-op {@code bin/performance-test.sh}'s
+     * header records having already happened once with {@code -Dexcluded.groups=}.
+     * <p>
+     * <b>What it proves and what it does not.</b> It reads the annotations, so it proves the profiles
+     * are labelled as intended and that the deterministic twin has not drifted into the measurement
+     * set. It cannot prove the lane's flags match - that lives in {@code bin/performance-test.sh}
+     * ({@code -Dexcluded.groups=quarantined,capacity}) and in the experiment runners' empty exclusion.
+     * Change either side and read what the lane actually selected, never that the flags look right.
+     * <p>
+     * Untagged deliberately, so it runs in the gating integration lane rather than only in the lane
+     * whose membership it describes.
+     */
+    @Test
+    void capacityProfilesAreOutOfTheGatingLane() {
+        assertThat(tagsOf("largeNumberOfInstances")).containsExactly(PERFORMANCE_TAG, CAPACITY_TAG);
+        assertThat(tagsOf("cooperativeStickyRebalanceShouldNotStall")).containsExactly(PERFORMANCE_TAG, CAPACITY_TAG);
+        assertThat(tagsOf("gentleChaosRebalance")).containsExactly(PERFORMANCE_TAG, CAPACITY_TAG);
+
+        // The correctness twin is what keeps these code paths gated once the profiles above leave, so
+        // it must carry neither tag - `capacity` would un-gate it, `performance` alone would move it to
+        // a lane that only runs on demand.
+        assertThat(tagsOf("scriptedChurnRoundsCompleteWithoutStall")).isEmpty();
+        assertThat(tagsOf("consumeWithMultipleInstancesPeriodicConsumerSync")).isEmpty();
+    }
+
+    /** Every {@code @Tag} on a declared method of this class, repeated annotations included. */
+    private static List<String> tagsOf(String methodName) {
+        for (java.lang.reflect.Method m : MultiInstanceRebalanceTest.class.getDeclaredMethods()) {
+            if (m.getName().equals(methodName)) {
+                return Arrays.stream(m.getAnnotationsByType(Tag.class)).map(Tag::value).collect(Collectors.toList());
+            }
+        }
+        throw new AssertionError("no method named " + methodName + " on " + MultiInstanceRebalanceTest.class);
+    }
+
     @ParameterizedTest
     @EnumSource(ProcessingOrder.class)
     void consumeWithMultipleInstancesPeriodicConsumerSync(ProcessingOrder order) {
@@ -367,8 +443,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     }
 
     /**
-     * CAPACITY measurement (performance lane - its pass RATE over runs is the output, and a single
-     * red run is not a verdict): 12 PC instances on 80 partitions with an aggressive chaos monkey
+     * CAPACITY measurement (NOT a gate - its pass RATE over runs is the output, and a single red run
+     * is not a verdict): 12 PC instances on 80 partitions with an aggressive chaos monkey
      * toggling up to 6 of 11 secondary instances every 0-500ms. PC-0 is never toggled and should
      * always be alive. The deterministic correctness twin that gates merges is
      * {@link #scriptedChurnRoundsCompleteWithoutStall()}.
@@ -393,19 +469,27 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * under extreme churn, not a PC bug — all PC-internal issues have been fixed.
      * If the pass rate drops materially, reassess: a new PC bug may have been introduced.
      * <p>
-     * <b>Corollary, and read it before backing the parameters off: the paragraph above is asserted,
-     * never measured.</b> No experiment separates "the group coordinator cannot converge at this
-     * churn rate" from "PC has a defect that only appears at this churn rate" — both look identical
-     * from outside, as instances alive with an empty assignment and no progress. That matters
-     * because the obvious response to a flaky stress test is to reduce the churn until it passes,
-     * and if any part of the residual is PC's, that <em>hides</em> a defect rather than removing a
-     * confound. It is the same shape that let the confluentinc#857 deadlock survive four months:
-     * astubbs#68 gave every test an uncontended broker, the suite went green, and the defect was
-     * untouched. What would settle it is a control arm — the same churn against a plain
-     * KafkaConsumer group with no PC in the path. Until then, do NOT reduce this profile's churn:
-     * its residual failure rate is the baseline that investigation measures against.
-     * TODO(refactor): settle the residual-failure attribution — see
-     * docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md
+     * <b>Measured, 2026-09-05 - and the paragraph above was right.</b> For years it was an assertion;
+     * the write-up below was opened because nobody had measured it. The Linux runner with the
+     * coordinator loggers raised showed, in every failing run, every LeaveGroup answered within 2.8s
+     * and every JoinGroup within 3.0s - no slow request anywhere - and a single JOIN PHASE held open
+     * for 17s while the monkey kept restarting members into it faster than a phase can complete. While
+     * a phase is open {@code consumer.poll()} returns nothing to any member, which is the FLAT count.
+     * Every PC-side candidate (retry-queue lock, CLOSING poll guard, a discharge poll before close) was
+     * refuted by measurement. Do NOT reduce this profile's churn to make it pass: its rate IS the
+     * measurement, and on an M2 desktop it is zero because the timing never lines up. The attribution
+     * question this comment used to flag as unsettled is answered by that measurement, and the
+     * write-up is
+     * {@code docs/solutions/test-flakiness/large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md}.
+     * <p>
+     * <b>Which is why it left the quarantine registry and the gating lane together, 2026-09-07.</b>
+     * It was quarantined while the mechanism was unexplained; once explained, quarantine was the wrong
+     * shelf - "quarantined" reads as "broken" and this test is not broken, it is a measurement whose
+     * legitimate output is a rate. {@link #CAPACITY_TAG} is where it went instead: excluded from the
+     * required {@code Performance Tests} check, still run by the scheduled {@code experiments}
+     * workflow and by {@code bin/exp-measure-large-instances-failure-rate.sh}, which is what turns the
+     * rate into a trend rather than a tick. Nothing about the profile's parameters or churn changed -
+     * deliberately, because the residual rate this measures is the baseline to compare against.
      * <p>
      * <b>Fixes applied (from confluentinc#857 investigation):</b>
      * <ul>
@@ -422,23 +506,9 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      *
      * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a>
      */
-    @Tag("performance")
+    @Tag(PERFORMANCE_TAG)
+    @Tag(CAPACITY_TAG)
     @Test
-    @Quarantined(
-            reason = "Rebalance stall, mechanism unexplained. The detector returns FLAT - the record count "
-                    + "stops rather than slows - and the ambient probe autopsy reports "
-                    + "ZOMBIE_MEMBER/REBALANCE_BLOCKED with the group dwelling in PreparingRebalance because a "
-                    + "member stopped answering, the whole assignment frozen at comparable lag. Measured at one "
-                    + "failure in ten consecutive runs on an idle Linux box, plus repeated CI failures, always "
-                    + "that same signature. It reproduces on the tree carrying this branch's log-argument fix, so "
-                    + "it is neither the confluentinc#857 revoke deadlock nor the SLF4J argument-evaluation "
-                    + "defect - it is a third thing. QUARANTINED PRE-EMPTIVELY, and the evidence tension is "
-                    + "deliberate rather than overlooked: the ledger was measured while this test was PR-state, "
-                    + "because on master the test is @Disabled and cannot fail there. This PR enables it into a "
-                    + "required lane, so on merge master inherits a gating check that fails about one run in ten. "
-                    + "The quarantine is applied at exactly the moment the failure becomes master-state.",
-            tracking = "docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md",
-            flapping = true)
     void largeNumberOfInstances() {
 
         numPartitions = scaled(80);
@@ -464,7 +534,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * <p>
      * Uses parameters closer to the production environments reported in confluentinc#857: 30 partitions, 4 consumers.
      */
-    @Tag("performance")
+    @Tag(PERFORMANCE_TAG)
+    @Tag(CAPACITY_TAG)
     @Test
     void cooperativeStickyRebalanceShouldNotStall() {
 
@@ -489,7 +560,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * If this test passes but {@link #largeNumberOfInstances()} fails, the issue is rebalance storm tolerance,
      * not a PC state management bug.
      */
-    @Tag("performance")
+    @Tag(PERFORMANCE_TAG)
+    @Tag(CAPACITY_TAG)
     @Test
     void gentleChaosRebalance() {
 
@@ -631,7 +703,12 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         // capacity profiles keep the legacy detector (11 consecutive progress-free 1s checks) so
         // their measured pass-rate baseline is undisturbed; correctness profiles use the sliding
         // NO_PROGRESS watermark (see Scenario#noProgressWindow)
-        ProgressTracker progressTracker = new ProgressTracker(count);
+        // withDiagnostic is what puts the fleet's own state next to the external count: without it
+        // every stall this test has ever produced ended "no consumer diagnostic supplied", which is
+        // the cheapest of the three instrumentation gaps standing between the recorded
+        // ZOMBIE_MEMBER/REBALANCE_BLOCKED signature and a diagnosis.
+        ProgressTracker progressTracker = new ProgressTracker(count)
+                .withDiagnostic(() -> describeFleet(allPCRunners));
         ProgressWatermark watermark = new ProgressWatermark(scenario.noProgressWindow, count.get());
         try {
             waitAtMost(scenario.completionCeiling)
@@ -650,8 +727,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                             expectedKeys.removeAll(getAllConsumedKeys(allPCRunners));
                             throw scenario.noProgressWindow == null
                                     ? progressTracker.constructError(msg("No progress, missing keys: {}.", expectedKeys))
-                                    : new RuntimeException(msg("NO_PROGRESS: consumed count stuck at {} beyond the {} watermark window, missing keys: {}.",
-                                    count.get(), scenario.noProgressWindow, expectedKeys));
+                                    : new RuntimeException(msg("NO_PROGRESS: consumed count stuck at {} beyond the {} watermark window, missing keys: {}. {}",
+                                    count.get(), scenario.noProgressWindow, expectedKeys, describeFleet(allPCRunners)));
                         }
                         SoftAssertions all = new SoftAssertions();
                         all.assertThat(overallConsumedKeys.containsAll(expectedKeys)).as("contains all: all expected are consumed at least once").isTrue();
@@ -715,7 +792,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                             if (numberToMessWith > 0) {
                                 log.info("Will mess with {} instances", numberToMessWith);
                                 IntStream.range(0, numberToMessWith).forEach(value -> {
-                                    int instanceToGet = (int) ((size - 1) * Math.random());
+                                    int instanceToGet = (int) (size * Math.random());
                                     ManagedPCInstance victim = secondaryPcs.get(instanceToGet);
                                     log.info("Victim is instance: " + victim.getInstanceId());
                                     victim.toggle(pcExecutor);
@@ -820,6 +897,123 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     }
 
     /**
+     * One line of per-instance state, shared by the stall log dump and by the failure message's
+     * consumer diagnostic so the two can never drift apart.
+     * <p>
+     * <b>{@code started} and {@code closePending} are the load-bearing pair, and they are why this
+     * exists.</b> Every recorded {@code largeNumberOfInstances} stall carries the ambient probe's
+     * {@code ZOMBIE_MEMBER/REBALANCE_BLOCKED} verdict - the group dwelling in
+     * {@code PreparingRebalance} because a member stopped answering. This pair answered that: the
+     * silent member is one the chaos monkey stopped and left in {@code CLOSING} mid-rebalance
+     * ({@code started=false, closePending=true}), not one still running - the harness, not a PC
+     * defect. Mechanism:
+     * {@code docs/solutions/test-flakiness/large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md}.
+     */
+    private String describeInstance(ManagedPCInstance instance) {
+        var pc = instance.getParallelConsumer();
+        if (pc == null) {
+            return msg("Instance {}: PC is null (never started?), started={}, closePending={}",
+                    instance.getInstanceId(), instance.isStarted(), instance.isClosePending());
+        }
+        try {
+            var wm = pc.getWm();
+            var sm = wm.getSm();
+            // assignedPartitions is deliberately absent: the accessor behind it mirrored state
+            // Kafka already owns, and astubbs/parallel-consumer#393 deleted the mirror rather
+            // than keep the poll path asking Kafka a third time per pass. This dump is a
+            // failure-path diagnostic, so it is not worth reintroducing a cached field for -
+            // and reading the live assignment here would need a consumer handle the dump does
+            // not have.
+            return msg("Instance {}: closed/failed={}, failureCause={}, started={}, closePending={}, " +
+                            "queuedInShards={}, outForProcessing={}, " +
+                            "incompleteOffsets={}, hasIncompletes={}, " +
+                            "pausedPartitions={}, consumedKeys={}, pc[{}]",
+                    instance.getInstanceId(),
+                    pc.isClosedOrFailed(),
+                    pc.getFailureCause() != null ? pc.getFailureCause().getMessage() : "none",
+                    instance.isStarted(),
+                    instance.isClosePending(),
+                    sm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
+                    wm.getNumberRecordsOutForProcessing(),
+                    wm.getNumberOfIncompleteOffsets(),
+                    wm.hasIncompleteOffsets(),
+                    pc.getPausedPartitionSize(),
+                    instance.getConsumedKeys().size(),
+                    pc.describeProgress())
+                    + describeInstanceThreads(instance.getInstanceId());
+        } catch (Exception e) {
+            // the type is kept, not just the message: a diagnostic that says only "error dumping
+            // state: null" names neither the failure nor the field that produced it
+            return msg("Instance {}: error dumping state: {}: {}",
+                    instance.getInstanceId(), e.getClass().getSimpleName(), e.getMessage());
+        }
+    }
+
+    /**
+     * Top frames of the threads PC runs for one instance - {@code pc-broker-poll-PC-<id>} and
+     * {@code pc-control-PC-<id>}, matched on the {@code -PC-<id>} suffix its
+     * {@code AbstractParallelEoSStreamProcessor#setMyId} gives them.
+     * <p>
+     * <b>Why a stack and not another counter.</b> The fleet line already says an instance is stuck in
+     * {@code CLOSING} with a poll pass tens of seconds old; what it cannot say is which call is
+     * holding it, and the candidates want different repairs -
+     * {@code ConsumerManager#close}'s wait for {@code pendingRequests} to drain, the consumer's own
+     * close, or a commit. Reading it off a stall costs nothing; inferring it from code has already
+     * produced one refuted hypothesis on this bug.
+     * <p>
+     * Deliberately unfiltered by package: the interesting frame is usually Kafka's or the JDK's
+     * (a {@code Thread.sleep} in a wait loop, a socket read), and trimming to PC's own frames would
+     * hide precisely the line that names the blocker.
+     */
+    private String describeInstanceThreads(int instanceId) {
+        String suffix = "-PC-" + instanceId;
+        return Thread.getAllStackTraces().entrySet().stream()
+                .filter(e -> e.getKey().getName().endsWith(suffix))
+                .map(e -> {
+                    StackTraceElement[] all = e.getValue();
+                    // The top frame says WHERE it is parked; the Kafka/PC frames say WHICH CALL put
+                    // it there, and only the second answers the question. A flat "first N frames"
+                    // does not work here and this is the fix for having tried it: a thread parked in
+                    // a socket select spends four frames on sun.nio internals and another four on
+                    // Kafka's network plumbing, so the first EIGHT frames stopped at
+                    // ConsumerNetworkClient.poll - one frame short of whether the caller was
+                    // KafkaConsumer.poll, commitSync or close, which is the whole question.
+                    String top = all.length == 0 ? "<no frames>" : all[0].toString();
+                    String meaningful = Arrays.stream(all)
+                            .map(StackTraceElement::toString)
+                            .filter(f -> f.contains("org.apache.kafka.clients")
+                                    || f.contains("bz.stub.parallelconsumer"))
+                            .limit(10)
+                            .collect(Collectors.joining(" <- "));
+                    if (meaningful.isEmpty()) {
+                        // never report nothing: an unrecognised stack is still evidence, and a
+                        // filter that silently empties is the failure mode this comment exists for
+                        meaningful = Arrays.stream(all).limit(15)
+                                .map(StackTraceElement::toString)
+                                .collect(Collectors.joining(" <- "));
+                    }
+                    return e.getKey().getName() + "[" + e.getKey().getState() + "] parked-at=" + top
+                            + " via " + meaningful;
+                })
+                .collect(Collectors.joining("\n      ", "\n      ", ""));
+    }
+
+    /**
+     * The whole fleet's state as one string, for {@code ProgressTracker.withDiagnostic}.
+     * <p>
+     * This goes in the thrown assertion MESSAGE rather than only in the log, deliberately: a CI log
+     * is truncated (GitHub cut a 9,968-line job to 7,138 during this very investigation, and the
+     * autopsy had to be recovered from the uploaded report artifact), whereas the failure message
+     * survives into the failsafe XML and the job summary. A diagnostic that is only in the log is
+     * one that is missing exactly when it is needed.
+     */
+    private String describeFleet(List<ManagedPCInstance> instances) {
+        return instances.stream()
+                .map(this::describeInstance)
+                .collect(Collectors.joining("\n    ", "fleet:\n    ", ""));
+    }
+
+    /**
      * Dump the internal state of every PC instance when a stall is detected.
      * This tells us exactly what each component thinks is happening:
      * - Is the PC alive or dead?
@@ -831,42 +1025,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     private void dumpInstanceState(List<ManagedPCInstance> instances) {
         log.error("=== STALL DETECTED — dumping all instance state ===");
         for (var instance : instances) {
-            var pc = instance.getParallelConsumer();
-            if (pc == null) {
-                log.error("  Instance {}: PC is null (never started?), started={}", instance.getInstanceId(), instance.isStarted());
-                continue;
-            }
-            try {
-                var wm = pc.getWm();
-                // Check if the shard manager has any processing shards at all
-                var sm = wm.getSm();
-                long totalWorkTracked = sm.getNumberOfWorkQueuedInShardsAwaitingSelection();
-                boolean hasIncompletes = wm.hasIncompleteOffsets();
-
-                // assignedPartitions is deliberately absent: the accessor behind it mirrored state
-                // Kafka already owns, and astubbs/parallel-consumer#393 deleted the mirror rather
-                // than keep the poll path asking Kafka a third time per pass. This dump is a
-                // failure-path diagnostic, so it is not worth reintroducing a cached field for -
-                // and reading the live assignment here would need a consumer handle the dump does
-                // not have.
-                log.error("  Instance {}: closed/failed={}, failureCause={}, started={}, " +
-                                "queuedInShards={}, outForProcessing={}, " +
-                                "incompleteOffsets={}, hasIncompletes={}, " +
-                                "pausedPartitions={}, consumedKeys={}",
-                        instance.getInstanceId(),
-                        pc.isClosedOrFailed(),
-                        pc.getFailureCause() != null ? pc.getFailureCause().getMessage() : "none",
-                        instance.isStarted(),
-                        totalWorkTracked,
-                        wm.getNumberRecordsOutForProcessing(),
-                        wm.getNumberOfIncompleteOffsets(),
-                        hasIncompletes,
-                        pc.getPausedPartitionSize(),
-                        instance.getConsumedKeys().size()
-                );
-            } catch (Exception e) {
-                log.error("  Instance {}: error dumping state: {}", instance.getInstanceId(), e.getMessage(), e);
-            }
+            log.error("  {}", describeInstance(instance));
         }
         log.error("=== END STATE DUMP ===");
     }

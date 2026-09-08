@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-ran `bin/check-shell-lint.sh` at each floor with ShellCheck 0.11.0: the error floor is still clean, the SC2215 whole-tree sweep still matches nothing, and `SHELL_LINT_SEVERITY` is still the single knob with no per-code allowlist. Both tables were rewritten because every count in them had drifted and the SC2034 group has moved from `bin/lib/inflight-tags.sh` to the `PC_*` exports in `bin/lib/chaos-experiment-common.sh` - counts replaced by the command that answers them, per this directory's own rule -->
 
 `bin/check-shell-lint.sh`, run as part of the single `repo: hygiene` job in `repo-hygiene.yml` (there
 is no separate `shell: lint` job any more - see [`docs/ci.md`](../ci.md)), gates on **errors only**.
@@ -39,11 +40,15 @@ Not gated:
 [`static-analysis-rule-profiles.md`](static-analysis-rule-profiles.md). `new` means the severity is
 right and only the existing corpus blocks it; `old` means it stays off everywhere.
 
-| Severity | Count | Profile | Why not gated | Turns on when |
-|---|--:|---|---|---|
-| `warning` | 14 | `new` | `SC2034` (unused variable, 6) is the largest group and includes shared-library exports the linter cannot see used across a `source` boundary. Then `SC2164` (`cd` without `\|\|`, 4) and `SC2155` (declare-and-assign masking a return value, 3). **"None currently causing a defect" stopped being true - see below.** | Somebody works the remainder off. This is the next floor to raise and the cheapest, and it now has an incident behind it rather than only tidiness. |
-| `info` | 40 | `new` except `SC2016`, which is `old` | Dominated by `SC2016` - single-quoted `$` in strings, overwhelmingly deliberate here because these scripts build awk programs and grep patterns - and `SC2001`, `sed` where parameter expansion would do. | Only after `warning` is clean, and probably never for `SC2016`. |
-| `style` | 18 | `old` | Preference. | Not planned. |
+Counts are deliberately not written here - `SHELL_LINT_SEVERITY=<severity> bash
+bin/check-shell-lint.sh` is the answer, and the ones that used to be in this table had all drifted by
+2026-09-07. What does not drift is the shape of each tier.
+
+| Severity | Profile | Why not gated | Turns on when |
+|---|---|---|---|
+| `warning` | `new` | `SC2164` (`cd` without `\|\|`) is the largest group, almost entirely in the `bin/test-*.sh` self-tests; then `SC2034` (unused variable), which is the shared-library-export false positive - today the `PC_*` exports in `bin/lib/chaos-experiment-common.sh`, which the linter cannot see used across a `source` boundary; then `SC2155` (declare-and-assign masking a return value) and one or two `SC2010`. **"None currently causing a defect" stopped being true - see below.** | Somebody works the remainder off. This is the next floor to raise and the cheapest, and it now has an incident behind it rather than only tidiness. |
+| `info` | `new` except `SC2016`, which is `old` | Dominated by `SC2016` - single-quoted `$` in strings, overwhelmingly deliberate here because these scripts build awk programs and grep patterns - then `SC2086` (unquoted expansion) and `SC2001`, `sed` where parameter expansion would do. | Only after `warning` is clean, and probably never for `SC2016`. |
+| `style` | `old` | Preference. | Not planned. |
 
 ## The warning floor has now missed a real defect: SC2215
 
@@ -99,17 +104,17 @@ is genuinely finishable.
 
 Ranked by how close each sits to a failure this repo has actually paid for.
 
-| # | Code | Sites | Why this one | Effort |
-|---|---|--:|---|---|
-| 1 | `SC2155` | 3 | **Declare-and-assign masks the return value** - `local x=$(cmd)` swallows `cmd`'s exit status. That is the exit-code-swallowing mechanism behind several of this month's silent false greens, in a repo whose gates are shell scripts. | Mechanical, split each line |
-| 2 | `SC2164` | 4 | `cd` without `\|\|` - the run continues in the wrong directory. Same failure shape as the BSD class: accepted, and means something else. | Mechanical |
-| 3 | `SC2010` | 1 | `ls \| grep` instead of a glob. One site, and it breaks on filenames this repo will eventually have. | Mechanical |
-| 4 | `SC2034` (shared-lib exports) | 4 | `INFLIGHT_*` in `bin/lib/inflight-tags.sh`. **Not a defect** - the linter cannot see them used across a `source` boundary. Needs a directive at the definitions, which is legitimate use of a suppression rather than silencing a finding. | One directive |
-| 5 | `SC2034` (`rc`, `out`) | 2 | The remaining two are genuinely unused locals, so unlike the four above these are real. | Read 2 sites |
+| # | Code | Why this one | Effort |
+|---|---|---|---|
+| 1 | `SC2155` | **Declare-and-assign masks the return value** - `local x=$(cmd)` swallows `cmd`'s exit status. That is the exit-code-swallowing mechanism behind several of this month's silent false greens, in a repo whose gates are shell scripts. | Mechanical, split each line |
+| 2 | `SC2164` | `cd` without `\|\|` - the run continues in the wrong directory. Same failure shape as the BSD class: accepted, and means something else. Nearly every site is a `bin/test-*.sh`. | Mechanical |
+| 3 | `SC2010` | `ls \| grep` instead of a glob. It breaks on filenames this repo will eventually have. | Mechanical |
+| 4 | `SC2034` (shared-lib exports) | **Not a defect** - the linter cannot see them used across a `source` boundary. This used to be `INFLIGHT_*` in `bin/lib/inflight-tags.sh`, which went away when that file became a wrapper evaluating `bin/lib/inflight-tags.mjs --shell`; the group came back as the `PC_*` exports in `bin/lib/chaos-experiment-common.sh`. Retiring one instance did not retire the class, and it will not stay retired while shell libraries export anything. | None, until the next one appears |
+| 5 | `SC2034` (genuinely unused locals) | The remainder are real unused locals, unlike the shared-lib group above. | Read the sites |
 
 Clearing all five raises the floor from `error` to `warning`, which is the single biggest coverage
 gain available to this lane. **After that the next floor is `info`, and it should probably never
-move** - 34 of its findings are `SC2016`, and single-quoted `$` is deliberate everywhere these
+move** - most of its findings are `SC2016`, and single-quoted `$` is deliberate everywhere these
 scripts build awk programs and grep patterns.
 
 ## What this lane cannot do

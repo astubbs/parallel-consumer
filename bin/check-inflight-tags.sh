@@ -14,7 +14,7 @@
 #
 # THE SETS ARE CLOSED ON PURPOSE, the same reasoning docs/data/schema.yaml gives for the feature
 # categories: an open set drifts into synonyms nobody can group by. If a note genuinely does not fit,
-# add the value to bin/lib/inflight-tags.sh and to docs/inflight/AGENTS.md in the same commit, and
+# add the value to bin/lib/inflight-tags.mjs and to docs/inflight/AGENTS.md in the same commit, and
 # say why - do not invent one in a note and hope.
 #
 # WHAT IT DELIBERATELY DOES NOT CHECK: whether the chosen impact is the RIGHT one. That is a
@@ -23,10 +23,11 @@
 
 set -uo pipefail
 
-# The sets live in bin/lib/inflight-tags.sh, shared with the session index
-# (.claude/hooks/inject-recorded-knowledge.sh) so the gate can never accept a tag the index cannot
-# place. The lib also explains why the bug/task partition exists. Resolve it from this script's own
-# location BEFORE the cd below - the self-test runs this gate inside a fixture repo.
+# The sets live in bin/lib/inflight-tags.mjs - the file the session index (`bin/inflight.mjs docs
+# index`) groups by - and reach bash through bin/lib/inflight-tags.sh, which evals that file's
+# `--shell` rendering. One source, so the gate cannot accept a tag the index cannot place. The lib
+# also explains why the bug/task partition exists. Resolve it from this script's own location
+# BEFORE the cd below - the self-test runs this gate inside a fixture repo.
 # shellcheck source=lib/inflight-tags.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/inflight-tags.sh" || exit 1
 
@@ -65,7 +66,7 @@ for f in docs/inflight/*.md; do
     # valid. Introduced exactly that way - merging a branch whose notes predated a state reword
     # appended the stale block underneath the corrected one rather than replacing it, and the gate
     # said "83 note(s) valid" over a note that was both `deferred - parked` and `parked - deferred`.
-    for tag in type impact state labels; do
+    for tag in type impact state labels vetted; do
         # No `|| echo 0`: grep -c PRINTS 0 and exits 1 on no match, so the fallback appends a
         # second line and the numeric test below errors on "0\n0".
         n=$(grep -c "<!-- inflight-$tag:" "$f" 2>/dev/null); n=${n:-0}
@@ -86,7 +87,7 @@ for f in docs/inflight/*.md; do
     state=$(sed -n 's/.*inflight-state:[[:space:]]*\([^>]*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
 
     if [ -z "$state" ] && grep -q 'inflight-state:.*-->' "$f"; then
-        note "$f \"$(note_title "$f")\": inflight-state reason contains '>' - the session index (is_open in .claude/hooks/inject-recorded-knowledge.sh) cannot parse that marker and would list the note as OPEN. Reword without '>'"
+        note "$f \"$(note_title "$f")\": inflight-state reason contains '>' - the session index (STATE_MARKER_RE in bin/lib/inflight-tags.mjs, read by \`bin/inflight.mjs docs index\`) cannot parse that marker and would list the note as OPEN. Reword without '>'"
     fi
 
     if [ -z "$type" ]; then
@@ -126,7 +127,7 @@ for f in docs/inflight/*.md; do
     if [ -n "$labels" ]; then
         for label in $labels; do
             if ! in_set "$label" "$LABELS"; then
-                note "$f \"$(note_title "$f")\": inflight-labels '$label' is not one of: $LABELS. Labels name a MECHANISM, never an area (the filename prefix does that) or a consequence (the impact does). Add a value to bin/lib/inflight-tags.sh AND docs/inflight/AGENTS.md in the same commit, or drop it"
+                note "$f \"$(note_title "$f")\": inflight-labels '$label' is not one of: $LABELS. Labels name a MECHANISM, never an area (the filename prefix does that) or a consequence (the impact does). Add a value to bin/lib/inflight-tags.mjs AND docs/inflight/AGENTS.md in the same commit, or drop it"
             fi
         done
     fi
@@ -135,10 +136,31 @@ for f in docs/inflight/*.md; do
     if [ -n "$state" ] && ! grep -q ' - ' <<<"$state"; then
         note "$f \"$(note_title "$f")\": inflight-state '$state' has no reason. Use '<state> - <why>'"
     fi
+
+    # THE VETTED MARKER IS A DATE AND WHAT WAS CHECKED, or it is not one. `bin/inflight.mjs vet`
+    # reads it with VETTED_RE in bin/lib/inflight-tags.mjs, which requires exactly `YYYY-MM-DD - <what>`;
+    # a marker that regex cannot parse reads there as "never vetted" - silently undoing the vet it
+    # records - so the shape is refused here, in front of whoever wrote it. The date is not checked
+    # against a calendar: a typo in the day is a wrong record, which no script can tell from a
+    # right one, but a marker with no date at all is a marker that says nothing.
+    # THE MARKER FORM ONLY, `<!-- inflight-vetted:` - not the bare field name, which appears in prose
+    # whenever a note quotes the grep that lists PROPOSED markers. The first cut matched the bare
+    # name and failed the sweep's own working note for citing the command; the duplicate check above
+    # already keys on the comment opener, and this follows it.
+    vetted=$(sed -n 's/.*<!-- inflight-vetted:[[:space:]]*\([^>]*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
+    # A '>' INSIDE THE MARKER IS THE SAME DEFECT THE STATE CHECK ABOVE GUARDS: VETTED_RE in
+    # bin/lib/inflight-tags.mjs is `[^>]*` too, so `fixed by X -> Y` parses as empty here and as
+    # "never vetted" there. Five markers hit this on the first sweep and were reported as "not
+    # YYYY-MM-DD", which sent the writer looking at the date. Name the actual cause.
+    if grep -q '<!-- inflight-vetted:' "$f" && [ -z "$vetted" ] && grep -q '<!-- inflight-vetted:.*>.*-->' "$f"; then
+        note "$f \"$(note_title "$f")\": inflight-vetted text contains '>' - VETTED_RE in bin/lib/inflight-tags.mjs cannot parse that marker and \`bin/inflight.mjs vet\` would list the note as never vetted. Reword without '>'"
+    elif grep -q '<!-- inflight-vetted:' "$f" && ! grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} - .+' <<<"$vetted"; then
+        note "$f \"$(note_title "$f")\": inflight-vetted '$vetted' is not 'YYYY-MM-DD - <what was checked>'. docs/inflight/AGENTS.md -> \"Vetting a note\" owns the marker"
+    fi
 done
 
 # THE DOC AND THE LIB MUST LIST THE SAME VALUES, and until now nothing checked it. The sets live in
-# bin/lib/inflight-tags.sh and are DESCRIBED in docs/inflight/AGENTS.md, which this script names as
+# bin/lib/inflight-tags.mjs and are DESCRIBED in docs/inflight/AGENTS.md, which this script names as
 # their owner five times over - so the two were stated twice with the agreement verified only by
 # whoever happened to look. That is the shape this repo treats as a defect everywhere else: a rule
 # documented rather than enforced drifts, and the drift is silent because both halves still parse.
@@ -148,7 +170,7 @@ done
 OWNER_DOC="docs/inflight/AGENTS.md"
 if [ -r "$OWNER_DOC" ]; then
     for v in $INFLIGHT_TYPES $INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS; do
-        grep -q "\`${v}\`" "$OWNER_DOC" || note "vocabulary '$v' is in bin/lib/inflight-tags.sh but never described in $OWNER_DOC"
+        grep -q "\`${v}\`" "$OWNER_DOC" || note "vocabulary '$v' is in bin/lib/inflight-tags.mjs but never described in $OWNER_DOC"
     done
     # every impact the doc's table declares must be one the gate accepts.
     # `sed -E`, NOT a basic regex: `\+` and `\|` are GNU BRE extensions that BSD sed does not
@@ -158,7 +180,7 @@ if [ -r "$OWNER_DOC" ]; then
     while IFS= read -r v; do
         [ -n "$v" ] || continue
         in_set "$v" "$INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS" \
-            || note "$OWNER_DOC documents impact '$v', which bin/lib/inflight-tags.sh does not accept"
+            || note "$OWNER_DOC documents impact '$v', which bin/lib/inflight-tags.mjs does not accept"
     done <<< "$(sed -E -n 's/^\| `([a-z-]+)` \| (bug|task|feature|register).*/\1/p' "$OWNER_DOC")"
 fi
 

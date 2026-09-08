@@ -3,6 +3,7 @@
 <!-- inflight-type: register -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - the lane still runs (`bin/infer-test.sh` from `maven.yml`) and the ratchet still matches what this note describes: `config/infer-known-findings.txt` now holds only the `NULLPTR_DEREFERENCE` `getPartitionState` group plus `INTEGER_OVERFLOW_L2 BackportUtils.readFully`, with every `THREAD_SAFETY_VIOLATION` and `resetOffsetMapAndRemoveWork` retired exactly as written. The delete-when is NOT met - the overflow finding is still in the ratchet with no note of its own. The six settled fork numbers it cites are cited as the PRs that fixed things, not as open work -->
 
 `bin/infer-test.sh` runs Infer over `parallel-consumer-core`'s main code in CI (`static: racerd` on
 `ubuntu-latest`), gating on an identity ratchet. **One register for one lane**: this file owns what
@@ -26,9 +27,9 @@ Run the lane for the current state; read below for what each group *is*.
 |---|---|
 <!-- post-merge: checked-begin -->
 | `PCMetrics.registeredMeters` | **Refinds a known defect** - the plain `ArrayList` mutated off two threads that the Lincheck PoC turned up unprompted, tracked in [`bug-shared-collections-across-the-poll-boundary.md`](bug-shared-collections-across-the-poll-boundary.md) and fixed by astubbs#57. RacerD names every mutating entry point statically. |
-| `RetryQueue` | **Ground nothing else covers.** `this.unique` read via `Map.size()`/`isEmpty()` racing with writes - **since fixed**, identities retired from the ratchet. What remains is `RetryQueueIterator.closed` read/write, a separate defect; `docs/refactoring.md` owns the offender list. The Lincheck lane's open-items note ranks `ProcessingShard` and `RetryQueue` as the next thing to model and says they are *not modelled at all*. |
+| `RetryQueue` | **Ground nothing else covers.** `this.unique` read via `Map.size()`/`isEmpty()` racing with writes - **since fixed**, identities retired from the ratchet. What remained was `RetryQueueIterator.closed` read/write - **now retired too**, and not by a lock: the iterator holds the READ LOCK its opener took, which only that thread can release, so it was already confined and RacerD simply had no way to know. `@ThreadConfined(ANY)` says so and `RetryQueueIteratorConfinementTest` asserts it at runtime. SpotBugs still reports `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` on the same field and is now wrong about it; `docs/refactoring.md` carries that. The Lincheck lane's open-items note ranks `ProcessingShard` and `RetryQueue` as the next thing to model and says they are *not modelled at all*. |
 <!-- post-merge: checked-end -->
-| `AbstractParallelEoSStreamProcessor.lastCommitTime` | **New. In no ledger.** A plain `Instant`, written in one method and read unsynchronised by `isTimeToCommitNow()`. Checked: no inflight note, no `refactoring.md` entry - the only mention anywhere is a code excerpt in an unrelated solutions write-up. It sits on the commit-timing path, in a repo that tracks commit-timeout flakes. Unfixed, and the one genuinely new thing here; it wants a look on its own account rather than as a lint entry. |
+| `AbstractParallelEoSStreamProcessor.lastCommitTime` | **Fixed, and not the way every record of it described.** This row and `docs/refactoring.md` both said it was written in ONE method and read by `isTimeToCommitNow()`, both control-thread - which made it a candidate for a confinement declaration. It is also written by `tryCommitOffsetsOnRevoke()`, inside `onPartitionsRevoked`, which the broker POLL thread runs, so declaring it confined would have been a false declaration RacerD would have believed. Both writes are under `commitLock` and the read is not, so the field is now `volatile` - same shape and same fix as `lastWorkRequestWasFulfilled` (astubbs#201). Effect of the race was a redundant commit, not a wrong one; no functional test can see it, so `LastCommitTimeFenceTest` pins the modifier. Both identities retired. |
 
 <!-- post-merge: checked-begin -->
 **What RacerD does NOT find, and why that is not a failure.** None of the four torn-read races found
@@ -48,14 +49,16 @@ the second. The four are named by their fixing PRs, which stay citable after eac
   that it is a policy about the method rather than a question about one call site. Do not answer it
   here.
 <!-- post-merge: checked-begin -->
-- **`getEpochOfPartition` is documented nullable** - its javadoc says "or null if not yet assigned" -
-  and `OffsetMapCodecManager` unboxes the result into `PartitionState`'s primitive `long` parameter
-  on the next line. **It now has its own note,
-  [`bug-epoch-null-unboxes-on-partition-assignment.md`](bug-epoch-null-unboxes-on-partition-assignment.md),
-  because the ratchet stopped watching it**: the identity was retired on astubbs#57 after Infer
-  stopped reporting it, and the code it is about was not touched by that PR. Read that note before
-  concluding from a green lane that this is fixed. This entry's earlier claim that it needs no policy
-  decision was wrong - null means *not yet assigned*, so the caller has to choose what that means.
+- **`getEpochOfPartition` is documented nullable and was unboxed into `PartitionState`'s primitive
+  `long` in `OffsetMapCodecManager` - settled, and not by the analyser.** The identity was retired on
+  astubbs#57 after Infer stopped reporting it without the code changing, which is the silenced-not-fixed
+  case; the trace that settled it (null unreachable at both sites, because `onPartitionsAssigned`
+  writes every epoch before it loads any state) and the decision that the ratchet needs no third
+  state for that case are in
+  [`docs/solutions/workflow-issues/a-silenced-static-finding-is-not-a-fixed-one-2026-09-05.md`](../solutions/workflow-issues/a-silenced-static-finding-is-not-a-fixed-one-2026-09-05.md).
+  The guard is `OffsetMapCodecManager.epochOfPartitionBeingAssigned`, whose javadoc carries the
+  cleared suspicion; `OffsetMapCodecManagerAssignmentEpochTest` pins it. The `getPartitionState`
+  group above is a different question and is untouched.
 <!-- post-merge: checked-end -->
 
 Why NullAway is silent on all of them: it reasons from annotations, and `getPartitionState` carries
@@ -149,7 +152,9 @@ reported known findings as new. Both sides are now sorted with `LC_ALL=C sort`.
 ## Delete when
 
 Every group above is fixed and retired from the ratchet, or has its own note. `getEpochOfPartition`
-should still go first - it is the smallest - but it does need a decision, which its own note carries.
+went first; `resetOffsetMapAndRemoveWork` is out of the `getPartitionState` group too - it no longer
+reads the map before writing it, and `PartitionStateManagerRevokeAfterFailedAssignmentTest` drives
+the absent-state path it used to dereference. The rest of that group waits on the arrival-guard note.
 
 <!-- post-merge: checked-begin -->
 **A retirement from the ratchet is not by itself evidence of a fix.** astubbs#57 retired five

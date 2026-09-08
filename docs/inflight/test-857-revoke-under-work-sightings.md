@@ -1,11 +1,15 @@
 # `ChaosRevokeUnderWork*` sightings - the variants whose mode permits astubbs#29's cycle <!-- post-merge: checked -->
 
 <!-- inflight-type: register -->
+<!-- inflight-vetted: 2026-09-07 - register re-read and two stale lines fixed in place. (1) The header said no ChaosRevokeUnderWork* variant overrides commitMode; ChaosRevokeUnderWorkTransactionalIT has since been added and overrides it to PERIODIC_TRANSACTIONAL_PRODUCER, so that is now named. (2) Experiment 1 described CLASS2_STALL as gating the run; ProgressProbe now raises CLASS2_STALL/LAG_STAGNATION through observe() (demoted 2026-08-25), so the consequence is dated rather than current - the measurement is untouched. Everything else holds: AbstractRevokeUnderWorkScenario.commitMode() still returns PERIODIC_CONSUMER_SYNC, LAG_STAGNATION_BOUND is still 150s, and the instrumentation hole is closed - both branches of tryCommitOffsetsOnRevoke log at INFO -->
 
-**Commit mode: `PERIODIC_CONSUMER_SYNC`** - inherited from `AbstractRevokeUnderWorkScenario`, which
+**Commit mode: `PERIODIC_CONSUMER_SYNC`** - the default on `AbstractRevokeUnderWorkScenario`, which
 every `ChaosRevokeUnderWork*` variant extends: the eager and cooperative arms, both of their drain
-variants, and the key-order one. Verified in source - none of them overrides `commitMode`, so the
-mode is a property of the family rather than of the two arms this file was opened for.
+variants, and the key-order one. Verified in source - none of those overrides `commitMode`, so the
+mode is a property of the family rather than of the two arms this file was opened for. One variant
+added since does override it, deliberately and to measure something else:
+`ChaosRevokeUnderWorkTransactionalIT` runs `PERIODIC_TRANSACTIONAL_PRODUCER`, so it is outside every
+sighting recorded below.
 
 <!-- post-merge: checked -->
 That makes these **the only sightings in the family whose mode permits astubbs#29's AB-BA cycle to
@@ -30,9 +34,11 @@ consumed=252421/250000 violations=53 done=true      <- await SUCCEEDED, zero Con
 ```
 
 - Storm ended `57:08`; every expected key was consumed by `01:49`. **Legitimate recovery took 281s.**
-- The probe declares `CLASS2_STALL` at **150s** of per-partition stagnation, and the gating run's
-  `failFast` kills the wait at the first violation - around 154s. So the run is destroyed at ~154s
-  while the workload needs ~281s to finish honestly.
+- The probe declares `CLASS2_STALL` at **150s** of per-partition stagnation, and at the time of this
+  experiment the gating run's `failFast` killed the wait at the first violation - around 154s. So the
+  run was destroyed at ~154s while the workload needs ~281s to finish honestly. (This is what the
+  demotion on 2026-08-25 acted on: `CLASS2_STALL/LAG_STAGNATION` now goes through `observe`, so it no
+  longer gates. The measurement below stands; the consequence no longer applies to a run today.)
 - 53 partitions eventually tripped the bound (49 by the time of the first poll, 4 more while
   legitimately draining) and **all of them recovered** - `done=true` requires every expected key.
 - Duplicates were 2,421 over 250,000, ~1%, which is at-least-once working, not loss.
@@ -499,5 +505,14 @@ logged at DEBUG while only the decline was at INFO, so at default verbosity "the
 contended" and "the revoke path never ran" were indistinguishable - and the decline is precisely
 what does not arrive when the window stays shut. Both branches of that fork now log at INFO, so a
 future replay can show whether the window opened instead of inferring it from an absence.
+
+**That hole-closing paid off on 2026-09-08, and the answer was the unwelcome one.** Two of the
+family's six `BLOCKED`-on-monitor capture seeds were replayed at `6aab3ff5a`; both passed, and the
+INFO logging showed one of the two had **zero declines** - void by the same standard as this section,
+now visible rather than inferred. One void in two is the base rate this method has.
+[`bug-857-family.md`](bug-857-family.md)'s `## 2026-09-08` section owns the table, and the finding
+that supersedes the whole approach: the signature those captures ask about cannot be produced at any
+head carrying astubbs#29, so the seeds were never able to answer the question. The verification came
+from a one-term control arm on `Rebalance857CommitSyncDeadlockProbeIT` instead.
 
 <!-- post-merge: checked-end -->

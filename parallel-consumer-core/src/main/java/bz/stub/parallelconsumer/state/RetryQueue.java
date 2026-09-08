@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
+import com.facebook.infer.annotation.ThreadConfined;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import org.apache.kafka.common.utils.CloseableIterator;
@@ -90,6 +91,7 @@ public class RetryQueue {
     /**
      * Clear the set
      */
+    @ControllerThreadOnly
     public void clear() {
         lock.writeLock().lock();
         try {
@@ -118,6 +120,7 @@ public class RetryQueue {
      * @param workContainer to add
      * @return true if the element was not already present
      */
+    @ControllerThreadOnly
     public boolean add(final WorkContainer<?, ?> workContainer) {
         lock.writeLock().lock();
         try {
@@ -137,12 +140,23 @@ public class RetryQueue {
     }
 
     /**
-     * Remove a work container from the set. Method follows Set.remove() behaviour, returning true if the element was
-     * present.
+     * Remove a work container from the set, WAITING for the write lock. Method follows Set.remove() behaviour,
+     * returning true if the element was present.
+     * <p>
+     * {@link ControllerThreadOnly} states the contract and names its check: the broker-poll thread must not reach
+     * this method, because a rebalance callback that waits here waits inside {@code poll()}.
+     * <p>
+     * <b>There is no declining alternative on this class, deliberately.</b> The rebalance callbacks do not ask
+     * this queue for anything at all - they remove from the shards, and
+     * {@link ShardManager#purgeDepartedRetryEntries()} collects whatever entries that leaves, on the controller
+     * thread where waiting is allowed. A {@code tryRemove} was the superseded astubbs/parallel-consumer#431
+     * design; the write-up that carries both is
+     * {@code docs/solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md}.
      *
-     * @param workContainer
-     * @return
+     * @param workContainer the container to remove
+     * @return true if the element was present
      */
+    @ControllerThreadOnly
     public boolean remove(final WorkContainer<?, ?> workContainer) {
         lock.writeLock().lock();
         try {
@@ -160,11 +174,17 @@ public class RetryQueue {
     /**
      * Remove all specified work containers from the set. Method follows Set.removeAll() behaviour, returning true if
      * the set was modified.
+     * <p>
+     * The parameter is wildcarded rather than generic because the body only ever asks a container for its
+     * topic, partition and offset ({@code WorkContainerKey.of}), which needs no type arguments - and
+     * {@link ShardManager#purgeDepartedRetryEntries()} collects {@code WorkContainer<?, ?>} out of this queue's
+     * own iterator, which no {@code <K, V>} signature can accept without an unchecked cast.
      *
      * @param toRemove collection of work containers to remove
      * @return true if the set was modified
      */
-    public <K, V> boolean removeAll(List<WorkContainer<K, V>> toRemove) {
+    @ControllerThreadOnly
+    public boolean removeAll(Collection<? extends WorkContainer<?, ?>> toRemove) {
         // GUARD ON THE CALLER'S OWN LIST, never on `unique`. The original fast path read
         // `unique.isEmpty()` with no lock held while writers mutate it under the write lock, so the
         // JMM permitted a stale `true` and this method could return false having removed nothing -
@@ -296,25 +316,58 @@ public class RetryQueue {
         }
     }
 
+    /**
+     * Confined to the thread that opened it - {@link ThreadConfined#ANY} rather than a named thread, because
+     * which one it is varies by caller and the invariant is that it is only ever the one.
+     * <p>
+     * <b>The lock discipline already required this.</b> {@link RetryQueue#iterator()} takes the queue's read
+     * lock on the calling thread and {@link #close()} releases it, and a {@link ReentrantReadWriteLock} read
+     * lock may only be released by its holder. An iterator that escaped to another thread could therefore never
+     * be closed there: the unlock would throw {@link IllegalMonitorStateException} and strand the read lock,
+     * blocking every writer for the life of the process. The guard below turns that into a refusal at the first
+     * foreign call, naming both threads.
+     * <p>
+     * <b>Why the declaration is here and not just the guard.</b> RacerD reads {@code @ThreadConfined} and
+     * reported four {@code THREAD_SAFETY_VIOLATION}s on {@code closed} without it - one unsynchronised
+     * read/write pair on a class it had no reason to believe was confined. It is a declaration the analyser
+     * consumes and does not check, which is why {@link #assertOnOwningThread} is beside it;
+     * {@code RetryQueueIteratorConfinementTest} is what fails when the two disagree. The rule:
+     * {@code parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md}, "Declare thread
+     * confinement".
+     */
+    @ThreadConfined(ThreadConfined.ANY)
     public static class RetryQueueIterator implements CloseableIterator<WorkContainer<?, ?>> {
         private final ReentrantReadWriteLock lock;
         private final Iterator<WorkContainer<?, ?>> wrapped;
+
+        /**
+         * The thread that opened this iterator, and so the only one that may use or close it. Held rather than
+         * merely asserted against the read lock's holder because {@link ReentrantReadWriteLock} does not expose
+         * who holds a READ lock - {@code isWriteLockedByCurrentThread} has no read-side counterpart, and
+         * {@code getReadHoldCount()} counts this thread's own holds, so it cannot tell "I am the opener" from
+         * "I hold a read lock for some other reason".
+         */
+        private final Thread owner;
+
         private boolean closed;
 
         public RetryQueueIterator(ReentrantReadWriteLock lock, Iterator<WorkContainer<?, ?>> wrapped) {
             this.lock = lock;
             this.wrapped = wrapped;
+            this.owner = Thread.currentThread();
             this.closed = false;
         }
 
         @Override
         public void close() {
+            assertOnOwningThread("closing");
             lock.readLock().unlock();
             this.closed = true;
         }
 
         @Override
         public boolean hasNext() {
+            assertOnOwningThread("hasNext on");
             if (closed) {
                 throw new IllegalStateException("RetryQueueIterator is closed");
             }
@@ -323,10 +376,25 @@ public class RetryQueue {
 
         @Override
         public WorkContainer<?, ?> next() {
+            assertOnOwningThread("next on");
             if (closed) {
                 throw new IllegalStateException("RetryQueueIterator is closed");
             }
             return wrapped.next();
+        }
+
+        /**
+         * The confinement declared above, asserted rather than trusted. Ordered BEFORE the closed check in every
+         * caller: a foreign thread reading {@code closed} is the unsynchronised read the declaration promises
+         * cannot happen, so answering it - even to refuse - would be honouring the wrong contract first.
+         */
+        private void assertOnOwningThread(String what) {
+            Thread current = Thread.currentThread();
+            if (current != owner) {
+                throw new IllegalStateException("RetryQueueIterator is confined to the thread that opened it, '"
+                        + owner.getName() + "', but " + what + " it was attempted on '" + current.getName()
+                        + "'. It holds that thread's read lock on the queue, which only that thread can release.");
+            }
         }
     }
 }

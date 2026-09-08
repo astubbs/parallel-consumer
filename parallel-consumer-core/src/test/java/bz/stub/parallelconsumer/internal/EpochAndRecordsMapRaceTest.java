@@ -15,6 +15,7 @@ import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
 
 import java.util.List;
+import java.util.Optional;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -131,6 +132,32 @@ class EpochAndRecordsMapRaceTest extends BrokerlessWorkManagerTestBase {
         assertThat(recordsMap.partitions()).containsExactly(tp);
         assertThat(recordsMap.count()).isEqualTo(1);
         assertThat(recordsMap.records(tp).getEpochOfPartitionAtPoll()).isEqualTo(0L);
+    }
+
+    /**
+     * The two epoch accessors are one lookup in two shapes: {@code epochOfPartitionIfAssigned} is empty exactly when
+     * {@code getEpochOfPartition} is null, and carries the same epoch when it is not. Pinned on both states of the
+     * race this class is about - before and after the assignment callback - so the poll path (which reads the
+     * Optional form) and the test suite (which unboxes the nullable form) can never disagree about whether a
+     * partition is assigned.
+     * <p>
+     * Red before the accessor existed: this class did not compile ({@code cannot find symbol:
+     * method epochOfPartitionIfAssigned}), which is the only red available for a method that is being added.
+     */
+    @Test
+    void optionalAccessorIsEmptyBeforeAssignmentAndAgreesWithTheNullableFormOnBothStates() {
+        assertWithMessage("before the assignment callback fires, the partition has no epoch")
+                .that(pm.epochOfPartitionIfAssigned(tp)).isEmpty();
+        assertWithMessage("the nullable form says the same thing, as null")
+                .that(pm.getEpochOfPartition(tp)).isNull();
+
+        wm.onPartitionsAssigned(UniLists.of(tp));
+
+        Optional<Long> epoch = pm.epochOfPartitionIfAssigned(tp);
+        assertWithMessage("after the assignment callback, the epoch is present")
+                .that(epoch).hasValue(0L);
+        assertWithMessage("the nullable form carries the same epoch")
+                .that(pm.getEpochOfPartition(tp)).isEqualTo(epoch.get());
     }
 
     /**

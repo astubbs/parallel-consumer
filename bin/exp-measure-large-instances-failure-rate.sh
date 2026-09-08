@@ -29,19 +29,7 @@ set -u
 source "${BASH_SOURCE[0]%/*}/lib/chaos-experiment-common.sh"
 
 D="$(git rev-parse --show-toplevel)"
-OUT=/tmp/large-instances; mkdir -p "$OUT"
-for i in $(seq 1 "${1:-10}"); do
-    log="$OUT/run-$i.log"
-    pc_run_performance "$D" 'MultiInstanceRebalanceTest#largeNumberOfInstances' "$log" \
-        -Dpc.log.dir="$OUT/pc-logs-$i"
-    stats=$(pc_failsafe_stats "$D" MultiInstanceRebalance)
-    r=$(pc_classify_failsafe_stats "$stats")
-    if [ "$r" = DID-NOT-RUN ]; then
-        printf '%s\trun=%s\tDID-NOT-RUN\t%s\n' "$(pc_now)" "$i" "${stats:-no-report}" >> "$OUT/tally.tsv"
-        continue
-    fi
-    progress=$(grep -ohE 'No progress beyond [0-9]+ records after [0-9]+ rounds' "$log" | tail -1)
-    keys=$(grep -ohE 'missing keys: \[[^]]{0,70}' "$log" | tail -1)
-    printf '%s\trun=%s\t%s\t%s\t%s\n' "$(pc_now)" "$i" "$r" "${progress:-no-progress-line}" \
-        "${keys:-no-keys-line}" >> "$OUT/tally.tsv"
-done
+REF="$(git -C "$D" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# The loop, the row stamping and the coordinator-logger reasoning live in the shared library, so
+# this runner and the capacity-profile one cannot drift apart.
+pc_measure_profile_failure_rate "$D" largeNumberOfInstances /tmp/large-instances "${1:-10}" "$REF"

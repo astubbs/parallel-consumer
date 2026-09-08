@@ -2,6 +2,8 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-state: closed - the stated delete-when now holds. Master's own two flags report DIFFERENT figures (at 49f81f155, `codecov/project/unit` 78.95% against `codecov/project/integration` 61.44%), which the identical-figure tell said could not happen while both flags held the same data; and astubbs#475, a PR with no `.java` in its diff, shows `codecov/project/unit` and `codecov/project/integration` both green. `maven.yml` carries the repair: `find`-built comma lists through `$GITHUB_OUTPUT`, `disable_search: true` on every `codecov/codecov-action` call, the master collector no longer on `always()`, and push runs keyed per SHA. Kept rather than deleted because [`docs/ci.md`](../ci.md) cites it and the files-count tell that separates the two causes is the part a later reader wants. -->
+<!-- inflight-vetted: 2026-09-08 - applied: closed per the accepted proposal, state marker added, body left as the record; checked: `maven.yml` has `disable_search: true` on each upload, the per-SHA push `concurrency` group, and the master collector without `always()`; `gh pr checks 475 -R astubbs/parallel-consumer` shows both per-flag gates passing -->
 
 `codecov/project/unit` and `codecov/project/integration` reported large negative deltas on branches
 that changed no Java. They are required checks, so they read as "the branch under review dropped
@@ -62,6 +64,8 @@ records for the flag split, and for the same reason.
 
 ## A second, independent way the same gates go red - and the one-line tell that separates them
 
+<!-- post-merge: checked-begin - every astubbs/parallel-consumer#207 reference in this section is past
+     tense and stays true once that PR has landed; attested by the branch that supplied the observation -->
 Seen from the other side while astubbs/parallel-consumer#207 was being compared against master, and
 it is not the glob. Master's run at `beb01e1ce` was `completed/cancelled` - superseded by the next
 push - so nothing uploaded for that commit at all and Codecov holds no report for it. Every PR
@@ -80,10 +84,31 @@ The files count separates the two causes in one line:
 | Files, base vs head | **equal** - the flags hold unlike sets, not unlike files | **base is short** by more than the PR adds |
 | Clears when | this lands and master re-uploads | the base moves to a master commit whose run completed |
 
-This note does not fix the second cause and does not close on it. It is recorded here because the
-time it cost was spent attributing its deltas to the first, and the tell above is what would have
-separated them immediately.
+It was recorded here without a fix, because the time it cost was spent attributing its deltas to
+the first cause, and the tell above is what would have separated them immediately.
 
+**The mechanism, and its fix, 2026-09-07.** The cancellation was `maven.yml`'s own `concurrency`
+group, keyed on `github.ref` for push events: any push to master inside the half hour the `build`
+job takes cancelled the previous push's run, and with merges landing in bursts that was roughly
+every other master commit - `gh run list -R astubbs/parallel-consumer --workflow maven.yml --event
+push --branch master` shows the shape, runs of consecutive `cancelled` broken by a lone `success`.
+Push runs are now keyed per SHA, so no master run is superseded and every master commit uploads; the
+`concurrency:` block's comment owns why per-SHA rather than `cancel-in-progress: false`.
+
+**The cancelled run did not leave Codecov with nothing - it uploaded a truncated base, which is the
+astubbs/parallel-consumer#431 sighting's "single truncated base upload" with its mechanism found.**
+The `build` job's collector ran on `always()`, so it found the reports of whichever modules had
+finished and uploaded them as that commit's base. Master `ce6f39a47` is the worked case: the run was
+cancelled in module 3 of 11, each flag's upload log says `Found 1 coverage files` and names core's
+report, and the pull request based on it - this fix's own, with no Java in its diff - compared a
+full-tree head against that base and read both per-flag gates red. Codecov's own comment carried the
+tell in words: "Report is N commits behind head on master". The collector now runs only on a
+successful build; a failing module truncates the tree the same way. What is still open on this cause
+is the same shape as the glob's: a PR whose merge-base predates the change can still find a short
+base, so the files-count tell above stays in use until every open PR's merge-base is a master commit
+that ran to completion.
+
+<!-- post-merge: checked-end -->
 ## A correction worth keeping
 
 The first diagnosis recorded here was wrong in the opposite direction - it claimed the PR lane

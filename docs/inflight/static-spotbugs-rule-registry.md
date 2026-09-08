@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - checked every `Bug pattern` entry in `config/spotbugs-exclude.xml` against this file: all 26 have an entry here, including the pair written as `IPU_IMPROPER_PROPERTIES_USE` + `_SETPROPERTY`, so the registry's own first rule still holds. `.spotbugs-baseline.xml` is gone from the tree, `includeTests` is still true, and the lane still runs `spotbugs:spotbugs spotbugs:check -Dspotbugs.failOnError=false`, so it still REPORTS rather than blocks. The `MockSomething` anchor warning is a false positive - it is an illustrative name in prose, not a symbol -->
 
 **Consult this before suppressing a SpotBugs finding, and before asking why a rule is not firing.**
 Every rule this repo switches off is listed here with a reason and a re-enable trigger. A rule that
@@ -118,6 +119,8 @@ Also ON, each a single finding unless noted, all in code that matters:
 | `EQ_COMPARETO_USE_OBJECT_EQUALS` | `EncodedOffsetPair` | |
 | `DM_DEFAULT_ENCODING`, `MDM_STRING_BYTES_ENCODING` (3) | `CoreApp` | JVM-default-dependent - the class `forbidden-apis` targets, arriving from another direction |
 | `PREDICTABLE_RANDOM`, `OBJECT_DESERIALIZATION` | `JavaUtils`, `OffsetSimpleSerialisation` | the only two find-sec-bugs findings with any weight |
+| `EXS_EXCEPTION_SOFTENING_RETURN_FALSE` | `Java8StreamUtils$QueueSpliterator.tryAdvance` | CHECKED, and it stands as a **correct** site rather than a defect: `Spliterator.tryAdvance` returns `boolean` and cannot throw a checked exception, so on `InterruptedException` there is no other channel - the stream ends and the flag is restored for the caller's thread to see. The constraint the sibling `_NO_CONSTRAINTS` rule looks for is present, and `Java8StreamUtilsTest.interruptingAWaitingConsumerEndsTheStreamAndLeavesTheFlagSet` is mutation-checked against swallowing the flag. Rule stays ON: a second site would not have this excuse. |
+| `IICU_INCORRECT_INTERNAL_CLASS_USE` | `JStreamParallelEoSStreamProcessorTest` | CHECKED, test code: it imports `internal.utils.LatchTestUtils`, a **test helper that lives under `internal`**, so the rule is firing on the package layout rather than on misuse. Rehoming those helpers is the trigger to re-read this, and the class already carries its own TODO about the layering. Rule stays ON rather than being switched off tree-wide for one structural finding. |
 | `DMC_DUBIOUS_MAP_COLLECTION`, `LUI_USE_GET0`, `OI_OPTIONAL_ISSUES_*` (3), `RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE`, `UEC_USE_ENUM_COLLECTIONS`, `MOM_MISLEADING_OVERLOAD_MODEL`, `NM_FIELD_NAMING_CONVENTION`, `BED_BOGUS_EXCEPTION_DECLARATION`, `SEO_SUBOPTIMAL_EXPRESSION_ORDER`, `PSC_PRESIZE_COLLECTIONS`, `SPP_FIELD_COULD_BE_STATIC`, `PRMC_POSSIBLY_REDUNDANT_METHOD_CALLS`, `UCPM_USE_CHARACTER_PARAMETERIZED_METHOD`, `OCP_OVERLY_CONCRETE_COLLECTION_PARAMETER` | various | one finding each; cheap to fix, so no reason to switch off |
 
 The stock rules already inventoried in `static-spotbugs-latent-findings.md` - `AT_*` (11),

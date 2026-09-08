@@ -141,7 +141,7 @@ public class RetryQueueLincheckTest {
      */
     @Operation
     public boolean dropNothingTaken() {
-        return retryQueue.<String, String>removeAll(Collections.emptyList());
+        return retryQueue.removeAll(Collections.emptyList());
     }
 
     /**

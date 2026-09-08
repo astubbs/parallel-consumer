@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import bz.stub.parallelconsumer.*;
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Getter;
 import lombok.NonNull;
@@ -382,20 +383,50 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      */
     public void close(Duration timeout) {
         log.debug("Closing producer, assuming no more in flight...");
-        if (options.isUsingTransactionalProducer() && !producerWrapper.isTransactionReady()) {
-            try {
-                acquireCommitLock();
-            } catch (java.util.concurrent.TimeoutException | InterruptedException e) {
-                log.error("Exception acquiring commit lock, will try to abort anyway", e);
+        // Nothing in the transaction cleanup may prevent the Producer being closed: leaking it (IO thread,
+        // sockets, buffers) outlives every failure that can get us here, and doClose's finally marks the
+        // instance CLOSED either way.
+        try {
+            if (options.isUsingTransactionalProducer() && !producerWrapper.isTransactionReady()) {
+                boolean commitLockHeld = false;
+                try {
+                    acquireCommitLock();
+                    commitLockHeld = true;
+                } catch (java.util.concurrent.TimeoutException | InterruptedException e) {
+                    log.error("Exception acquiring commit lock, will try to abort anyway", e);
+                }
+                try {
+                    // close started after tx began, but before work was done, otherwise a tx wouldn't have been started
+                    abortTransaction();
+                } finally {
+                    // releaseCommitLock throws IllegalStateException when this thread does not hold it,
+                    // which is exactly the state the catch above carries on from - release only what was taken
+                    if (commitLockHeld) {
+                        releaseCommitLock();
+                    }
+                }
             }
-            try {
-                // close started after tx began, but before work was done, otherwise a tx wouldn't have been started
-                abortTransaction();
-            } finally {
-                releaseCommitLock();
-            }
+        } catch (Exception e) {
+            // abortTransaction throws on a fenced (ProducerFencedException / InvalidProducerEpochException) or
+            // poisoned ("we are in an error state") producer - the states a close after a fatal producer error is
+            // most likely in; acquireCommitLock can throw an unchecked ConcurrentModificationException the arm
+            // above does not cover. The broker has already discarded the transaction in every one of those, so
+            // there is nothing the throw protects.
+            // The ConcurrentModificationException case is the one that changes behaviour rather than only
+            // containing it: it means ANOTHER thread holds the write lock, i.e. the single-writer invariant is
+            // already broken by something else, and the producer is now closed rather than left running. That is
+            // the intended trade - a close that returns having left the Producer alive is the defect this method
+            // exists to stop, and the alternative leaves a live producer behind an instance marked CLOSED.
+            // logWithoutEscaping because e came from a producer the USER configured: rendering it runs their
+            // getCause/getMessage inside the logging binding, and an escape here would surface out of close() as a
+            // logging stack trace instead of this diagnosis - and read, one layer up, as the Producer having failed
+            // to close when the finally below in fact closed it.
+            ThrowableUtils.logWithoutEscaping(e, () ->
+                    log.error("Exception cleaning up the transaction while closing - closing the Producer anyway. "
+                            + "Cause: {}", ThrowableUtils.describeWithRootCause(e), e));
+        } finally {
+            closeProducer(timeout);
         }
-        closeProducer(timeout);
     }
 
     private void closeProducer(Duration timeout) {

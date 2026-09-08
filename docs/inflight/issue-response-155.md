@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - unposted: astubbs#155 has no comments at all; astubbs#201 merged and the draft still matches the tree (isStaticFactor and LoadFactorCeilingReportingTest both present), and astubbs#119 is still open so the 857-family sentence is still current -->
 <!-- post-merge: exempt-file - a drafted issue reply, held until the pre-release sweep posts it.
      It deliberately outlives the PR that wrote it, so it cannot be written in post-merge terms. -->
 

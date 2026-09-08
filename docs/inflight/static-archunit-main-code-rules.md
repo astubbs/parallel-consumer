@@ -169,7 +169,81 @@ shard-map accessor rule above is the worked example of turning one down.
 exactly the shape named above. It arrived with one entry - the confluentinc#857 transactional revoke
 wait, owned by astubbs#44 - and grew on 2026-08-31 when the rule's deny list was widened during a
 defect-class sweep and immediately found a second, pre-existing defect on master
-([`bug-retry-queue-write-lock-on-the-rebalance-path.md`](bug-retry-queue-write-lock-on-the-rebalance-path.md)).
+(`git show 745b1f6a5:docs/inflight/bug-retry-queue-write-lock-on-the-rebalance-path.md` - the note was
+retired on 2026-09-08, see the update below).
+
+**Update 2026-09-07: the walk now follows METHOD REFERENCES, and the list grew by twelve because of it.**
+`notReachBlockingCalls()` followed `getMethodCallsFromSelf()` and nothing else, and ArchUnit models
+`retryQueue::remove` as a method REFERENCE, which that accessor never returns. So
+`ShardManager.removeStaleContainers` - `.map(retryQueue::remove)`, a real unbounded write-lock acquire - was
+invisible to the rule from every rebalance callback, including `onPartitionsAssigned`, which the list did not
+mention at all. `getMethodReferencesFromSelf()` is now walked beside the calls, through one shared
+`inspectReach()` that applies the same deny-list check, the same `root => target` exemption key, the same
+synchronized-method check and the same enqueue to both kinds.
+
+**This is the "a complete-looking allowlist is evidence about the WALK" case, and it is the third blind spot
+this rule has had.** The list read as finished while three callbacks sat on a waiting acquire; nothing was
+wrong with the entries, only with what could reach the point of being entered. Widening the walk with the
+entries untouched is what measured it - the rule went from green to eighteen violations - and the twelve new
+`root => target` keys that produced are in the list with astubbs/parallel-consumer#431 named as the owner that
+deletes them. Recording them rather than shipping the rule green is deliberate, and it is the argument below
+applied to itself: a gate that arrives green has measured nothing.
+
+**Update 2026-09-07: the rule also enforces a contract the CODEBASE declares, not only a JDK deny list.**
+`@ControllerThreadOnly`
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ControllerThreadOnly.java`) marks a
+method that may wait, and a reach into one is reported exactly as a deny-listed call is - same exemption key,
+same message shape, calls and method references alike. It closes a gap the deny list cannot: a
+`tryLock()`-based sibling of `RetryQueue.remove` would take the very same lock and be correctly absent from
+the list, so once both live on one class nothing but a declared contract can tell a waiting acquire from a
+declining one. astubbs/parallel-consumer#431 is the change that creates that pair.
+
+**Update 2026-09-08: `KNOWN_BLOCKING_VIOLATIONS` is now EMPTY, and the rule passes on merit.** The note
+cited above is retired - `git show 745b1f6a5:docs/inflight/bug-retry-queue-write-lock-on-the-rebalance-path.md`
+is the record of it, and its durable content is in the solutions write-up named below. The dated
+paragraphs above stand as written - they describe the list as it was, and the third blind spot is still the
+lesson. What changed is the code, not the rule: every rebalance callback stopped touching `RetryQueue`
+altogether (they remove from the shards, and the controller thread collects the retry-queue entries that
+leaves), so all eighteen keys went. Deleting them with the reaches still in place is what measured it - the
+rule reported 24 violations, more than the 18 keys because the `@ControllerThreadOnly` half fires once per
+route. The set, its `root => target` keying and the argument for keeping it are all still there; what is gone
+is its contents.
+
+**Two claims above are now historical, and are corrected here rather than over there.** The owner named for
+those keys was astubbs/parallel-consumer#431, which is superseded rather than merged - both designs are in
+[`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
+And the `tryLock()`-based sibling that would have made `@ControllerThreadOnly` the only thing able to tell a
+waiting acquire from a declining one was that PR's; it does not exist, so that marker's value today is that
+it names a contract nothing on the callback path may reach - a narrower job than the one the paragraph above
+describes, and still one the JDK deny list cannot do.
+
+**This entry is what "an allowlist is a frozen baseline wearing a source-code disguise" looks like when it
+ends well**: the entries were honest, each had an owner, and the owner's job was to delete them. The warning
+is unchanged for the next one, because nothing about this outcome was guaranteed by the mechanism.
+
+**It is deliberately NOT Infer's `@ThreadConfined`**, which arrived with astubbs/parallel-consumer#433 and is
+the subject of a rule in `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`. That one
+is CONSUMED by RacerD, so it must be paired with a runtime assertion or it silences a detector; this one is
+read by no analyser and silences nothing, so it is checked here and nowhere else. The runtime half - a
+named-thread `@ThreadConfined` plus an `assertOnOwningThread`, in the `RetryQueue.RetryQueueIterator` /
+`ThreadConfinedConsumer` shape - is tracked in
+[`core-retry-queue-needs-a-runtime-controller-ownership-guard.md`](core-retry-queue-needs-a-runtime-controller-ownership-guard.md).
+
+**The standing proof is a positive control, because a measurement in a commit message protects nothing.**
+`RebalanceCallbackRuleControlTest` hands the real rule object - not a copy - two hand-imported fixtures under
+`archfixture/`: one reaching a deny-listed acquire through a method reference, one reaching an annotated
+method that waits for nothing at all, so no entry in the deny list can match it. Both are hand-imported
+because the rule's own `@AnalyzeClasses` carries `DoNotIncludeTests`, which is also what keeps a deliberate
+violation from turning the production rule permanently red. Each half was checked by removal: drop the
+reference hop and both cases fail; drop the annotation block and the annotated case fails.
+
+**Constructor calls were the obvious next widening and were measured and rejected**, which is worth recording
+because it reads as free. Enqueuing `getConstructorCallsFromSelf()` turns every factory call into a reach into
+whatever the constructed object wires up: `PCModule.workManager()` contains `new WorkManager(..)`, whose
+constructor registers a metrics gauge as a method reference, and that gauge reads the retry queue under its
+read lock - a red rule on a path no callback takes. The general limit under it is that ArchUnit's model has
+the same shape for a reference invoked now (a stream stage) and one invoked later (a gauge, an executor task),
+so a reference-walking rule is conservative by construction, and cannot say WHEN a reach happens.
 
 **The tension is real and is not resolved here.** The argument for the entries: each names a defect
 that exists on master, has a tracking note, and was not introduced by the branch that had to decide

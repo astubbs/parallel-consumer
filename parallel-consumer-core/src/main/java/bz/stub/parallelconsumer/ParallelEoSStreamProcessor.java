@@ -78,6 +78,30 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
     }
 
     /**
+     * Takes the produce lock for the context and then - holding it - refuses if any of the context's partitions has
+     * been fenced for revocation. The two must go in that order: a fence is set on the control thread inside the
+     * producer write lock, so a worker that has the read lock cannot be raced by one, and a worker that was parked
+     * on the read lock while a revocation commit ran finds the fence the moment it gets through. Checking before
+     * the lock would be a check-then-act across exactly the commit the fence exists to protect.
+     * <p>
+     * The refusal is a {@link PCRetriableException}: the record is marked failed and its produce lock is returned by
+     * {@code cleanUpContext} as usual, and at its retry it is stale (truncation has replaced the state by then) and
+     * is dropped - the partition's new owner has it. Nothing was produced, so nothing is duplicated; in the eager
+     * mode the user function's own side effects have happened, which is the at-least-once that mode already
+     * accepts for them. {@link bz.stub.parallelconsumer.state.PartitionState#fenceForRevocation} owns the why.
+     */
+    private void acquireProduceLockRefusingRevokedWork(ProducerManager<K, V> pm, PollContextInternal<K, V> context) throws TimeoutException {
+        ProducerManager<K, V>.ProducingLock produceLock = pm.beginProducing(context);
+        context.setProducingLock(of(produceLock));
+        if (context.streamWorkContainers().anyMatch(getWm()::checkIfWorkIsStale)) {
+            throw new PCRetriableException(msg("Not producing for {}: a partition of this batch was revoked while the " +
+                    "batch waited for the produce lock, and its offsets have been committed by the revocation. The " +
+                    "record is redelivered to the partition's new owner; producing here would publish its output " +
+                    "without its offset.", context.getOffsets()));
+        }
+    }
+
+    /**
      * todo refactor to it's own class, so that the wrapping function can be used directly from
      *  tests, e.g. see: {@see ProducerManagerTest#producedRecordsCantBeInTransactionWithoutItsOffsetDirect}
      */
@@ -88,8 +112,7 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
         // if running strict with no processing during commit - get the produce lock first
         if (options.isUsingTransactionCommitMode() && !options.isAllowEagerProcessingDuringTransactionCommit()) {
             try {
-                ProducerManager<K, V>.ProducingLock produceLock = pm.beginProducing(context);
-                context.setProducingLock(of(produceLock));
+                acquireProduceLockRefusingRevokedWork(pm, context);
             } catch (TimeoutException e) {
                 throw new RuntimeException(msg("Timeout trying to early acquire produce lock to send record in {} mode - could not START record processing phase", PERIODIC_TRANSACTIONAL_PRODUCER), e);
             }
@@ -112,8 +135,7 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
         // by having the produce lock span the block on acks, means starting a commit cycle blocks until ack wait is finished
         if (options.isUsingTransactionCommitMode() && options.isAllowEagerProcessingDuringTransactionCommit()) {
             try {
-                ProducerManager<K, V>.ProducingLock produceLock = pm.beginProducing(context);
-                context.setProducingLock(of(produceLock));
+                acquireProduceLockRefusingRevokedWork(pm, context);
             } catch (TimeoutException e) {
                 throw new RuntimeException(msg("Timeout trying to late acquire produce lock to send record in {} mode", PERIODIC_TRANSACTIONAL_PRODUCER), e);
             }
@@ -137,6 +159,13 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
         } catch (InvalidPidMappingException invalidPidMappingException) {
             log.error("Closing parallel Consumer due to InvalidPidMappingException", invalidPidMappingException);
             this.closeOnException(invalidPidMappingException);
+            // Rethrow, or runUserFunctionInternal marks every WorkContainer in this batch SUCCEEDED and returns
+            // an empty result list - records whose output was never produced, recorded as done. Today nothing
+            // commits that verdict only because closeOnException blocks this worker until the instance is
+            // CLOSED; the verdict is wrong regardless, and must not depend on that. Wrapped like the arm below
+            // so the failure travels the same route as any other produce failure.
+            throw new PCInternalRuntimeException("Producer id mapping invalid - the instance is closing, and this "
+                    + "batch is failed so its offsets are not committed", invalidPidMappingException);
         } catch (Exception e) {
             throw new PCInternalRuntimeException("Error while waiting for produce results", e);
         }

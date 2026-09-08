@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: release-gate -->
+<!-- inflight-vetted: 2026-09-08 - applied: the astubbs#444 line rewritten and dropped from the recheck-at-cut list, since it merged 2026-09-07 carrying no product change and measured that third mechanism as the Kafka group protocol rather than a PC defect; checked: astubbs#44 is open so confluentinc#857 still blocks the critical-defect gate, no copyOfContextMap anywhere in the tree so the MDC gap is real, kafka.version is 3.9.2 so the two 3.9.1 command examples stay correct-as-written, the Streams and Connect staging rows and the staged feature record are still staged with astubbs#269 and astubbs#271 open, and the release.yml correction the 2026-09-07 pass made in place (astubbs#72) is left standing -->
 
 
 Scope: are the things 0.6.0.0 *publishes* (`CHANGELOG.adoc`, `README.adoc`) true on the day we cut it?
@@ -36,15 +37,47 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
     record before it lands, or it ships undocumented.
   - Re-read the maturity wording itself. `stable` was withdrawn because it was untrue; the
     replacement, `production-use`, is only as good as the critical-defect gate holding.
+
+  **Rechecked at this commit (2026-09-05), the "before the tag" half only - the "again after the
+  critical fixes land" half stays open below.** `docs/data/module-maturity.yaml` was read and
+  deliberately left unchanged, and **what the pass actually saw is worth writing down, because the
+  file is only half conditional.** Each shipped module carries a bare `maturity: production-use`
+  field value with no condition attached to it, and *separately* a `support_posture` line reading
+  "Maintained for production use when the release validation passes." Only the second is qualified;
+  the first is a naked value that a renderer or a reader can lift on its own. Whether that unqualified
+  value is a claim the still-open confluentinc#857 family falsifies, or a category label the
+  `support_posture` line exists to condition, is a **release call for the maintainer** - so this pass
+  established the state and changed no value. The list is
+  `grep -n 'maturity:\|support_posture' docs/data/module-maturity.yaml`; the second recheck should
+  start from that rather than from "already conditional", which is what the first pass wrote and is
+  true of only one of the two. `docs/data/roadmap.yaml`'s
+  `known-defects-cleared` stage detail did carry a stale claim - it said astubbs#29 "remains
+  unmerged", and astubbs#29 merged 2026-09-02, fixing one confluentinc#857 mechanism (the
+  poll/control revoke-path deadlock). Corrected in place, without weakening what was already true:
+  the family is **not** closed by that merge. astubbs#44 (the transactional revoke wait) is a
+  separate defect the merged fix cannot reach, and `docs/inflight/bug-857-family.md` records
+  unattributed stall sightings reproducing on trees that already carry astubbs#29's fix.
+  The third mechanism this bullet used to carry - a closing instance
+  polling too little to leave its group cleanly - is no longer a PC-side candidate: astubbs#444
+  merged 2026-09-07 carrying no product change, having measured that residual as the Kafka consumer
+  group protocol under the churn rate of the `largeNumberOfInstances` profile. So `confluentinc#857`
+  is still the open critical defect blocking this gate, and the "amend the claim rather than the
+  standard" instruction above still applies.
+  **Still open: recheck again after astubbs#44 and the family ledger's remaining sightings resolve** -
+  this pass only established today's state, not the state at cut.
 <!-- post-merge: checked-begin -->
 - **The rest of astubbs#197's triage list has landed, and owes the release nothing:** the "Max loading
   factor steps reached" WARN on every control-loop pass, which `PCModule` earned for anyone following
   the README's own tuning advice by building `DynamicLoadFactor(static, static)` when
   `messageBufferSize` was set (astubbs#155, fixed in astubbs#201); the `OffsetEncoding` magic-byte
-  hazard (astubbs#217); MDC capture at submit time (astubbs#205); and `release.yml` publishing an
-  empty GitHub Release body, so the curated changelog never reached the release page (astubbs#199,
-  which replaced the inline `awk`/`sed` converter with `bin/release-notes.py` and made a missing or
-  unrenderable section fail the release).
+  hazard (astubbs#217); and MDC capture at submit time (astubbs#205, merged 2026-08-27). The fourth
+  item this bullet used to carry - `release.yml` publishing an empty GitHub Release body, so the
+  curated changelog never reached the release page - **was already false when it was written**:
+  astubbs#72 gave the workflow a `--notes-file` built from the `CHANGELOG.adoc` section on
+  2026-07-29, with `--generate-notes` only as a fallback (corrected 2026-09-07). What astubbs#199
+  does is narrower than the retired claim: it replaces that inline `awk`/`sed` converter with
+  `bin/release-notes.py` and makes a missing or unrenderable section fail the release, rather than
+  restoring a body that was never absent.
 <!-- post-merge: checked-end -->
 - **After it ships:** ~11 mirrored issues describe 0.6.0.0 in the future tense and need the real
   coordinate; astubbs#186, astubbs#188 and astubbs#195 close with a pointer to the release.

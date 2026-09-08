@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: reliability -->
+<!-- inflight-vetted: 2026-09-07 - re-read `ProducerManager#commitOffsets`: the `catch (TimeoutException | InterruptException e)` and its classifying comment block are still there (the vet tools four missing anchors are that blocks `IllegalStateException`/`UnsupportedVersionException`/`AuthorizationException`/`InvalidProducerEpochException` - present, just spelt in full), `arbitrarilyChosenLimitForArbitraryErrorSituation = 200` is still a count, and the retry arm still sets `committed = true` outside the `isTransactionCompleting()` branch. astubbs#241 and astubbs#225 are still OPEN; astubbs#423 is now CLOSED, which does not change the ordering constraint the note states -->
 
 
 astubbs#241 (confluentinc#144). **The premise both the mirror body and the manifest entry
@@ -81,8 +82,11 @@ the produce-callback change on master, and astubbs#262 and the `fix/transactiona
 branch both reconciled onto it. astubbs#257 has since merged too, and does not go near
 `commitOffsets`. None of them changes the commit retry loop, so a taxonomy change conflicts textually
 at worst. What still binds is the ORDER:
-astubbs#262's `bug-eos-swallowed-produce-failures.md` records two further produce-path mishandlings
-that belong in the same design, so a taxonomy change written without them designs half the problem.
+astubbs#423 fixed two further produce-path mishandlings that belong in the same design - a swallowed
+`InvalidPidMappingException` that reported the batch succeeded, and a throwing abort on close that
+leaked the producer - written up as the defect class in
+[`docs/solutions/logic-errors/a-catch-that-closes-and-continues-reports-the-batch-succeeded-2026-09-03.md`](../solutions/logic-errors/a-catch-that-closes-and-continues-reports-the-batch-succeeded-2026-09-03.md).
+A taxonomy change written without those two shapes designs half the problem.
 <!-- post-merge: checked-end -->
 
 Co-design partners, all three: astubbs#225 (fencing should abort and rejoin), astubbs#317 /

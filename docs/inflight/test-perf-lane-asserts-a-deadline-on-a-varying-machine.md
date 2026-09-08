@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - still true: MultiInstanceHighVolumeTest still declares GATING_CEILING = ofSeconds(60) and still gates on "all N within T" rather than on progress, and the throughput check in maven.yml is still non-blocking - its "Fail on throughput regression" step is guarded by `if: always() && false && ...`. The cited slf4j solution write-up still resolves. Nothing here is retired -->
 
 `MultiInstanceHighVolumeTest` asserts **3,000,000 records within a 60-second `GATING_CEILING`**. On
 GitHub-hosted runners the same test, on the same code, in the same lane, has been observed at:
@@ -12,6 +13,7 @@ GitHub-hosted runners the same test, on the same code, in the same lane, has bee
 | 36,361 | 82,505 | PASS |
 | 42,024 | 71,387 | PASS |
 
+| 60,154 | 32,394 | FAIL - 1,948,661 of 3,000,000 by the ceiling; astubbs/parallel-consumer#442 at b23c13db, the same code having passed this lane at four earlier heads of that PR <!-- post-merge: checked --> |
 **A 1.54x spread on identical code**, and the slowest passing run already consumed 70% of the
 deadline. A draw 43% below the best fails on arithmetic alone. That is not a hypothetical: it is the
 observed spread of the instrument, measured against its own ceiling.

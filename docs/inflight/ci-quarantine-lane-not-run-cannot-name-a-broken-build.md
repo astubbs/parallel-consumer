@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-read `bin/quarantine-lane-report.sh`: the classifier is still `if [ \"\$found\" = \"0\" ]; then echo NOT_RUN`, with no signal separating not-selected from a build that died, and the row still renders `⚪ not run | ... | report missing - check the lane job`; `quarantine-lane.yml`'s run steps are still `continue-on-error: true`, so that job is still green when the reader gets there -->
 
 `bin/quarantine-lane-report.sh` classifies a quarantined test as `NOT_RUN` when no surefire or
 failsafe XML names it, and the row reads *"⚪ not run - report missing - check the lane job"*. **That

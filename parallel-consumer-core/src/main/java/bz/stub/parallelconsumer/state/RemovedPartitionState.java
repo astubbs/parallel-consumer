@@ -146,6 +146,15 @@ public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
         return 0;
     }
 
+    /**
+     * Never fenced: this is a process-wide singleton, and it already reads as stale for every container. The manager
+     * skips removed states before calling this; the override is the second line of defence.
+     */
+    @Override
+    public void fenceForRevocation() {
+        log.debug("Not fencing a removed partition - its work is already stale");
+    }
+
     @Override
     public void onSuccess(long offset) {
         log.debug("Dropping completed work container for partition no longer assigned. WC: {}, partition: {}", offset, getTp());

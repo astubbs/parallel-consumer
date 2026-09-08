@@ -78,6 +78,18 @@ public class RunLengthEncoder extends OffsetEncoder {
         encodeRunLength(true, relativeOffset);
     }
 
+    /**
+     * Run-length encoding is <em>distance</em> based, not call based: {@link #encodeRunLength} grows the open run by
+     * {@code relativeOffset - previousRangeIndex}, so it does not care how many offsets in between it was shown.
+     * <p>
+     * It therefore only needs to see the first and last offset of each maximal run of same-state offsets - see
+     * {@link OffsetSimultaneousEncoder#invoke()}.
+     */
+    @Override
+    boolean requiresEveryOffset() {
+        return false;
+    }
+
     @Override
     public byte[] serialise() throws EncodingNotSupportedException {
         addTail();

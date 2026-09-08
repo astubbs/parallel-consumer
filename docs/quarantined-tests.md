@@ -82,35 +82,39 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-The one entry below is an unreliable failure rather than a deterministic one, so it carries
-`flapping = true`: a pass proves nothing and the lane reports it without demanding action. It was never
-hidden by the surefire retry astubbs#224 removed, because the test did not run in a gating lane until
-the PR that quarantines it.
+**The registry is empty.** No test currently carries `@Quarantined` - the checklist below has no
+entries, and that is the state to preserve rather than a gap to fill. Every entry that has ever stood
+here has gone, and none of them by a lapse - they are worth reading as a set, because the five exits
+below are five different things "un-quarantining" can mean:
 
-**The other entry that stood here has gone, and not by a lapse.**
-`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is astubbs#262's rule-3
-re-enable: astubbs#265 deleted the wall-clock assertion that flaked, and astubbs#262, its owner,
-deletes the annotation and its entry together.
-(`OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` went
-earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it had itself frozen.)
+- `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`
+  is the **flake diagnosed and fixed** case. It was quarantined on a sighting ledger with no
+  mechanism; the mechanism turned out to be its own staging rather than PC. Its stage 1 produced four
+  records more than the out-for-processing target, and with its processing gate closed nothing ever
+  retires, so records-in-shards sat permanently over the record-intake threshold, PC paused the
+  partition for back pressure, and the stage-2 records carrying the pause point were never fetched.
+  It passed at all only by racing a poll already in flight. Stage 1 is now derived from the buffer
+  size, the precondition is asserted rather than left mute, and the reproduction was re-proved red
+  against the defect. Diagnosis, arms and numbers:
+  [`docs/solutions/test-flakiness/the-setup-guard-was-waiting-on-records-back-pressure-had-stopped-fetching-2026-09-07.md`](solutions/test-flakiness/the-setup-guard-was-waiting-on-records-back-pressure-had-stopped-fetching-2026-09-07.md).
+- `MultiInstanceRebalanceTest.largeNumberOfInstances` is the **wrong-shelf** case, and the one worth
+  not misreading as a fix. Nothing about it was repaired: its residual failures were measured as the
+  Kafka consumer group protocol under this profile's churn rate, so it is a measurement whose output
+  is a pass rate, not a test that can be red or green. Quarantine defers a defect, and there is no
+  defect here to defer - it now carries `@Tag("capacity")`, which the required `Performance Tests`
+  lane excludes and the scheduled `experiments` workflow still runs. The deterministic correctness
+  twin `scriptedChurnRoundsCompleteWithoutStall` keeps those code paths gated. Decision:
+  [`docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md`](inflight/test-largenumberofinstances-cannot-gate-a-merge.md).
+- `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is the **rule-3
+  re-enable**: astubbs#265 deleted the wall-clock assertion that flaked, and astubbs#262, its owner,
+  deleted the annotation and its entry together.
+- `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
+  is the **product-side** one: diagnosed and fixed on master by astubbs#351 - it asserted an offset it
+  had itself frozen.
+- `ProducerManagerTest.aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced` is a second
+  **deterministic, product-side** fix: the revoke-path commit ran on the broker-poll thread without
+  draining the controller's work mailbox first, so a transaction could omit the offset of a record it
+  contained. Diagnosed on astubbs#436, fixed on astubbs#466 by handing the commit to the control
+  thread instead - write-up:
+  [`docs/solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md`](solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md).
 
-- [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is
-  measured but not explained. The progress detector returns `FLAT` - the record count *stops* rather
-  than slowing, which is the discriminator it exists to report - and the `AMBIENT PROBE AUTOPSY`
-  block names `ZOMBIE_MEMBER/REBALANCE_BLOCKED`: the group dwells in `PreparingRebalance` because a
-  member stopped answering, with the whole assignment frozen at comparable lag rather than one shard
-  wedged. Measured at one failure in ten consecutive runs on an idle Linux box, plus repeated CI
-  failures, always that signature. It reproduces on the tree carrying this branch's log-argument
-  fix, so it is neither the confluentinc#857 revoke deadlock nor the SLF4J argument-evaluation
-  defect but a third, open mechanism. Sighting ledger, including what would settle the attribution:
-  [`docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md`](inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md).
-  Unowned - no fix PR exists, because no diagnosis does.
-
-  **Rule 2 is satisfied prospectively rather than retrospectively, and that is worth stating plainly
-  rather than letting a later reader find it.** The ledger was measured while this test was
-  PR-state: on master it is `@Disabled`, so it cannot fail there and no master-state ledger for it
-  can exist. The PR carrying this entry enables it into the required `Performance Tests` lane, which
-  is exactly the act that makes its failures master-state - master would otherwise inherit a gating
-  check that fails about one run in ten. The quarantine lands in the same change as the enablement,
-  so the test never spends a day blocking merges on an unexplained stall. If the enablement were
-  ever reverted, this entry should go with it.

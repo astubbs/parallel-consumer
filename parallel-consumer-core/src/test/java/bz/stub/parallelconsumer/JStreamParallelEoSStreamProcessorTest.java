@@ -59,6 +59,9 @@ class JStreamParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         verify(myRecordProcessingAction, times(1)).apply(any());
 
+        // The stream is live, so close to end it before collecting.
+        streaming.closeDrainFirst();
+
         assertThat(streamedResults).hasSize(1);
     }
 
@@ -91,6 +94,9 @@ class JStreamParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
             }
         });
 
+        // The stream is live, so close to end it before collecting.
+        streaming.closeDrainFirst();
+
         assertThat(myResultStream).hasSize(1);
     }
 
@@ -115,6 +121,8 @@ class JStreamParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         verify(myRecordProcessingAction, times(2)).apply(any());
 
+        // The stream is live, so close to end it before collecting.
+        streaming.closeDrainFirst();
 
         assertThat(myResultStream).hasSize(2);
     }

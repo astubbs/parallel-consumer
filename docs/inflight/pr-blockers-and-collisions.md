@@ -2,34 +2,14 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - re-checked every PR named here with `gh pr view -R astubbs/parallel-consumer`; pruned the four all-merged bullets (the astubbs#322 merge order, the `master-confluent` retarget, the astubbs#51/#57 collision, the file-ownership map), confirmed astubbs#38 and astubbs#8 still open and `SubmitWorkToPoolShutdownRaceTest` still holds two inline `ListAppender` blocks, and corrected the Phase B bullet - `ChaosRevokeUnderWorkTransactionalIT` landed with astubbs#29 and is UNCALIBRATED -->
 
 
 Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` has that, and is right.
 
-- **Agreed merge order for the astubbs#322 split and what queues behind it: 323, 324, 325, 57, 322, <!-- post-merge: checked - the merged/remaining tally was deleted rather than restated; it went stale at every merge in the list -->
-  267, 29.** Which of them are still open is `gh pr list -R astubbs/parallel-consumer`'s answer, not
-  this file's - the ORDER is the standing coordination fact, and it is recorded here because it
-  outlived the note that held it (it lived only in astubbs#323's own note, which that PR's merge
-  deleted).
-<!-- post-merge: checked-begin -->
-- **The `master-confluent` retarget is done.** astubbs#29 and astubbs#31 were both cut against the
-  pinned pre-rebrand mirror, where a merge would have landed the fix somewhere no user could reach
-  it; both now target `master`, and astubbs#31 has merged. The reconciliation that made it
-  non-mechanical is the part worth keeping: astubbs#29's deadlock fix predates the internals
-  astubbs#80 reshaped, so it had to be reconciled rather than replayed.
-<!-- post-merge: checked-end -->
 - **astubbs#38 (JUnit 6) is blocked on something other than the version bump.** JUnit 6 needs Java 17, *and*
   `archunit-junit5` will not run on it with no `archunit-junit6` engine in existence. The ArchUnit
   tests must be rewired first. See `deps-deferred-majors.md`.
-<!-- post-merge: checked-begin -->
-- **astubbs#51 (virtual threads) collides with astubbs#57** - both edit `PCMetrics.java`. Sequence,
-  don't parallelise; whichever is still open rebases onto the other.
-- **File ownership:** metrics and `PartitionStateManager` are astubbs#57's, `PartitionState` is
-  astubbs#337's (the confluentinc#893 cherry-pick, split out of astubbs#57 on 2026-08-24), the
-  offset encoders are astubbs#106's, and astubbs#29 will want the poll/lifecycle internals
-  astubbs#80 reshaped. Pick parallel work accordingly - and check `gh pr list` for which of these
-  are still open, since a merged one's files are simply master's again.
-<!-- post-merge: checked-end -->
 <!-- post-merge: checked-begin -->
 - **`LogCapture` is the only supported way to capture a log line in this suite.**
   `bz.stub.parallelconsumer.internal.utils.LogCapture` is an `AutoCloseable` appender plus level
@@ -72,22 +52,13 @@ either an amended note in the release section when 0.6.0.0 is cut, or a follow-u
 
 ### Decisions waiting on a human
 
-- **Two pre-existing main-code holes need their own PR**, written up with fix and test shapes in
-  `bug-eos-swallowed-produce-failures.md`. The `InvalidPidMappingException` one is the serious one: a
-  whole batch is marked *succeeded* and its offsets committed for records whose output was never
-  produced. Same shape as the defect astubbs#261 fixed, and the single exception to the rationale that
-  justified it.
-- **The commit-interval identity check** (`bug-commit-interval-identity-check.md`) - an explicit
-  `Duration.ofSeconds(5)` is silently replaced with 100ms. One-line fix, wants its own change so the
-  behaviour change is visible.
 - **Register hardening** (`next-transactional-register-hardening.md`) - ranked by how much false
   assurance each item buys. The top one is not subtle: `-Dexcluded.groups=transactions` is a
   documented, supported invocation that runs **zero** claim proofs while the register reports every
   claim covered.
-- **Phase B, the transactional chaos scenario, is now UNBLOCKED.** It was deferred behind
-  **astubbs#29** so its SLOs would not be calibrated against a master still carrying the
-  confluentinc#803 commit-lock deadlock, which would have folded that defect into the baseline and
-  then reported the live bug as an in-SLO event. astubbs#29 has merged, so that reason is spent and
-  the work is startable. What to check before starting: the fix closes the AB-BA cycle only in
-  `PERIODIC_CONSUMER_SYNC`, so a transactional scenario's baseline was never exposed to that edge -
-  do not assume the deferral bought this scenario anything it did not.
+- **Phase B, the transactional chaos scenario, has landed and is UNARMED.**
+  `ChaosRevokeUnderWorkTransactionalIT` came in with astubbs#29 and its javadoc carries the
+  `Calibration status: UNCALIBRATED` block - it has been shown to RUN, never to go red on a tree
+  that should fail. The decision waiting on a human is whether anyone arms it before v6; until
+  then a green run is not evidence the transactional revoke path is healthy. Do not re-derive
+  the reasoning here - the class javadoc owns it.
