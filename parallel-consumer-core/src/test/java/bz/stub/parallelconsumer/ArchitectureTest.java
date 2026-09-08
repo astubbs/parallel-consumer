@@ -209,12 +209,18 @@ class ArchitectureTest {
      * than one that never looked. The pair form exempts the one reach that is tracked and leaves the
      * callback under inspection for everything else.
      *
-     * <p>{@code onPartitionsRevoked}'s {@code while (isTransactionCommittingInProgress())
-     * Thread.sleep(100)} is unbounded and transactional-mode only. It arrived as confluentinc#548's
-     * fix and is now the defect behind astubbs/parallel-consumer#44 - which holds upstream's
-     * {@code verified bug} label - one of a couple of dozen that carry it. Tracked in
-     * {@code docs/inflight/bug-857-transactional-revoke-wait.md};
-     * remove this entry when that lands.
+     * <p><b>One entry has been retired, and what replaced it is a bounded wait this list does not
+     * name - deliberately.</b> {@code onPartitionsRevoked}'s {@code while (isTransactionCommittingInProgress())
+     * Thread.sleep(100)} spin - confluentinc#548's fix, unbounded, transactional-mode only, the defect
+     * behind astubbs/parallel-consumer#44 - is gone: in transactional mode the callback now hands its
+     * commit to the control thread and waits on a {@code CompletableFuture} with a deadline
+     * ({@code commitOnRevokeViaTheControlThread}, which carries the reasoning). That is
+     * {@code CompletableFuture.get(long, TimeUnit)}, and {@link #BLOCKING_CALLS} names the untimed
+     * {@code get()} and {@code join()} but not the timed form. Keep it that way, or add the timed form
+     * together with a {@code root => target} exemption for that one reach: the wait is safe there
+     * because a transactional commit needs nothing from the poll thread, which is the opposite of the
+     * edge both known deadlocks ran along, and it is bounded by the same timeout the inline commit's
+     * own lock acquisition had.
      *
      * <p><b>The twelve entries below are debt this rule's own widening MADE VISIBLE, not debt it created.</b>
      * The reaches were always there; the walk could not see them, so the list read as complete while three
@@ -225,8 +231,6 @@ class ArchitectureTest {
      * is a defect on the books, which a reach nobody can see is not.
      */
     private static final Set<String> KNOWN_BLOCKING_VIOLATIONS = new HashSet<>(Arrays.asList(
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.lang.Thread.sleep(long)",
             // The RetryQueue write lock on the revoke/lost path. Pre-existing on master, surfaced by the
             // astubbs/parallel-consumer#29 defect-class sweep once the deny list learned about
             // ReentrantReadWriteLock. Owner: docs/inflight/bug-retry-queue-write-lock-on-the-rebalance-path.md

@@ -138,15 +138,25 @@ Proceeding past the wait is separately unsafe until producer fencing is recovera
 
 Branch `fix/bound-revoke-transaction-wait` exists with no code on it.
 
-## Adjacent, and NOT this: the revoke commit that does not drain the mailbox
+## Adjacent, and NOT this: the revoke commit that did not drain the mailbox - now fixed, and it moves the ground here
 
-The same method this note bounds - `tryCommitOffsetsOnRevoke` - has a second, independent defect
-recorded in
-[`core-revoke-commit-skips-the-work-mailbox-drain.md`](core-revoke-commit-skips-the-work-mailbox-drain.md):
-when it does commit, it commits without first draining the work mailbox, so a revoke-time
-transaction can omit the offset of a record it already produced. That is a correctness hole in the
-*uncontended* commit; this note is about the *wait* when the lock is contended. astubbs#408's
-decline fires only under contention and its amended test accepts "committed inline if the dwell had
-already ended" as resolved - so it neither narrows nor widens the drain defect, and the two fixes
-will meet on this one method. Whichever lands second resolves that collision; the other note records
-the recommended fix and the question that decides its correctness.
+The same method this note bounds - `tryCommitOffsetsOnRevoke` - had a second, independent defect:
+when it did commit, it committed without first draining the work mailbox, so a revoke-time
+transaction could omit the offset of a record it already produced. Diagnosed in astubbs#436 and
+fixed since; the record is
+[`docs/solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md`](../solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md).
+
+**The fix changes this note's premise, and astubbs#408 will meet it on this method.** In
+transactional mode the revoke callback no longer commits on the poll thread at all: it posts a
+request, the control thread runs its ordinary lock-flush-drain-commit sequence, and the callback
+waits, bounded by `commitLockAcquisitionTimeout`
+(`AbstractParallelEoSStreamProcessor#commitOnRevokeViaTheControlThread`). So the poll thread never
+takes the producer transaction lock, and the contended wait this note is about has no seam left to
+happen on in that mode - a commit already in flight is queued behind rather than waited on or
+declined. `tryCommitOffsetsOnRevoke` and its `commitLock.tryLock()` remain for the consumer-commit
+modes, where confluentinc#857's cycle is real and the inline commit is correct. What astubbs#408 still
+owns is whether the bounded wait is the right bound (it is the same five-minute default the inline
+path's write-lock acquisition had, so no regression, but confluentinc#803's complaint was that bound
+burning `max.poll.interval.ms`), and its `RebalanceEoSDeadlockTest` amendment, which accepts
+"declined" as resolved - the delegated commit satisfies the unamended assertion that committed offsets
+advance inside the callback. Whichever lands second resolves the collision on this one method.
