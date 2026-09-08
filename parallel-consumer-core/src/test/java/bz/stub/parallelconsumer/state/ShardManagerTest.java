@@ -137,8 +137,11 @@ class ShardManagerTest {
 
         assertThat(retryQueue.size()).isEqualTo(4);
 
-        assertThat(w0).isNotEqualTo(w1);
-        assertThat(w1).isNotEqualTo(w2);
+        // The property being asserted is that the queue holds these as four DISTINCT entries, which it decides
+        // with its own WorkContainerKey - not with WorkContainer equality, which is identity and would make
+        // `w0 != w1` true of any two objects and assert nothing.
+        assertThat(RetryQueue.WorkContainerKey.of(w0)).isNotEqualTo(RetryQueue.WorkContainerKey.of(w1));
+        assertThat(RetryQueue.WorkContainerKey.of(w1)).isNotEqualTo(RetryQueue.WorkContainerKey.of(w2));
 
         boolean removed = retryQueue.remove(w1);
         assertThat(removed).isTrue();

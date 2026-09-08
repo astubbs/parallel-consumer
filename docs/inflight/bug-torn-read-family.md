@@ -58,7 +58,10 @@ fixes themselves changed.
 The hunt turned up defects that are **not** members of this family. They have their own owners and
 lifecycles, so they are not recorded here:
 
-- [`bug-async-commit-marked-successful-before-broker-ack.md`](bug-async-commit-marked-successful-before-broker-ack.md)
+- The async commit recorded on send rather than on the broker's acknowledgement - **closed**, and the
+  note carrying it retired with the fix. The mechanism, the control arms and how it composes with the
+  commit-failure seam are in
+  [`../solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md`](../solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md).
 - [`bug-brokerpollsystem-pause-api-is-racy-and-uncalled.md`](bug-brokerpollsystem-pause-api-is-racy-and-uncalled.md)
 - The unsynchronised cross-thread counter maps - **closed**; all four are now concurrent, and what
   the hunt's sighting did and did not establish is in

@@ -8,10 +8,12 @@
 **This file exists because the work had no home.** `bug-857-mirror-attributions-unconfirmed.md`
 correctly says the honest options are "reproduce and diagnose, or close on their own merits" - but it
 owns the *attribution* question, not the investigation, so "reproduce and diagnose" has sat as a
-sentence nobody could pick up. The field report has been open for months with no reproduction
-attempt: a grep of `docs/plans/` and `docs/solutions/` finds nothing targeting it. The only
-adjacent record is `unforceable-trigger-commit-lock-timeout-2026-08-07.md`, which is a *test* flake
-on the same lock and unrelated to the reporter's scenario.
+sentence nobody could pick up. The field report sat open for months with no reproduction attempt at
+all - **the attempt now exists**, as `CommitResponseTimeoutSoakIT` in the `soak` lane, and its first
+two runs are recorded at the bottom of this note. A grep of `docs/plans/` and `docs/solutions/` still
+finds nothing targeting the report; the only adjacent record is
+`unforceable-trigger-commit-lock-timeout-2026-08-07.md`, which is a *test* flake on the same lock and
+unrelated to the reporter's scenario.
 
 **The filename carries astubbs#177 for history only.** That issue was closed on 2026-09-01 without
 the reproduction or the closing comment this note asked for;
@@ -83,6 +85,132 @@ Reuse before building: `ChaosScenarioBase` already provides a fleet, a failing-w
 the retry tests, and the chaos suite's `ProgressProbe` plus the new `INSTANCE_STALL` detector will say
 whether an instance is wedged while it happens. **Do not start a parallel harness** - see
 `docs/testing.md`.
+
+**This section is now a record of the design rather than an outstanding request**: it was built as
+`CommitResponseTimeoutSoakIT`, and what its runs actually measured is the next section. Do not build
+it again.
+
+## The experiment now exists, and its first two runs measured the experiment rather than the defect
+
+`CommitResponseTimeoutSoakIT` (the `soak` lane, `docs/testing.md`) is the reproduction attempt this
+note asked for, built from the astubbs#177 shape above for the reason stated there - it is buildable,
+and it is the cheapest route to the wedged-poller question. **2026-09-07, two runs, 0 timeouts in
+2 x 30 minutes - and neither is a sighting-ledger entry, because in both the assertion could not have
+failed after the first minute.**
+
+Conditions common to both runs, so the numbers are interpretable:
+
+| Term | Value |
+|---|---|
+| Duration | 30 min each (`-Dsoak.duration=PT30M`) |
+| Shape | 1 instance, no churn, `KEY` ordering, `PERIODIC_CONSUMER_SYNC`, 1s commit interval |
+| Scale | 1000 keys over 20 partitions, `maxConcurrency` 14, ~100ms user function |
+| Poisoning | per-record and permanent (a poisoned record throws on every attempt) |
+| Produce | 1000 records every 20s - 90,000 produced per run |
+| Broker | the suite's Testcontainers Kafka on Docker |
+| Machine | maintainer's macOS arm64 workstation |
+| Assertion | exactly one - no `Timeout waiting for commit response`, and no other terminal failure |
+
+| Arm | Seed | Succeeded | Failed | Findings |
+|---|---|---|---|---|
+| `failureFraction` 0.5 (astubbs#177's reporter's) | `3747722682837130843` | 451 | 237,006 | none |
+| `failureFraction` 0.03 | `5055695573431537469` | 2,372 | 81,114 | none |
+
+Run command (the second adds `-Dsoak.failureFraction=0.03`):
+
+```
+./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+  -Dincluded.groups=soak -Dexcluded.groups= -Dit.test=CommitResponseTimeoutSoakIT \
+  -Dfailsafe.failIfNoSpecifiedTests=false -Dsoak.duration=PT30M
+```
+
+### What both runs measured is a total intake stall, not the absence of a timeout
+
+Successes froze - at 451 and at 2,372 - within the first ~60 seconds of each run and **never moved
+again** across the remaining 29 minutes, while the producer kept publishing and the failure count
+climbed at a rate that then held exactly constant. A constant retry rate against a frozen success
+count means no new record is being taken as work at all: the instance has stopped, not merely slowed.
+
+**A stalled instance cannot reach the exception being hunted:**
+
+- only `PartitionState#onSuccess` calls `recordCompletion` (`setDirty`, before dirty became derived);
+  `onFailure` in the same file is an explicit no-op, so a failing record never marks its partition
+  dirty;
+- the control loop gates on `shouldTryCommitNow` in `AbstractParallelEoSStreamProcessor` -
+  `isTimeToCommitNow() && wm.isDirty() && !isRebalanceInProgress.get()`;
+- so with no success anywhere, nothing is dirty, no commit request is enqueued, and
+  `ConsumerOffsetCommitter#commitAndWait` - the only place `Timeout waiting for commit response` is
+  thrown - is never entered.
+
+A green run therefore cannot distinguish "no timeout occurred" from "no commit was attempted". This
+is exactly the `dirty` asymmetry `upstream-tell-809-833-the-hang-is-fixed.md` names for this same
+workload; these runs are the measurement of it rather than evidence about the report.
+
+**Lowering the poisoned fraction does not fix it, and that is a run rather than a guess:** 0.03 bought
+about 1.5 extra bursts and stalled identically, which rules out "too many poisoned keys" and makes the
+fraction the wrong knob. Duration is the wrong knob too - the stall arrives in minute one of thirty.
+
+### What stops intake is not the documented back pressure - and the candidate is named
+
+`PartitionState#updateBlockFromEncodingResult` logs on every transition (`Offset map data too large`,
+`not allow further messages`). **Neither string appears once in either run's log**, so offset-encoding
+back pressure is eliminated.
+
+The untested candidate is the load gate. `WorkManager#isSufficientlyLoaded` compares
+`workable = inShards - parkedForRetry` against `targetAmountOfRecordsInFlight * loadingFactor`, and
+`inShards` counts records queued **behind** a blocked shard head - records that can never be worked -
+while only the failing head itself is `parkedForRetry`. A shard set full of unworkable queued records
+would therefore read as "sufficiently loaded", the broker poller would stay paused, and nothing would
+ever arrive to change it. That is the silent-stall shape the gate's own comment names against
+confluentinc#857. **This is a hypothesis, not a result.**
+
+### What to run next, in order
+
+1. **Re-run either arm with `WorkManager` at DEBUG and read the `isSufficientlyLoaded=` line at the
+   moment successes freeze.** It prints its own operands (`inShards`, `parkedForRetry`, the threshold)
+   for exactly this purpose. It either confirms or eliminates the load gate, and until it is read the
+   other arms are guesswork. One run settles it.
+2. **Per-attempt rather than per-record failure**, so records eventually succeed, the shards drain and
+   the instance keeps committing for the whole run. On this evidence it is the only shape that keeps
+   the commit path alive indefinitely - promoted from "a different mechanism" to "the first arm that
+   can falsify the assertion at all".
+3. **`gtassone`'s configuration from confluentinc#809** - 128 partitions, concurrency 64, user
+   function 100ms to minutes, `PERIODIC_CONSUMER_SYNC`. This is astubbs#175's own shape, and the
+   scenario does not have it: the workload transcribes the now-closed astubbs#177 report instead,
+   whose defect `upstream-tell-809-833-the-hang-is-fixed.md` says is already fixed.
+   `upstream-175-sporadic-commit-timeouts.md` no longer nominates it as a *wedge* candidate - see
+   the section below - but it remains the closest recorded configuration to the live report, which is
+   what this arm buys.
+
+### The stall may be the better lead than the timeout
+
+confluentinc#833's reporter - astubbs#177's, whose shape this scenario transcribes - showed
+`pc_processed_records_total` **flat** across the window in which their timeout fired, which is this
+state, not a busy one. Whoever picks this up should consider whether the reported timeout is a
+*consequence* of an intake stall rather than a peer of it.
+
+### Where the two adjacent notes leave candidate 2, and why that matters to the next arm
+
+The candidate list at the top of this note already reflects both of these. They are repeated here
+because they are what the remaining soak arms are aimed at, and each is owned by the note named:
+
+- **`upstream-tell-809-833-the-hang-is-fixed.md`** - four `astubbs#177` commits landed 2026-08-19 and
+  close candidate 1's class outright: the poller now publishes its own death
+  (`notifyPollerDied`), waiters are released with its exception, and the message reports the budget it
+  actually waited on. astubbs#177's mirror is closed; confluentinc#833 is still open upstream and
+  still unanswered, which is why its reporter's shape is still worth running here.
+- **`upstream-175-sporadic-commit-timeouts.md`** - confluentinc#809 is *not* the same defect as
+  confluentinc#833 despite the shared message, and its strand-by-strand table now closes its last
+  named strand too: **the poll thread alive but wedged - the AB-BA cycle - was fixed by astubbs#29,
+  merged 2026-09-02**, and that note records the strand as closed for this report.
+
+So candidate 2 stays the open one, with **no named mechanism left inside it**: the single wedge the
+record ever described has been fixed, so a reproduction on current code would be characterising
+something nobody has yet described. That is what makes the intake stall these runs found the more
+promising lead of the two. The branch `test/177-commit-response-timeout` (unmerged) is further prior
+art: it confirmed the astubbs#100 trigger reproduces when the catch is removed, and records one
+**falsified** experiment (moving `brokerPollSubsystem.supervise()` earlier in `controlLoop()` does not
+help - measured).
 
 ## Do not
 
