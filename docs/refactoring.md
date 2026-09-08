@@ -430,26 +430,53 @@ cosmetic - see the last bullet.*
     `onPartitionsAssigned(Collection<TopicPartition> partitions)` and
     `onPartitionsLost(Collection<TopicPartition> partitions)`) and `ConsumerManager`'s
     `noWakeups`, `erroneousWakups`, `correctPollWakeups` counters.
-  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (2) - primitive written in one thread may not
-    be visible to another: `ConsumerManager.commitRequested`, `RetryQueue.closed`.
-    Was 3: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` is now
-    `volatile` (astubbs#201), and SpotBugs no longer reports it.
-    **`RetryQueue.closed` is now a FALSE POSITIVE and stays listed for that reason.** The
+  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` - primitive written in one thread may not
+    be visible to another. **Re-derive the membership, do not trust a list here**:
+    `./mvnw --batch-mode -Pci test-compile spotbugs:spotbugs spotbugs:check -Dspotbugs.failOnError=false`
+    and read `parallel-consumer-core/target/spotbugsXml.xml` for that bug type. **Run it exactly as
+    written - it is the `static: spotbugs` step's own command.** `spotbugs:spotbugs` on its own
+    analyses whatever bytecode happens to be under `target/` already: nothing on a clean checkout,
+    stale classes after an edit - and `test-compile` is what puts `target/test-classes` there, which
+    the `includeTests` setting needs. Narrowing with `-pl` and no `-am` reintroduces the missing
+    artefact trap [`docs/building.md`](building.md) owns. **No membership is written
+    here, deliberately** - an enumeration would be one more list to maintain, and the paragraph
+    below is the record of what that cost last time.
+    <!-- file-refs: N/A - the report path above is build output, written by the command on the line before it and absent from a clean checkout -->
+    **This entry was wrong about that membership for a month, in the direction that matters**:
+    it listed two fields and a count, while the analyser named six - three of them in
+    `PartitionState`, the class astubbs#349 was fencing at the time, and one
+    (`ProgressTracker.highestRoundCountSeen`) that no ledger anywhere carried. The signal was
+    present and the record was wrong about it, which is worse than the analyser having been
+    silent. The lane runs `spotbugs:check` with `-Dspotbugs.failOnError=false`, so it annotates
+    and never blocks, and nothing goes red when this paragraph rots - hence the reproduce
+    command above rather than a list to maintain.
+    Fixed and off the list since: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`
+    (`volatile`, astubbs#201), and `PartitionState.allowedMoreRecords` plus
+    `PartitionState.stateChangedSinceCommitStart` (astubbs#469 - the first `volatile` against a
+    jcstress FORBIDDEN arm, the second **not**: it was written by both threads, jcstress measured
+    that the modifier moves the anomaly by nothing, and it collapsed with `dirty` into a monotone
+    completion count. **`volatile` is the fix for a one-writer field, not for a shared one**).
+    `PartitionState.bootstrapPhase` remains, deliberately unwalked - an analyser row is not a
+    diagnosis, and nobody has scoped it.
+    **`RetryQueue.closed` is a FALSE POSITIVE and stays listed for that reason.** The
     iterator that owns it is `@ThreadConfined(ANY)` with a runtime guard
     (`assertOnOwningThread`), so there is no second thread to be stale for - it never
     could be, because the iterator holds a read lock only its opener can release.
     SpotBugs reads no confinement annotation and will keep reporting it; do not "fix" it
     with `volatile`, which would assert a sharing that does not exist.
-  - **`PartitionState`'s commit-window pair is confined by construction - do not "fix" either with
-    `volatile`.** `stateChangedSinceCommitStart` and `offerLastMadeForCommit` share one lifecycle:
-    written where a commit window opens, read where it closes. **`offerLastMadeForCommit`'s javadoc
-    owns the thread model** - which thread writes and reads it in each commit mode, the one
-    `Consumer#close()` hand-over, and why `dirty` being the fence is what keeps the rest plain; it is
-    not restated here, because two copies of a concurrency argument drift and the field is where a
-    reader forms the question. What belongs on this list is only the work item: if anyone declares
-    the confinement with `@ThreadConfined` plus a runtime assertion (the `RetryQueue.closed`
-    treatment above), **do the pair together** - annotating one of two fields with the same lifecycle
-    reads as a claim about the other.
+  - **`PartitionState`'s commit-window pair shares one lifecycle - declare the confinement on both or
+    on neither.** The pair is `offerLastMadeForCommit` (astubbs#470) and `completionCountBeingCommitted`
+    (astubbs#469): both written by `getCommitDataIfDirty()` where a commit window opens, both read by
+    `onOffsetCommitSuccess` where it closes. **`offerLastMadeForCommit`'s javadoc owns the thread model** -
+    which thread writes and reads it in each commit mode, the one `Consumer#close()` hand-over, and why
+    `completionCount`'s `incrementAndGet` being the fence is what keeps the rest plain; it is not restated
+    here, because two copies of a concurrency argument drift and the field is where a reader forms the
+    question. Their modifiers already differ, deliberately and for reasons each javadoc gives:
+    `offerLastMadeForCommit` is plain and **must not be "fixed" with `volatile`**, while
+    `completionCountBeingCommitted` is `volatile` because no single thread is correct to name across the
+    commit modes. What belongs on this list is only the work item: if anyone declares the confinement with
+    `@ThreadConfined` plus a runtime assertion (the `RetryQueue.closed` treatment above), **do the pair
+    together** - annotating one of two fields with the same lifecycle reads as a claim about the other.
   - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
     on the astubbs#119 branch:**
     `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
