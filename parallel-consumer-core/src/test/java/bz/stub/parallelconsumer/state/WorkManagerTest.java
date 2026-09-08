@@ -1032,6 +1032,12 @@ public class WorkManagerTest {
                 .as("with nothing parked, the gate reads all three as workable while one is selectable - the "
                         + "over-read is the whole queue behind the blocked head, and it grows with it")
                 .isEqualTo(3);
+
+        assertThat(wm.isRecordsAwaitingProcessing())
+                .as("the SECOND consumer of the same over-read, measured rather than reasoned: a record queued "
+                        + "behind a blocked head still holds its selection claim, so drain() - which gates the "
+                        + "transition to closing on this - would wait on work no worker can reach")
+                .isTrue();
     }
 
     /**

@@ -75,8 +75,11 @@ the per-shard selection-claim counters netted against the retry queue. A record 
 blocked head holds its claim, so that figure counts it too - and `drain()` gates the transition to
 closing on it. A `KEY`-ordered instance holding one permanently failing record therefore has work
 "awaiting processing" for as long as it holds the record, which is the same over-read in a second
-consumer. It is a different consequence (a close that waits out its drain timeout, not a poller that
-stays paused) and is recorded here rather than fixed.
+consumer. **Measured, not reasoned**: the last assertion of
+`WorkManagerTest#theLoadGateCountsRecordsQueuedBehindABlockedKeyHeadAsWorkable` is
+`isRecordsAwaitingProcessing()` reading true with nothing selectable. The consequence differs (a close
+that waits out its drain timeout, rather than a poller that stays paused), which is why it is recorded
+here rather than folded into the gate question.
 
 Ruled out, checked and not affected: `isWorkInFlightMeetingTarget()` and `hasWorkInFlight()` read
 `numberRecordsOutForProcessing`, which counts records actually dispatched to a worker and cannot
