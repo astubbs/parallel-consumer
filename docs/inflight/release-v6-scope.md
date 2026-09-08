@@ -296,17 +296,15 @@ box means the v6 action for that line is done, not that the defect is closed:
 
 ## Known unknowns the release note should not paper over
 
-**Every item below is being pursued (owner's instruction, 2026-09-08), each by its own agent on its
-own branch; `gh pr list -R astubbs/parallel-consumer` shows the PRs as they open.** Code-shaped
-questions run in parallel; the replay-shaped ones (chaos and soak) run one at a time, because
-several replay agents on one machine produce exactly the starvation artefacts they are meant to
-rule out. Order of the replay queue: the eager-mode stall (done - withdrawn, astubbs#478), the six deadlock
-captures with the fix applied (done - proven by control arm, astubbs#485), the async-unordered
-rebalance stall (done - the group protocol, not PC, astubbs#486), then the
-`INSTANCE_STALL`/`ZOMBIE_MEMBER` idle-versus-loaded replay, then the intake stall astubbs#471's
-soak found (read the gate's DEBUG line under that workload; one run settles the load-gate
-hypothesis).
-
+**Every item below was pursued (owner's instruction, 2026-09-08), each by its own agent on its
+own branch.** Code-shaped questions ran in parallel; the replay-shaped ones ran one at a time,
+because several replay agents on one machine produce exactly the starvation artefacts they are
+meant to rule out. The replay queue is drained into PRs: the eager-mode stall (withdrawn,
+astubbs#478), the six deadlock captures (proven by control arm, astubbs#485), the async-unordered
+rebalance stall (the group protocol, astubbs#486), the `INSTANCE_STALL` load arm (astubbs#488), and
+the intake stall (astubbs#487, arms pending) - the last two are tracked in the "Still open" list
+above, not here. What remains below is either settled, or a gap the release note must name rather
+than paper over.
 
 - ~~Whether the six deadlock captures that verified astubbs#29's mechanism ever replay clean with
   the fix applied~~ - **known, 2026-09-08, astubbs#485: the question was unanswerable by replay, and
@@ -363,6 +361,23 @@ hypothesis).
   kept, and a new core test covers the collision case the old one can no longer reach. The other
   rows of [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) are untouched by this. The
   automated review found nothing blocking; astubbs#482 squash-merged 2026-09-08.
+- **A single wedged shard is invisible to everything that gates** - astubbs#478's surviving finding,
+  owned by [`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md)
+  (deferred: a new gate needs a red control before it can be trusted). `INSTANCE_STALL` is
+  per-instance, so a watermark frozen by a commit that never landed, on an instance whose other
+  shards keep completing, is caught by no chaos detector; every 857 replay this month drained with
+  full key coverage, which is what a false negative of that shape looks like. The release note
+  should say the suite cannot see it, not that no stall is known. Not a v6 gate: the gate is
+  test-suite work, and building it without the red control first is the trap the note names.
+- **One unconditional by-key shard removal remains on master** - the revoke sweep in
+  `ShardManager.removeWorkFromShardFor`, the second of the two astubbs#483's defect-class sweep
+  found. astubbs#468's identity-`equals` change made conditional removal possible and fixed the
+  stale sweep; this one was reported, not fixed. Cost is misdirection bounded to one control-loop
+  tick by astubbs#481's purge, never loss. A small fix, not a v6 gate.
+- **The other rows of [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md)** - astubbs#482
+  closed the most-sighted row; the register still names several, one of them
+  (`processInKeyOrder` failing its own input sanity check) undiagnosed. A tag needs a green master,
+  so these are tag-day work rather than scope.
 - The maturity claim itself: `docs/data/module-maturity.yaml` carries a bare `production-use` next
   to a conditional support posture, and a renderer can lift the bare value without its condition.
   The tag-day checks below carry the recheck.
