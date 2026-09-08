@@ -238,7 +238,7 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
      * thread dump and a parked thread is only interesting while it is still parked. */
     private static final Duration WATCH_INTERVAL = Duration.ofSeconds(5);
 
-    private static final Duration PROGRESS_LOG_INTERVAL = Duration.ofSeconds(60);
+    private static final Duration DEFAULT_PROGRESS_LOG_INTERVAL = Duration.ofSeconds(60);
 
     /** The half of the timeout message that means the poller is WEDGED BUT ALIVE - the defect nobody owns. */
     static final String COMMIT_RESPONSE_TIMEOUT = "Timeout waiting for commit response";
@@ -257,9 +257,12 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
         ChaosSeed seed = resolveSeed();
         Duration duration = resolveDuration();
         double failureFraction = resolveFailureFraction();
+        ProcessingOrder ordering = resolveOrdering();
+        int messageBufferSize = resolveMessageBufferSize();
         log.info("=== SOAK astubbs#177/astubbs#175 commit-response timeout: seed={} duration={} "
-                        + "failureFraction={} keys={} partitions={} (replay: {} -Dsoak.duration={}) ===",
-                seed.getValue(), duration, failureFraction, KEY_SPACE, PARTITIONS,
+                        + "failureFraction={} ordering={} messageBufferSize={} keys={} partitions={} "
+                        + "(replay: {} -Dsoak.duration={}) ===",
+                seed.getValue(), duration, failureFraction, ordering, messageBufferSize, KEY_SPACE, PARTITIONS,
                 seed.replayCommand().replace("-Dincluded.groups=chaos", "-Dincluded.groups=soak"), duration);
 
         String topic = getClass().getSimpleName() + "-" + RandomUtils.nextInt();
@@ -267,10 +270,11 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
 
         ManagedPCInstance.Config config = ManagedPCInstance.Config.builder()
                 .commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)
-                .order(ProcessingOrder.KEY)
+                .order(ordering)
                 .inputTopic(topic)
                 .pollDelayMs(POLL_DELAY_MS)
                 .maxConcurrency(MAX_CONCURRENCY)
+                .messageBufferSize(messageBufferSize)
                 .build();
 
         ManagedPCInstance instance = new ManagedPCInstance(config, getKcu(), (incarnationId, context) -> {
@@ -319,7 +323,8 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
      */
     private List<String> watchUntil(ManagedPCInstance instance, Instant deadline) throws InterruptedException {
         List<String> findings = new ArrayList<>();
-        Instant nextProgressLog = Instant.now().plus(PROGRESS_LOG_INTERVAL);
+        Duration progressInterval = resolveProgressInterval();
+        Instant nextProgressLog = Instant.now().plus(progressInterval);
         while (Instant.now().isBefore(deadline)) {
             ParallelEoSStreamProcessor<String, String> pc = instance.getParallelConsumer();
             if (pc != null) {
@@ -338,14 +343,50 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
                 }
             }
             if (Instant.now().isAfter(nextProgressLog)) {
-                log.info("Soak progress: remaining={} produced={} succeeded={} failed={}",
+                log.info("Soak progress: remaining={} produced={} succeeded={} failed={} {}",
                         Duration.between(Instant.now(), deadline), produced.get(), succeeded.get(),
-                        failed.get());
-                nextProgressLog = Instant.now().plus(PROGRESS_LOG_INTERVAL);
+                        failed.get(), describeIntake(pc));
+                nextProgressLog = Instant.now().plus(progressInterval);
             }
             Thread.sleep(WATCH_INTERVAL.toMillis());
         }
         return findings;
+    }
+
+    /**
+     * The intake gate's state, on the progress line, so a run that freezes says WHY in the same place it
+     * says it froze.
+     * <p>
+     * The two runs of 2026-09-07 recorded a total intake stall and could not name what stopped intake,
+     * because the only figures on the progress line were the counters that had stopped moving. These are
+     * the gate's own operands - the same ones {@code WorkManager#isSufficientlyLoaded} prints at DEBUG,
+     * read from the same {@code getWorkableRecords()} accessor - plus Kafka's paused-partition count,
+     * which is what a latched gate actually DOES. A frozen success count beside
+     * {@code loaded=true pausedPartitions=<all of them>} is the gate holding the poller down; a frozen
+     * success count beside {@code loaded=false pausedPartitions=0} is something else entirely, and the
+     * point of the line is that those two are no longer indistinguishable after the fact.
+     * <p>
+     * At INFO deliberately: it is one line per progress tick, it is the harness narrating rather than the
+     * product, and the DEBUG stream it duplicates is behind {@code -Dpc.loadgate.log.level=debug} because
+     * it fires per control-loop tick. This one is always in the log of every soak that ever runs.
+     */
+    private static String describeIntake(ParallelEoSStreamProcessor<String, String> pc) {
+        if (pc == null) {
+            return "intake=UNAVAILABLE (no PC yet)";
+        }
+        try {
+            var wm = pc.getWm();
+            var records = wm.getSm().getWorkableRecords();
+            return String.format("intake(loaded=%s workable=%d = inShards=%d - parkedForRetry=%d; target=%d; "
+                            + "pausedPartitions=%d)",
+                    wm.isSufficientlyLoaded(), records.getWorkable(), records.getInShards(),
+                    records.getParkedForRetry(), wm.getOptions().getTargetAmountOfRecordsInFlight(),
+                    pc.getPausedPartitionSize());
+        } catch (RuntimeException e) {
+            // Never let the narration take down the soak it is narrating - the same rule captureThreadDump
+            // below follows.
+            return "intake=UNAVAILABLE (" + e.getClass().getSimpleName() + ": " + e.getMessage() + ")";
+        }
     }
 
     /**
@@ -477,5 +518,48 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
     private static double resolveFailureFraction() {
         String property = System.getProperty("soak.failureFraction");
         return property == null ? 0.5d : Double.parseDouble(property);
+    }
+
+    /**
+     * {@code -Dsoak.ordering=UNORDERED} is the control arm for the head-of-line half of the intake-stall
+     * hypothesis, and {@code KEY} - the reporter's - is the default.
+     * <p>
+     * It is a knob rather than a second test class because the two arms must differ by exactly ONE term:
+     * same seed, same poisoned set, same key space, same burst clock. Under {@code UNORDERED} no shard
+     * head can block anything queued behind it, so every record the shards hold is genuinely selectable
+     * and {@code inShards} is an honest count of workable records. If the stall survives that, what
+     * stops intake is the buffer filling with permanently-failing records, not head-of-line blocking -
+     * which is a different defect with a different fix.
+     */
+    private static ProcessingOrder resolveOrdering() {
+        String property = System.getProperty("soak.ordering");
+        return property == null ? ProcessingOrder.KEY : ProcessingOrder.valueOf(property);
+    }
+
+    /**
+     * {@code -Dsoak.messageBufferSize=20000} raises the record-intake gate's threshold and NOTHING else - the
+     * decisive control arm on the gate itself, and 0 (leave the dynamic load factor alone) by default.
+     * <p>
+     * The gate is {@code inShards - parkedForRetry > targetAmountOfRecordsInFlight * loadingFactor}, which at
+     * {@code maxConcurrency} 14 and the initial factor of 2 is a threshold of <b>28</b> - about a eighteenth of
+     * the poisoned records a single 1000-record burst leaves permanently resident. If the gate is what stops
+     * intake, a threshold set above what the run can accumulate keeps the instance taking work for the whole
+     * run; if the instance stalls anyway, the gate is not the mechanism.
+     */
+    private static int resolveMessageBufferSize() {
+        String property = System.getProperty("soak.messageBufferSize");
+        return property == null ? 0 : Integer.parseInt(property);
+    }
+
+    /**
+     * {@code -Dsoak.progressInterval=PT5S}; ISO-8601, like {@code soak.duration}, and 60s by default.
+     * <p>
+     * A knob because the interval that suits a thirty-minute run is the wrong one for reading the moment
+     * intake freezes - which the 2026-09-07 runs put inside the first sixty seconds, i.e. inside a single
+     * sample. A short diagnostic run wants several samples across the freeze.
+     */
+    private static Duration resolveProgressInterval() {
+        String property = System.getProperty("soak.progressInterval");
+        return property == null ? DEFAULT_PROGRESS_LOG_INTERVAL : Duration.parse(property);
     }
 }
