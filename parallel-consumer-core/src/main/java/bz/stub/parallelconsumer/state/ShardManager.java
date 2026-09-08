@@ -652,9 +652,8 @@ public class ShardManager<K, V> {
      *     {@link RetryQueue} removes BY KEY - topic, partition and offset ({@code WorkContainerKey.of}) - so
      *     the removal below cannot say which container it meant, and a fresh entry arriving at a departed
      *     container's coordinates would be taken out instead. That is the defect class recorded in
-     *     {@code git show 7c95b75ce^:docs/inflight/bug-stale-sweep-iterator-evicts-fresh-replacement.md} -
-     *     the note was retired by the fix - and fixed on the shard's side by
-     *     astubbs/parallel-consumer#468, where the two sides really were different threads. Here they are
+     *     {@code git show 7c95b75ce^:docs/inflight/bug-stale-sweep-iterator-evicts-fresh-replacement.md} (retired when astubbs/parallel-consumer#468 fixed it) and fixed on the shard's
+     *     side by astubbs/parallel-consumer#468, where the two sides really were different threads. Here they are
      *     not: {@link RetryQueue#add} is {@link ControllerThreadOnly}, its only production caller is
      *     {@link #onFailure}, and both run on this same thread - so there is no add to race and no window to
      *     narrow. <b>What would reopen it is a second writer</b>, which is the same condition as the bullet

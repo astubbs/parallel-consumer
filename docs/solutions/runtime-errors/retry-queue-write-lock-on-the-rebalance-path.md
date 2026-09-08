@@ -182,9 +182,8 @@ They are a check-then-act, and it is safe for two independent reasons, both of w
 - **Departure is monotonic.** `isResident` is reference identity, and nothing re-inserts the same
   container instance, so "not resident" cannot go stale in the dangerous direction.
 - **Nothing else writes the queue's keys.** `RetryQueue` removes by topic/partition/offset, so the
-  removal cannot say which container it meant - the defect class of astubbs#468, recorded in a note
-  that PR retired when it merged
-  (`git show 7c95b75ce^:docs/inflight/bug-stale-sweep-iterator-evicts-fresh-replacement.md`). Here there is no race to
+  removal cannot say which container it meant - the defect class of astubbs#468, recorded in
+  `git show 7c95b75ce^:docs/inflight/bug-stale-sweep-iterator-evicts-fresh-replacement.md` (retired when astubbs/parallel-consumer#468 fixed it). Here there is no race to
   narrow: `RetryQueue.add` is `@ControllerThreadOnly`, its only production caller is
   `ShardManager.onFailure`, and the purge runs on that same thread.
 
