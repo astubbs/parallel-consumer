@@ -292,6 +292,18 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * case. Answering "yes, go ahead" there would hand the control thread a consumer another thread is actively
      * polling - the data race {@link ThreadConfinedConsumer} exists to prevent - so this reports only what it can
      * prove.
+     * <p>
+     * <b>It also fires on a close that STARTED and threw</b>, not only on a poll thread that never reached
+     * {@code doClose}: {@code runState = CLOSED} is the statement <em>after</em>
+     * {@link #maybeCloseConsumerManager()}, so anything thrown out of that call leaves {@code runState} short of
+     * {@code CLOSED} and the poll thread dead. That is deliberate and is the useful answer in both halves of the
+     * case. If the throw came before {@link ConsumerManager#close(Duration)} claimed ownership, the consumer is
+     * genuinely still open and the control thread's retry closes it - which is the whole point. If it came from
+     * the guarded {@code consumer.close()} itself, the dead poll thread still holds ownership,
+     * {@code tryClaimOwnership()} refuses to steal it, and the retry lands on the warning that already explains
+     * the cost rather than closing a consumer twice. Not exercised by
+     * {@code PollerDeathClosesTheConsumerTest}, which kills the poll thread at {@code poll()} time; named here so
+     * a later reader does not have to re-derive it from the statement order.
      *
      * @return true when the poll thread has ended (or never started) and this system did not close the consumer
      */
