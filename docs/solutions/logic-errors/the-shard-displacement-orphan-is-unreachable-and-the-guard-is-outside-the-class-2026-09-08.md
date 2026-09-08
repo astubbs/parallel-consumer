@@ -146,6 +146,28 @@ completing on the poll thread inside `poll()` before the `poll()` that yields `B
 
 **Conclusion: (2) AND (3) AND (4) is unsatisfiable.**
 
+**And it is ordering-mode independent, which the review of astubbs#483 asked to have stated rather
+than assumed.** Legs L1-L6 never consult the shard key: they are about the inserting thread, the
+retry queue's single add site, the finality of two epoch fields, and which callbacks sweep - none of
+which varies with `ProcessingOrder`. **The mode is visible in exactly one place, L7's second half**,
+and it is safe in every mode for the same underlying reason: a shard is partition-scoped throughout.
+Under `PARTITION` and `UNORDERED` the shard *is* a topic-partition, so an offset identifies one
+record by construction; under `KEY` the shard is topic-plus-partition-plus-key, so it is
+partition-scoped too and the offset is again unique within it. A topic-scoped key would break that
+half - and only that half - by letting two records collide on one offset with **no re-assignment
+anywhere in the story**, which is the leg the whole argument leans on.
+
+`ShardDisplacementOrphanReachabilityTest` now says this rather than asserting it: its first arm is
+parameterised over every `ProcessingOrder`, and
+`underKeyOrderingOneOffsetOnTwoPartitionsDoesNotCollideInOneShard` exercises the `KEY` half directly.
+That arm was verified by sabotage per `docs/testing-at-write-time.md` - making `ShardKey`'s
+key-ordered form topic-scoped turns exactly that arm red, on the assertion that carries the leg.
+
+The one behavioural difference between the modes is benign here, and worth naming so it is not
+mistaken for a gap: under `KEY`, `removeShardIfEmpty` garbage-collects an emptied shard, where the
+other two keep the object. That makes the conclusion **stronger** under `KEY`, not weaker - a
+collected shard holds no resident at all, so there is nothing to displace.
+
 ## Why this is worth recording rather than just closing
 
 **The guard on the last leg is outside the class.** Legs L1-L5 are properties of this engine; L7 is

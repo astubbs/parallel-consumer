@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import lombok.extern.slf4j.Slf4j;
@@ -12,13 +13,17 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
 
 import java.util.ArrayList;
 import java.util.List;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
 import static com.google.common.truth.Truth.assertWithMessage;
 
@@ -29,10 +34,11 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * <b>No, and the discriminator is not in this class.</b> The branch itself is reachable - confluentinc#909's
  * late drain puts a stale resident in a shard and the next poll's fresh record displaces it, which is what
  * {@link ProcessingShardStaleReplacement909Test} covers. What cannot happen is that resident also being in
- * the {@link RetryQueue}, and the three arms below are the control-armed form of that claim: the shape that
+ * the {@link RetryQueue}, and the arms below are the control-armed form of that claim: the shape that
  * production drives (green, and the sweep is what makes it green), the shape that reaches the branch without
- * a queue entry (so the first arm's green is not "the branch never fires"), and the shape that <em>would</em>
- * orphan an entry (so the first arm's assertions are known to be able to see one).
+ * a queue entry (so the first arm's green is not "the branch never fires"), the shape that <em>would</em>
+ * orphan an entry (so the first arm's assertions are known to be able to see one), and one arm for leg seven's
+ * KEY-ordering half, which the other three run under {@code PARTITION} and so cannot reach.
  * <p>
  * <b>The argument, each leg checked in source rather than inferred.</b> An orphan needs four things true at
  * once when a container {@code B} arrives at {@code (topic, partition, offset)}: a resident {@code A} at that
@@ -71,9 +77,21 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * <li><b>The fence carries no sweep at all</b> - which is what arm three exploits - but a second container at
  *     the same coordinates requires the offset to be delivered twice, and within one assignment generation the
  *     consumer's position never goes backwards: nothing in main calls {@code seek}, and shards are
- *     partition-scoped in every ordering mode ({@code ShardKey.KeyOrderedKey} owns that reasoning). A
+ *     partition-scoped in every ordering mode ({@code ShardKey.KeyOrderedKey} owns that reasoning), so two
+ *     records sharing a key and an offset on different partitions do not collide either -
+ *     {@link #underKeyOrderingOneOffsetOnTwoPartitionsDoesNotCollideInOneShard()} is that half. A
  *     re-delivery therefore needs a re-assignment, which is transitions one and two, sweeps included.</li>
  * </ol>
+ * <b>The conclusion is ordering-mode independent.</b> Legs one to six never consult the shard key - they
+ * are about the inserting thread, the queue's single add site, two final epoch fields, and which callbacks
+ * sweep. The mode is visible only in leg seven's second half, and is safe in every mode for one reason: a
+ * shard is partition-scoped throughout ({@code PARTITION}/{@code UNORDERED} make it a topic-partition,
+ * {@code KEY} makes it {@code (topic, partition, key)}), so an offset identifies one record within it. The
+ * first arm is parameterised over every {@link ProcessingOrder} and
+ * {@link #underKeyOrderingOneOffsetOnTwoPartitionsDoesNotCollideInOneShard()} covers the {@code KEY} half, so
+ * this paragraph is tested rather than asserted. The one behavioural difference - {@code KEY} garbage-collects
+ * an emptied shard - only strengthens the conclusion: a collected shard holds nothing to displace.
+ * <p>
  * <b>Why astubbs/parallel-consumer#481 does not move any of this, and is a second answer besides.</b> That PR
  * takes the rebalance callbacks off the retry queue - they remove from the shards only, and
  * {@code ShardManager.purgeDepartedRetryEntries()} collects departed entries on the controller thread one
@@ -101,12 +119,24 @@ class ShardDisplacementOrphanReachabilityTest {
 
     final TopicPartition tp = new TopicPartition(TOPIC, 0);
 
-    final PCModuleTestEnv module = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
-            .ordering(PARTITION)
-            .consumer(new MockConsumer<>(OffsetResetStrategy.EARLIEST))
-            .build());
+    WorkManager<String, String> wm;
 
-    final WorkManager<String, String> wm = module.workManager();
+    /**
+     * Builds the engine under one ordering mode. Called by {@link #setUp()} with {@code PARTITION} for the arms
+     * that fix a mode, and by the parameterised arm once per {@link ProcessingOrder}.
+     */
+    private void useOrdering(ProcessingOrder ordering) {
+        var testModule = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
+                .ordering(ordering)
+                .consumer(new MockConsumer<>(OffsetResetStrategy.EARLIEST))
+                .build());
+        this.wm = testModule.workManager();
+    }
+
+    @BeforeEach
+    void setUp() {
+        useOrdering(PARTITION);
+    }
 
     ShardManager<String, String> sm() {
         return wm.getSm();
@@ -122,15 +152,24 @@ class ShardDisplacementOrphanReachabilityTest {
 
     private ProcessingShard<String, String> shard() {
         var found = sm().getShard(sm().computeShardKey(recordAt(OFFSET)));
-        assertWithMessage("FIXTURE: the shard must exist - under PARTITION ordering it survives being "
+        assertWithMessage("FIXTURE: the shard must exist - under PARTITION and UNORDERED it survives being "
                 + "emptied, so its absence means the fixture never registered anything")
                 .that(found.isPresent())
                 .isTrue();
         return found.get();
     }
 
+    /**
+     * The container occupying {@link #OFFSET}, or null if none is - <b>including when the shard itself is
+     * gone</b>. Under {@code KEY} ordering {@code removeShardIfEmpty} garbage-collects an emptied shard, so
+     * "no shard" and "no resident" are the same answer to the only question the arms ask: is there anything
+     * here to displace. Deliberately not routed through {@link #shard()}, whose presence assertion is a fixture
+     * check for the arms that need the shard object itself.
+     */
     private WorkContainer<String, String> residentAtOffset() {
-        return shard().getWorkContainerAtOffset(OFFSET).orElse(null);
+        return sm().getShard(sm().computeShardKey(recordAt(OFFSET)))
+                .flatMap(s -> s.getWorkContainerAtOffset(OFFSET))
+                .orElse(null);
     }
 
     /** Every container the retry queue currently holds, by reference, so an orphan can be told from a replacement. */
@@ -182,8 +221,10 @@ class ShardDisplacementOrphanReachabilityTest {
      * fresh record at the same offset - deliverable only after the partition is re-assigned - cannot arrive
      * while {@code A} is still there to displace.
      */
-    @Test
-    void aRebalanceUnseatsTheResidentBeforeAnyReplacementCanArrive() {
+    @ParameterizedTest
+    @EnumSource(ProcessingOrder.class)
+    void aRebalanceUnseatsTheResidentBeforeAnyReplacementCanArrive(ProcessingOrder ordering) {
+        useOrdering(ordering);
         WorkContainer<String, String> a = aFailedRecordRestingInBothStructures();
 
         wm.onPartitionsRevoked(UniLists.of(tp));
@@ -276,6 +317,55 @@ class ShardDisplacementOrphanReachabilityTest {
         assertWithMessage("and there was no entry to orphan")
                 .that(retryQueueContents())
                 .isEmpty();
+    }
+
+    /**
+     * <b>Leg seven's KEY-ordering half, which the three arms above cannot reach.</b>
+     * <p>
+     * They all run under {@code PARTITION}, where a shard is a topic-partition by definition, so they exercise
+     * "a duplicate offset needs a re-assignment" but say nothing about the <em>other</em> way a second container
+     * could arrive at an occupied offset: two records with the same KEY on different partitions, which share an
+     * offset space only by coincidence. {@code ProcessingShard}'s map is keyed by offset alone, so a
+     * topic-scoped shard key would collide them - and the reachability argument would lose a leg, because the
+     * arrival would need no re-assignment at all.
+     * <p>
+     * {@code ShardKey.KeyOrderedKey} is partition-scoped and its javadoc says this is why. That is an
+     * assertion in prose everywhere else; here it is a test. Raised by the automated review on
+     * astubbs/parallel-consumer#483, which observed that leg seven cites a KEY-ordering fact no arm exercised.
+     */
+    @Test
+    void underKeyOrderingOneOffsetOnTwoPartitionsDoesNotCollideInOneShard() {
+        var keyOrderedModule = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
+                .ordering(KEY)
+                .consumer(new MockConsumer<>(OffsetResetStrategy.EARLIEST))
+                .build());
+        WorkManager<String, String> keyWm = keyOrderedModule.workManager();
+        ShardManager<String, String> keySm = keyWm.getSm();
+
+        var partitionZero = new TopicPartition(TOPIC, 0);
+        var partitionOne = new TopicPartition(TOPIC, 1);
+        keyWm.onPartitionsAssigned(UniLists.of(partitionZero, partitionOne));
+        long epoch = keyWm.getPm().getEpochOfPartition(partitionZero);
+
+        // the same key and the same offset, on two partitions - legal, and routine on any topic
+        var onPartitionZero = new ConsumerRecord<>(TOPIC, 0, OFFSET, "same-key", "from-partition-0");
+        var onPartitionOne = new ConsumerRecord<>(TOPIC, 1, OFFSET, "same-key", "from-partition-1");
+        keySm.addWorkContainer(epoch, onPartitionZero);
+        keySm.addWorkContainer(epoch, onPartitionOne);
+
+        assertWithMessage("PRECONDITION: the two records must share a key, or this arm tests nothing about "
+                + "KEY ordering")
+                .that(onPartitionZero.key())
+                .isEqualTo(onPartitionOne.key());
+        assertWithMessage("both records must be held: a topic-scoped shard key would put them in one "
+                + "offset-keyed map under one key, and the second would displace the first - silently, and "
+                + "with no re-assignment anywhere in the story, which is the leg the proof needs")
+                .that(keySm.getNumberOfRecordsInShards())
+                .isEqualTo(2L);
+        assertWithMessage("and they must be in DIFFERENT shards, which is the actual mechanism - "
+                + "ShardKey.KeyOrderedKey carries the TopicPartition alongside the key")
+                .that(keySm.computeShardKey(onPartitionZero))
+                .isNotEqualTo(keySm.computeShardKey(onPartitionOne));
     }
 
     /**
