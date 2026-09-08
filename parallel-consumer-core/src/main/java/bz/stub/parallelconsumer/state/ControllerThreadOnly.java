@@ -52,11 +52,13 @@ import java.lang.annotation.Target;
  * beside the class it governs, {@link RetryQueue}.
  * Move it up a package when a second, unrelated class needs it.
  *
- * <b>There is no declining alternative on {@link RetryQueue} yet.</b> Every annotated method takes the write
- * lock unconditionally, so a caller that must not wait has nowhere to go but off this class - which is exactly
- * what astubbs/parallel-consumer#431 is for: it adds a {@code tryLock()}-based path and routes the rebalance
- * sweeps onto it. Until then this marker names the callers that are already wrong, and the rule's
- * {@code KNOWN_BLOCKING_VIOLATIONS} carries them as open debt.
+ * <b>There is no declining alternative on {@link RetryQueue}, and there is deliberately no need for one.</b>
+ * Every annotated method takes the write lock unconditionally, and no rebalance callback reaches any of them:
+ * the callbacks remove from the shards alone, and {@link ShardManager#purgeDepartedRetryEntries()} collects the
+ * retry-queue entries that leaves, on the controller thread. A {@code tryLock()}-based sibling was the
+ * superseded astubbs/parallel-consumer#431 design - and had it landed, this marker would have become the only
+ * thing able to tell the two apart, since a declining sibling takes the same lock and would be correctly absent
+ * from the rule's JDK deny list.
  *
  * @author Antony Stubbs
  * @see RetryQueue#remove(WorkContainer)

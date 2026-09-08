@@ -155,8 +155,16 @@ class RetryQueueRequeueWindowTest {
     }
 
     /**
-     * P1, second half - the orphan is not merely present but unremovable. Every route that takes an entry out
-     * of the retry queue reaches it through shard contents, and the shard has none.
+     * P1, second half - the orphan is not merely present but, at the time this was written, unremovable: every
+     * route that took an entry out of the retry queue reached it through shard contents, and the shard has
+     * none.
+     * <p>
+     * <b>That premise no longer holds, and the arm is kept because of it rather than in spite of it.</b>
+     * {@link ShardManager#purgeDepartedRetryEntries()} reaches an entry by asking the SHARD about the
+     * container rather than the other way round, so the two work requests below would now collect the orphan
+     * even if the confirmation on {@link ShardManager#onFailure} stopped preventing it. What this arm still
+     * pins is that the window leaves nothing behind at all - and it goes red if the confirmation AND the purge
+     * are both removed, which is the honest statement of what it now guards.
      */
     @Test
     void nothingCanEverRemoveTheOrphanedRetryQueueEntry() {
@@ -295,17 +303,19 @@ class RetryQueueRequeueWindowTest {
      * The production sweep does both in one call ({@code removeWorkFromShardFor}); these model it split, with
      * {@code sm.onFailure} landing in the middle - which is the only interleaving either arm is about.
      *
-     * @param queueFirst the order the sweep does its two removals in: {@code true} models
-     *                   astubbs/parallel-consumer#431's ordering, {@code false} models master's
+     * @param queueFirst the order the sweep does its two removals in: {@code true} models the superseded
+     *                   astubbs/parallel-consumer#431 ordering, {@code false} the shard-first one production
+     *                   had before its callbacks stopped touching the queue at all
      */
     private void sweepAroundTheRequeue(WorkContainer<String, String> wc, boolean queueFirst) {
         var shard = wm.getSm().getShard(wm.getSm().computeShardKey(wc)).get();
         Runnable queueRemoval = () -> {
             // Named rather than discarded, and deliberately NOT asserted: whether an entry was present depends
             // on which position this runnable is in. Queue-first finds nothing, because the controller has not
-            // added yet - that IS astubbs/parallel-consumer#431's ordering and the reason its arm makes an
-            // orphan. Shard-first finds the controller's add. Both are the modelled behaviour, so the value is
-            // recorded to show it was considered rather than dropped.
+            // added yet - that IS the superseded astubbs/parallel-consumer#431 ordering and the reason its arm
+            // makes an orphan. Shard-first finds the controller's add. Both are modelled behaviour, neither is
+            // production's (which removes from no queue at all), so the value is recorded to show it was
+            // considered rather than dropped.
             var ignoredEntryWasPresent = wm.getSm().getRetryQueue().remove(wc);
         };
         Runnable shardRemoval = () -> {
@@ -323,28 +333,25 @@ class RetryQueueRequeueWindowTest {
     }
 
     /**
-     * <b>The fix is ordering-dependent, and this is the arm that says so.</b> Master's sweep removes from the
-     * SHARD first and the queue second, and the argument on {@link ShardManager#onFailure} turns on that: the
-     * departure becomes observable to the residency read <em>before</em> the sweep's queue removal, so either
-     * the controller sees a departed container and undoes its add, or its add landed early enough for the
-     * sweep's queue removal to find it.
+     * <b>The confirmation on {@link ShardManager#onFailure} is ordering-dependent, and this is the arm that
+     * says so.</b> It holds against a sweep whose SHARD removal is the observable one: the departure becomes
+     * visible to the residency read before anything else happens, so either the controller sees a departed
+     * container and undoes its add, or its add landed early enough for the sweep to have found it.
      * <p>
-     * <b>astubbs/parallel-consumer#431 reverses that order</b> - it asks the queue first, declining rather than
-     * waiting, so that a refused lock abandons the paired shard removal and the pair never splits. Against that
-     * ordering a one-shot confirmation is defeated: the sweep's queue removal passes over an empty queue, the
-     * controller then adds and reads residency while the container is still in its shard, and the shard removal
-     * happens afterwards. Neither party removes the entry.
+     * <b>Against a sweep that removed from the QUEUE first, a one-shot confirmation is defeated</b> - the
+     * sweep's queue removal passes over an empty queue, the controller then adds and reads residency while the
+     * container is still in its shard, and the shard removal happens afterwards. Neither party removes the
+     * entry.
      * <p>
-     * <b>This asserts the orphan APPEARS - it is red-by-design documentation, not an endorsement.</b> It is
-     * green today because astubbs#431 is an open draft and master is still shard-first. When astubbs#431 lands it must pair
-     * the removal - repeat the queue removal AFTER the shard removal, which closes this half while the
-     * residency confirmation closes the half where the controller's add arrives later - and this test must then
-     * be inverted to assert no orphan.
-     * <p>
-     * <b>This arm cannot itself detect that moment, and saying it could was the over-claim review caught.</b>
-     * It hand-builds both orderings, so production changing under it moves nothing here.
-     * {@link #theProductionSweepsQueueRemovalIsGatedOnItsShardRemoval()} is what actually goes red when the
-     * production sweep stops being shard-first; this arm is the explanation the reader needs once it does.
+     * <b>Historical, and deliberately kept.</b> That queue-first ordering was the superseded
+     * astubbs/parallel-consumer#431 design, which had the poll thread DECLINE the write lock rather than not
+     * ask for it - and which therefore had to repeat the queue removal after the shard removal to close this
+     * half. Production has never had that ordering and now never will: the callbacks touch the shards only,
+     * and {@link ShardManager#purgeDepartedRetryEntries()} collects what they leave. The arm is kept because
+     * it is what the two write-ups that cite it point at for WHY a one-shot residency confirmation is not a
+     * complete answer on its own - which is still true, and is why the purge rather than the confirmation is
+     * what closes the window. Its assertion stands as written: it hand-builds both removals, so nothing in
+     * production moves it.
      */
     @Test
     void aQueueFirstSweepDefeatsTheOneShotConfirmation() {
@@ -356,10 +363,11 @@ class RetryQueueRequeueWindowTest {
                 .that(wm.getSm().getNumberOfRecordsInShards())
                 .isEqualTo(0L);
 
-        assertWithMessage("RED BY DESIGN: with the sweep removing from the QUEUE first, the residency read "
-                + "still sees a resident container and the add is not undone - so the entry is orphaned. When "
-                + "astubbs/parallel-consumer#431 lands it must repeat the queue removal after the shard "
-                + "removal, and this assertion must be inverted to isFalse()")
+        assertWithMessage("MODELS THE SUPERSEDED DESIGN: with the sweep removing from the QUEUE first, the "
+                + "residency read still sees a resident container and the add is not undone - so the entry is "
+                + "orphaned. Production never removes from the queue in a callback, so nothing here can change "
+                + "under this arm; it stands as the reason a one-shot confirmation is not the whole answer, "
+                + "which ShardManager.purgeDepartedRetryEntries() is")
                 .that(wm.getSm().getRetryQueue().contains(wc))
                 .isTrue();
     }
@@ -391,24 +399,26 @@ class RetryQueueRequeueWindowTest {
     /**
      * <b>The mechanical coupling between the two modelled arms above and the production code they model.</b>
      * <p>
-     * Both arms hand-build the sweep's two removals, because one of them models an ordering production does
-     * not have yet - so neither can fail when production's ordering changes, and on its own that leaves the
-     * promised regression signal resting on a future author remembering to rewrite a test. Raised in review,
-     * and correct. This arm supplies what they cannot: it drives the REAL revoke sweep
-     * ({@code WorkManager#onPartitionsRevoked} -> {@code ShardManager.removeWorkFromShardFor}) and pins the one
-     * property of it that the confirmation on {@link ShardManager#onFailure} depends on - <b>that the queue
-     * removal is gated on the shard removal having found the container</b>, which is only true of a shard-first
-     * sweep.
+     * Both arms hand-build the sweep's two removals, so neither can fail when production's ordering changes,
+     * and on its own that leaves the promised regression signal resting on a future author remembering to
+     * rewrite a test. Raised in review, and correct. This arm supplies what they cannot: it drives the REAL
+     * revoke sweep ({@code WorkManager#onPartitionsRevoked} -> {@code ShardManager.removeWorkFromShardFor})
+     * and pins what that sweep does to the retry queue.
      * <p>
-     * <b>It goes RED the moment production stops being shard-first</b>, astubbs/parallel-consumer#431 included,
-     * and its message names the pairing that PR has to add. That is the failure the modelled arms describe but
-     * cannot themselves produce.
+     * <b>Re-stated: the answer is now "nothing at all".</b> It used to be "the queue removal is gated on the
+     * shard removal having found the container", which was true of a shard-first sweep and was what the
+     * confirmation on {@link ShardManager#onFailure} depended on. The sweep runs on the broker-poll thread
+     * inside {@code poll()}, so it no longer asks the retry queue for its unbounded fair write lock at all -
+     * and {@link ShardManager#purgeDepartedRetryEntries()} collects what that leaves, on the controller
+     * thread, discriminating by shard residency rather than by which removal ran first.
      * <p>
-     * The resident container is the arm's own control: without it, "the departed container's entry survived"
-     * would also pass on a sweep that never ran at all.
+     * <b>The resident container is what makes that a claim rather than a tautology.</b> "Both entries survived
+     * the sweep" would also pass on a sweep that never ran; the controller pass at the end separates them,
+     * collecting exactly the departed one and leaving the resident one alone. So this arm goes red both if a
+     * callback starts touching the queue again and if the purge stops discriminating.
      */
     @Test
-    void theProductionSweepsQueueRemovalIsGatedOnItsShardRemoval() {
+    void theProductionSweepLeavesTheRetryQueueToTheController() {
         var residentPartition = tp;
         var departedPartition = new TopicPartition(TOPIC, 1);
 
@@ -429,27 +439,29 @@ class RetryQueueRequeueWindowTest {
         var departedShard = wm.getSm().getShard(wm.getSm().computeShardKey(willLeaveItsShard)).get();
         var removedByHand = departedShard.removeWorkAtOffset(willLeaveItsShard.offset());
         assertWithMessage("FIXTURE: one container must leave its shard while keeping its queue entry, or this "
-                + "arm has nothing to distinguish gated from ungated")
+                + "arm has nothing to distinguish collected from left alone")
                 .that(removedByHand)
                 .isSameInstanceAs(willLeaveItsShard);
 
         wm.onPartitionsRevoked(UniLists.of(residentPartition, departedPartition));
 
-        assertWithMessage("CONTROL: the sweep must remove the entry of a container it DID find in its shard - "
-                + "without this the assertion below would also pass on a sweep that never ran")
+        assertWithMessage("THE PRODUCTION SWEEP DOES NOT TOUCH THE RETRY QUEUE. If this has gone red, a "
+                + "rebalance callback is reaching RetryQueue again - which is an unbounded, fair write-lock "
+                + "acquire on the broker-poll thread inside poll(), and ArchitectureTest."
+                + "rebalanceCallbacksMustNotBlock should be red beside it")
+                .that(wm.getSm().getRetryQueue().contains(stillResident)
+                        && wm.getSm().getRetryQueue().contains(willLeaveItsShard))
+                .isTrue();
+
+        var ignoredWork = wm.getWorkIfAvailable(10);
+
+        assertWithMessage("the controller's purge collects the entry whose container left its shard")
+                .that(wm.getSm().getRetryQueue().contains(willLeaveItsShard))
+                .isFalse();
+        assertWithMessage("CONTROL: and the one whose container the sweep DID find is gone with it - both "
+                + "partitions were revoked, so by now neither container is resident anywhere")
                 .that(wm.getSm().getRetryQueue().contains(stillResident))
                 .isFalse();
-
-        assertWithMessage("PRODUCTION IS SHARD-FIRST, and the confirmation in ShardManager.onFailure depends "
-                + "on it: the sweep's queue removal is reached only through a non-null shard removal, so an "
-                + "entry whose container has already left its shard survives it. If this has gone red, "
-                + "production now removes from the queue unconditionally or first - which is exactly the "
-                + "astubbs/parallel-consumer#431 ordering that defeats a one-shot confirmation. That PR must "
-                + "repeat the queue removal AFTER the shard removal, and this arm plus "
-                + "aQueueFirstSweepDefeatsTheOneShotConfirmation must both be re-stated against the new "
-                + "ordering")
-                .that(wm.getSm().getRetryQueue().contains(willLeaveItsShard))
-                .isTrue();
     }
 
     /**
@@ -486,11 +498,17 @@ class RetryQueueRequeueWindowTest {
 
     /**
      * P3 - control arm, same magnitude one seam LATER. The rebalance completes wholly AFTER the re-queue, so
-     * the sweep finds the container in its shard, and {@code removeWorkFromShardFor} takes the paired retry
-     * queue entry with it. Green on master: the pair only splits when the rebalance lands in the window.
+     * the sweep finds the container in its shard and takes it out.
+     * <p>
+     * <b>Re-stated when the sweep stopped touching the retry queue.</b> It used to remove the paired queue
+     * entry itself, and this arm asserted that. It cannot any more: the sweep runs on the broker-poll thread
+     * inside {@code poll()} and the queue's write lock is unbounded and fair, so the callback removes from the
+     * shards alone and {@link ShardManager#purgeDepartedRetryEntries()} collects the entry on the controller
+     * thread. What the arm asserts is therefore in two steps rather than one, and the second step is the
+     * bound: one control-loop pass.
      */
     @Test
-    void theSameRebalanceOneSeamLaterTakesTheQueueEntryWithTheShardEntry() {
+    void theSameRebalanceOneSeamLaterLeavesTheQueueEntryForTheControllerToCollect() {
         WorkContainer<String, String> wc = aFailedRecordTakenAsWork();
 
         wm.handleFutureResult(wc);
@@ -502,7 +520,17 @@ class RetryQueueRequeueWindowTest {
 
         wm.onPartitionsRevoked(UniLists.of(tp));
 
-        assertWithMessage("the sweep reaches the queue entry through the shard entry, and removes both")
+        assertWithMessage("the sweep takes the shard entry - that part is unchanged, and it is all a rebalance "
+                + "callback is allowed to do")
+                .that(wm.getSm().getNumberOfRecordsInShards())
+                .isEqualTo(0L);
+        assertWithMessage("and it leaves the queue entry alone rather than waiting for the write lock")
+                .that(wm.getSm().getRetryQueue().contains(wc))
+                .isTrue();
+
+        var ignoredWork = wm.getWorkIfAvailable(10);
+
+        assertWithMessage("one controller pass collects it - the departed entry's whole lifetime")
                 .that(wm.getSm().getRetryQueue().contains(wc))
                 .isFalse();
     }
