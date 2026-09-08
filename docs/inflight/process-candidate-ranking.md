@@ -77,9 +77,11 @@ comes first because nothing else matters until it clears.
      `core-revoke-commit-skips-the-work-mailbox-drain.md` as gating - a deterministic exactly-once
      break with C9 refuted - and the same commit fixed it; the note is gone and the record is in
      `docs/solutions/logic-errors/`.
-  2. `bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md` - in the default commit
-     mode, a dead poll thread holds its partitions for `max.poll.interval.ms`; traced end to end,
-     untested, unfixed.
+  2. A dead poll thread holding its partitions for `max.poll.interval.ms` in the default commit mode -
+     read as gating, and traced end to end but untested and unfixed when the sweep ran. Now tested
+     and fixed: `maybeCloseConsumer` gained an arm for a poll thread that ended without closing the
+     consumer, the note is gone, and the record is in
+     `docs/solutions/logic-errors/a-duty-assigned-by-role-is-unassigned-when-the-role-holder-dies-2026-09-08.md`.
   3. `pr-431-must-pair-its-queue-removal-with-the-shard-removal.md` with
      `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the retry-queue orphan window; master
      is still shard-first and astubbs#431 is a draft.
