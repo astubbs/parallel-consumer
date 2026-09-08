@@ -38,7 +38,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  *   race the ownership guard exists to prevent.</li>
  *   <li><b>The refusal is loud.</b> It throws rather than returning quietly, because
  *   {@code doClose} catches it and that catch is where the user is told the consequence - no
- *   LeaveGroup, so the group's next rebalance waits out {@code session.timeout.ms}. A silent skip
+ *   LeaveGroup, so the group's next rebalance waits out {@code max.poll.interval.ms} - the consumer
+ *   object is still open, so its heartbeat keeps the session alive and {@code session.timeout.ms}
+ *   never fires. A silent skip
  *   would leave the member gone with nobody told why the group stalled.</li>
  *   <li><b>An unowned consumer still closes normally</b> - the guard must not break the happy path,
  *   which is the ordinary shutdown every user hits.</li>
