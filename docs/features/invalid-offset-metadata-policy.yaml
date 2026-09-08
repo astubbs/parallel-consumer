@@ -28,7 +28,9 @@ opt_in:
   isolated_from_stable_modules: false
 boundaries:
   - The policy governs every payload this build cannot read - a magic byte no encoding claims, an encoding with no decoder here, metadata recognized as Kafka Streams', and a body that is not something any encoder here could have produced.
-  - It does not govern a payload that decodes successfully into a wrong-but-plausible offset map; nothing in such a payload proves it wrong.
+  - A decoded map claiming offsets the partition does not hold is governed too: the end offsets of the partitions carrying metadata are read once per assignment, and a map reaching past the last offset a partition holds is treated as unreadable.
+  - When those end offsets cannot be read - an unavailable leader, a timeout - the check stands down for that assignment and logs it, rather than discarding maps it cannot judge.
+  - It still does not govern a payload that decodes into a map which is merely wrong about offsets that do exist; nothing in such a payload proves it wrong.
   - Under IGNORE the offset map is discarded, not repaired, so records completed but not yet committed before that point are replayed.
 references:
   - label: Offset-metadata policy
