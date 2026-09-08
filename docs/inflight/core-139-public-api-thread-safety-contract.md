@@ -3,7 +3,7 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: reliability -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-vetted: 2026-09-07 - PROPOSED partly true (public-API contract, owner to decide): most of the audit re-verifies at HEAD - `pauseIfRunning`/`resumeIfPaused` are still non-atomic check-then-set, `setLongPollTimeout` still writes `BrokerPollSystem`s `private static Duration longPollTimeout`, `controlLoopHooks` is a `CopyOnWriteArrayList`, `pausedPartitionSizeCache` is volatile, and `RetryQueue` still carries the GUARD ON THE CALLERS OWN LIST comment. Two rows have moved and are now wrong: `state` IS volatile on master (`private volatile State state = State.UNUSED`), so the "not volatile" premise and the "astubbs#226 makes it volatile" bullet are stale - astubbs#226 is still OPEN and is now a health-check PR, not the volatility one - while `controlThreadFuture` is still NOT volatile; and astubbs#51 is CLOSED, so the virtual-thread collision bullet no longer describes live work. `DirectStateSource` does not exist on master (astubbs#268 is still OPEN). astubbs#139/158/142 are all still OPEN. Suggest correcting those two bullets and the volatility premise, keeping steps 1-4, and dropping the delete-when section -->
+<!-- inflight-state: deferred - after v6. astubbs#139 is not v6 scope (owner ruling, 2026-09-08). The audit below stands as the record, with its volatility premise corrected on the same day so a later reader does not inherit it; the atomicity race and the missing per-method contract are what the blocker rests on now -->
 
 
 astubbs#139 (mirroring confluentinc#186) is labelled *blocker* and *1.0*, and has been since 2022,
@@ -23,14 +23,16 @@ audit it was missing, so the label can either be cleared or, for the first time,
 ## The audit - what a user may call off the constructing thread, and what happens
 
 Verified against the tree, not inferred. The field at the centre of it is
-`AbstractParallelEoSStreamProcessor`'s `private State state = State.UNUSED`, which is **not**
-volatile on master.
+`AbstractParallelEoSStreamProcessor`'s `State state`, which was **not** volatile when this audit was
+written and **is** on master today (`private volatile State state = State.UNUSED`). That closes the
+visibility half of every row below that named it; the atomicity half - a check-then-set with no lock
+- is untouched, and is what the blocker rests on. `controlThreadFuture` is still not volatile.
 
 <!-- post-merge: checked-begin -->
 | Surface | Verdict |
 |---|---|
-| `pauseIfRunning` / `resumeIfPaused` | **Unsafe twice.** Non-volatile read, and a check-then-set that is not atomic - a `pause` racing a `close` can write `PAUSED` over `CLOSING` and resurrect a consumer that was shutting down |
-| `close*` (six overloads on `DrainingCloseable`) | Same field. `waitForClose` spins on `while (!state.equals(CLOSED))` and the control task loops on `while (state != CLOSED)`, both non-volatile |
+| `pauseIfRunning` / `resumeIfPaused` | **Unsafe.** A check-then-set that is not atomic (`if (this.state == State.RUNNING) { this.state = State.PAUSED; }`) - a `pause` racing a `close` can write `PAUSED` over `CLOSING` and resurrect a consumer that was shutting down. The read is volatile now; that does not make the pair atomic |
+| `close*` (six overloads on `DrainingCloseable`) | Same field. `waitForClose` spins on `while (!state.equals(CLOSED))` and the control task loops on `while (state != CLOSED)` - both read a volatile field now, so the spin terminates; the transition race above is what remains |
 | `isClosedOrFailed` | Reads the same field plus a non-volatile `controlThreadFuture` |
 | `subscribe` x4 | Safe before `poll*`, unsafe after - `consumer.subscribe(topics, this)` runs on the caller's thread while the poll thread owns the `KafkaConsumer`. This is the half confluentinc#346 addressed |
 | `addLoopEndCallBack` | Registers onto `controlLoopHooks`, walked by `this.controlLoopHooks.forEach(Runnable::run)` every control pass. **Safe since astubbs#267** - it was a plain `ArrayList` and is now a `CopyOnWriteArrayList`, so a registration racing the walk no longer throws |
@@ -81,18 +83,19 @@ contract cannot be corrected after a 1.0 without breaking someone.
 ## What has already moved, and what it collides with
 
 <!-- post-merge: checked-begin -->
-- **astubbs#226** makes `state` and `controlThreadFuture` volatile and documents the four threads
-  that touch the field. It closes the visibility half of the state defect and *not* the atomicity
-  half - `pauseIfRunning` and `resumeIfPaused` are unchanged there.
+- **`state` is volatile on master** and `controlThreadFuture` is not; the visibility half of the
+  state defect is closed for the field that matters and the atomicity half is not - `pauseIfRunning`
+  and `resumeIfPaused` are unchanged. astubbs#226, which this note once credited with the volatility
+  change, is the health-check surface PR today and does not carry it.
 - **astubbs#267** closed the listener-registration half.
 - **astubbs#268** is the worked example of the design rule this issue needs: it marshals every read
   onto the control thread via the loop-end callback, and its `DirectStateSource` javadoc enumerates
   what may never be read from another thread, with a reason each. Whoever writes step 1 should start
   from that list rather than re-deriving it.
-- **astubbs#51** (a copy of confluentinc#908) rewrites `synchronized` blocks in the same class as
-  `ReentrantLock` to avoid virtual-thread pinning. It is still on pre-rename packages, and it touches
-  `AbstractParallelEoSStreamProcessor` and `PCMetrics`, so it collides with all three above. Any
-  atomicity fix wants to know which lock primitive wins before it picks one.
+- **astubbs#51** (a copy of confluentinc#908), which rewrote `synchronized` blocks in the same class
+  as `ReentrantLock` to avoid virtual-thread pinning, is CLOSED and no longer live work - so the
+  lock-primitive question an atomicity fix has to answer is open again rather than decided by a
+  colliding branch.
 - confluentinc#346 itself is closed unmerged, on pre-rename packages, and predates the fork's actor
   work. Treat it as a design reference for the `subscribe` half only, not a cherry-pick.
 <!-- post-merge: checked-end -->
