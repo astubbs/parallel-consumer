@@ -262,6 +262,14 @@ owns the detail, including why the budget is not established for W1's continuous
 Class 2 observes and `INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT`
 guards the routing; it is untagged deliberately, so it gates every default integration build.
 
+**How literally "speed" should be taken: the crossing flips on `-XX:ActiveProcessorCount` alone.** One
+seed on one tree fired no observation at the box's own processor count and fired at eight, two runs
+each, every run draining to `inFlight=0` with full key coverage. So a Class 2 finding tells you about
+the machine before it tells you anything about the code, and a crossing that appears on a loaded
+runner and not on a laptop is the expected behaviour rather than a non-reproduction.
+[`bug-857-family.md`](inflight/bug-857-family.md)'s `## A fourth open item` section **owns those
+runs**, including the ledger entry they withdrew.
+
 **The demotion REDUCED per-shard coverage, and that is a known gap rather than a relocation.**
 `INSTANCE_STALL` is per-INSTANCE, so one wedged shard on an instance whose other shards keep
 completing fires nothing that gates - and the correctness ledger does not close it either, because it

@@ -17,9 +17,11 @@ close** - the cycle's second edge lives in `ConsumerOffsetCommitter`, constructe
 consumer-commit modes, and among those only the *sync* arm blocks. The scenario's own javadoc says
 the mode was chosen to maximise revoke-path vs commit-path lock contention.
 
-Mode-compatible is not the same as attributed. **Two seeds have now been replayed, and the result
-<!-- post-merge: checked -->
-is bad for astubbs#29: the fix does not close this stall** - see "The first replays" below. Of five
+Mode-compatible is not the same as attributed. This once read *"two seeds have now been replayed,
+and the result is bad for astubbs#29: the fix does not close this stall"*. **WITHDRAWN 2026-09-08:
+that grid was not a one-term A/B, and its outcome flips on a processor cap with the code held
+constant** - "The first replays" below carries the correction, and `bug-857-family.md`'s
+`## A fourth open item` section owns the numbers. Of five
 sightings four carry a reproducer; two of those four have been run. The third sighting has no probe
 verdict at all; the fourth's seed was recorded as lost and then recovered, see its own correction. Compare `test-857-churn-storm-async-stalls.md`, whose
 sightings are in a mode where the cycle cannot close.
@@ -224,6 +226,27 @@ fingerprint identity as seed identity.**
 **Evidence**, outside the repo because it is 96MB compressed: `/home/astubbs/pc/evidence/857-replay-2026-08-18/`
 - `results.log` (the ledger), `autopsy-blocks.txt` (226 extracted verdicts), `reports/` (gzipped
   failsafe XMLs), and the driver scripts so the experiment can be re-run.
+
+### CORRECTED 2026-09-08: this grid was not a one-term A/B, and its outcome flips on the processor cap it dismissed
+
+**Do not read the table above as a comparison of astubbs#29's lock change.** Two separate findings,
+either alone enough to spend it; `bug-857-family.md`'s `## A fourth open item` section **owns the
+numbers and the reasoning**, and this is the part that belongs with the grid itself.
+
+- **The arms differed in a second place.** `ConsumerManager.poll` refreshes the pause cache at ENTRY
+  and at exit on the DEFECT arm (`438b09d9b`); on the FIXED arm (`b8a335b05`) only the exit refresh
+  is there. Exit-only is the shape
+  [`paused-poll-wakeup-lost-to-stale-pause-cache-2026-09-01.md`](../solutions/performance-issues/paused-poll-wakeup-lost-to-stale-pause-cache-2026-09-01.md)
+  owns, fixed two weeks after this grid ran by a commit that is not an ancestor of `b8a335b05`. A
+  controlled revert of it on today's tree did **not** reproduce the symptom, so it explains the
+  fixed-worse-than-defect asymmetry no better than astubbs#29 does - what it establishes is that the
+  grid was never measuring one term.
+- **The confound bullet above dismisses the wrong suspect.** *"the controls passing under the same
+  cap argue it does not manufacture the stall"* - seed B replayed on today's master fires no
+  observation at the box's own twelve processors and fires at `-XX:ActiveProcessorCount=8`, two runs
+  each, code and seed held constant. The cap is exactly what manufactures it.
+
+Every replay in the 2026-09-08 set drained to `inFlight=0` with full key coverage, crossing or not.
 
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed

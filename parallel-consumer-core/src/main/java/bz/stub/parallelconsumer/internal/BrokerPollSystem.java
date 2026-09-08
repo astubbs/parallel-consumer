@@ -263,6 +263,57 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         return committer.isPresent();
     }
 
+    /**
+     * Has the poll thread finished <b>without</b> the consumer having been closed - so that whoever is closing
+     * the instance must close it instead?
+     * <p>
+     * <b>Why this exists.</b> {@link #maybeCloseConsumerManager()} above and
+     * {@code AbstractParallelEoSStreamProcessor.maybeCloseConsumer} split the consumer close by commit mode, and
+     * that split assumes the designated closer is <em>alive</em> at close time. When the poll thread dies - any
+     * exception escaping {@link #controlLoop()} - it never reaches {@code doClose}, and in the consumer-commit
+     * modes the split then left nobody: no {@code consumer.close()}, so no LeaveGroup, so the member's partitions
+     * stayed assigned to a dead instance until {@code max.poll.interval.ms} expired.
+     * <p>
+     * <b>This is not a reconciliation of the two {@code isResponsibleForCommits()} methods.</b> They are an XOR
+     * over commit mode and they have never disagreed - see
+     * {@code docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md},
+     * which warns specifically against "fixing" them. What is added here is the case neither of them can express:
+     * the designated closer is dead.
+     * <p>
+     * <b>Derived, never mirrored.</b> Both halves are read from state this class already owns, because a copy of
+     * "the consumer is closed" would be a synchronisation contract nobody wrote
+     * ({@code docs/solutions/architecture-patterns/a-mirror-of-state-another-component-owns-is-a-contract-nobody-wrote.md}).
+     * {@code runState} reaches {@link State#CLOSED} at exactly one place - the statement after
+     * {@link #maybeCloseConsumerManager()} in {@link #doClose()} - so "this system closed it" is
+     * {@code CLOSED && isResponsibleForCommits()} with nothing to keep in step. It is {@code volatile}, and the
+     * future completing is itself the happens-before edge for everything the poll thread did.
+     * <p>
+     * <b>Deliberately false while the poll thread is still alive</b>, which is the {@code closeAndWait}-timed-out
+     * case. Answering "yes, go ahead" there would hand the control thread a consumer another thread is actively
+     * polling - the data race {@link ThreadConfinedConsumer} exists to prevent - so this reports only what it can
+     * prove.
+     * <p>
+     * <b>It also fires on a close that STARTED and threw</b>, not only on a poll thread that never reached
+     * {@code doClose}: {@code runState = CLOSED} is the statement <em>after</em>
+     * {@link #maybeCloseConsumerManager()}, so anything thrown out of that call leaves {@code runState} short of
+     * {@code CLOSED} and the poll thread dead. That is deliberate and is the useful answer in both halves of the
+     * case. If the throw came before {@link ConsumerManager#close(Duration)} claimed ownership, the consumer is
+     * genuinely still open and the control thread's retry closes it - which is the whole point. If it came from
+     * the guarded {@code consumer.close()} itself, the dead poll thread still holds ownership,
+     * {@code tryClaimOwnership()} refuses to steal it, and the retry lands on the warning that already explains
+     * the cost rather than closing a consumer twice. Characterised by
+     * {@code PollerDeathClosesTheConsumerTest.aCloseThatStartedAndThrewIsNotRetriedIntoASecondClose}, which
+     * records that behaviour but - unlike its sibling arm - does not go red without this predicate, and says so
+     * itself. So this paragraph is where the reasoning lives; the test only stops it changing unnoticed.
+     *
+     * @return true when the poll thread has ended (or never started) and this system did not close the consumer
+     */
+    public boolean pollThreadEndedWithoutClosingTheConsumer() {
+        boolean pollThreadFinished = pollControlThreadFuture.map(Future::isDone).orElse(true);
+        boolean thisSystemClosedIt = runState == CLOSED && isResponsibleForCommits();
+        return pollThreadFinished && !thisSystemClosedIt;
+    }
+
     private EpochAndRecordsMap<K, V> pollBrokerForRecords() {
 
         checkStateForPausingSubscriptions();
