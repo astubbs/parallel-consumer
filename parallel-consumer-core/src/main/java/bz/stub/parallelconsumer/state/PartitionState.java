@@ -113,7 +113,11 @@ public class PartitionState<K, V> {
 
     /**
      * How many records this partition has completed, ever. Monotone, and the <b>only</b> thing a completing
-     * thread touches to say the partition's state has moved on - see {@link #setDirty()}.
+     * thread touches to say the partition's state has moved on - see {@link #recordCompletion()}.
+     * <p>
+     * <b>It is a version stamp, not a quantity.</b> Nothing reads the number for its own sake; the only
+     * use of it anywhere is its inequality with {@link #completionCountCommitted}, which is
+     * {@link #isDirtyAt(long)}.
      * <p>
      * With {@link #completionCountCommitted} it replaces the pair of booleans this class carried until
      * astubbs/parallel-consumer#469 - a {@code volatile boolean dirty} and a plain
@@ -327,23 +331,42 @@ public class PartitionState<K, V> {
     }
 
     /**
-     * Records that this partition's state has moved on. The only write a completing thread makes to the
-     * commit protocol, and it only ever goes forward.
+     * Records that a completion landed, so this partition's state has moved on. The only write a completing
+     * thread makes to the commit protocol, and it only ever goes forward.
+     * <p>
+     * It was called {@code setDirty()} until astubbs/parallel-consumer#469, which is a misnomer once dirty
+     * is derived rather than stored: there is no flag to set, and what the completing thread does is stamp a
+     * new version on the partition. Whether that leaves it dirty is {@link #isDirty()}'s answer, not this
+     * method's.
      */
-    private void setDirty() {
+    private void recordCompletion() {
         completionCount.incrementAndGet();
     }
 
     /**
-     * Is there completed state this partition has not had committed?
+     * Is this partition dirty? <b>Dirty means a completion has landed that no acknowledged commit has
+     * covered.</b>
      * <p>
-     * Read on the control thread by the commit gate ({@code AbstractParallelEoSStreamProcessor}'s
+     * Derived, never stored - there is no flag for the two threads to disagree about. Read on the control
+     * thread by the commit gate ({@code AbstractParallelEoSStreamProcessor}'s
      * {@code isTimeToCommitNow() && wm.isDirty()}) and on the committer thread by
      * {@link #getCommitDataIfDirty()}. The {@link #completionCount} load is the acquire that pairs with a
      * completing thread's {@code incrementAndGet}.
      */
     boolean isDirty() {
-        return completionCount.get() != completionCountCommitted;
+        return isDirtyAt(completionCount.get());
+    }
+
+    /**
+     * The single definition of dirty, taking the {@link #completionCount} sample to test as a parameter, so
+     * that a caller which must also <em>keep</em> the value it tested tests and keeps the same one.
+     * {@link #getCommitDataIfDirty()} is that caller; {@link #isDirty()} simply passes a fresh load.
+     *
+     * @param sampledCompletionCount one read of {@link #completionCount}
+     * @return true if that sample is ahead of what the last acknowledged commit covered
+     */
+    private boolean isDirtyAt(long sampledCompletionCount) {
+        return sampledCompletionCount != completionCountCommitted;
     }
 
     // todo rename isRecordComplete()
@@ -390,7 +413,7 @@ public class PartitionState<K, V> {
 
         updateHighestSucceededOffsetSoFar(offset);
 
-        setDirty();
+        recordCompletion();
     }
 
     public void onFailure(WorkContainer<K, V> work) {
@@ -630,8 +653,12 @@ public class PartitionState<K, V> {
      * why that direction and not the other.
      */
     public Optional<OffsetAndMetadata> getCommitDataIfDirty() {
+        // Loaded ONCE, then tested and stashed - this cycle must stash the very count it tested, not a
+        // second load. A completion landing between two loads would be published as covered while its
+        // offset need not be in the metadata this cycle goes on to encode, which is the burnt commit
+        // cycle astubbs/parallel-consumer#469 closes.
         long collectedAt = completionCount.get();
-        if (collectedAt != completionCountCommitted) {
+        if (isDirtyAt(collectedAt)) {
             completionCountBeingCommitted = collectedAt;
             return of(createOffsetAndMetadata());
         }

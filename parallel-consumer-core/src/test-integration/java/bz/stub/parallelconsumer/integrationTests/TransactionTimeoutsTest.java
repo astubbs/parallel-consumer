@@ -241,7 +241,7 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
                 throw new FakeRuntimeException("fail");
             } else if (offset == OFFSET_TO_MARK_DIRTY) {
                 // The controller only attempts a commit when a record has SUCCEEDED since the last one:
-                // PartitionState#onSuccess is the sole caller of setDirty, onFailure is a no-op, and
+                // PartitionState#onSuccess is the sole caller of recordCompletion, onFailure is a no-op, and
                 // wm.isDirty() is AND-ed into the commit gate - requestCommitAsap() cannot override it. So if
                 // every other record of this batch finishes before the slow one starts, no commit is attempted
                 // at all and no timeout can fire. Delaying this one success into the slow record's lock hold

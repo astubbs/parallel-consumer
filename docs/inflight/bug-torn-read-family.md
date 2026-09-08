@@ -29,7 +29,8 @@ reclassified as a downstream stage of another. The armed red reproductions live 
 **Settled 2026-08-25, and the dossier below had it wrong in a specific way.** The tear is real -
 forced open, a mid-window read commits offset 101 with no payload on a partition the broker reset
 to 5, cancelling the replay - but it is **fenced**: the commit path collects only `dirty` states,
-`setDirty()` has exactly one call site (`onSuccess`), and a bootstrap-phase state cannot have had an
+`recordCompletion()` (called `setDirty()` when this was settled) has exactly one call site
+(`onSuccess`), and a bootstrap-phase state cannot have had an
 epoch-matched completion. The one production route that dirties a bootstrap-phase state is candidate
 3's success-path tear, so fixing candidate 3 closes candidate 1's only door. Harden the reset-write
 ordering later, with the planned racing-double unification. Original analysis kept below for the

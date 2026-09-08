@@ -79,9 +79,12 @@ fix. Count the writers first: one writer is a modifier, two writers is a protoco
 
 Both flags collapse into a monotone completion count plus the count the commit covered:
 
-- the completing thread only ever increments a count;
+- the completing thread only ever increments a count - `PartitionState.recordCompletion()`, which is
+  what the old `setDirty()` became once there was no flag left to set;
 - the committer samples that count at commit start, holds it, and publishes it on success;
-- "is this partition dirty" is a comparison of the two.
+- "is this partition dirty" is a comparison of the two - `isDirty()`, derived rather than stored, and
+  the comparison itself lives in one place (`isDirtyAt`) because the collecting caller has to test and
+  keep the same sample rather than load twice.
 
 Neither thread writes a value that can lose to the other, and there is no check-then-act left,
 because the clean-marking step publishes a value decided earlier rather than reading one. Measured:

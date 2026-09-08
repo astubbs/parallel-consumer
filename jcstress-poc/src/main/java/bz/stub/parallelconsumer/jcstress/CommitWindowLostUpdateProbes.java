@@ -290,7 +290,7 @@ public class CommitWindowLostUpdateProbes {
         public void controlThread() {
             incompleteOffsets.remove(1L);
             offsetHighestSucceeded = 1;
-            completionCount.incrementAndGet();          // setDirty()
+            completionCount.incrementAndGet();          // recordCompletion()
         }
 
         @Actor

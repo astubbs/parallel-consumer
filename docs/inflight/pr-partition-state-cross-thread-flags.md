@@ -5,11 +5,17 @@
 <!-- inflight-impact: coordination -->
 
 <!-- post-merge: checked-begin - every sentence below names astubbs/parallel-consumer#469 rather
-     than "this PR", and reads correctly once that PR has merged and its branch is gone -->
+     than "this PR", and reads correctly once that PR has merged and its branch is gone; the first
+     line is post-merge-correct by removal, since the file it describes is deleted before the merge
+     and so never reaches master -->
+**This note is deleted in astubbs/parallel-consumer#469's final commit at merge prep, so it never
+lands on `master`** - [`docs/inflight/AGENTS.md`](AGENTS.md) forbids leaving a "delete this when it
+merges" marker behind, because the merge is exactly when nobody is looking here.
+
 Working note for astubbs/parallel-consumer#469. The durable knowledge has already moved to
 [`docs/solutions/logic-errors/volatile-is-the-fix-for-a-one-writer-field-not-a-shared-one-2026-09-07.md`](../solutions/logic-errors/volatile-is-the-fix-for-a-one-writer-field-not-a-shared-one-2026-09-07.md)
 and into each field's own javadoc, so what is left here is only what a reviewer of that PR needs
-while it is open. It goes when it merges.
+while it is open.
 
 ## The decision astubbs#469 takes that the next reader is most likely to reverse on sight
 
@@ -22,16 +28,35 @@ before proposing the modifier. The two notes astubbs#469 retired
 kept deliberately - the `throughput`-vs-`stall` misclassification review caught on astubbs#349 - and
 the solution write-up above carries what outlived them.
 
-## Two things a reviewer should push back on
+## The vocabulary astubbs#469 leaves behind
 
-- **The seam the pinning test drives is new production code**, not one master already had. Master's
-  protocol was correct in program order at every overridable call on the commit path; the defect is
-  an interleaving inside `setClean()`'s check-then-act, between a read and a write with nothing
-  between them. So `PartitionState.onCommitWindowClosing()` was added - an overridable no-op - and
-  the redness is shown two ways rather than one: a permanent control arm in
+Dirty is **derived**, so nothing sets or clears it, and the names say so:
+
+- **`recordCompletion()`** is what `setDirty()` became. The completing thread's only write to the
+  commit protocol; it stamps a new version on the partition and says nothing about whether the
+  partition is dirty. Its one caller is still `onSuccess`.
+- **`isDirty()`** is the derived query, and its javadoc carries the definition: a completion has
+  landed that no acknowledged commit has covered.
+- **`isDirtyAt(long)`** holds that comparison once. `isDirty()` passes a fresh load;
+  `getCommitDataIfDirty()` passes the sample it then stashes, because the collecting cycle must
+  publish the very count it tested - a second load could cover a completion whose offset the encode
+  never saw, which is the burnt commit cycle astubbs#469 exists to close.
+
+A reader arriving at `setDirty` from an older document is at the right method under the new name;
+the dated records under `docs/plans/` and `docs/solutions/` that describe the retired two-flag
+protocol are left as written.
+
+## What a reviewer should push back on
+
+- **SETTLED - the seam the pinning test drives is new production code, and no pre-existing one was
+  found.** astubbs#469 asked a reviewer to say so if master already had a seam at that instruction;
+  the review at
+  https://github.com/astubbs/parallel-consumer/pull/469#issuecomment-5575529118 searched for an
+  overridable hook on the commit path between the flag-read and the `dirty` write and found none,
+  reporting no counter-evidence. `PartitionState.onCommitWindowClosing()` therefore keeps its
+  justification, and astubbs#469's redness is still shown two ways: a permanent control arm in
   `PartitionStateCommitWindowSeamTest` that reverts only the protocol, and a transient revert of the
-  production protocol whose failure output is in astubbs#469's fix commit. **If a reviewer can see a
-  seam master already had, say so** - the added one loses its justification.
+  production protocol whose failure output is in astubbs#469's fix commit.
 - **The field collapse touches what astubbs#349 measured.** `dirty` stops being a `volatile boolean`
   and becomes a comparison of two counters. The release/acquire edge that PR measured is preserved
   (an `AtomicLong` RMW is a strictly stronger release than a volatile store), but its modifier

@@ -164,7 +164,7 @@ class CloseAndOpenOffsetTest extends BrokerIntegrationTest<String, String> {
             // offsets topic or touch the (not thread safe) Consumer#committed.
             //
             // The last success has to be established FIRST, though: a work manager with nothing succeeded
-            // yet is also not dirty, and setDirty only fires downstream of the success
+            // yet is also not dirty, and recordCompletion only fires downstream of the success
             // (WorkManager.onSuccessResult -> PartitionState.onSuccess). Waiting on !isDirty() alone can
             // therefore pass before offset 5 has even been processed, let alone committed.
             var rebalancePartition = new TopicPartition(rebalanceTopic, 0);

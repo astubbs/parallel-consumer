@@ -142,7 +142,8 @@ Do not re-derive these; they are measured and recorded.
   modifier is dropped. **`PartitionState.allowedMoreRecords` came off the list the same way**
   (astubbs#469), and the note beside it did not: `stateChangedSinceCommitStart` was written by both
   threads, so a modifier could not fix it and jcstress measured that it does not - that field and
-  `dirty` collapsed into a monotone completion count plus the count the commit covered, pinned by
+  `dirty` collapsed into a monotone completion count (`recordCompletion()`) plus the count the commit
+  covered, with `isDirty()` derived from the pair rather than stored, pinned by
   `PartitionStateCommitWindowSeamTest`. **A modifier is not the default answer to a shared field;
   it is the answer to a one-writer field.** **`RetryQueue.closed` came off the list a different way**: the iterator that
   owns it holds a read lock only its opener can release, so it was already confined and the answer
