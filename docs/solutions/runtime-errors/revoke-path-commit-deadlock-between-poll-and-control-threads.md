@@ -71,6 +71,13 @@ tags:
 > which this cycle cannot close at all, so its results are not evidence about this change in either
 > direction. Both are expanded below.
 >
+> **Re-run 2026-09-08, because this A/B's tree no longer exists.** astubbs#466 changed the revoke
+> path after the grid above was taken. The same instrument, the same one-term control, re-run at
+> `6aab3ff5a`: fix 5/5 on both assignors with the window demonstrably open, pre-fix control 5/5
+> failing. It also establishes that the six captures' `BLOCKED`-on-monitor signature can no longer
+> appear even when the deadlock is fully present - see "Verification status" below, which is the
+> current status of this document and supersedes the "Unproven" verdict kept there as a record.
+>
 > **Read the mode caveat before anything else.** The cycle described here can only close in
 > `PERIODIC_CONSUMER_SYNC`. The reproducer test runs `PERIODIC_TRANSACTIONAL_PRODUCER`, where the
 > cycle **cannot occur at all** - and where a *different*, unbounded block on the revoke path
@@ -199,6 +206,13 @@ was true for a reason that had nothing to do with the code under test.
 Not merged. Not verified - see the verification status at the end of this section, which is the part
 that matters.)*
 
+**Dated correction, 2026-09-08 - the parenthetical above is the state on the day it was written and
+is no longer the state of the code.** astubbs#29 merged 2026-09-02 as `a6941020f`, and the revoke
+path has been changed again since, by astubbs#466 (`745b1f6a5`), which routes the transactional-mode
+revoke commit through the control thread. The claims are left standing rather than rewritten, per
+[`docs/citations.md`](../../citations.md); the verification section at the end of this section
+carries the same correction, and it is where the current status is.
+
 Split the two jobs the `commitCommand` monitor was doing. A dedicated `ReentrantLock` now guards
 commit *execution*; the `commitCommand` monitor keeps guarding only the flag itself
 (`AbstractParallelEoSStreamProcessor.java:1555,1589,1595`).
@@ -280,6 +294,71 @@ That is the sharpest open question on this work: the fix addresses a cycle the t
 while the block the test *can* reach is untouched.
 
 ### Verification status - the part that matters
+
+**SUPERSEDED 2026-09-08 - PROVEN, at a head that did not exist when the section below was written.
+Read this block first; the "Unproven" verdict under it is the state of astubbs#29 as an unmerged
+draft on 2026-08-07 and is kept as the record rather than rewritten.**
+
+The 2026-08-31 A/B in this document's header status block already moved the verdict once. What it
+could not cover is that the revoke path changed *again* afterwards: astubbs#466 (`745b1f6a5`) landed
+`commitOnRevokeViaTheControlThread` for the transactional mode, so the tree that A/B measured no
+longer exists. This is the same instrument re-run at `6aab3ff5a` - master plus everything through
+astubbs#466 - with a control cut from that same head by the one term, `commitLock.tryLock()`
+replaced by `commitLock.lock()`. Five repetitions per cell, `-Dpc.log.level=info`:
+
+| arm | assignor | result | revoke-path declines | commit-response timeouts |
+|---|---|---|---|---|
+| fix | eager | 5/5 pass | 6 | 0 |
+| fix | cooperative | 5/5 pass | 5 | 0 |
+| pre-fix control | eager | **5/5 FAIL** | 0 | 65 |
+
+The declines are the load-bearing column, for the reason the header block gives: they prove the
+window opened rather than the run quietly missing the race. Both fix cells also logged the
+uncontended branch (5 and 5), so the revoke fork demonstrably executed in every cell.
+
+**The control also settles a question this file asked six times and could not have answered.** The
+six thread-dump captures in [`../../inflight/bug-857-family.md`](../../inflight/bug-857-family.md)
+each identified the defect by one signature - the poll thread `BLOCKED` on an `AtomicBoolean`
+monitor, held by its own `pc-control`, reached through `onPartitionsRevoked` - and each closed by
+asking for a replay that reads *whether the poll thread is still found `BLOCKED` on the same
+monitor*. **That question is now unanswerable-by-construction, and the control arm is what proves
+it rather than an argument from reading the code.** With the deadlock deliberately restored at this
+head, all **80** diagnoses across the five failing repetitions read:
+
+```
+POLL THREAD AT TIMEOUT: WAITING - the poll thread is parked rather than working ...
+Waiting on: java.util.concurrent.locks.ReentrantLock$NonfairSync@..., held by: pc-control.
+Top frames: [... LockSupport.park, ... ReentrantLock.lock,
+             ...tryCommitOffsetsOnRevoke(AbstractParallelEoSStreamProcessor.java:956),
+             ...onPartitionsRevoked(AbstractParallelEoSStreamProcessor.java:709), ...]
+```
+
+Not one said `BLOCKED`, and not one named an `AtomicBoolean`. The monitor the captures name was
+replaced by a `ReentrantLock`, and a thread waiting on one parks rather than blocking - so a replay
+looking for the captures' signature returns "no" whether the deadlock is fixed or fully present.
+**Anyone matching a future capture by that signature will mis-file a genuine reproduction.** Match
+by the method pair (`tryCommitOffsetsOnRevoke` under `onPartitionsRevoked`) and the holder
+(`pc-control`), never by the thread state or the lock type.
+
+**And the JVM's own deadlock detector cannot see this cycle in either form.** `PollThreadStallDiagnosis`
+calls `findDeadlockedThreads()`, which covers `ReentrantLock` as well as monitors, yet every control
+verdict came back `WAITING` rather than `DEADLOCK`. The cycle's other edge is the control thread
+waiting on `commitResponseQueue`, a `LinkedBlockingQueue.poll` - a queue wait, not a lock - so no
+lock graph contains it. The commit-response timeout remains the only thing that breaks it, which is
+why this instrument gates instead of an assertion on `findDeadlockedThreads`.
+
+**What is still not covered**, unchanged: the transactional revoke wait
+([`../../inflight/bug-857-transactional-revoke-wait.md`](../../inflight/bug-857-transactional-revoke-wait.md),
+astubbs#44 / confluentinc#803), and the mode caveat above.
+
+**Two of the three defects the section below names have also been retired by events**, and the third
+is what the table above answers: the deterministic 5/5 latch failure was the test/fix contract
+mismatch it describes, and `Rebalance857CommitSyncDeadlockProbeIT` - which does not use that latch -
+is the instrument that replaced it. That probe now **gates**: four subclasses of five repetitions
+run in the integration suite on every PR, so the fix is re-verified continuously rather than by this
+one experiment.
+
+---
 
 **Unproven.** Specifically:
 
