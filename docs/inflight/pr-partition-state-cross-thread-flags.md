@@ -28,6 +28,14 @@ before proposing the modifier. The two notes astubbs#469 retired
 kept deliberately - the `throughput`-vs-`stall` misclassification review caught on astubbs#349 - and
 the solution write-up above carries what outlived them.
 
+**And a second one, in the probe module: the remaining duplication between the arms is load-bearing.**
+Answering the duplicate-code check, astubbs#469 hoisted the shared scaffolding into a base class each
+arm extends, and stopped at a line a dedupe pass would happily cross - the measured field's own
+declaration per `@State` class, and each actor's literal sequence of accesses. The two probe classes'
+javadocs **own** that split and the rule behind it (a member may be hoisted only if it contains no
+access to the arm's measured field); what is here is only the warning that the remaining duplication
+is deliberate, so re-read those javadocs before removing any more of it.
+
 ## The vocabulary astubbs#469 leaves behind
 
 Dirty is **derived**, so nothing sets or clears it, and the names say so:
