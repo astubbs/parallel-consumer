@@ -46,6 +46,13 @@ class EncoderOutputSurvivesDecodeValidationTest {
     /**
      * Encodes {@code length} offsets from {@link #BASE_OFFSET} where only {@code incompleteIndexes} are incomplete,
      * then hands the bytes back through the production decode path exactly as a rebalance would.
+     * <p>
+     * <b>Every shape is decoded twice</b>, once with no plausibility ceiling and once with the tightest honest one -
+     * a partition that ends exactly at the last offset encoded. That second pass is what pins the encoder side of
+     * {@link OffsetRunLength#runLengthDecodeToIncompletes}'s guard: the encoder only ever encodes offsets PC has
+     * polled, so its output always ends on an offset the partition holds, and the guard must therefore never see it
+     * as a claim past the end. Anything that made the encoder write one offset further than it saw would land here
+     * as a false rejection rather than as silence.
      */
     private static void roundTrip(OffsetEncoding encoding, int length, SortedSet<Long> incompletes) throws Exception {
         long highestSucceeded = BASE_OFFSET + length - 1;
@@ -62,16 +69,19 @@ class EncoderOutputSurvivesDecodeValidationTest {
         withMagic.put(encoding.magicByte);
         withMagic.put(body);
 
-        assertThatCode(() -> {
-            var decoded = EncodedOffsetPair.decodeToIncompletes(withMagic.array(), BASE_OFFSET,
-                    InvalidOffsetMetadataHandlingPolicy.FAIL, TP);
-            assertThat(decoded.getIncompleteOffsets())
-                    .as("a payload this build wrote must decode back to the offsets it encoded")
-                    .isEqualTo(incompletes);
-        })
-                .as("FAIL must not reject %s output at length %s - a false rejection discards a real offset map "
-                        + "and replays completed work", encoding, length)
-                .doesNotThrowAnyException();
+        for (long ceiling : new long[]{OffsetMapCodecManager.UNKNOWN_PARTITION_CEILING, highestSucceeded}) {
+            assertThatCode(() -> {
+                var decoded = EncodedOffsetPair.decodeToIncompletes(withMagic.array(), BASE_OFFSET,
+                        InvalidOffsetMetadataHandlingPolicy.FAIL, TP, ceiling);
+                assertThat(decoded.getIncompleteOffsets())
+                        .as("a payload this build wrote must decode back to the offsets it encoded")
+                        .isEqualTo(incompletes);
+            })
+                    .as("FAIL must not reject %s output at length %s against a partition ending at %s - a false "
+                            + "rejection discards a real offset map and replays completed work",
+                            encoding, length, ceiling)
+                    .doesNotThrowAnyException();
+        }
     }
 
     /**

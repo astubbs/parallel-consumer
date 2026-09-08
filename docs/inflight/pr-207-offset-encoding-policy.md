@@ -151,8 +151,6 @@ Each of these outlived this PR and now has its own note, so nothing is restated 
 
 - [`core-bytearray-encodings-have-no-codec.md`](core-bytearray-encodings-have-no-codec.md) - the two
   encoder-less, decoder-less `OffsetEncoding` constants, and the wire-format decision about them.
-- [`bug-run-length-plausibility-ceiling.md`](bug-run-length-plausibility-ceiling.md) - a structurally
-  valid but implausibly large run length, which nothing in the payload proves wrong.
 - [`core-fail-policy-escapes-the-rebalance-callback.md`](core-fail-policy-escapes-the-rebalance-callback.md)
   - `FAIL` stopping via Kafka's generic callback wrapper rather than PC's own fatal path.
 
