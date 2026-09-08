@@ -59,60 +59,11 @@ astubbs/parallel-consumer#29 carried.
 
 ## What gates v6, as the sweep read it
 
-[`release-when-is-v6-good-enough.md`](release-when-is-v6-good-enough.md) set the bar as "the bugs
-that are already open". Six area sweeps each named what they read as gating (the owner's pass over
-the sweep's proposals is done - [`process-inflight-vet-sweep.md`](process-inflight-vet-sweep.md)
-records it); this is the union,
-ordered by user-visible consequence, with the confidence each agent stated. The mechanical gate
-comes first because nothing else matters until it clears.
-
-- **The quarantine registry is non-empty, and every entry is unowned.** `release.yml` refuses the
-  cut while [`docs/quarantined-tests.md`](../quarantined-tests.md) lists anything; read that file,
-  not this line.
-- **Verified defects, in the code as written today:**
-  1. `bug-857-transactional-revoke-wait.md` - was the unbounded wait inside the revoke callback,
-     with a user report carrying upstream's verified-bug label. astubbs#466 (merged the day the sweep
-     ran) replaced the spin with a wait bounded by `commitLockAcquisitionTimeout`; whether that bound
-     is right is what is left, and astubbs#408 holds it. The sweep also read
-     `core-revoke-commit-skips-the-work-mailbox-drain.md` as gating - a deterministic exactly-once
-     break with C9 refuted - and the same commit fixed it; the note is gone and the record is in
-     `docs/solutions/logic-errors/`.
-  2. `bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md` - in the default commit
-     mode, a dead poll thread holds its partitions for `max.poll.interval.ms`; traced end to end,
-     untested, unfixed.
-  3. `pr-431-must-pair-its-queue-removal-with-the-shard-removal.md` with
-     `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the retry-queue orphan window; master
-     is still shard-first and astubbs#431 is a draft.
-  4. `bug-unvalidated-batchsize.md` - `batchSize(0)` silently processes nothing; one `validate()`
-     bound closes all three shapes (astubbs#311). The cheapest real fix in the set.
-  5. `bug-max-failure-history-is-inert.md` - a public option that does nothing; removing it is
-     breaking, so it is settled before the major or carried forever.
-  6. `bug-offset-commit-timeout-does-two-jobs.md` - the default makes a retry unreachable; the fix is
-     a design choice among three.
-  7. `bug-162-offset-state-truncation.md` - a WARN operators alert on, firing falsely for every new
-     group; decision 5 in the section above.
-  8. `bug-unbounded-log-lines.md` - record keys and values printed at WARN on a line that asks to be
-     pasted into a public issue; cheap to fix.
-- **Contract and compatibility, where a major is the only window:**
-  `core-bytearray-encodings-have-no-codec.md` (two magic bytes),
-  `core-pc-owns-the-clients-it-uses.md` (the consumer-instance option). The sweep also listed
-  `core-139-public-api-thread-safety-contract.md` here; the owner ruled astubbs#139 out of v6 scope
-  on 2026-09-08 and the note is deferred after v6.
-- **Instruments the release decision is read through, currently lying or unproven:**
-  `test-chaos-autopsy-omits-fleet-violations.md` (a clean autopsy after a fleet-violation kill,
-  confirmed in code), `test-perf-lane-asserts-a-deadline-on-a-varying-machine.md` (a required check
-  that fails on arithmetic), `test-no-progress-window-may-not-transfer-to-w1.md` (sightings at the
-  bound, none replayed), `ci-codecov-flags-not-like-for-like.md` (proposal 9),
-  `ci-broker-container-exit-126-is-undiagnosable.md`.
-- **Decisions, not engineering:** the astubbs#161 and astubbs#181 replies (items 1 and 2 at the top
-  of this file); the "is it enough?" call, whose own target date has passed; and astubbs#257's
-  changelog wording, which has one window because the section is generated from the log.
-- **Read as not gating, by the agent that vetted each:** the new modules (astubbs#271, astubbs#269,
-  astubbs#268 - capabilities, not defects); the `deps-` majors; every `issue-response-*` draft; the
-  `static-` registers (advisory lanes); the `branch-` notes; the `test-debt` and feature notes; the
-  unfenced `PartitionState` booleans and the plain-int counter (real, unmeasured, possibly absorbed
-  by the shared-nothing rework); and the poisoned-transaction pair, where today's behaviour is
-  strictly better than what it replaced.
+Moved on 2026-09-08 into
+[`release-when-is-v6-good-enough.md`](release-when-is-v6-good-enough.md), under "What the
+astubbs#476 vetting sweep read as gating", so the release has one note to burn down. The list there
+is the sweep's reading with each agent's stated confidence, reconciled against the burn-down's own
+tiers; this file keeps the ranking of everything else.
 
 ## Ready picks
 

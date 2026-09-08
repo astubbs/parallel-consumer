@@ -140,8 +140,7 @@ has two named exceptions, not one - a single oversized record stops its partitio
 the process in transactional mode. Either name it beside astubbs#44 in `release-0.6.0.0.md`, or
 carry a smaller standalone abort for v6. The astubbs#476 vetting sweep read the pair as **not
 gating** ("today's behaviour is strictly better than what it replaced"); that is an agent's reading,
-recorded in [`process-candidate-ranking.md`](process-candidate-ranking.md), and the call is still
-the owner's.
+recorded in the sweep's list below, and the call is still the owner's.
 
 ### Tier 3 - release plumbing, then tag
 
@@ -221,6 +220,16 @@ churn rather than a PC defect.
 
 ## Known unknowns the release note should not paper over
 
+**Every item below is being pursued (owner's instruction, 2026-09-08), each by its own agent on its
+own branch; `gh pr list -R astubbs/parallel-consumer` shows the PRs as they open.** Code-shaped
+questions run in parallel; the replay-shaped ones (chaos and soak) run one at a time, because
+several replay agents on one machine produce exactly the starvation artefacts they are meant to
+rule out. Order of the replay queue: the eager-mode stall (running), then the six deadlock captures
+with the fix applied, then the async-unordered rebalance stall with its progress-tracker
+instrumentation, then the `INSTANCE_STALL`/`ZOMBIE_MEMBER` idle-versus-loaded replay, then the
+commit-response-timeout stall astubbs#471's soak found.
+
+
 - Whether the six deadlock captures that verified astubbs#29's mechanism ever replay clean **with
   the fix applied** - the owning solutions doc still says "unproven".
 - Whether the shard-displacement orphan window
@@ -236,15 +245,77 @@ churn rather than a PC defect.
   to a conditional support posture, and a renderer can lift the bare value without its condition.
   The tag-day checks below carry the recheck.
 
+## What the astubbs#476 vetting sweep read as gating
+
+Moved here from `process-candidate-ranking.md` on 2026-09-08 (it was written by the six-agent sweep
+on 2026-09-07 and is the agents' reading, with their stated confidence - not the owner's decision).
+Where it disagrees with the tiers above, the tiers say so: the poisoned-transaction pair (the sweep:
+not gating; the owner's call is still open in tier 2), the transactional revoke wait (the sweep read
+astubbs#466 as having replaced the unbounded wait, which is right, and astubbs#408 as owning the
+bound), and the `batchSize` validation bound (the sweep: cheapest real fix; the triage below filed
+it as 0.6.0.x - it could ride in tier 1). Item 2 in its list, the dead poll thread, is now
+astubbs#477 in tier 1.
+
+The bar above is "the bugs that are already open". Six area sweeps each named what they read as gating (the owner's pass over
+the sweep's proposals is done - [`process-inflight-vet-sweep.md`](process-inflight-vet-sweep.md)
+records it); this is the union,
+ordered by user-visible consequence, with the confidence each agent stated. The mechanical gate
+comes first because nothing else matters until it clears.
+
+- **The quarantine registry is non-empty, and every entry is unowned.** `release.yml` refuses the
+  cut while [`docs/quarantined-tests.md`](../quarantined-tests.md) lists anything; read that file,
+  not this line.
+- **Verified defects, in the code as written today:**
+  1. `bug-857-transactional-revoke-wait.md` - was the unbounded wait inside the revoke callback,
+     with a user report carrying upstream's verified-bug label. astubbs#466 (merged the day the sweep
+     ran) replaced the spin with a wait bounded by `commitLockAcquisitionTimeout`; whether that bound
+     is right is what is left, and astubbs#408 holds it. The sweep also read
+     `core-revoke-commit-skips-the-work-mailbox-drain.md` as gating - a deterministic exactly-once
+     break with C9 refuted - and the same commit fixed it; the note is gone and the record is in
+     `docs/solutions/logic-errors/`.
+  2. `bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md` - in the default commit
+     mode, a dead poll thread holds its partitions for `max.poll.interval.ms`; traced end to end,
+     untested, unfixed.
+  3. `pr-431-must-pair-its-queue-removal-with-the-shard-removal.md` with
+     `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the retry-queue orphan window; master
+     is still shard-first and astubbs#431 is a draft.
+  4. `bug-unvalidated-batchsize.md` - `batchSize(0)` silently processes nothing; one `validate()`
+     bound closes all three shapes (astubbs#311). The cheapest real fix in the set.
+  5. `bug-max-failure-history-is-inert.md` - a public option that does nothing; removing it is
+     breaking, so it is settled before the major or carried forever.
+  6. `bug-offset-commit-timeout-does-two-jobs.md` - the default makes a retry unreachable; the fix is
+     a design choice among three.
+  7. `bug-162-offset-state-truncation.md` - a WARN operators alert on, firing falsely for every new
+     group; decision 5 in the section above.
+  8. `bug-unbounded-log-lines.md` - record keys and values printed at WARN on a line that asks to be
+     pasted into a public issue; cheap to fix.
+- **Contract and compatibility, where a major is the only window:**
+  `core-bytearray-encodings-have-no-codec.md` (two magic bytes),
+  `core-pc-owns-the-clients-it-uses.md` (the consumer-instance option). The sweep also listed
+  `core-139-public-api-thread-safety-contract.md` here; the owner ruled astubbs#139 out of v6 scope
+  on 2026-09-08 and the note is deferred after v6.
+- **Instruments the release decision is read through, currently lying or unproven:**
+  `test-chaos-autopsy-omits-fleet-violations.md` (a clean autopsy after a fleet-violation kill,
+  confirmed in code), `test-perf-lane-asserts-a-deadline-on-a-varying-machine.md` (a required check
+  that fails on arithmetic), `test-no-progress-window-may-not-transfer-to-w1.md` (sightings at the
+  bound, none replayed), `ci-codecov-flags-not-like-for-like.md` (proposal 9),
+  `ci-broker-container-exit-126-is-undiagnosable.md`.
+- **Decisions, not engineering:** the astubbs#161 and astubbs#181 replies (items 1 and 2 at the top
+  of this file); the "is it enough?" call, whose own target date has passed; and astubbs#257's
+  changelog wording, which has one window because the section is generated from the log.
+- **Read as not gating, by the agent that vetted each:** the new modules (astubbs#271, astubbs#269,
+  astubbs#268 - capabilities, not defects); the `deps-` majors; every `issue-response-*` draft; the
+  `static-` registers (advisory lanes); the `branch-` notes; the `test-debt` and feature notes; the
+  unfenced `PartitionState` booleans and the plain-int counter (real, unmeasured, possibly absorbed
+  by the shared-nothing rework); and the poisoned-transaction pair, where today's behaviour is
+  strictly better than what it replaced.
+
 ## Open defects with no PR - each one's disposition against the bar
 
-The astubbs#476 vetting sweep produced its own reading of what gates v6, with each agent's stated
-confidence, under "What gates v6, as the sweep read it" in
-[`process-candidate-ranking.md`](process-candidate-ranking.md). It agrees with the two look-at items
-below, and adds one this section had filed as 0.6.0.x: `batchSize(0)` silently processes nothing,
-and the sweep calls the `validate()` bound "the cheapest real fix in the set" (astubbs#311). It also
-lists the instruments the release decision is read through that are currently lying or unproven;
-read that list before trusting a green.
+The sweep's reading above agrees with the look-at items below and adds one this section had filed
+as 0.6.0.x: `batchSize(0)` silently processes nothing, and the sweep calls the `validate()` bound
+"the cheapest real fix in the set" (astubbs#311). Its list of instruments the release decision is
+read through that are currently lying or unproven is worth reading before trusting a green.
 
 "Gate on open bugs" only works if every open bug has a disposition, so this is every `bug-` note on
 master that no queue PR addresses (`ls docs/inflight/bug-*.md` is the list; the impact tag on each
