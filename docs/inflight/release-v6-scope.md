@@ -197,27 +197,45 @@ counts (astubbs#336), the sign-reversed shard count (astubbs#373), the retry-que
 demoted to a timing proxy, and astubbs#444 measured the large-instance residual as group-protocol
 churn rather than a PC defect.
 
-**Still open - the release note names each, and each has an agent on it (2026-09-08):**
+**Still open - the release note names each, and each has an agent on it (2026-09-08).** A ticked
+box means the v6 action for that line is done, not that the defect is closed:
 
-- The transactional revoke wait, astubbs#44 (confluentinc#803) - outside v6 by the 2026-09-07
-  decision; the release claim names it as the known exception. The decision predates astubbs#466,
-  which replaced the unbounded spin with a wait bounded by `commitLockAcquisitionTimeout`, so what
-  astubbs#408 (tier 2) still owns is declining instead of waiting, and whether that bound is right.
-  The exception the claim names should say "bounded, not yet declined", not "unbounded".
-- `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on idle runners, so they read as
-  starvation rather than a wedge. Not a confirmed defect; not ruled out either.
-- **An intake stall under an always-failing key, found by astubbs#471's soak (merged 2026-09-08).**
-  Under KEY ordering with records that throw on every attempt, successes froze inside the first
-  minute of both runs while the failure rate held exactly constant: the instance stopped taking new
-  work at all, and a stalled instance can never reach the commit-response timeout the soak was
-  hunting. Named, untested candidate: `WorkManager#isSufficientlyLoaded` counts records queued
-  BEHIND a blocked shard head while only the failing head is parked, so head-of-line blocking on a
-  few keys reads as "sufficiently loaded" and the poller pauses for good - the silent-stall shape
-  the gate's own comment names against confluentinc#857. Offset-encoding back pressure is
-  eliminated (neither transition logged). One run reading the gate's DEBUG line settles it; that is
-  the last item of the replay queue. confluentinc#833's reporter showed the processed-records
-  counter flat across their window, which is this state, so this may be the better lead than the
-  timeout itself.
+- [x] **astubbs#408 (tier 2, after v6)** - the transactional revoke wait, astubbs#44
+  (confluentinc#803). Outside v6 by the 2026-09-07 decision; the release claim names it as the
+  known exception. The decision predates astubbs#466, which replaced the unbounded spin with a wait
+  bounded by `commitLockAcquisitionTimeout`, so what astubbs#408 still owns is the measurement of
+  that bound and the held decline seam - astubbs#466 refuted declining as the fix, so it is only the
+  deadline fallback. The v6 action is the release-note sentence, and
+  [`release-0.6.0.0.md`](release-0.6.0.0.md) now says "bounded, not yet declined" rather than
+  "unbounded". astubbs#408's own probe still reads the callback over the poll-interval budget on
+  today's master, which is the defect reproduced against the bounded design; its title and whether
+  it still closes astubbs#44 are the owner's, after v6.
+- [ ] **astubbs#488 (draft)** - `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on
+  idle runners, so they read as starvation rather than a wedge. The idle replay was the weak
+  direction: a load-shaped stall needs the load. astubbs#488 ran the load arm - three seeds, idle
+  and under CPU burners, one term differing - and on one seed both arms crossed the bound that raised
+  every gating firing on CI, with the detector reporting the member busy in user code and no stall
+  violation or dump in any arm, every window proven open. Starvation, confirmed from the load side.
+  It proposes a PROPOSED close for the `INSTANCE_STALL` line only, owner-gated; the `ZOMBIE_MEMBER`
+  arm never fired, so nothing there moves. Box closes when astubbs#488 merges.
+- [ ] **astubbs#487 (draft)** - **an intake stall under an always-failing key, found by
+  astubbs#471's soak (merged 2026-09-08).** Under KEY ordering with records that throw on every
+  attempt, successes froze inside the first minute of both runs while the failure rate held exactly
+  constant: the instance stopped taking new work at all, and a stalled instance can never reach the
+  commit-response timeout the soak was hunting. Named, untested candidate:
+  `WorkManager#isSufficientlyLoaded` counts records queued BEHIND a blocked shard head while only
+  the failing head is parked, so head-of-line blocking on a few keys reads as "sufficiently loaded"
+  and the poller pauses for good - the silent-stall shape the gate's own comment names against
+  confluentinc#857. Offset-encoding back pressure is eliminated (neither transition logged).
+  astubbs#471's "one run reading the gate's DEBUG line" could not be made as written: the gate's
+  logger sits under a bare package pin in both logging profiles, so the debug flag never reached
+  it. astubbs#487 carries the flag that does, the gate's operands on the soak's progress line, one
+  knob per arm so each changes exactly one term, and the accounting gap pinned as a unit test. Its
+  predictions are written before the runs, including that the UNORDERED control stalls too - which
+  would refute the head-of-line half of the hypothesis while confirming the load-gate half. The arms
+  run once the machine lock frees. confluentinc#833's reporter showed the processed-records counter
+  flat across their window, which is this state, so this may be the better lead than the timeout
+  itself. Box closes when the arms have run and astubbs#487 merges with their outcome.
 
 **Resolved or reassigned since this list was written - kept so the release note can say what was ruled out:**
 
