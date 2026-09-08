@@ -11,6 +11,7 @@ import lombok.experimental.UtilityClass;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Single entry point for wrapping the actual execution of user functions
@@ -50,6 +51,18 @@ public class UserFunctions {
         } catch (Throwable e) {
             throw new ExceptionInUserFunctionException(MSG, e);
         }
+    }
+
+    /**
+     * A function that takes nothing: delegates to the one-parameter form, so it is not a construction site of its
+     * own (the count of those is a documented invariant of {@code ThrowableUtils.isTransparentWrapper}).
+     *
+     * @param <RESULT>        the out type for the user function
+     * @param wrappedFunction the function to run
+     */
+    public static <RESULT> RESULT carefullyRun(Supplier<RESULT> wrappedFunction) {
+        Function<Void, RESULT> ignoringItsParameter = unused -> wrappedFunction.get();
+        return carefullyRun(ignoringItsParameter, null);
     }
 
     /**

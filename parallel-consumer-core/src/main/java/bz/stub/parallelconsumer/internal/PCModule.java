@@ -79,12 +79,16 @@ public class PCModule<K, V> {
     }
 
     /**
-     * How another producer is built from the same configuration when PC needs one - the seam a recovery replaces
-     * an invalidated producer through: present only where PC built the producer itself, because a caller's finished
-     * instance carries no configuration to rebuild from. Each call builds from the same configuration - the same
-     * {@code transactional.id} included, so that initialising a replacement fences the producer it replaces. The id
-     * travels with the source so a failure to build can name it. Nothing in this rung calls it; the manager that
-     * does is the recovery PR above.
+     * The {@link ReplacementProducerSource} for this module, the seam a recovery replaces an invalidated producer
+     * through: present only where PC built the producer itself, because a caller's finished instance carries no
+     * configuration to rebuild from. Nothing in this rung calls it; the manager that does is the recovery PR above.
+     * <p>
+     * Only the builds this source makes run under {@link UserFunctions#carefullyRun}: the seam is overridable, and an
+     * {@link Error} from the constructor (a serializer's static initialiser failing, say) must surface as a failure
+     * of the build rather than escape every catch on the recovery path, leaving the instance RUNNING with its
+     * workers parked on the produce lock for good. The first producer, built by {@link #producerWrap()} at
+     * start-up, is not wrapped: that path predates recovery, its failures reach the caller constructing PC, and
+     * they keep the type and message the Kafka client gave them.
      */
     public Optional<ReplacementProducerSource<K, V>> replacementProducerWrap() {
         if (options().isProducerInstanceSupplied()) {
@@ -92,16 +96,14 @@ public class PCModule<K, V> {
         }
         // null in a non-transactional commit mode, where the caller sets none
         String transactionalId = (String) options().getProducerConfig().get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
-        return Optional.of(new ReplacementProducerSource<>(this::buildProducerWrapperFromConfiguration, transactionalId));
+        return Optional.of(new ReplacementProducerSource<>(
+                () -> UserFunctions.carefullyRun(this::buildProducerWrapperFromConfiguration), transactionalId));
     }
 
     private ProducerWrapper<K, V> buildProducerWrapperFromConfiguration() {
         // a copy per call: the seam may read or edit it, and must not edit the options
         Map<String, Object> config = new LinkedHashMap<>(options().getProducerConfig());
-        // run as user code is: the seam is overridable, and an Error from the constructor (a serializer's static
-        // initialiser failing, say) must surface as a failure of the build rather than escape every catch on the
-        // recovery path, leaving the instance RUNNING with its workers parked on the produce lock for good
-        Producer<K, V> producer = UserFunctions.carefullyRun(this::buildProducer, config);
+        Producer<K, V> producer = buildProducer(config);
         return wrapPcBuilt(producer);
     }
 
