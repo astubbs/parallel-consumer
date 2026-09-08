@@ -29,6 +29,13 @@ completed. New questions arrive faster than old ones close.
   in Uber's 2021 write-up - Connect over rebalance latency against a hard end-to-end latency
   requirement, which is a measured argument somebody else already made about a system we also compare
   against.
+- **DONE 2026-09-08: KPipe**, surveyed from source, README, benchmark harness and git history;
+  [`core-hasten-adjacent-systems-register.md`](core-hasten-adjacent-systems-register.md) owns the
+  result. **What it leaves open is a benchmark, not a search:** its README claims 6.6x and 41x
+  Parallel Consumer's throughput, measured against upstream 0.5.3.3 pinned at a hundred workers.
+  *Settles:* whether the gap is the worker-pool configuration or the engine - rerun its own JMH
+  harness with `maxConcurrency` raised to match the per-record work, and against the fork's
+  artifact. Do not answer the claim in public before it runs.
 - **The systems uForwarder never mentions**, which is its own signal: SQS, RabbitMQ, Pulsar shared
   subscriptions, and Parallel Consumer itself. *Settles:* whether the queue-semantics-over-a-log
   family has an answer nobody in this space cites - Pulsar shared subscriptions especially, since

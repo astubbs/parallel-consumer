@@ -245,7 +245,61 @@ Parallel Consumer.
 *mechanism*, and a consumption proxy is not a mechanism. The eighteen-family list below exists
 because of that miss.
 
-## Rows added 2026-09-05, all `claimed` and none checked here## Rows added 2026-09-05, all `claimed` and none checked here
+## KPipe - the embedded competitor, and the first system found that benchmarks against Parallel Consumer
+
+**Surveyed 2026-09-08 from its source, README, benchmark harness and git history**
+([github.com/eschizoid/kpipe](https://github.com/eschizoid/kpipe), Apache-2.0, on Maven Central as
+`io.github.eschizoid:kpipe-*`). Classification: **competitor** - and the only row in this register on
+the *same* side of the position axis as Parallel Consumer: an embedded library, no cluster, no
+server, the application keeps its `KafkaConsumer` properties. uForwarder above is the proxy-cluster
+answer; this is another embedded one.
+
+**Age, because it reads older than it is.** First commit 2025-04-09 by one author, Mariano Gonzalez,
+then a year nearly dormant; v1.0.0 on 2026-03-09 and forty releases since, v1.19.0 on 2026-07-31,
+still committing on 2026-09-08. About 50k lines of Java across fifteen modules, Java 25 floor. The
+author forked `confluentinc/parallel-consumer` on 2025-04-20, eleven days after KPipe's first
+commit, and has never opened an issue, PR or comment on either the upstream or the fork repository.
+
+Against the eight questions:
+
+| Question | KPipe |
+|---|---|
+| 1. What does it schedule | Records. One virtual thread per record (`PARALLEL`), one per key with a 10,000 distinct-key cap (`KEY_ORDERED`), or serial (`SEQUENTIAL`). |
+| 2. What does it own | The poll loop, commit, retry, DLQ, backpressure (pause polling above a 10,000 in-flight watermark), a circuit breaker. |
+| 3. Position | Embedded, at the dispatch boundary - same side as Parallel Consumer. |
+| 4. Rewrite | The consumer is rewritten into a typed pipeline (deserialize, operators, sink; sealed `Passed` / `Filtered` / `Failed` outcomes). The rest of the application is not. |
+| 5. Per-call hot path | Nothing - no server, no database. |
+| 6. Capacity | Not delegated, not arbitrated: a local in-flight watermark only. **No adaptive limiter** - nothing like uForwarder's Vegas controller. |
+| 7. Global half unreachable | Not applicable; there is no global half. |
+| 8. Undispatched work | No. Purely reactive; no key-level lookahead, no declared requirements. |
+
+**What it has that this register cares about.** A sparse completion frontier: lowest still-pending
+offset per partition, commit only the contiguous prefix - the same *durability, not kind* difference
+as uForwarder. The frontier lives in memory and nothing is encoded into commit metadata, so a restart
+or rebalance replays everything above it. Key ordering **is** offered, so uForwarder's largest gap
+does not apply here; but it is a per-key serial queue drained by a virtual thread behind a hard
+distinct-key cap, not a shard scheduler, and there is no admission state before execution.
+
+**Its benchmark is the thing to read, and to answer.** The README claims 6.6x Parallel Consumer's
+throughput at 10 ms of work per record and 41x at 100 ms. The harness
+([`ParallelProcessingBenchmarkInfrastructure`](https://github.com/eschizoid/kpipe/blob/main/benchmarks/src/jmh/java/io/github/eschizoid/kpipe/benchmarks/ParallelProcessingBenchmarkInfrastructure.java))
+pins Parallel Consumer at `maxConcurrency(100)`, `UNORDERED`, version 0.5.3.3 - the abandoned
+upstream artifact, not this fork - so the headline measures a hundred-thread pool against unbounded
+virtual threads and lands exactly at `workers ÷ work-time`. **That is a configuration ceiling, not an
+engine one**, and its own captures record the costs: about 1.7 KB allocated per record against
+about 35 B for Parallel Consumer, and `KEY_ORDERED` losing to Parallel Consumer's `KEY` mode on one
+of its two machines at sub-millisecond work. Nothing here has run it. A rerun with Parallel
+Consumer's concurrency raised to match, and against the fork's artifact, is the cheapest public
+claim in this register to settle, and
+[`process-prior-art-research-targets.md`](process-prior-art-research-targets.md) queues it.
+
+**It also carries a proof of at-least-once worth reading beside this repo's chaos suite**: 21
+jcstress classes (being ported to Fray as of 2026-09-08), jqwik property suites over the offset
+lifecycle, and chaos-rebalance and crash-restart integration tests against a real broker;
+[its offset-invariants document](https://github.com/eschizoid/kpipe/blob/main/docs/OFFSET-INVARIANTS.md)
+records three data-loss bugs that suite caught before release.
+
+## Rows added 2026-09-05, all `claimed` and none checked here
 
 Named by the owner from reading, recorded so they are not lost, and **not verified in this
 repository** - the evidence rule applies to them exactly as to anything else.
@@ -359,6 +413,13 @@ In priority order, and the first is not optional before any public claim:
 
 ## What this changes about the thesis
 
+- **2026-09-08, KPipe.** The positioning sentence above - *uForwarder is the proxy-cluster answer;
+  this is the embedded answer, and it keeps key ordering* - loses its second clause: KPipe is an
+  embedded answer that keeps key ordering too, and it is the first system found that names Parallel
+  Consumer as its comparator. What remains distinctive on the embedded side is the durable frontier
+  (encoded into commit metadata, surviving rebalance), the shard scheduler behind key ordering, and
+  every global or adaptive half this corpus proposes - KPipe has none of them. Its benchmark is the
+  first external claim about this engine specifically, and it is answerable.
 - **2026-09-05, first sweep.** Two claims dropped as novelty arguments and one narrowed to its
   substrate. **The engineering is unharmed and arguably validated** - four independent teams
   converging on the same shape is evidence the shape is right - but the *pitch* has to change, and
