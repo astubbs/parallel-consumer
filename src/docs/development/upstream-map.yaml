@@ -1004,19 +1004,27 @@ entries:
   - id: sweep-2023-broker-disconnect-commit
     group: rebalance-stability
     summary: Async offset-commit errors after broker downtime are logged and dropped
-    fork: {branches: [], prs: [], fork_issues: [248], status: none}
+    fork: {branches: [fix/async-commit-success-waits-for-ack], prs: [470], fork_issues: [248], status: pr-open}
     upstream: {repo: confluentinc/parallel-consumer, issues: [203], prs: [345], related: [185], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
       nioertel, 2022-03; never reproduced (reporter did not answer three diagnostic
       questions), so this closure was the one arguably defensible on merits -- though
-      "completed" is still wrong. PARTIALLY addressed since: commitDeferringOnRebalance()
-      now defers RebalanceInProgress/CommitFailed instead of throwing or swallowing.
-      NOT addressed: PERIODIC_CONSUMER_ASYNCHRONOUS still only log.errors the callback
-      exception, with "// todo keep work in limbo until async response is received?"
-      still in source -- which matches the reported symptom exactly. Before any fix,
-      try to reproduce with the swept ChaosBroker harness: PR #345
-      astubbs/bugs/broker-disconnect @bc620f3b8.
+      "completed" is still wrong. Addressed in two steps. First:
+      commitDeferringOnRebalance() defers RebalanceInProgress/CommitFailed instead of
+      throwing or swallowing. Second, astubbs/parallel-consumer#470: the async path no
+      longer marks offsets clean when the request is SENT, so a callback carrying an
+      exception -- the reporter's RetriableCommitFailedException, verbatim -- leaves the
+      offsets dirty and the next cycle re-commits them, instead of logging into a state
+      with nothing left to retry. The "todo keep work in limbo until async response is
+      received?" marker that entry #248 quotes is deleted by that PR. Mechanism and
+      control arms:
+      docs/solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md.
+      STILL OPEN, and why this is not closed: the reporter's actual symptom was a
+      throughput collapse with endless retries, and nothing here reproduced that -- the
+      fix removes the silent-loss path the report exposed, not necessarily the reported
+      slowdown. The reproduction attempt with the swept ChaosBroker harness is still the
+      deciding experiment: PR #345 astubbs/bugs/broker-disconnect @bc620f3b8.
 
   - id: sweep-2023-topic-priority
     group: features

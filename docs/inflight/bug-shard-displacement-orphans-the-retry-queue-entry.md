@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - `ProcessingShard`s `A real replacement after all` branch is unchanged and the class still holds no `RetryQueue` field - the queue is still only a parameter on `getWorkIfAvailable`. `ShardManager.onSuccess` still calls `retryQueue.remove(wc)` unconditionally before touching a shard, which is the bound the note claims. astubbs#431 is still OPEN, so the `removeStaleWorkContainersFromShard` clause has not gone stale. Production reachability is still unestablished -->
 
 **Found by the defect-class sweep on the re-queue orphan window**, which is fixed and written up in
 [`docs/solutions/runtime-errors/retry-queue-orphan-window-between-the-requeue-check-and-the-add.md`](../solutions/runtime-errors/retry-queue-orphan-window-between-the-requeue-check-and-the-add.md).
@@ -73,3 +74,29 @@ add-then-confirm shape that closes rather than narrows.
 **`ProcessingShard.retire`'s javadoc is where the pairing invariant is stated**, and it currently
 covers only the population and the selection claim - if the queue becomes the shard's business, that
 javadoc is the place the third half goes.
+
+## Update 2026-09-08 - the entry is now collected, and the fix question narrows
+
+`ShardManager.purgeDepartedRetryEntries()` collects every retry-queue entry whose container is
+resident in no shard, once per control-loop pass, on the controller thread. **A displaced container
+is resident in no shard from the moment its replacement takes its offset** - residency is reference
+identity - so the surviving entry this note is about is now collected on the next pass rather than
+waiting on the replacement's own terminal event.
+
+That does not close the note, and the difference is worth keeping straight:
+
+- **The FIGURE this note names as the actual harm is now bounded by one control-loop tick** rather
+  than by the replacement's lifecycle. That is a strictly smaller window, on the same misdirection.
+- **The pairing gap itself is unchanged.** `ProcessingShard.addWorkContainer` still cannot remove
+  from a queue it holds no reference to, and the three design options below are still the options.
+  What has changed is the cost of doing nothing, which was already "bounded misdirection" and is now
+  a tick of it.
+- **The clause about astubbs/parallel-consumer#431's branch is dead, and so is the vet marker's
+  reading of it.** That PR is CLOSED as superseded, never merged; `removeStaleWorkContainersFromShard`
+  never took the queue, and no rebalance-path code touches the queue at all now. The 2026-09-07 stamp
+  above says the clause "has not gone stale" *because* that PR was open - true on its date, and the
+  reason it is corrected here rather than edited there. Both designs:
+  [`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
+
+**Production reachability is still not established**, which is the open question this note names and
+the purge does not answer.

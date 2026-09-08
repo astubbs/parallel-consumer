@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.internal;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ManagedTruth;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
@@ -53,6 +54,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -300,6 +302,75 @@ class ProducerRecoveryTest {
                 .that(all.get(all.size() - 1).generationId()).isEqualTo(2);
         assertWithMessage("every build is handed the caller's id, unchanged").that(transactionalIdBuiltUnder).isEqualTo(transactionalId);
         assertThat(producerManager().isProducerAvailable()).isTrue();
+    }
+
+    /**
+     * A fence that lands on the revocation's commit. Since astubbs#466 that commit is not the poll thread's: in
+     * transactional mode {@code onPartitionsRevoked} posts a request, the control thread runs its ordinary
+     * lock-flush-drain-commit pass for it, and the callback waits, bounded by {@code commitLockAcquisitionTimeout}.
+     * So a fence here is raised on the control thread, inside the served pass - which records it as any commit-path
+     * fence is recorded - and the pass throwing fails the request. What this pins is the callback's side of that:
+     * it comes back promptly on the failed pass rather than at its deadline, the instance is neither failed nor
+     * closed, no hold on the producer write lock is stranded, and the control thread replaces the producer on its
+     * next pass. astubbs#44 (confluentinc#803) is the reason the promptness matters - the callback runs inside
+     * {@code poll()} and is charged against {@code max.poll.interval.ms}.
+     * <p>
+     * The fence is armed only for the revocation: the control thread commits the first records at its normal
+     * cadence, the commit interval is then raised to an hour at runtime, and fresh work after that gives the
+     * revocation something to commit of its own. The fence hook records which thread it fired on - a fence that
+     * fired for a periodic commit would make every assertion below true for the wrong reason. The replacement
+     * build is held on a latch so the recorded state can be observed before recovery completes.
+     */
+    @Test
+    @Timeout(60)
+    void fencedDuringTheServedRevokeCommitFailsTheRequestPromptlyAndIsRecovered() throws Exception {
+        var fenceArmed = new AtomicBoolean(false);
+        var fencedOnThread = new AtomicReference<String>();
+        onBuild.put(0, producer -> doAnswer(invocation -> {
+            if (!fenceArmed.get()) {
+                return invocation.callRealMethod();
+            }
+            fencedOnThread.set(Thread.currentThread().getName());
+            producer.fenceProducer();
+            throw new ProducerFencedException("fenced at the served revoke commit");
+        }).when(producer).sendOffsetsToTransaction(anyMap(), any(ConsumerGroupMetadata.class)));
+        start(optionsBuilder().build());
+        addRecords(0, 4);
+        awaitCommittedThrough(producers.get(0), 5);
+        // from here the control thread stays away from the lock: the next commit is an hour out
+        pc.setTimeBetweenCommits(Duration.ofHours(1));
+        addRecords(5, 6);
+        await().atMost(Duration.ofSeconds(30)).until(() -> seen.size() == 7);
+        // every worker has handed its produce lock back, so the revocation can take the write lock
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> ManagedTruth.assertThat(producerManager()).hasNoProduceLockHolders());
+        await().atMost(Duration.ofSeconds(10)).until(() -> !producerManager().isTransactionCommittingInProgress());
+        var holdReplacement = new CountDownLatch(1);
+        holdBuildUntil = Optional.of(holdReplacement);
+        fenceArmed.set(true);
+
+        long start = System.currentTimeMillis();
+        pc.onPartitionsRevoked(UniLists.of(TP));
+        long took = System.currentTimeMillis() - start;
+
+        assertWithMessage("fixture: the fence fired for the revocation's commit, served on the control thread")
+                .that(fencedOnThread.get()).contains("pc-control");
+        assertWithMessage("the callback came back promptly on the failed pass, not at its deadline")
+                .that(took).isLessThan(3_000L);
+        assertWithMessage("the fence raised by the served revoke commit is recorded for the control thread to recover")
+                .that(producerManager().isReplacing()).isTrue();
+        assertThat(pc.getFailureCause()).isNull();
+        assertThat(pc.isClosedOrFailed()).isFalse();
+        // recovery releases the write lock before it builds the replacement, and the served pass released its own
+        // hold on the way out - so with the build held, the lock is free and a later revocation could take it
+        await().atMost(Duration.ofSeconds(10)).until(() -> !producerManager().isTransactionCommittingInProgress());
+        assertWithMessage("no hold on the producer write lock is stranded by the failed pass")
+                .that(producerManager().tryAcquireCommitLockForRevocation()).isTrue();
+        producerManager().releaseCommitLockIfHeldByCurrentThread();
+
+        holdReplacement.countDown();
+        awaitProducers(2);
+        await().atMost(Duration.ofSeconds(30)).until(() -> producerManager().isProducerAvailable());
+        assertThat(pc.isClosedOrFailed()).isFalse();
     }
 
     /**

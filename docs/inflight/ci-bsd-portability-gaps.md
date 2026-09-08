@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-08 - applied: shrunk, the third item removed because its guard half shipped as `gnu-bsd` rows in `bin/check-shell-hazards.sh`; items 1 and 2 left as they were; checked: all three quarantine gates still carry the unreachable `|| source bin/lib/quarantine-common.sh` fallback under `set -e`, `bin/test-check-pr-ready.sh` still holds no executing `stat`/mtime case (its only match is a prose comment), and the hazards gate's `gnu-bsd` rows cover both `stat -c` and `stat -f` -->
 
 <!-- post-merge: checked-begin -->
 The hooks in `.claude/hooks/` and the gates in `bin/` were swept for GNU-only constructs, and the
@@ -9,8 +10,13 @@ sweep was then **executed on a Mac** rather than reasoned about
 (astubbs/parallel-consumer#341). The whole `bin/` suite passes there now. What the class *is*, the
 four defects it produced and how to avoid the next one are written up in
 [`docs/solutions/workflow-issues/gnu-only-constructs-fail-silently-on-bsd-2026-08-25.md`](../solutions/workflow-issues/gnu-only-constructs-fail-silently-on-bsd-2026-08-25.md),
-which **owns that knowledge**. This note keeps only what is still open. Delete it when these are
-resolved.
+which **owns that knowledge**. The guard half of that class is now in place too:
+`bin/check-shell-hazards.sh` carries `gnu-bsd` rows for `stat -c` and `stat -f` among others, so the
+argument no longer has to be remembered - which retired this note's third item, the near-verbatim
+repetition of the "probe, never fall back" reasoning across several script headers. What that leaves
+is a comment at the point of use rather than an open item.
+
+This note keeps only what is still open. Delete it when these are resolved.
 <!-- post-merge: checked-end -->
 
 ## A latent instance of the bash 3.2 `source` defect
@@ -37,9 +43,3 @@ or `mtime` reference at all - it greps the script's source text. **The `shell: m
 help here**, unlike the other fixes: a source-text grep passes identically on both platforms, so
 running it on macOS asserts nothing new. This one needs a case that actually dates a file and reads
 the result back.
-
-## The "probe, never fall back" reasoning is stated three times
-
-The identical argument is repeated near-verbatim in three files. `bin/AGENTS.md` has the precedent
-for collapsing that - the SIGPIPE class got a named write-up and a CI guard - and the write-up half
-now exists (linked above). The guard half does not.

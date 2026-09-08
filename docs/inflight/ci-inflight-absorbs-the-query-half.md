@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-read the table against the tree: only the `inject-recorded-knowledge.sh` row has migrated (it is 237 lines now and a thin wrapper over `bin/inflight.mjs docs index`); the other six scripts are unchanged at the line counts recorded, `warn-low-disk.sh` is still 471 lines of bash, and the `.github/scripts` decision is untaken - 15 `.js` gates there still share nothing with `bin/*.mjs`. The delete-when is unmet -->
 
 <!-- post-merge: checked-begin -->
 **A hook or gate should decide POLICY. It should not know how to READ THE CORPUS.** Several do both

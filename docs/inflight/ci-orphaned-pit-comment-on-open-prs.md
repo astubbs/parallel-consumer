@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-checked both halves: the `Mutation Testing (PIT) Report` comment is still on astubbs/parallel-consumer#29 (one match via `gh api .../issues/29/comments`), and the `mutation` job in `maven.yml` still calls neither `createComment` nor `updateComment` - the only `sticky-report-comment.js` caller in that file is the SpotBugs step. The hand-deletion is the whole of what is left -->
 
 A `## :x: Mutation Testing (PIT) Report - **PIT did not produce a report.**` comment sits on
 astubbs/parallel-consumer#29 showing a red ❌, dated April 2026. **It contradicts the live job**,

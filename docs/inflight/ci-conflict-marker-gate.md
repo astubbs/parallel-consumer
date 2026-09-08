@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-checked `ls bin/`: neither of the two scripts this note proposes exists, and no rule in `bin/lib/source-patterns.mjs` or `bin/check-shell-hazards.sh` looks for conflict markers - the gate is still unwritten -->
 
 <!-- post-merge: checked-begin -->
 **A merge was committed and pushed with most of one file still inside an unresolved conflict, and

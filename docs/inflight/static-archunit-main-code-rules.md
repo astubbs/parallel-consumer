@@ -169,7 +169,8 @@ shard-map accessor rule above is the worked example of turning one down.
 exactly the shape named above. It arrived with one entry - the confluentinc#857 transactional revoke
 wait, owned by astubbs#44 - and grew on 2026-08-31 when the rule's deny list was widened during a
 defect-class sweep and immediately found a second, pre-existing defect on master
-([`bug-retry-queue-write-lock-on-the-rebalance-path.md`](bug-retry-queue-write-lock-on-the-rebalance-path.md)).
+(`git show 745b1f6a5:docs/inflight/bug-retry-queue-write-lock-on-the-rebalance-path.md` - the note was
+retired on 2026-09-08, see the update below).
 
 **Update 2026-09-07: the walk now follows METHOD REFERENCES, and the list grew by twelve because of it.**
 `notReachBlockingCalls()` followed `getMethodCallsFromSelf()` and nothing else, and ArchUnit models
@@ -196,6 +197,29 @@ same message shape, calls and method references alike. It closes a gap the deny 
 `tryLock()`-based sibling of `RetryQueue.remove` would take the very same lock and be correctly absent from
 the list, so once both live on one class nothing but a declared contract can tell a waiting acquire from a
 declining one. astubbs/parallel-consumer#431 is the change that creates that pair.
+
+**Update 2026-09-08: `KNOWN_BLOCKING_VIOLATIONS` is now EMPTY, and the rule passes on merit.** The note
+cited above is retired - `git show 745b1f6a5:docs/inflight/bug-retry-queue-write-lock-on-the-rebalance-path.md`
+is the record of it, and its durable content is in the solutions write-up named below. The dated
+paragraphs above stand as written - they describe the list as it was, and the third blind spot is still the
+lesson. What changed is the code, not the rule: every rebalance callback stopped touching `RetryQueue`
+altogether (they remove from the shards, and the controller thread collects the retry-queue entries that
+leaves), so all eighteen keys went. Deleting them with the reaches still in place is what measured it - the
+rule reported 24 violations, more than the 18 keys because the `@ControllerThreadOnly` half fires once per
+route. The set, its `root => target` keying and the argument for keeping it are all still there; what is gone
+is its contents.
+
+**Two claims above are now historical, and are corrected here rather than over there.** The owner named for
+those keys was astubbs/parallel-consumer#431, which is superseded rather than merged - both designs are in
+[`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
+And the `tryLock()`-based sibling that would have made `@ControllerThreadOnly` the only thing able to tell a
+waiting acquire from a declining one was that PR's; it does not exist, so that marker's value today is that
+it names a contract nothing on the callback path may reach - a narrower job than the one the paragraph above
+describes, and still one the JDK deny list cannot do.
+
+**This entry is what "an allowlist is a frozen baseline wearing a source-code disguise" looks like when it
+ends well**: the entries were honest, each had an owner, and the owner's job was to delete them. The warning
+is unchanged for the next one, because nothing about this outcome was guaranteed by the mechanism.
 
 **It is deliberately NOT Infer's `@ThreadConfined`**, which arrived with astubbs/parallel-consumer#433 and is
 the subject of a rule in `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`. That one

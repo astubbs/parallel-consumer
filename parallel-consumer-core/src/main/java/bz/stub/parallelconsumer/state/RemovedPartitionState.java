@@ -14,6 +14,7 @@ import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 
 import java.util.Collections;
@@ -146,6 +147,15 @@ public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
         return 0;
     }
 
+    /**
+     * Never fenced: this is a process-wide singleton, and it already reads as stale for every container. The manager
+     * skips removed states before calling this; the override is the second line of defence.
+     */
+    @Override
+    public void fenceForRevocation() {
+        log.debug("Not fencing a removed partition - its work is already stale");
+    }
+
     @Override
     public void onSuccess(long offset) {
         log.debug("Dropping completed work container for partition no longer assigned. WC: {}, partition: {}", offset, getTp());
@@ -154,5 +164,34 @@ public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
     @Override
     public boolean isPartitionRemovedOrNeverAssigned() {
         return true;
+    }
+
+    /**
+     * The one inherited mutator that was never overridden, and the only one a <b>different</b> thread can reach
+     * after removal.
+     * <p>
+     * A commit already in flight when its partitions are revoked completes afterwards and calls
+     * {@code PartitionStateManager#onOffsetCommitSuccess}, which resolves the now-removed partition to this
+     * <b>shared singleton</b>. Without this override that lands in {@link PartitionState#onOffsetCommitSuccess},
+     * writing {@code lastCommittedOffset} and {@code stateChangedSinceCommitStart} - plain, non-volatile fields -
+     * on the one instance every removed partition in the JVM points at, from the control thread, unsynchronised.
+     * <p>
+     * Nothing has been observed to break, because {@code getAssignedPartitions()} filters on
+     * {@link #isPartitionRemovedOrNeverAssigned()} and so nothing reads those fields back off the singleton. That
+     * is an accidental safety net in another class, not a property of this one - and
+     * astubbs/parallel-consumer#44 leaned on it, because declining the revoke commit means truncation no longer
+     * waits for an in-flight commit to finish. Made explicit rather than left incidental.
+     * <p>
+     * <b>Cleared 2026-09-02.</b> The remaining inherited mutators were walked: {@code onFailure} has an empty
+     * body, and {@code addNewIncompleteRecord}'s only caller {@code maybeRegisterNewPollBatchAsWork} is itself
+     * overridden here - so this was the one reachable write. <b>What would reopen it:</b> a new mutator added to
+     * {@link PartitionState} without a no-op override here, or any reader of {@code lastCommittedOffset} /
+     * {@code stateChangedSinceCommitStart} that stops filtering on
+     * {@link #isPartitionRemovedOrNeverAssigned()}. Nothing enforces either - the ArchUnit rules in this repo do
+     * not check override completeness against a base class.
+     */
+    @Override
+    public void onOffsetCommitSuccess(OffsetAndMetadata committed) {
+        log.debug("Ignoring commit success for partition no longer assigned. Committed: {}, partition: {}", committed, getTp());
     }
 }

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - still true: no soak lane on the baseline, and soak-deadlock-probe.sh is still only on the overnight-harness branch (astubbs#405 OPEN, gh pr view 405) -->
 
 The suite runs once per PR and finishes in minutes. The defects this project keeps finding are the
 ones that need time and load to appear - so the suite is weakest against exactly the shape of defect

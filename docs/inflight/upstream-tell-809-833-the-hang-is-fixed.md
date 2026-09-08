@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
+<!-- inflight-vetted: 2026-09-07 - re-read both upstream issues: confluentinc#833 and confluentinc#809 are still OPEN and their newest comment is still the 2026-08-05 mirror-tracking one, so the telling has still not happened; astubbs#177's mirror is still CLOSED and astubbs#175 still OPEN; task 3 rewritten because astubbs#44's body has since dropped the "likely the same defect" claim but still attributes both reports to astubbs#100, and astubbs#29 has merged -->
 
 Two upstream reports, **both still open upstream with no reply**, mirrored as astubbs#175 and
 astubbs#177. Both show the same signature:
@@ -84,11 +85,13 @@ The fix landed; closing the mirror follows.
    confluentinc#809** - so nothing has been claimed about it. `notifyPollerDied` plausibly covers it
    for the same reason it covers the other, but that is the inference this note already got wrong
    once. Read the close path before replying.
-3. **Correct astubbs#44's summary.** It asserts these two are "likely the same defect" as
-   confluentinc#803, i.e. the `synchronized(commitCommand)` deadlock whose fix is still open as
-   astubbs#29. They are not: confluentinc#833's cause is the poll-thread death astubbs#177 fixed. That
-   summary currently points the next reader at the wrong PR, and AGENTS.md's rule is to correct a
-   mirror when it turns out wrong rather than leave the next reader to inherit it.
+3. **Finish correcting astubbs#44's summary.** Half done: the body no longer claims these two are
+   "likely the same defect" as confluentinc#803, and it names astubbs#29 (merged) as the fix for
+   confluentinc#803 itself. What it still says is that confluentinc#809 and confluentinc#833 "were
+   later triaged onto astubbs#100" - which is the attribution the section above corrects.
+   confluentinc#833's cause is the poll-thread death astubbs#177 fixed; astubbs#100 removed one route
+   to it and did not close the class. AGENTS.md's rule is to correct a mirror when it turns out wrong
+   rather than leave the next reader to inherit it.
 <!-- post-merge: checked-end -->
 
 ## The original diagnosis, kept because it found the mechanism

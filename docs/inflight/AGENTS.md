@@ -214,7 +214,11 @@ The fields are HTML comments after the heading. Only `inflight-type` is always r
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-state: closed - will not do -->
+<!-- inflight-vetted: 2026-09-07 - re-read against the tree; the race is still there -->
 ```
+
+`inflight-vetted` is the odd one out: it classifies nothing and is written by a re-reading, not by
+the author. [Vetting a note](#vetting-a-note) owns it.
 
 - **`inflight-type`** - what KIND of item it is. One of **`bug`**, **`feature`**, **`task`**,
   **`register`**. This is a tracker, so it uses a tracker's vocabulary - with one addition a tracker
@@ -260,29 +264,33 @@ successor and carry the sentence above forward unchanged. Branch
 `ci/inflight-index-by-type-and-priority`, merged superseded into astubbs#400.
 
 The impacts, in the order `.claude/hooks/inject-recorded-knowledge.sh` presents them at session
-start. **The order is not severity - signal integrity comes first**, because you cannot judge the
-state of the code through instruments that lie, and acting on a false green is worse than acting on
-nothing:
+start - which is `INFLIGHT_IMPACT_ORDER` in `bin/lib/inflight-tags.sh`, and that lib is the
+authority when this table disagrees with it. It did disagree, until 2026-08-31: this table had
+`crash` twelfth where the hook emits it third, so a reader judging what outranks what got the
+wrong answer from the document that claims to describe it.
+
+**The order is not severity - signal integrity comes first**, because you cannot judge the state of
+the code through instruments that lie, and acting on a false green is worse than acting on nothing:
 
 | Impact | Valid on | The consequence |
 |---|---|---|
 | `misdirection` | bug | the signal is actively WRONG - a green that asserted nothing, a hidden flake, a contaminated control arm, a scanner returning 401 while appearing to scan |
 | `blind-spot` | bug | there is no signal - untested behaviour, unscanned code, an obligation nobody tracks |
+| `crash` | bug, feature | the process dies, or exhausts a resource until it does - a leak ends here |
 | `data-loss` | bug | a record is dropped or mis-committed |
 | `stall` | bug | something stops making progress and stays stopped |
 | `security` | bug, task, feature | a grant or permission wider than it should be, or a known exposure carried |
 | `config-lie` | bug | an option does not do what it says |
+| `reliability` | bug, task, feature | it survives less than it should, and no single defect is named yet |
 | `throughput` | bug | backpressure or fetch behaviour is wrong, with no data risk |
 | `release-gate` | task | blocks publishing |
 | `coordination` | task | two pieces of work will collide, or one is blocked waiting on another |
 | `stranded-work` | task | work or knowledge that will be lost if nobody acts |
-| `deps-debt` | task | upgrades deliberately held back |
-| `crash` | bug, feature | the process dies, or exhausts a resource until it does - a leak ends here |
-| `reliability` | bug, task, feature | it survives less than it should, and no single defect is named yet |
 | `ci` | task, feature | the build, gates, review automation or agent harness are wrong or missing |
 | `test-debt` | task, feature | tests that should exist and do not |
 | `refactor` | task, feature | the code is harder to change than it needs to be |
 | `process` | task, feature | how the work itself is ranked, recorded or organised |
+| `deps-debt` | task | upgrades deliberately held back |
 
 **An impact names a CONSEQUENCE, never a state.** "in progress", "standard work", "medium" and the
 like are status labels wearing an impact's clothes - they answer "where is this?" when the question
@@ -331,3 +339,59 @@ with a count, never silently.
 session start, so the anti-inflation duty moved from a "high" marker (the old scheme) to the ledger
 itself: when you add a note, look at the others and ask whether one has stopped earning its place -
 delete it or give it a state; the work landing is not the only reason to remove one.
+
+## Vetting a note
+
+**A note records when it was last confirmed to be true, because nothing else can.** `git log` dates
+the last *edit*, and on this directory that is the same day for nearly every file - the package
+rename of 2026-08-26/27 rewrote all of them - so "is this still real?" had no answer short of
+re-reading the note against the tree. The anti-inflation duty above ("when you add a note, look at
+the others") fires at add time, and it did not hold: on 2026-09-07 the baseline carried 145 open
+notes over roughly 16k lines, with no record of anyone having re-read any of them. A periodic sweep
+is the honest replacement, and the marker is what makes a sweep incremental rather than a re-read of
+everything each time.
+
+- **`inflight-vetted`** - `<!-- inflight-vetted: YYYY-MM-DD - what was checked -->`. The date a
+  reader last re-read the note against the tree and found it still true, and *what they checked* -
+  the class they opened, the test they ran, the issue they read. Optional; absent means never
+  vetted. **Written only on the outcome where the note is still true and unchanged.** The other four
+  outcomes change the note or remove it, and that change is its own record.
+
+**A vet has five outcomes, four of which are the rules above.** Read the note, then check its claim
+against the tree at the baseline - not against a memory of it:
+
+1. **Still true, unchanged** - stamp it. The only outcome that writes the marker.
+2. **Still true, not now** - `inflight-state: deferred - <what it waits on>`. That is the schedule;
+   no marker, because the decision is the record.
+3. **Partly true** - shrink it to what is still open (the second of the four outcomes above), then
+   stamp what remains.
+4. **True, but owned elsewhere now** - migrate what outlives it, then `git rm` (the first and
+   fourth of the four).
+5. **No longer true** - `git rm`, or `closed - <why>` when the reasoning is worth a later reader
+   finding.
+
+**This section is the per-note contract; [`docs/grooming.md`](../grooming.md) owns the sweep around
+it** - when to run one, how it is split between agents, the dispatch prompt, and where the results
+are consolidated. Follow that document each time rather than re-deriving the sweep.
+
+**The worklist is `bin/inflight.mjs vet`.** Every open note on the baseline, unvetted first, in the
+index's group order and then **oldest first** by the date the note was first added on any ref -
+each annotated with the cheap signals a script can see: every fork number it cites is merged or
+closed, the number in its filename is settled, a cited path or symbol no longer resolves on the
+baseline, a stated delete-when condition. **A signal is a reason to open the note, never a verdict**:
+a note cites a merged pull request because that is where the problem was found, and a symbol is
+missing because the note proposes it. `--area <prefix>` scopes the list to one area, which is how a
+sweep is split between agents - one file per note means the areas cannot collide.
+
+**An agent proposes; a `bug` at `stall` or worse is the owner's to close.** A vet is a claim check,
+not a decision, and the highest-impact notes - `misdirection` through `stall` in the table above -
+are exactly the ones where a confident "no longer real" costs the most when it is wrong. For those,
+an agent that concludes anything but "still true" writes the marker with the proposal in it and
+changes nothing else: `<!-- inflight-vetted: 2026-09-07 - PROPOSED closed: fixed by astubbs#451,
+the guard is in \`revoke()\` -->`. The re-reading happened and is recorded; the state change waits
+for the owner, and `grep -l 'inflight-vetted:.*PROPOSED' docs/inflight/*.md` is the list of what
+is waiting.
+
+`bin/check-inflight-tags.sh` refuses a marker that is not `YYYY-MM-DD - <what>`: the tool reads it
+with one regex, and a marker it cannot parse reads as "never vetted", silently undoing the vet it
+records.

@@ -1,31 +1,39 @@
-# confluentinc#857 family: the unbounded revoke wait in transactional mode
+# confluentinc#857 family: is the transactional revoke wait bounded at the right value?
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- post-merge: checked - a dated vetting record, past tense against 2026-09-08, naming no branch whose deletion falsifies it -->
+<!-- inflight-vetted: 2026-09-08 - applied: re-premised on astubbs#466, which removed the unbounded spin; the open question is now the bound itself, held by astubbs#408, and the four stale citations are repaired (the "no open PR" claim, the dead `fix/bound-revoke-transaction-wait` branch, the renamed fencing note, and the two file:line citations); checked: `AbstractParallelEoSStreamProcessor.commitOnRevokeViaTheControlThread` is what `onPartitionsRevoked` reaches in transactional mode and its wait is `getCommitLockAcquisitionTimeout()`, the `while (isTransactionCommittingInProgress()) sleep` spin is gone from the source, astubbs#408 was the open draft holding it on that date, and `fix/bound-revoke-transaction-wait` no longer existed on origin -->
 
 **Commit mode: `PERIODIC_TRANSACTIONAL_PRODUCER` only.** This is the discriminator - the defect below
 <!-- post-merge: checked -->
 and the AB-BA deadlock in astubbs#29 are in mutually exclusive modes and cannot be the same bug.
 
-## The defect
+## What this note used to be, and what it is now
 
-`AbstractParallelEoSStreamProcessor.onPartitionsRevoked` waits with **no deadline** for an in-flight
-<!-- post-merge: checked -->
-transaction, on master, predating astubbs#29:
+It was about an **unbounded** wait: `onPartitionsRevoked` spun on
+`while (isTransactionCommittingInProgress()) Thread.sleep(100)`, on the poll thread inside `poll()`,
+with no deadline, in the mode where the control thread routinely holds the producer write lock. That
+spin is gone. astubbs#466 (merged 2026-09-07) routes transactional revocation through
+`AbstractParallelEoSStreamProcessor.commitOnRevokeViaTheControlThread`: the callback posts a request,
+the control thread runs its ordinary lock-flush-drain-commit-fence sequence, and the callback waits
+**bounded by `commitLockAcquisitionTimeout`**. A commit already in flight queues behind rather than
+being waited on or declined, and on timeout the commit is declined at WARN.
 
-```java
-// AbstractParallelEoSStreamProcessor.java:418-419 (master)
-while (isTransactionCommittingInProgress())
-    Thread.sleep(100); //wait for the transaction to finish committing
-```
+<!-- post-merge: checked-begin - names astubbs#408 (a PR reference, permanent and resolvable) and
+     states the measurement as a thing that happened, with no claim about any branch's existence or
+     any PR's open/draft state -->
+**So the open question is the bound, not the absence of one.** The five-minute default is the same
+bound the inline commit's own write-lock acquisition already had - no regression - but
+confluentinc#803's complaint is precisely that such a bound burns `max.poll.interval.ms`, and a
+callback that overruns it evicts the member. astubbs#408 measured exactly that overrun and left the
+bound alone: see "The measurement, and what it does not settle" below. The collision on
+`tryCommitOffsetsOnRevoke` is resolved - astubbs#466 landed first and astubbs#408 took its design.
+<!-- post-merge: checked-end -->
 
-`isTransactionCommittingInProgress()` (`:1494-1496`) is gated on
-`options.isUsingTransactionCommitMode()`, so this loop only runs in transactional mode - and there it
-is the *common* case, not a rare race: the control thread takes the producer write lock in
-`maybeAcquireCommitLock()` before committing.
-
-The callback runs on the poll thread inside `poll()`, so it is bounded by `max.poll.interval.ms`.
-Overrunning it evicts the member.
+Two different locks are both called "commit lock", which is part of why this was conflated: the
+`commitCommand` monitor guarding consumer commit execution, and the producer transaction lock behind
+`maybeAcquireCommitLock()` / `commitLockAcquisitionTimeout` (5 min default). This note is the latter.
 
 ## Why this is not astubbs#29's deadlock <!-- post-merge: checked -->
 
@@ -34,26 +42,23 @@ The AB-BA cycle's second edge lives in `ConsumerOffsetCommitter`, which `BrokerP
 `PERIODIC_CONSUMER_SYNC, PERIODIC_CONSUMER_ASYNCHRONOUS` arm). In transactional mode there is no
 request queue, no response queue and no `commitAndWait()` - **the cycle cannot occur here**.
 <!-- post-merge: checked -->
-astubbs#29's `tryLock()` change does not touch `:418-419` and cannot fix this.
-
-Two different locks are both called "commit lock", which is part of why this was conflated: the
-`commitCommand` monitor guarding consumer commit execution, and the producer transaction lock behind
-`maybeAcquireCommitLock()` / `commitLockAcquisitionTimeout` (5 min default). This defect is the
-latter.
+astubbs#29's `tryLock()` change does not touch the transactional revoke path and never could fix it;
+`tryCommitOffsetsOnRevoke` and its `commitLock.tryLock()` remain for the consumer-commit modes, where
+confluentinc#857's cycle is real and the inline commit is correct.
 
 ## Sighting: `RebalanceEoSDeadlockTest`, 1 failure in 20, 2026-07-30
 
-Local fork16 stress hunt on astubbs#80's branch (master-like code). Recorded in the original family
-ledger as *"Live confirmation the deadlock is still present"* - see
+Local fork16 stress hunt on astubbs#80's branch (master-like code, long predating astubbs#466).
+Recorded in the original family ledger as *"Live confirmation the deadlock is still present"* - see
 `test-load-tightness-flakes.md`, where it is explicitly *not* a member.
 
-**That attribution was wrong, and the correction is the point of this file.**
+**That attribution was wrong, and the correction is why this section is kept.**
 `RebalanceEoSDeadlockTest` runs `PERIODIC_TRANSACTIONAL_PRODUCER`
 (`.commitMode(ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)`), the mode in
 <!-- post-merge: checked -->
 which the AB-BA cycle cannot close. So the failure is **not** evidence for astubbs#29.
 
-It is, however, a **real** failure and it is evidence for the block above. The run was on
+It was, however, a **real** failure and it was evidence for the unbounded wait. The run was on
 master-family code, where the test's latch was still reachable - the latch-unreachable defect
 (the revoke path calling the private `tryCommitOffsetsOnRevoke()` instead of the overridden
 <!-- post-merge: checked -->
@@ -63,6 +68,9 @@ the correction; only its attribution moves.
 No seed was captured.
 
 ## Sighting: `ChaosRevokeUnderWorkTransactionalIT.revokeUnderWorkStaysProtocolHonestInTransactionalMode`, 1 failure in 2 runs, 2026-09-05
+
+Predates astubbs#466, so it is a sighting against the unbounded spin rather than against today's
+bound - kept because it is this scenario's only red and no replay of its seed has been run.
 
 <!-- post-merge: checked - astubbs/parallel-consumer#448 is cited for its permanent diff content, which does not change after merge or if its branch is deleted -->
 astubbs/parallel-consumer#448, a docs-and-data PR - entries added under `docs/data/`, markdown notes
@@ -108,45 +116,73 @@ it is not lost with the run's logs.
 ## User-facing report
 
 **astubbs#44 (confluentinc#803)** - *"Transactional Producer instance gets timeout getting commit lock
-while second instance starts"* - matches this mechanism exactly: second instance joins, rebalance
-fires, poll thread spins here, `max.poll.interval.ms` is breached, the group reports *"group is
-already rebalancing"*, and the run ends on `commitLockAcquisitionTimeout`.
+while second instance starts"* - matched the original mechanism exactly: second instance joins,
+rebalance fires, poll thread waits here, `max.poll.interval.ms` is breached, the group reports
+*"group is already rebalancing"*, and the run ends on `commitLockAcquisitionTimeout`. Whether
+astubbs#466's bounded wait is short enough to keep that from recurring is the open question above.
 
-It carries upstream's *verified bug* label. **This note previously called it the ONLY such issue,
-which is false** - a couple of dozen upstream issues carry that label, and this claim propagated
-from here into a roadmap entry, a plan, several notes and a PR body before anyone ran
+It carries upstream's *verified bug* label. **Earlier versions of this note called it the ONLY such
+issue, which is false** - a couple of dozen upstream issues carry that label, and the claim
+propagated from here into a roadmap entry, a plan, several notes and a PR body before anyone ran
 `gh issue list -R confluentinc/parallel-consumer --state all --label "verified bug"`. The label
-still matters - it means a maintainer confirmed the report rather than merely triaging it - but
-it does not make this issue unique. It was re-triaged off
+still matters - a maintainer confirmed the report rather than merely triaging it - but it does not
+make this issue unique. It was re-triaged off
 <!-- post-merge: checked -->
-astubbs#29 and onto this block on 2026-08-18; its `pr-available` label was removed, because no open
-PR addresses it.
+astubbs#29 and onto this block on 2026-08-18. Its `pr-available` label was removed at the time
+<!-- post-merge: checked - a dated fact plus a PR citation, both permanent -->
+because no open PR addressed it; astubbs#408 was opened against it afterwards.
 
-## Open decision - do not write code before settling it
+## The measurement, and what it does not settle
 
-The wait needs a deadline, and the obvious design is ruled out: the poll thread **cannot** abort the
-transaction, because `ProducerManager` enforces single-writer from the control thread and throws
-`ConcurrentModificationException` otherwise.
+<!-- post-merge: checked-begin - every sentence is a measurement or a decision recorded in the past
+     tense against a PR number, which stays resolvable after that PR closes and its branch is deleted -->
+`Revoke857TransactionalWaitProbeIT.revokeMustNotWaitOnATransactionPastTheMaxPollInterval` is the
+instrument, built on astubbs#408 to make the overrun observable. Against astubbs#466's delegated
+commit it reports **19.2s of callback time out of a 20s in-flight dwell, against a 10s
+`max.poll.interval.ms` budget, 5/5** - so the callback still holds the poll thread for as long as the
+transaction runs, and a transaction longer than `max.poll.interval.ms` still evicts the member. That
+is confluentinc#803's complaint, reproduced against the current design.
 
-The candidate is to deadline the **holder** instead - bound the control thread, which owns the
-transaction and can abort itself - rather than the revoke callback that merely notices the overrun.
-Not agreed with the user.
+**What astubbs#466 did fix, and the probe confirms:** the callback is no longer *starved across
+successive* transactions. The spin the confluentinc#548 code used measured **79s of callback time
+from the same 20s dwell**, because a 1s commit interval let the control thread re-take the lock as
+fast as it dropped it. Bounded delegation removes that multiplication; it does not remove the wait.
+
+**What is not settled, and is deliberately not decided here.** Bounding the delegated wait needs a
+value, and PC cannot read the consumer's own `max.poll.interval.ms` - so the bound needs either a new
+option or a derivation, and the timeout fallback astubbs#466 already has (decline at WARN, with the
+deferred-duplicate cost named) is what it would fall back to. That is a design choice with a
+user-visible option surface, and it belongs to the owner rather than to a reconciliation pass.
+
+**Declining unconditionally is NOT the answer, and this is the trap worth not re-deriving.**
+astubbs#408 originally declined the revoke commit on the poll thread. astubbs#466 refuted that by
+experiment: a revoke that commits nothing leaves its produced output in the open transaction for the
+*next* commit to publish without the matching offset - the same duplicate through a different door.
+Declining is the deadline fallback, logged at WARN, never the fix. Two arms in `ProducerManagerTest`
+carry that result.
+
+**Held for the owner's call, on astubbs#408's branch:** the three `ProducerManager` revocation lock
+helpers, their unit tests, and the `DeclineCountingProducerManager` instrument. They count a decline
+the transactional path no longer makes, and they are the seam a bounded-wait-with-decline design
+would use.
+<!-- post-merge: checked-end -->
+
+## The constraint any further bound has to respect
+
+The poll thread **cannot** abort the transaction, because `ProducerManager` enforces single-writer
+from the control thread and throws `ConcurrentModificationException` otherwise. That is why
+astubbs#466 deadlines the *holder* - the control thread, which owns the transaction and can abort
+itself - rather than the revoke callback that merely notices the overrun, and any sharpening of the
+bound has to keep that shape.
 
 Proceeding past the wait is separately unsafe until producer fencing is recoverable:
 `ProducerFencedException` is wrapped in `InternalRuntimeException` and kills the instance. See
-`next-recoverable-producer-fencing.md` and astubbs#225.
+[`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md) and astubbs#225.
 
-Branch `fix/bound-revoke-transaction-wait` exists with no code on it.
+## Adjacent, and NOT this: the revoke commit that did not drain the mailbox
 
-## Adjacent, and NOT this: the revoke commit that does not drain the mailbox
-
-The same method this note bounds - `tryCommitOffsetsOnRevoke` - has a second, independent defect
-recorded in
-[`core-revoke-commit-skips-the-work-mailbox-drain.md`](core-revoke-commit-skips-the-work-mailbox-drain.md):
-when it does commit, it commits without first draining the work mailbox, so a revoke-time
-transaction can omit the offset of a record it already produced. That is a correctness hole in the
-*uncontended* commit; this note is about the *wait* when the lock is contended. astubbs#408's
-decline fires only under contention and its amended test accepts "committed inline if the dwell had
-already ended" as resolved - so it neither narrows nor widens the drain defect, and the two fixes
-will meet on this one method. Whichever lands second resolves that collision; the other note records
-the recommended fix and the question that decides its correctness.
+The same method this note bounds - `tryCommitOffsetsOnRevoke` - had a second, independent defect:
+when it did commit, it committed without first draining the work mailbox, so a revoke-time
+transaction could omit the offset of a record it already produced. Diagnosed in astubbs#436 and
+fixed by astubbs#466, the same change that re-premised this note; the record is
+[`docs/solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md`](../solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md).

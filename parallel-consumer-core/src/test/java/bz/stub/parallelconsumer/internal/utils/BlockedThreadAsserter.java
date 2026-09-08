@@ -33,6 +33,14 @@ import static org.awaitility.Awaitility.await;
  *     "it has not returned yet" says nothing except that this thread got scheduled first.</li>
  * </ul>
  * <p>
+ *     <li>{@link #returnsWithin} - <em>does NOT block</em>, which is the negative of the two above and is
+ *     asserted by the caller rather than here. It hands back whether the function returned inside a budget,
+ *     because a caller proving a non-block usually has to read state <em>while the contention is still on</em>
+ *     and so cannot give up its own thread to an assertion helper. {@code RetryQueueRebalancePathTest} is the
+ *     caller: it holds a lock the function would have to wait for, and requires that the function returns
+ *     anyway.</li>
+ * </ul>
+ * <p>
  * A single asserter instance runs a single function: the returned/threw state below is per-instance, so use a
  * fresh one per assertion.
  * <p>
@@ -52,6 +60,12 @@ public class BlockedThreadAsserter {
      * The same fact as {@link #methodReturned}, in the form that can be <em>waited on</em> rather than polled.
      */
     private final CountDownLatch functionReturned = new CountDownLatch(1);
+
+    /**
+     * The thread {@link #returnsWithin} started, so that {@link #joinQuietly} can reach it. Null until then; the
+     * two assert idioms hold their thread in a local, because neither hands it back to the caller.
+     */
+    private Thread runningThread;
 
     /**
      * What the function under assert threw, if anything.
@@ -245,6 +259,61 @@ public class BlockedThreadAsserter {
         return throwable == null
                 ? ""
                 : " (it threw: " + throwable + ")";
+    }
+
+    /**
+     * Starts {@code function} on a background thread named {@code threadName} and reports whether it returned
+     * within {@code budget}.
+     * <p>
+     * <b>It asserts nothing about blocking, deliberately</b> - it is the primitive under the two idioms above,
+     * exposed for the caller that needs the opposite property. Proving a function does NOT block means holding
+     * whatever it would have waited for, which the calling thread has to keep doing while it reads state, so
+     * that caller cannot hand its thread to {@link #assertFunctionBlocks}; what it needs back is the fact, not
+     * a verdict.
+     * <p>
+     * <b>A throw is raised here rather than reported as a return.</b> {@link #runCapturingThrowable} otherwise
+     * makes a function that throws on entry indistinguishable from one that returned promptly - which, for a
+     * caller asserting promptness, is a false PASS rather than the false fail it would be above.
+     * <p>
+     * The thread is named by the caller because these tests are about which thread a call is on:
+     * {@code broker-poll} in {@code RetryQueueRebalancePathTest} names the thread a Kafka rebalance callback
+     * really runs on, and it is what a stack dump from a failing run has to say.
+     *
+     * @param threadName name for the background thread - say what it models, not what it does here
+     * @return true if {@code function} returned inside {@code budget}
+     */
+    public boolean returnsWithin(final Runnable function, final String threadName, final Duration budget) {
+        runningThread = new Thread(() -> {
+            runCapturingThrowable(function);
+            markReturned();
+        }, threadName);
+        runningThread.setDaemon(true); // see assertFunctionBlocks
+        runningThread.start();
+
+        final boolean returned;
+        try {
+            returned = functionReturned.await(budget.toMillis(), MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for " + threadName + " to return", e);
+        }
+        Throwable thrown = blockedFunctionThrew.get();
+        if (thrown != null) {
+            throw new AssertionError("Function on '" + threadName + "' threw instead of returning: " + thrown, thrown);
+        }
+        return returned;
+    }
+
+    /**
+     * Joins the thread {@link #returnsWithin} started, for at most {@code timeout}.
+     * <p>
+     * Separate from {@code returnsWithin} because the whole point of that method is a caller that is still
+     * holding something the function may be parked on - so the join belongs after the caller has let go, in its
+     * own {@code finally}, and joining any earlier would burn the timeout and then leak the thread into the rest
+     * of the suite. A no-op when nothing was started, so that {@code finally} needs no guard.
+     */
+    public void joinQuietly(final Duration timeout) {
+        ThreadUtils.joinQuietly(runningThread, timeout);
     }
 
     public void awaitReturnFully() {
