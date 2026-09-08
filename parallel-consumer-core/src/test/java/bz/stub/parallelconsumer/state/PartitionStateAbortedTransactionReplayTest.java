@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
+import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -73,6 +74,77 @@ class PartitionStateAbortedTransactionReplayTest {
 
     private PartitionState<String, String> stateOf(WorkManager<String, String> wm) {
         return wm.getPm().getPartitionState(tp);
+    }
+
+    /**
+     * A {@link ShardManager} that plays a concurrent scanner on the replay: the container the replay has just
+     * published is selected and completed before control returns to the loop, the seam
+     * {@code PartitionStateRegistrationOrder370Test} uses on the poll path.
+     */
+    static class CompletingOnPublishShardManager extends ShardManager<String, String> {
+        private final WorkManager<String, String> wm;
+        private boolean armed;
+        private boolean fired;
+
+        CompletingOnPublishShardManager(PCModule<String, String> module, WorkManager<String, String> wm) {
+            super(module, wm);
+            this.wm = wm;
+        }
+
+        @Override
+        void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<String, String> aRecord) {
+            super.addWorkContainer(epochOfInboundRecords, aRecord);
+            if (!armed) {
+                return;
+            }
+            armed = false;
+            fired = true;
+            List<WorkContainer<String, String>> taken = wm.getWorkIfAvailable(1);
+            assertWithMessage("seam: the container the replay just published must be the one the scan hands out")
+                    .that(taken).hasSize(1);
+            WorkContainer<String, String> wc = taken.get(0);
+            wc.onUserFunctionSuccess();
+            wm.handleFutureResult(wc);
+        }
+    }
+
+    /**
+     * The register-then-publish order astubbs#370 established on the poll path (astubbs#450) holds on the replay
+     * too: a record put back into processing is selected and completed the instant it is reachable through its
+     * shard, before the loop moves on. On the publish-then-register order {@link PartitionState#onSuccess(long)}'s
+     * assert fires from inside the replay - a completion for an offset the partition had not yet re-registered -
+     * and without {@code -ea} the offset ends complete and incomplete at once. Latent today for the same reason it
+     * was latent on the poll path: one control thread does both. The seam is checked to have fired, so a test that
+     * never raced would not pass by accident.
+     */
+    @Test
+    void aCompletionTheInstantAReplayedRecordIsPublishedIsAValidCompletion() {
+        var installed = new CompletingOnPublishShardManager[1];
+        var module = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
+                .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
+                .ordering(ProcessingOrder.UNORDERED)
+                .build()) {
+            @Override
+            protected ShardManager<String, String> createShardManager(WorkManager<String, String> workManagerInstance) {
+                installed[0] = new CompletingOnPublishShardManager(this, workManagerInstance);
+                return installed[0];
+            }
+        };
+        var wm = module.workManager();
+        wm.onPartitionsAssigned(UniLists.of(tp));
+        assertWithMessage("fixture: the module built the racing shard manager").that(installed[0]).isNotNull();
+        register(wm, 0, 0);
+        takeAndSucceedAll(wm);
+        assertWithMessage("fixture: the record is in the ledger, uncommitted").that(stateOf(wm).getAllIncompleteOffsets()).isEmpty();
+        installed[0].armed = true;
+
+        int restored = wm.restoreWorkDiscardedByAbortedTransaction();
+
+        assertWithMessage("seam fired: the scanner completed the record inside the replay").that(installed[0].fired).isTrue();
+        assertThat(restored).isEqualTo(1);
+        assertWithMessage("completed during the replay, so not incomplete after it").that(stateOf(wm).getAllIncompleteOffsets()).isEmpty();
+        assertWithMessage("and its completion was registered where the commit reads it")
+                .that(stateOf(wm).getOffsetHighestSucceeded()).isEqualTo(0L);
     }
 
     /**

@@ -4,6 +4,8 @@
 <!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
 
+<!-- post-merge: checked-begin - a dated account of where the widening was and why it was dropped; it
+     reads the same once the branch has landed -->
 **Status, 2026-09-08.** The widening this note describes - fan-out through PC-owned implementations of
 an interface-typed field, timed acquires denied, `root => via => target` keys - lived on
 `fix/803-bound-transactional-revoke-wait` and was **dropped when that branch merged master**:
