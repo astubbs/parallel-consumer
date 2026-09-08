@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: refactor -->
+<!-- inflight-vetted: 2026-09-07 - re-checked every copy: `check-history-rewrite.sh` and `check-merge-outstanding-work.sh` each still run `["gh", "pr", "list", "-R", slug, "--head", BRANCH, ...]` in their own python block, `remind-inflight-on-push.sh` still has its own, and `bin/check-pr-ready.sh` still does it in bash against `-R "\$REPO"`; `.claude/hooks/lib/hook-common.sh` has no PR-lookup function at all. The refspec half is still doubled too - `hook_push_head_ref` in the library and `push_head_ref` inside `check-history-rewrite.sh` -->
 
 `.claude/hooks/check-history-rewrite.sh`, `.claude/hooks/remind-inflight-on-push.sh` and
 `.claude/hooks/check-merge-outstanding-work.sh` each carry their own copy of the same python3 block:

@@ -3,6 +3,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - re-read `.claude/hooks/warn-low-disk.sh` and `bin/check-shell-hazards.sh`: every open item still holds - `df -Pk` on the fast path is still unbounded (only the `docker system df` call got a `timeout 5`), `docker_root` still defaults to `/var/lib/docker` with no `daemon.json` `data-root` read, the `PC_DISK_*` bands are still commented "Overridable ONLY so bin/test-check-agent-hooks.sh can drive each band", and no heredoc-inside-command-substitution hazard row has been added -->
 
 <!-- post-merge: checked-begin -->
 Findings from the simplify-and-review pass over `.claude/hooks/warn-low-disk.sh` that astubbs#339,

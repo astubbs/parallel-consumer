@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-state: closed - the collision resolved itself the way this note said it should. astubbs#338 merged (master now carries `shebang_below_header()` and `git -c core.quotePath=false ls-files`, and no `HAS_FORK_HOLDER` or `fp_path_of`), and `origin/feats/polyglot-demos` has since taken that newer copy: its `bin/check-copyright-headers.sh` carries all of master's fixes, none of the five superseded pieces, and differs from master by 24 lines of comment and ledger rows rather than by a rewrite. The "diff the blob, not the PR" trap the note records is why it is closed rather than deleted -->
 
 `bin/check-copyright-headers.sh` exists on `master` in its Java-only form, and **two open lines of
 work have independently rewritten it from that same base**. Whichever lands second inherits a large
@@ -54,5 +55,3 @@ the exact failure the widening exists to end, and one that goes green rather tha
 
 The self-test, `bin/test-check-copyright-headers.sh`, is untouched by the other branches, so this
 one script is the whole of the conflict.
-
-Delete this note when the second of the two lands.

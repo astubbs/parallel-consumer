@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: deps-debt -->
+<!-- inflight-vetted: 2026-09-07 - unchanged in the pom: requireUpperBoundDeps is still the only rule wired in, dependencyConvergence is still off with the comment naming this note, and the unij slf4j-api exclusion is still the one fixed case - the three Kafka-tree divergences are untouched -->
 
 `maven-enforcer`'s `requireUpperBoundDeps` is **on** - it is the rule that catches the dangerous
 case, where resolution settles on a version lower than something in the graph asks for. That is the

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - the landed half is confirmed on the tree (no perf-baseline.tsv anywhere, and check-throughput-regression.mjs takes the median of the last N `perf baseline (master)` runs read from their artifacts) and the one open item is still open: no workflow downloads a previous aggregate, appends and re-uploads it, so the history is still bounded by log retention and by N -->
 
 **Largely IMPLEMENTED 2026-09-01 - see "What landed" at the foot. The committed baseline is gone; what
 remains open is the accumulating artifact.**

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: reliability -->
+<!-- inflight-vetted: 2026-09-07 - `EncodedOffsetPair#handleUnreadableMetadata` is still `@SneakyThrows` and still reached from `OffsetMapCodecManager`, `ParallelConsumerOptions#invalidOffsetMetadataPolicy` still defaults to `IGNORE` (astubbs#207), and `PartitionStateManager` still carries the `never-throws contract` javadoc astubbs#29 added for the revoke side. The question the note says to establish first - whether a FAIL stop is a stop or a hang - is still untested; no test drives an unreadable payload under FAIL -->
 <!-- post-merge: checked-begin -->
 
 `EncodedOffsetPair#handleUnreadableMetadata` throws under `FAIL`. What it throws is an

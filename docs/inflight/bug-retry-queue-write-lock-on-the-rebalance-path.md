@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-08 - applied: shrunk - "Fixing it: not started, and no design agreed" replaced with astubbs#431, which is the fix in flight; checked: the defect is intact - `RetryQueue.remove(WorkContainer)` still takes `lock.writeLock().lock()` unbounded, the lock is still `new ReentrantReadWriteLock(true)` (fair), `RetryQueueIterator` still hands the read lock to the caller, `ArchitectureTest.KNOWN_BLOCKING_VIOLATIONS` still carries the rebalance-callback entries, astubbs#431 is OPEN, and `RetryQueue.remove`'s javadoc names it as the `tryLock()` path being added -->
 
 <!-- post-merge: checked - the sentence below dates the find rather than describing an open PR, so it
      reads the same once that work has landed -->
@@ -35,8 +36,8 @@ things sharpen that:
 
 - the lock is constructed **fair** (`new ReentrantReadWriteLock(true)`), so a waiting writer also
   blocks readers that arrive behind it - contention queues rather than interleaving
-- the wait sits inside the `max.poll.interval.ms` budget, which is the same budget the
-  astubbs/parallel-consumer#44 revoke wait overruns
+- the wait sits inside the `max.poll.interval.ms` budget, which is the same budget
+  astubbs/parallel-consumer#44's revoke wait overran
 
 **What has not been established, and must be before anyone calls this benign or serious:** how long
 the control thread can hold that read lock in `ShardManager`, and whether any path holds it across
@@ -59,10 +60,15 @@ than of this defect:
 
 ## Fixing it
 
-Not started, and no design agreed. The rule's own advice is the starting point - decline rather than
-wait (`tryLock`), or move the work off the poll thread - but `remove()` returning "I could not do
-it" changes a caller contract, so it is a decision rather than a patch. The revoke path's own
-requirements are the constraint: whatever it does must be correct when the removal does not happen.
+**astubbs#431 is the fix in flight** - "the rebalance callbacks decline the retry queue's write lock
+instead of waiting for it". It takes the rule's own advice, adding a `tryLock()`-based path and
+routing the callback-reachable sweeps onto it; `RetryQueue.remove`'s javadoc and its
+`@ControllerThreadOnly` annotation both name it, so the code says where the work is. The design
+question that made this more than a patch is still the interesting part of it: `remove()` returning
+"I could not do it" changes a caller contract, and the revoke path's own requirements are the
+constraint - whatever it does must be correct when the removal does not happen.
 
-Related, and worth reading first because it is the same class with an agreed-hard design problem:
-[`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md).
+Related, and worth reading first because it is the same class - a blocking acquire on the poll
+thread inside a rebalance callback - one step further along:
+[`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md), where the wait is now
+bounded and the open question is whether the bound is right.
