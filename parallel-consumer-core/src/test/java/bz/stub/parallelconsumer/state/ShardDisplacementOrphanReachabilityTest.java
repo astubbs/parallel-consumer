@@ -60,16 +60,25 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *     {@code putAll} in {@code onPartitionsAssigned}, and {@link PartitionState#fenceForRevocation}. Bumping
  *     the manager's epoch map alone does not: the state's own epoch is final and is only ever consulted
  *     through the state object.</li>
- * <li><b>The first two each carry a paired sweep, on the same thread, before the callback returns</b> -
- *     {@code onPartitionsRemoved} does the swap and then {@code partition.onPartitionsRemoved(sm)} and
- *     {@code sm.removeStaleContainers()}; {@code onPartitionsAssigned} ends with
- *     {@code sm.removeStaleContainers()}. Arm one asserts exactly this.</li>
+ * <li><b>The first two each carry a sweep that takes the container out of its SHARD, on the same thread,
+ *     before the callback returns</b> - {@code onPartitionsRemoved} does the swap and then
+ *     {@code partition.onPartitionsRemoved(sm)} and {@code sm.removeStaleContainers()};
+ *     {@code onPartitionsAssigned} ends with {@code sm.removeStaleContainers()}. Arm one asserts exactly
+ *     this, and residence is all the argument needs - what is not resident cannot be displaced.</li>
  * <li><b>The fence carries no sweep at all</b> - which is what arm three exploits - but a second container at
  *     the same coordinates requires the offset to be delivered twice, and within one assignment generation the
  *     consumer's position never goes backwards: nothing in main calls {@code seek}, and shards are
  *     partition-scoped in every ordering mode ({@code ShardKey.KeyOrderedKey} owns that reasoning). A
  *     re-delivery therefore needs a re-assignment, which is transitions one and two, sweeps included.</li>
  * </ol>
+ * <b>Why astubbs/parallel-consumer#481 does not move any of this, and is a second answer besides.</b> That PR
+ * takes the rebalance callbacks off the retry queue - they remove from the shards only, and
+ * {@code ShardManager.purgeDepartedRetryEntries()} collects departed entries on the controller thread one
+ * pass later. Leg five was originally written as "removes it from both structures"; the queue half was never
+ * the part carrying it, and arm one now asserts the two removals in the order that PR establishes. Coming the
+ * other way, the purge means that even a displacement orphan would be collected within one control-loop tick
+ * - so the harm is bounded whatever happens, and this class says the case does not arise. Both are worth
+ * keeping: arm three asserts them together.
  * <b>What would reopen it</b>, and none of it is guarded here: any in-generation replay of an offset - a
  * {@code seek}, an offset-reset or truncation replay that re-registers already-registered offsets, or a
  * topic-scoped shard key. The guard on the last leg is a property of the Kafka consumer's fetch position, not
@@ -156,35 +165,53 @@ class ShardDisplacementOrphanReachabilityTest {
 
     /**
      * <b>The disproof.</b> Drive the only production sequence that can turn a queued, resident container
-     * stale, and assert that it leaves both structures before the poll that could supply a replacement can
-     * even run.
+     * stale, and assert it stops being a RESIDENT before the poll that could supply a replacement can run.
      * <p>
-     * The load-bearing assertion is the middle one, and it is about ordering rather than about outcomes: the
-     * transition that makes {@code A} stale and the sweep that removes it are the same method on the same
-     * thread, inside the rebalance callback, so a fresh record at the same offset - which can only be
-     * delivered after the partition is re-assigned - cannot arrive while {@code A} is still there to displace.
+     * <b>Residence is what the assertions are about, and that is the point.</b> Since
+     * astubbs/parallel-consumer#481 the rebalance callbacks touch the shards only - the queue entry survives
+     * them and is collected by {@code ShardManager.purgeDepartedRetryEntries()} on the controller's next pass.
+     * This arm asserts both halves in the order that PR establishes: gone from the shard inside the callback,
+     * gone from the queue after one controller pass. The displacement branch needs a resident to displace, so
+     * the one-tick queue-only window is not a way into it.
+     * <p>
+     * The load-bearing assertion is the first, and it is about ordering rather than outcomes: the transition
+     * that makes {@code A} stale and the sweep that unseats it are the same method on the same thread, so a
+     * fresh record at the same offset - deliverable only after the partition is re-assigned - cannot arrive
+     * while {@code A} is still there to displace.
      */
     @Test
-    void aRebalanceClearsBothStructuresBeforeAnyReplacementCanArrive() {
+    void aRebalanceUnseatsTheResidentBeforeAnyReplacementCanArrive() {
         WorkContainer<String, String> a = aFailedRecordRestingInBothStructures();
 
         wm.onPartitionsRevoked(UniLists.of(tp));
 
         assertWithMessage("the revocation must have taken the container out of its shard - the removed-state "
-                + "swap that makes it stale and the sweep that removes it are the same callback")
+                + "swap that makes it stale and the sweep that unseats it are the same callback. This is the "
+                + "whole disproof: what is not resident cannot be displaced")
                 .that(residentAtOffset())
                 .isNull();
-        assertWithMessage("and out of the retry queue in the same callback - this is the pairing the "
-                + "displacement branch cannot do for itself, done here by the sweep that owns the departure")
+        assertWithMessage("PRECONDITION for the next assertion, and the shape astubbs/parallel-consumer#481 "
+                + "establishes: the callback leaves the queue entry alone rather than pairing the removal, so "
+                + "it is still here and is the controller's to collect")
                 .that(retryQueueContents())
-                .isEmpty();
+                .containsExactly(a);
 
         wm.onPartitionsAssigned(UniLists.of(tp));
 
-        assertWithMessage("the re-assignment must not resurrect either half")
+        assertWithMessage("the re-assignment must not put the container back in a shard")
                 .that(residentAtOffset())
                 .isNull();
-        assertWithMessage("the re-assignment must not resurrect the queue entry")
+
+        // one controller pass - purgeDepartedRetryEntries() runs at the top of it
+        List<WorkContainer<String, String>> takenOnTheControllerPass = sm().getWorkIfAvailable(100);
+
+        assertWithMessage("FIXTURE: the controller pass must find nothing to hand out, or the purge is being "
+                + "credited with a removal that selection actually made")
+                .that(takenOnTheControllerPass)
+                .isEmpty();
+        assertWithMessage("one controller pass collects the departed entry - the bound astubbs/parallel-"
+                + "consumer#481 states, asserted here because this arm's argument reads it as the reason the "
+                + "queue is empty by the time a replacement can arrive")
                 .that(retryQueueContents())
                 .isEmpty();
 
@@ -295,5 +322,25 @@ class ShardDisplacementOrphanReachabilityTest {
                 + "is why the ready-to-retry figure reads the DISPLACED container's retry-due time")
                 .that(shard().isResident(retryQueueContents().get(0)))
                 .isFalse();
+
+        // The other half of the answer, asserted here because this is the only place the orphan exists to
+        // collect: it does not survive one control-loop pass. Unreachability and the bound are independent
+        // results, and this arm is where they meet.
+        List<WorkContainer<String, String>> takenOnTheControllerPass = sm().getWorkIfAvailable(100);
+
+        assertWithMessage("PRECONDITION, and NOT what was predicted before running this: the fence makes the "
+                + "whole partition stale, so the replacement is stale on arrival too and couldBeTakenAsWork "
+                + "refuses it. Nothing is handed out, which is why the assertion below is about the bound and "
+                + "not about which mechanism delivers it")
+                .that(takenOnTheControllerPass)
+                .isEmpty();
+        assertWithMessage("even the orphan production cannot create does not survive one control-loop pass - "
+                + "so the harm is bounded whatever happens, and the arms above say the case does not arise. "
+                + "Two independent results, neither implying the other. NOT attributed to a single mechanism: "
+                + "under a fence astubbs/parallel-consumer#481's purge collects it at the top of this call AND "
+                + "the last-resort stale sweep below would take the same key, so this arm cannot tell them "
+                + "apart and does not pretend to - it asserts the bound, which is what the note claims")
+                .that(retryQueueContents())
+                .isEmpty();
     }
 }

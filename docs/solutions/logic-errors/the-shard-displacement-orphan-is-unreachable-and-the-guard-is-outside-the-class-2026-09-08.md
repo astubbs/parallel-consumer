@@ -96,14 +96,28 @@ That is the same fact
 [`stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md`](stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md)
 established from the other direction.
 
-**L5 - T1 and T2 each carry a paired sweep, on the same thread, before the callback returns.** T1's
-swap is immediately followed in the same loop iteration by `partition.onPartitionsRemoved(sm)` -
-`sm.removeAnyShardEntriesReferencedFrom(incompleteOffsets.values())`, which removes from the shard
-and then from the queue - and `onPartitionsRemoved` ends with `sm.removeStaleContainers()`. T2 is
-the last statement before `sm.removeStaleContainers()` in `onPartitionsAssigned`. Both sweeps reach
-`A`: `processingShards` is never replaced (`ShardMapIsNeverReplacedArchTest` pins it), shards are
-only ever removed when empty, and both iterators are weakly consistent, which still guarantees every
-element present for the whole traversal.
+**L5 - T1 and T2 each carry a sweep that takes `A` out of its SHARD, on the same thread, before the
+callback returns.** T1's swap is immediately followed in the same loop iteration by
+`partition.onPartitionsRemoved(sm)` - `sm.removeAnyShardEntriesReferencedFrom(incompleteOffsets.values())` -
+and `onPartitionsRemoved` ends with `sm.removeStaleContainers()`. T2 is the last statement before
+`sm.removeStaleContainers()` in `onPartitionsAssigned`. Both sweeps reach `A`: `processingShards` is
+never replaced (`ShardMapIsNeverReplacedArchTest` pins it), shards are only ever removed when empty,
+and both iterators are weakly consistent, which still guarantees every element present for the whole
+traversal.
+
+**Residence is all this leg needs, which is why astubbs#481 does not move it.** That PR takes the
+rebalance callbacks off the retry queue entirely - they remove from the shards only, and
+`ShardManager.purgeDepartedRetryEntries()` collects departed entries on the controller thread a tick
+later. So these sweeps no longer remove `A`'s queue entry, and for one control-loop tick a
+queue-only entry survives the callback. **It survives with `A` resident in no shard**, and the
+displacement branch requires a *resident* to displace, so that window is not a way in. The argument
+above was originally written as "removes it from both structures"; the queue half was never the part
+carrying it.
+
+**And astubbs#481 is a second, independent answer to the same question, from the other direction.**
+Even if the branch did orphan an entry, the purge collects it within one control-loop tick, in every
+ordering mode. Bound and unreachability are worth keeping separately: the bound holds whatever
+happens, and the proof says the case does not arise.
 
 **L6 - T3, the fence, carries no sweep at all**, and it is genuinely a production path:
 `AbstractParallelEoSStreamProcessor` calls `wm.fenceForRevocation(...)` on the **control thread**
@@ -168,6 +182,12 @@ structures; the question is whether it can fail at all.
 | `sm.removeStaleContainers()` alone | green - `removeAnyShardEntriesReferencedFrom` covers it | green |
 | `partition.onPartitionsRemoved(sm)` alone | green - `removeStaleContainers()` covers it | green |
 | both | **red** | **red**, at `the revocation must have taken the container out of its shard`, `expected: null but was: WorkContainer(tp:myTopic-0:o:0:k:key-0)` |
+
+**Re-run after merging astubbs#481**, because that PR changes what those sweeps do - they now remove
+from the shards only - and an ablation measured against the old shape would be evidence about code
+that no longer exists. Same result, same assertion: either alone green, both red. That is the
+expected outcome and it is stated because the alternative was not obvious in advance - the arm
+asserts residence, which is the half astubbs#481 leaves untouched.
 
 Same magnitude, different position: neither sweep alone is what makes the arm green, and removing
 both flips exactly the one assertion the argument turns on. An arm that could not be made to fail
