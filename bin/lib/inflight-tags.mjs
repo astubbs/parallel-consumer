@@ -125,6 +125,15 @@ const TYPE_RE = /inflight-type:\s*([a-z-]*)\s*-->/
 const IMPACT_RE = /inflight-impact:\s*([a-z-]*)\s*-->/
 const STATE_RE = /inflight-state:\s*([^>]*)-->/
 const LABELS_RE = /inflight-labels:\s*([^>]*)-->/
+/**
+ * THE VETTED MARKER: `<!-- inflight-vetted: YYYY-MM-DD - what was checked -->`. The date a reader
+ * last re-read the note against the tree and found it still true, and what they checked. It is the
+ * one fact about a note no command can answer: `git log` dates the last EDIT, and on this
+ * repository that is the same day for nearly every note (the package rename of 2026-08-26/27
+ * rewrote all of them), so "when did someone last confirm this is real" has no other home.
+ * `bin/inflight.mjs vet` partitions the corpus on it; docs/inflight/AGENTS.md owns what a vet is.
+ */
+export const VETTED_RE = /inflight-vetted:\s*(\d{4}-\d{2}-\d{2})\s*-\s*([^>]*)-->/
 /** Any state marker at all: its presence is what makes a note NOT open. */
 export const STATE_MARKER_RE = /inflight-state:[^>]*-->/
 /**
@@ -172,12 +181,16 @@ export function titleOf(text, path) {
  * @param {string} text the note's content
  * @param {string} path its path, for the title fallback
  * @returns {{type: string, impact: string, state: string, labels: string[], open: boolean,
- *            deferred: boolean, title: string}}
+ *            deferred: boolean, title: string, vetted: {date: string, what: string}|null}}
  *   `type` and `impact` are the marker's value or '' - not validated here, because an unknown value
- *   is a finding the index reports (its "unmatched" group) rather than an error to throw.
+ *   is a finding the index reports (its "unmatched" group) rather than an error to throw. `vetted`
+ *   is null when the note carries no well-formed vetted marker - a malformed one is the gate's to
+ *   refuse, and reads here as "never vetted", which is the safe direction.
  */
 export function classifyNote(text, path) {
+    const v = VETTED_RE.exec(text)
     return {
+        vetted: v ? { date: v[1], what: v[2].trim() } : null,
         type: first(TYPE_RE, text),
         impact: first(IMPACT_RE, text),
         state: first(STATE_RE, text),

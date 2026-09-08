@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - `BrokerPollSystem.pausePollingAndWorkRegistrationIfRunning()` and `resumePollingAndWorkRegistrationIfPaused()` are still public and still do an unsynchronised check-then-act on `runState` (volatile, so visible but not atomic) from whatever thread calls them; a repo-wide grep for either name outside their own declarations returns no caller in any main or test source. The disposition the note asks for - correct it, hide it, or delete it - is still unmade -->
 
 Surfaced by the torn-read hunt of 2026-08-24 as an out-of-family finding, and split out of
 [`bug-torn-read-family.md`](bug-torn-read-family.md) so it is not deleted with that dossier when the

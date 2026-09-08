@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: crash -->
+<!-- inflight-vetted: 2026-09-07 - every claim re-checked against the tree: `ConsumerManager` still catches only `SaslAuthenticationException` (bounded retry) and `WakeupException` (`correctPollWakeups++`), `BrokerPollSystem#supervise` still wraps the death in `PCInternalRuntimeException` and its "Unknown error" catch still calls `notifyPollerDied` before rethrowing, and `maybeCloseConsumer` is still gated on `isResponsibleForCommits()` (`committer instanceof ProducerManager`) so consumer-commit modes send no LeaveGroup. `gh issue view` says 163/148/153/149/141 are all still OPEN and 163 has no comments, so the draft answer is still unposted. Removed the delete-when section per docs/inflight/AGENTS.md; its condition (answer posted, policy decided) is unmet -->
 
 [astubbs#163](https://github.com/astubbs/parallel-consumer/issues/163) (confluentinc#550) asks whether
 PC has an exception handler, and then asks the question that was never answered: *"is there a plan to
@@ -114,8 +115,3 @@ Skipping Records sections describe only the processing path.
 Recommended disposition for astubbs#163 itself: post the answer, correct the stale poll-is-unguarded
 claim in the body, then close it as a duplicate of astubbs#153 with astubbs#148 as the contained step.
 Answering before closing matters - the reporter asked in 2023 and has never had a fork answer.
-
-## Delete this file when
-
-The answer is posted and the poll-path policy is decided - either implemented, or recorded as
-deliberately-not-offered in `docs/refactoring.md` with the README documenting the `byte[]` route.

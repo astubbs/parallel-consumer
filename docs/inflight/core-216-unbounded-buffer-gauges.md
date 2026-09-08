@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - `JStreamParallelEoSStreamProcessor#userProcessResultsStream` is still an uncapped `LinkedBlockingQueue` with no `@Deprecated`, `PCMetricsDef` still gauges neither buffer, `gh issue view 216 -R astubbs/parallel-consumer` is OPEN and 122 is CLOSED/COMPLETED - every premise correction in this note still holds -->
 
 [astubbs#216](https://github.com/astubbs/parallel-consumer/issues/216) asks for gauges over the
 buffers that grow when the *user* stops draining them, starting with the JStream result backlog.

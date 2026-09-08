@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - `ProcessingShard`s `A real replacement after all` branch is unchanged and the class still holds no `RetryQueue` field - the queue is still only a parameter on `getWorkIfAvailable`. `ShardManager.onSuccess` still calls `retryQueue.remove(wc)` unconditionally before touching a shard, which is the bound the note claims. astubbs#431 is still OPEN, so the `removeStaleWorkContainersFromShard` clause has not gone stale. Production reachability is still unestablished -->
 
 **Found by the defect-class sweep on the re-queue orphan window**, which is fixed and written up in
 [`docs/solutions/runtime-errors/retry-queue-orphan-window-between-the-requeue-check-and-the-add.md`](../solutions/runtime-errors/retry-queue-orphan-window-between-the-requeue-check-and-the-add.md).

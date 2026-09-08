@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - `PartitionState.stateChangedSinceCommitStart` is still `private boolean ... = false`, still set `true` on the control thread in `setDirty`, still cleared to `false` and read in the `setClean` guard `if (!stateChangedSinceCommitStart)` on the poll thread. Nothing has been fenced and nothing has been measured; `docs/refactoring.md`s `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` list still omits it, and both cited notes plus `CommitPathVisibilityProbes` still resolve -->
 
 A plain `boolean` that both the control thread and the broker-poll thread write. Recorded because
 the sweep found it, **not diagnosed** - the pair below is read off the call graph, and nothing has

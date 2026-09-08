@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-vetted: 2026-09-07 - still true: every named survivor site is still there and unpinned - PartitionState.deregisterMetrics and its call from line 701, couldBeTakenAsWork, hasIncompleteOffsets and isBlockingProgress; RemovedPartitionStateTest exists as the note says; the cited ci-mutation-survivor-list-is-unreadable.md note is still open. Not re-run - the note asks for a reproduce, not a cached number -->
 
 The first two real runs of the PR-scoped mutation lane (after astubbs#371 fixed it) scored
 astubbs#344's changed classes and reported four survivors, 88% test strength. This note is that
