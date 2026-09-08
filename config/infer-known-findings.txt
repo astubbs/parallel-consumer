@@ -47,7 +47,6 @@
 #
 # Format: <count> <bug_type> <Class.method>
 1 INTEGER_OVERFLOW_L2 BackportUtils.readFully
-1 NULLPTR_DEREFERENCE AbstractParallelEoSStreamProcessor.processWorkCompleteMailBox
 1 NULLPTR_DEREFERENCE PartitionStateManager.couldBeTakenAsWork
 1 NULLPTR_DEREFERENCE PartitionStateManager.getHighestSeenOffset
 1 NULLPTR_DEREFERENCE PartitionStateManager.isAllowedMoreRecords
