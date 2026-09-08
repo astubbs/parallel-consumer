@@ -690,3 +690,49 @@ Instance 5 on the first seed is the case that matters for the detector: a member
 frozen, with two workers parked between tasks - spare hands and nothing to hand them, because the
 records it holds are on the eight busy ones. A rule that accuses on "a free worker beside held work"
 accuses it; the rule that lands with the stacked follow-up accuses only nobody-in-user-code.
+
+## Sighting, 2026-09-08 - the outer wait again, with nothing gating and the Class 2 observation firing all over the topic
+
+<!-- post-merge: checked-begin -->
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` errored after 345.8s on the `Chaos Pain
+Suite 4/4` shard of astubbs/parallel-consumer#471, at head `33906f782`. The failure is the outer
+Awaitility wait, not a detector:
+
+    failure: ConditionTimeoutException: Condition with alias 'all messages consumed under churn'
+    didn't complete within 5 minutes
+    [chaos-probe] peaks: maxRebalanceDwell=4499ms maxDrainDuration=13543ms
+                         maxLagStagnation=150030ms maxInstanceStall=0ms
+
+**Replay seed `984595272001816748`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=984595272001816748
+
+Job: <https://github.com/astubbs/parallel-consumer/actions/runs/34178467617/job/101912551516>.
+
+**Same signature as the 2026-09-03 sighting - and this one is not weak evidence.** That entry says
+outright that its cancelled job makes the timeout unattributable. This job ran to completion on a
+normal PR shard, so the five-minute wait genuinely expired with the fleet still short of its records.
+
+**No gating detector fired.** What fired is `CLASS2_STALL/LAG_STAGNATION`, fifty-one times, over
+twenty-three distinct partitions of the run's one topic - the observation that stopped gating on
+2026-08-25 because it cannot separate a busy fleet from a wedged one. `maxInstanceStall=0ms`
+separates this from the worker-saturation line diagnosed above on 2026-09-07: no member was accused,
+because no member was frozen while holding work. So the two instruments this file has spent a month
+calibrating both read clean, and the run still failed.
+
+**That combination is exactly the per-shard gap this file already names**, and the observation's own
+text names it too: watermarks stagnant across most of the topic while every instance keeps completing
+is covered by nothing that gates - `test-per-shard-liveness-has-no-gate.md` owns the question. This
+is the first seed on the line that pairs a clean per-instance reading with a real outer-wait failure,
+which makes it the better replay target than the ones captured for the saturation line: replay it with
+`-Dchaos.diagnoseStallRecovery=true` and the per-instance telemetry, and if the fleet is completing
+throughout while the aggregate never reaches the count, the gap is demonstrated rather than argued.
+
+**Recorded, not diagnosed, and the branch is argued against on a mechanism.** The merge that produced
+this head changes documentation plus one javadoc block in `CommitResponseTimeoutSoakIT`. The branch as
+a whole (`git diff origin/master...33906f782`) touches no main code at all: its Java is that one new
+scenario, which carries the `soak` tag and is excluded from the integration lane by this branch's own
+pom and wrapper fix, plus one unit test in `QuarantinedAnnotationContractTest`. Nothing it carries is
+loaded by the chaos lane, so it cannot reach `ChaosChurnStormIT`.
+<!-- post-merge: checked-end -->
