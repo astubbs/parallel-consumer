@@ -95,7 +95,7 @@ class ImplausibleOffsetMapOnAssignmentTest {
     }
 
     private PCModuleTestEnv moduleWithCommittedMetadata(String metadata) {
-        return moduleWithCommittedMetadata(metadata, PARTITION_END_OFFSET, builder -> builder);
+        return moduleWithCommittedMetadata(metadata, PARTITION_END_OFFSET, UnaryOperator.identity());
     }
 
     private PCModuleTestEnv moduleWithCommittedMetadata(String metadata, InvalidOffsetMetadataHandlingPolicy policy) {
@@ -199,7 +199,7 @@ class ImplausibleOffsetMapOnAssignmentTest {
         int completedRun = (int) (highestOffsetHeld - COMMITTED_OFFSET);
         var module = moduleWithCommittedMetadata(runLengthV2Metadata(1, completedRun),
                 partitionEndOffset,
-                builder -> builder);
+                UnaryOperator.identity());
         WorkManager<String, String> wm = module.workManager();
 
         assertThatCode(() -> wm.onPartitionsAssigned(UniLists.of(TP)))

@@ -265,17 +265,17 @@ public class OffsetMapCodecManager<K, V> {
      * @return the last offset each partition holds, keyed by partition and absent where it could not be established
      */
     private Map<TopicPartition, Long> findHighestOffsetsHeld(Map<TopicPartition, OffsetAndMetadata> partitionLastCommittedOffsets) {
-        var partitionsCarryingAMap = partitionLastCommittedOffsets.entrySet().stream()
+        var partitionsCarryingMetadata = partitionLastCommittedOffsets.entrySet().stream()
                 .filter(entry -> entry.getValue() != null)
                 .filter(entry -> entry.getValue().metadata() != null && !entry.getValue().metadata().isEmpty())
                 .map(Map.Entry::getKey)
                 .collect(Collectors.toSet());
-        if (partitionsCarryingAMap.isEmpty()) {
+        if (partitionsCarryingMetadata.isEmpty()) {
             return Collections.emptyMap();
         }
 
         try {
-            var endOffsets = module.consumer().endOffsets(partitionsCarryingAMap);
+            var endOffsets = module.consumer().endOffsets(partitionsCarryingMetadata);
             var highestOffsetsHeld = new HashMap<TopicPartition, Long>();
             endOffsets.forEach((tp, endOffset) -> {
                 if (endOffset != null) {
@@ -291,7 +291,7 @@ public class OffsetMapCodecManager<K, V> {
             log.warn("Could not read the end offsets of {} while loading their committed offset maps ({}), so those " +
                             "maps cannot be checked against the offsets the partitions actually hold - decoding them " +
                             "as they are. An offset map claiming offsets that do not exist would be accepted this time.",
-                    partitionsCarryingAMap, e.toString());
+                    partitionsCarryingMetadata, e.toString());
             log.debug("End offset lookup failed", e);
             return Collections.emptyMap();
         }
