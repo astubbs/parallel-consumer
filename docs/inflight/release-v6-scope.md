@@ -210,8 +210,18 @@ churn rather than a PC defect.
   grid the item was opened on was also never a one-term A/B. What survives from this line is the
   per-shard liveness gap, already tracked and deferred with a stated bar - a blind spot to name,
   not a bug to fix before cutting.
-- A rebalance stall in async unordered mode from `MultiInstanceRebalanceTest` (the "fifth open
-  item"), blocked on progress-tracker instrumentation that does not exist yet. Unattributed.
+- ~~A rebalance stall in async unordered mode from `MultiInstanceRebalanceTest` (the "fifth open
+  item"), blocked on progress-tracker instrumentation that does not exist yet~~ - **attributed
+  2026-09-08, astubbs#486: the consumer-group protocol, not PC, and it was never blocked.** The
+  progress-tracker diagnostic has been wired since astubbs#444 and the mechanism was already
+  measured (a join phase the coordinator holds open, during which `poll()` returns nothing to any
+  member, then recovers - the write-up astubbs#473 promoted to master); the family note's section
+  had two claims that were false against master, which is why the item kept being picked up. The
+  freeze is real and fleet-wide but it recovers, no work is stranded, and no instance stays wedged;
+  what reads as red is the detector's no-progress window closing inside a real protocol freeze. The
+  PC half - that PC holds nothing during it - was re-verified with a one-term control arm on
+  `ClosingMemberRebalanceIT` after astubbs#451, #466 and #468 moved the revoke and close seam. Not a
+  defect; the release note need not name it.
 - `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on idle runners, so they read as
   starvation rather than a wedge. Not a confirmed defect; not ruled out either.
 - **An intake stall under an always-failing key, found by astubbs#471's soak (merged 2026-09-08).**
@@ -267,8 +277,8 @@ own branch; `gh pr list -R astubbs/parallel-consumer` shows the PRs as they open
 questions run in parallel; the replay-shaped ones (chaos and soak) run one at a time, because
 several replay agents on one machine produce exactly the starvation artefacts they are meant to
 rule out. Order of the replay queue: the eager-mode stall (done - withdrawn, astubbs#478), the six deadlock
-captures with the fix applied (done - proven by control arm, astubbs#485), then the async-unordered
-rebalance stall with its progress-tracker instrumentation (running), then the
+captures with the fix applied (done - proven by control arm, astubbs#485), the async-unordered
+rebalance stall (done - the group protocol, not PC, astubbs#486), then the
 `INSTANCE_STALL`/`ZOMBIE_MEMBER` idle-versus-loaded replay, then the intake stall astubbs#471's
 soak found (read the gate's DEBUG line under that workload; one run settles the load-gate
 hypothesis).
