@@ -165,7 +165,7 @@ jobs:
           # here at all (see this workflow's header), and a path in this list for a script that can
           # never write it is the stale entry the note below is about.
           found=0
-          for d in /tmp/large-instances /tmp/scale-sweep /tmp/detector-audit /tmp/async-answer; do
+          for d in /tmp/large-instances /tmp/scale-sweep /tmp/detector-audit /tmp/async-answer /tmp/cooperative-sticky-rebalance /tmp/gentle-chaos-rebalance; do
               if [ -d "$d" ]; then cp -R "$d" experiment-output/ && found=$((found + 1)); fi
           done
           find experiment-output -name 'tally.tsv' -exec sh -c 'echo "--- $1 ---"; cat "$1"' _ {} \; || true
