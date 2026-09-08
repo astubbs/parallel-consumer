@@ -15,20 +15,34 @@ the burn-down that gets from here to the tag, because the answer to "is it enoug
 register that was `release-0600-blockers.md` is folded in below as the tag-day checks, so the
 release has one note to burn down rather than three.
 
-## The decision, 2026-09-08
+## The decisions - 2026-09-07 by the owner, confirmed and extended 2026-09-08
 
 **v6 is a bug release. It is overdue. The bar is the one already stated** in
 [`release-0.6.0.0.md`](release-0.6.0.0.md) under *"This release is a stability release, and that is
-the point"* - nothing else has to be true. The three questions the previous version of this note
-left open are answered:
+the point"* - nothing else has to be true. The owner took four decisions on 2026-09-07 (recorded on
+<!-- post-merge: checked - names astubbs#475 as the PR that merged the decisions branch, which stays true after it lands -->
+branch `docs/v6-scope-decisions`, merged into astubbs#475) and confirmed the bar on 2026-09-08:
 
-- **What is the bar?** Stability release, and that is the whole bar.
-- **Which open items are genuinely v6?** The merge queue below, and only it. Everything that is
-  finished but does not fix a currently-open defect follows in a later release. A thing being ready
-  is not a reason to ship it in this one.
-- **Does the roadmap announcement have to be simultaneous?** No. Its plan is astubbs#446; it can
-  land before the tag and take pressure off sooner. The announcement is what lets the first release
-  be a bug release without being the only thing anyone sees.
+- **The bar is the stability release, and nothing else.** "Every known critical defect resolved,
+  with a guard" is the whole bar. Anything not fixing an open bug or clearing a release gate is out
+  of v6, however finished it looks. That one sentence settles the feature PRs without arguing each:
+  the commit-failure seam, virtual threads, residence time, the proxy stack, the perf campaign.
+- **Streams and Connect do not ship in v6.** Both moved to the `next-0x` horizon in
+  `docs/data/roadmap.yaml`; the announcement carries them as what is coming. The feature-record
+  note that waited on their modules is deferred.
+- **The transactional revoke wait (astubbs#44) is outside v6 for now, and the claim names it.** Its
+  fix (astubbs#408) is stacked on producer-fencing recovery (astubbs#410) by design, not by
+  chronology: declining the lock is only safe once a fenced producer is recoverable. So the choice
+  was the whole fencing work in v6 or the claim naming the exception, and the owner chose the
+  exception. `release-0.6.0.0.md`'s release condition carries the amended claim, with the
+  instruction to delete that paragraph if astubbs#410 lands before the tag.
+- **The `0.6.0.0` issue label means "closes when the release ships".** Swept the same day; the
+  features and the decision-only mirrors lost it.
+- **Which open items are genuinely v6?** (2026-09-08) The merge queue below, and only it. A thing
+  being ready is not a reason to ship it in this one.
+- **Does the roadmap announcement have to be simultaneous?** (2026-09-08) No. Its plan is
+  astubbs#446; it can land before the tag and take pressure off sooner. The announcement is what
+  lets the first release be a bug release without being the only thing anyone sees.
 
 **The mental hurdle, named so it stops steering.** The owner's instinct is that the first fork
 release has to be impressive. The record says otherwise: the delta since 0.5.3.3 is the largest
@@ -96,28 +110,30 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
 - [ ] **astubbs#473** - clears the two remaining quarantine entries by fixing what they were about.
   The release guard blocks while `docs/quarantined-tests.md` has any.
 
-### Tier 2 - the producer-recovery stack, bottom-up, in this order
+### Tier 2 - the producer-recovery stack: OUTSIDE v6 by the 2026-09-07 decision, named in the claim
 
-astubbs#225 (survive producer fencing rather than dying) is a feature, but two open **defects** are
-stacked on it and cannot land without it: the poisoned-transaction wedge and the transactional
-revoke wait that carries upstream's verified-bug label. That is why the stack is in a bug release.
-Each rung was re-cut on 2026-09-07 so it can be reviewed against pieces already reviewed.
+astubbs#225 (survive producer fencing rather than dying) is a feature, and two open **defects** are
+stacked on it: the transactional revoke wait (astubbs#44, upstream's verified-bug label) and the
+poisoned-transaction wedge. The owner chose on 2026-09-07 not to pull the whole fencing stack into a
+bug release, and to name astubbs#44 as the one known critical defect outside scope instead. **That
+call stands unless the owner reopens it**; this tier records the stack and its order so that if it
+is reopened - or if the stack simply lands before the tag - nothing has to be re-derived.
 
-- [ ] **astubbs#472** - the vocabulary and plumbing: what the broker reports, how PC builds another
-  producer. Changes no behaviour.
-- [ ] **astubbs#474** - keep every completed record until the commit that carries it succeeds. The
-  exactly-once argument of recovery, on its own.
-- [ ] **astubbs#410** - recovery itself. Closes astubbs#225.
-- [ ] **astubbs#434** - abort a transaction poisoned by a terminal send failure. The wedge in
-  [`bug-wedged-after-poisoned-transaction.md`](bug-wedged-after-poisoned-transaction.md) and
-  [`bug-poisoned-transaction-not-aborted-while-running.md`](bug-poisoned-transaction-not-aborted-while-running.md).
-- [ ] **astubbs#408** - a revocation declines the transaction lock instead of waiting on it. Closes
-  astubbs#44 (confluentinc#803). **The one PR in the queue with real reds** - checklist, hygiene,
-  the macOS shell lane and the heavy integration shard - so it needs work, not just a merge. Its
-  design question was settled by stacking on astubbs#410, and it must now resolve the
-  `tryCommitOffsetsOnRevoke` collision with the merged astubbs#466.
-- **astubbs#420** - derive the `transactional.id`, the enforced factory, config redaction. Producer
-  ownership polish stacked above recovery. **Proposed: after v6.** It fixes no open defect.
+The order, bottom-up, each rung re-cut on 2026-09-07 so it can be reviewed against pieces already
+reviewed: astubbs#472 (vocabulary and plumbing, no behaviour change), astubbs#474 (keep every
+completed record until the commit that carries it succeeds), astubbs#410 (recovery itself, closes
+astubbs#225), astubbs#434 (abort a transaction poisoned by a terminal send failure), astubbs#408
+(a revocation declines the transaction lock, closes astubbs#44 - the one PR in the stack with real
+reds, and it must now resolve the `tryCommitOffsetsOnRevoke` collision with the merged
+astubbs#466), then astubbs#420 (producer-ownership polish, after v6 in any case).
+
+**One thing the 2026-09-07 decision did not name, and the owner should:** the poisoned-transaction
+wedge ([`bug-wedged-after-poisoned-transaction.md`](bug-wedged-after-poisoned-transaction.md),
+[`bug-poisoned-transaction-not-aborted-while-running.md`](bug-poisoned-transaction-not-aborted-while-running.md))
+is fixed by astubbs#434, which also stacks on astubbs#410. If the stack is outside v6, the claim
+has two named exceptions, not one - a single oversized record stops its partition for the life of
+the process in transactional mode. Either name it beside astubbs#44 in `release-0.6.0.0.md`, or
+carry a smaller standalone abort for v6.
 
 ### Tier 3 - release plumbing, then tag
 
@@ -126,9 +142,10 @@ Each rung was re-cut on 2026-09-07 so it can be reviewed against pieces already 
 - [ ] **astubbs#446** - lift the announcement plan onto master, so the announcement is not being
   written from a branch nobody merges.
 - [ ] The tag-day artefact checks in the section of that name below.
-- [ ] Amend the release claim, not the standard, for what is still open in the confluentinc#857
-  family below. The claim is "every known **critical** defect resolved and evidenced", and the
-  family is not closed - say which mechanisms are, and which sightings remain unattributed.
+- [ ] Amend the release claim, not the standard, for what is still open. `release-0.6.0.0.md`
+  already names astubbs#44 as the exception (2026-09-07); add the poisoned-transaction wedge if the
+  owner confirms it is the second, and say which confluentinc#857 mechanisms are closed and which
+  sightings remain unattributed.
 - [ ] Post the drafted issue responses (`ls docs/inflight/issue-response-*.md` and
   [`release-0.6.0.0-issue-response-drafts.md`](release-0.6.0.0-issue-response-drafts.md)) in the
   pre-release sweep [`docs/releasing.md`](../releasing.md) describes.
@@ -136,7 +153,8 @@ Each rung was re-cut on 2026-09-07 so it can be reviewed against pieces already 
 
 ### Can follow - finished or nearly, and deliberately not v6
 
-Named so nobody re-argues them in: astubbs#352 (commit-failure seam - a feature, even though
+Named so nobody re-argues them in: the producer-recovery stack in tier 2 (by the 2026-09-07
+decision, unless reopened); astubbs#352 (commit-failure seam - a feature, even though
 confluentinc#833's reporter patched the library for it), astubbs#226 (health check), astubbs#306
 (offset density), astubbs#360 (virtual threads), astubbs#471 and astubbs#405 (soak and torture
 harnesses - test infrastructure, unless a run finds a data-loss defect), and every Streams, proxy,
@@ -158,7 +176,7 @@ churn rather than a PC defect.
 
 **Still open, and the release note names each:**
 
-- The transactional revoke wait, astubbs#44 (confluentinc#803) - astubbs#408 in tier 2.
+- The transactional revoke wait, astubbs#44 (confluentinc#803) - outside v6 by the 2026-09-07 decision; the release claim names it as the known exception. Fix is astubbs#408, tier 2.
 - An eager-mode (`PERIODIC_CONSUMER_SYNC`) stall that reproduces on trees carrying astubbs#29's fix
   (the family note's "fourth open item"). Unattributed.
 - A rebalance stall in async unordered mode from `MultiInstanceRebalanceTest` (the "fifth open
@@ -173,8 +191,9 @@ churn rather than a PC defect.
 
 ## What v6 must say about data loss and duplicates
 
-- **Fixed in the queue:** the async-commit acknowledgement (astubbs#470); the poisoned-transaction
-  wedge (astubbs#434).
+- **Fixed in the queue:** the async-commit acknowledgement (astubbs#470).
+- **Fixed on a branch outside v6 scope, and needing a named exception or an owner decision:** the
+  poisoned-transaction wedge (astubbs#434, stacked on the producer-recovery work) - see tier 2.
 - **Fixed on master:** the revoke-path transaction omitting offsets (astubbs#466); the torn-read family
   ([`bug-torn-read-family.md`](bug-torn-read-family.md) - astubbs#337, astubbs#344, astubbs#345,
   astubbs#346, astubbs#349); a terminally failed send publishing half a result set (astubbs#261);

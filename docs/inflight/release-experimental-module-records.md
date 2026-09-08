@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: release-gate -->
+<!-- inflight-state: deferred - after v6; the owner decided on 2026-09-07 that neither module ships in 0.6.0.0, so the records return with whichever next-0x release lands them -->
 
 
 `docs/features/kafka-streams-experimental.yaml` and `kafka-connect-experimental.yaml` were written and
