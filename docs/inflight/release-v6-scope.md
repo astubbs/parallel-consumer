@@ -240,7 +240,7 @@ box means the v6 action for that line is done, not that the defect is closed:
 **Resolved or reassigned since this list was written - kept so the release note can say what was ruled out:**
 
 - ~~An eager-mode (`PERIODIC_CONSUMER_SYNC`) stall that reproduces on trees carrying astubbs#29's
-  fix (the family note's "fourth open item")~~ - **withdrawn 2026-09-08, astubbs#478.** Four replays
+  fix (the family note's "fourth open item")~~ - **withdrawn 2026-09-08, astubbs#478 (merged).** Four replays
   of the recorded seed on today's master all drained completely with zero loss; the "stall" was the
   Class 2 timing bound, whose crossing flips with the processor count at a fixed seed and tree. The
   grid the item was opened on was also never a one-term A/B. What survives from this line is the
@@ -449,7 +449,7 @@ its subject at any merge.
 
 **Look at before the tag - these contradict the release claim if left silent:**
 
-- ~~The eager-mode stall that reproduces with the fixes applied~~ - **withdrawn, astubbs#478**
+- ~~The eager-mode stall that reproduces with the fixes applied~~ - **withdrawn, astubbs#478 (merged)**
   (2026-09-08): not a defect, a timing bound crossing on processor count. Nothing to ship or name.
 - ~~Poller death leaves the consumer open in consumer-commit modes~~ - **now astubbs#477 in tier 1**
   (2026-09-08). The fix was as small as the note proposed, and its defect-class sweep - cleanup gated
