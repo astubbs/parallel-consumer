@@ -278,8 +278,9 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
      * Records that a commit succeeded, for each partition that was committed.
      * <p>
      * Per partition, this delegates to {@link PartitionState#onOffsetCommitSuccess}, which stores the newly committed
-     * offset as the partition's last committed offset and marks the partition clean (unless its state changed again
-     * while the commit was in flight, in which case it stays dirty and will be committed again).
+     * offset as the partition's last committed offset and marks the partition clean - unless the acknowledgement is
+     * to an offer a later one has passed, or its state changed again while the commit was in flight, in either of
+     * which cases it stays dirty and will be committed again.
      * <p>
      * <b>No offsets are discarded here.</b> Earlier versions of this javadoc described truncating tracked offsets below
      * the committed offset once a commit landed. That does not happen, and cannot: {@link PartitionState} tracks only
