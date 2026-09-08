@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - register re-read; every row still open, one stale line fixed. The RegistrationRaceStaleResidentIT section still said "deliberately NOT quarantined here", but the owner has since quarantined it - the test carries @Quarantined(flapping = true, tracking = "docs/inflight/test-untracked-ci-flakes.md") and docs/quarantined-tests.md lists it citing this file - so that paragraph now records the quarantine and keeps the classification open; nothing was lifted. The rest checks out: the PIT row matches maven.yml (step timeout-minutes: 20, job 25, still continue-on-error), and bin/inflight.mjs codecov test on freshArrivalColliding..., rapidToggleShouldNotCreateDuplicateInstances, simpleBatchTest and processInKeyOrder shows none of them fixed - recent runs pass, and the tool warns its page is bounded -->
 
 Found 2026-08-07 by scanning surefire `Flakes:` markers across the 45 most recent CI runs (Integration
 and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any ledger.
@@ -234,13 +235,17 @@ same branches at neighbouring commits. That is the master-state evidence
 `docs/quarantined-tests.md` asks for, so this is a legitimate quarantine candidate under rule 2
 rather than an undiagnosed one under rule 1.
 
-**It is deliberately NOT quarantined here.** The test reproduces confluentinc#909 through the real
-registration path, so parking it costs a genuine reproduction, and the choice between that cost and
-a required check that fails a few times a day is the owner's rather than a babysitter's. What it
-needs first is the classification this section already asks for: the guard is a SETUP step, so the
-question is whether the control thread is merely slow to reach offset 25 under CI load, or whether
-something is actually preventing it - and only the second is a product defect. `codecov test` gives
-the per-commit history to bisect that from recorded runs rather than by re-running builds.
+**It has since BEEN quarantined, by the owner, under rule 2.** This paragraph read "deliberately NOT
+quarantined here" while it was a babysitter's call to leave alone; the call has been made. The test
+carries `@Quarantined(..., flapping = true, tracking = "docs/inflight/test-untracked-ci-flakes.md")`
+and `docs/quarantined-tests.md` lists it, citing this file as its standing prose ledger - so the two
+now point at each other and this row is the ledger half, not an untracked flake. The reasoning that
+made it a hard call stands and is why it is `flapping`: the test reproduces confluentinc#909 through
+the real registration path, so parking it costs a genuine reproduction. **What is still open is the
+classification, and quarantining did not supply it**: the guard is a SETUP step, so the question is
+whether the control thread is merely slow to reach offset 25 under CI load, or whether something is
+actually preventing it - and only the second is a product defect. `codecov test` gives the per-commit
+history to bisect that from recorded runs rather than by re-running builds.
 <!-- post-merge: checked-end -->
 
 <!-- post-merge: checked-begin - names astubbs#257 in the past tense as the branch the sighting came

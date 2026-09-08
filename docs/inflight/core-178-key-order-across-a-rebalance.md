@@ -3,6 +3,7 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: reliability -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - every anchor in the four-step route still resolves: `already exists in shard queue, dropping record` and `Replacing stale entry (epoch {})` in `ProcessingShard`, `removeStaleWorkContainersFromShard` reached from `ShardManager`, and `Dropping work from revoked partition` in `WorkManager`. `KeyOrderLedger`s window key still carries the epoch (`"|e" + epoch`), so the cross-epoch overlap still falls into two windows, and `ChaosRevokeUnderWorkKeyOrderIT` still exists. astubbs#178 is still OPEN and the information request is still unposted -->
 
 Triage of [astubbs#178](https://github.com/astubbs/parallel-consumer/issues/178), the fork mirror of
 [confluentinc issue #843](https://github.com/confluentinc/parallel-consumer/issues/843): one record

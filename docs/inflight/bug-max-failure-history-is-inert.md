@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: config-lie -->
+<!-- inflight-vetted: 2026-09-07 - `ParallelConsumerOptions.maxFailureHistory` is still `@Builder.Default private final int maxFailureHistory = 10` and a tree-wide grep finds that declaration as its only occurrence in any Java source - no reader anywhere. `WorkContainer` still keeps only its `lastFailureReason` optional. The delete-when condition is unmet: the option is neither implemented nor removed -->
 
 
 `ParallelConsumerOptions.maxFailureHistory` is declared with a default of 10 and is **read nowhere in

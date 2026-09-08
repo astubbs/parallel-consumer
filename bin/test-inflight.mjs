@@ -194,6 +194,7 @@ const docsShapeLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'docs-
 const cacheLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'cache.mjs')).href)
 const docsCommandsLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'docs-commands.mjs')).href)
 const rankLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'rank.mjs')).href)
+const vetLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'vet.mjs')).href)
 const repoLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'repo.mjs')).href)
 
 /** The notes-area corpus index, the way the `rank` row builds it - notes only, never all three areas. */
@@ -3788,6 +3789,149 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
             "out.push('', d.items > d.recognised", "out.push('', false"),
     },
+    // --- `vet` and the oldest-first order it shares with `rank` -----------------------------------
+    {
+        id: 'vet-orders-a-group-oldest-first-by-first-added-date',
+        why: "operator ruling 2026-09-07: 'impact, then by age, so oldest first'. Path order inside a group ranked nothing while reading as if it did, and last-touched is not age on this repository - the package rename rewrote every note on one day - so the order has to come from the first-added date, which is exactly the one a path sort ignores",
+        run: async (binDir) => inVetFixture(async () => {
+            const v = await vetRun(binDir)
+            const names = vetNames(v)
+            const b = names.indexOf('bug-b-older-stall.md')
+            const a = names.indexOf('bug-a-newer-stall.md')
+            return b >= 0 && a >= 0 && b < a
+                && vetRow(v, 'bug-b-older-stall').age === '2026-01-01' && vetRow(v, 'bug-a-newer-stall').age === '2026-02-01'
+        }),
+        // Path order: `bug-a-` sorts before `bug-b-`, and the older note loses its place.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'vet.mjs'), '|| byAgeThenPath(a, b))', '|| a.path.localeCompare(b.path))'),
+    },
+    {
+        id: 'rank-orders-a-group-oldest-first-by-first-added-date',
+        why: 'the same ruling, on the view that prompted it: `rank --impact stall` printed its rows alphabetically, which is what the operator noticed. The rule is imported from one place so the two views cannot disagree, and this is the check that rank actually applies it',
+        run: async (binDir) => {
+            const { rank, registerBlob } = await rankLib(binDir)
+            const { corpusIndex } = await notes(binDir)
+            const { DOC_AREAS, NOTES_DIR } = await repoLib(binDir)
+            const { firstAddedDates } = await gitlib(binDir)
+            return inVetFixture(async () => {
+                const index = corpusIndex({ areas: DOC_AREAS.filter((a) => a.dir === NOTES_DIR) })
+                const r = rank(index, { prs: NO_PRS, register: registerBlob(index), ages: firstAddedDates('docs/inflight/') })
+                if (!r.ok) return false
+                const stall = r.groups.find((g) => g.key === 'stall')
+                if (!stall) return false
+                const names = stall.rows.map((row) => row.name)
+                const b = names.indexOf('bug-b-older-stall.md')
+                const a = names.indexOf('bug-a-newer-stall.md')
+                return b >= 0 && a >= 0 && b < a && rankRow(r, 'bug-b-older-stall').age === '2026-01-01'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'rows.sort(byAgeThenPath)', 'rows.sort((a, b) => a.path.localeCompare(b.path))'),
+    },
+    {
+        id: 'vet-partitions-on-a-well-formed-marker-only',
+        why: 'the marker is the whole mechanism: a malformed one (no date) or a prose mention with no closing `-->` counted as vetted would let a note skip every future sweep on the strength of a typo, which is the gate-green-but-index-wrong shape this vocabulary has already been bitten by',
+        run: async (binDir) => inVetFixture(async () => {
+            const v = await vetRun(binDir)
+            return v.vetted === 1
+                && vetRow(v, 'bug-c-vetted-stall').vetted?.date === '2026-03-01'
+                && vetRow(v, 'bug-d-malformed-vet').vetted === null
+                && vetRow(v, 'bug-e-prose-vet').vetted === null
+        }),
+        // A regex that no longer demands the date accepts the malformed marker.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'inflight-tags.mjs'), '(\\d{4}-\\d{2}-\\d{2})\\s*-\\s*([^>]*)-->', '()\\s*-?\\s*([^>]*)-->'),
+    },
+    {
+        id: 'vet-settled-signal-needs-every-cited-number-settled',
+        why: 'the innocent reading is the common one - a note names the pull request that found the problem - so a signal firing on ANY settled citation would fire on most of the corpus and partition nothing; it fires only when nothing the note cites is still open',
+        run: async (binDir) => inVetFixture(async () => {
+            const v = await vetRun(binDir)
+            const fired = (stem) => vetRow(v, stem).signals.some((s) => s.key === 'all-cited-numbers-settled')
+            return fired('bug-b-older-stall') && !fired('bug-a-newer-stall')
+        }),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'vet.mjs'), 'if (known.length > 0 && open.length === 0) {', 'if (known.length > 0 && open.length >= 0) {'),
+    },
+    {
+        id: 'vet-anchor-signal-resolves-a-partial-path',
+        why: 'notes cite `state/PartitionState.java` - a package-relative path with no module - as often as the full path or the bare name, and the first cut of this signal flagged every one of them as missing, which made the four real misses on the corpus indistinguishable from fifty false ones',
+        run: async (binDir) => inVetFixture(async () => {
+            const v = await vetRun(binDir)
+            const s = vetRow(v, 'bug-b-older-stall').signals.find((x) => x.key === 'anchor-missing')
+            return !!s && s.detail.includes('`Gone.java`') && !s.detail.includes('PartitionState.java')
+        }),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'vet.mjs'), 'return suffixes.some((p) => p.endsWith(`/${cited}`))', 'return false'),
+    },
+    {
+        id: 'vet-symbol-signal-reads-the-source-and-never-the-notes',
+        why: 'a symbol mentioned only in a note is exactly the kind that has gone from the code; reading the notes as source would find every cited symbol in the note that cites it, and the signal would never fire',
+        run: async (binDir) => inVetFixture(async () => {
+            const v = await vetRun(binDir)
+            const s = vetRow(v, 'bug-b-older-stall').signals.find((x) => x.key === 'anchor-missing')
+            return !!s && s.detail.includes('`GhostClass`') && !s.detail.includes('`RealClass`')
+        }),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'vet.mjs'), 'const SOURCE_RE = /\\.(java|kt|', 'const SOURCE_RE = /\\.(md|java|kt|'),
+    },
+    {
+        id: 'vet-counts-deferred-and-closed-rather-than-listing-them-unless-asked',
+        why: "AGENTS.md's schedule rule is that all open work happens before any deferred work, so a sweep reads the deferred section only when the open one is empty - and an enumeration that dropped them silently would be the found-nothing wearing the authority of a completed check",
+        run: async (binDir) => inVetFixture(async () => {
+            const v = await vetRun(binDir)
+            const names = vetNames(v)
+            const counted = new Map(v.excluded.map((e) => [e.key, e.count]))
+            const all = await vetRun(binDir, { all: true })
+            return !names.includes('bug-f-deferred.md') && !names.includes('bug-g-closed.md')
+                && counted.get('deferred') === 1 && counted.get('closed') === 1
+                && vetNames(all).includes('bug-f-deferred.md') && vetNames(all).includes('bug-g-closed.md')
+        }),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'vet.mjs'), "if (!all && (group === 'closed' || group === 'deferred')) {", "if (false && (group === 'closed' || group === 'deferred')) {"),
+    },
+    {
+        id: 'vet-scopes-to-an-area-by-filename-prefix',
+        why: 'the area is how a sweep is split between agents, and one file per note is what keeps their edits from colliding - a scope that leaked another area would hand two agents the same note',
+        run: async (binDir) => inVetFixture(async () => {
+            const v = await vetRun(binDir, { area: 'ci' })
+            return vetNames(v).length === 1 && vetNames(v)[0] === 'ci-i-other-area.md' && v.area === 'ci'
+        }),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'vet.mjs'), 'if (area !== null && !name.startsWith(`${area}-`)) continue', 'if (false) continue'),
+    },
+    {
+        id: 'vet-delete-when-reports-the-condition-under-the-heading',
+        why: 'on this corpus the marker is a `## Delete when` section, and the heading alone only says one exists; the condition under it is what a vetter can judge on sight, and printing it is the difference between a row that saves a read and one that costs one',
+        run: async (binDir) => inVetFixture(async () => {
+            const v = await vetRun(binDir)
+            const s = vetRow(v, 'bug-h-delete-when').signals.find((x) => x.key === 'delete-when')
+            return !!s && s.detail.includes('The thing lands.')
+        }),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'vet.mjs'), 'return (body.trim() || l.trim()).slice(0, 160)', 'return l.trim().slice(0, 160)'),
+    },
+    {
+        id: 'vet-reads-a-named-ref-instead-of-the-baseline',
+        why: "docs/grooming.md calls `vet` the sweep's progress view, and a sweep's own result is not on the baseline until it lands - so without `--ref` the view cannot show the thing it exists to show. A ref that silently fell back to the baseline would report the branch's stamps as missing",
+        run: async (binDir) => {
+            const { baselineNotes } = await vetLib(binDir)
+            return inVetFixture(async () => {
+                const onBranch = baselineNotes({ ref: 'sweep' })
+                const onBase = baselineNotes()
+                const has = (r, stem) => r.ok && r.notes.some((n) => n.path === `docs/inflight/${stem}.md`)
+                return onBranch.baseline === 'sweep' && has(onBranch, 'bug-j-only-on-the-sweep-branch')
+                    && !has(onBase, 'bug-j-only-on-the-sweep-branch')
+                    && baselineNotes({ ref: 'no-such-ref' }).ok === false
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'vet.mjs'), 'const base = ref ?? baseline()', 'const base = baseline()'),
+    },
+    {
+        id: 'first-added-dates-take-the-earliest-add-across-refs',
+        why: 'a note is born on a branch and reaches the baseline later, so the baseline history dates the merge; and the parse reads a NUL-separated token stream where a path carries a leading newline - the first cut split on record boundaries that git does not emit and returned zero dates for every note, silently',
+        run: async (binDir) => {
+            const { firstAddedDates } = await gitlib(binDir)
+            return inVetFixture(async () => {
+                const r = firstAddedDates('docs/inflight/')
+                return r.ok && r.dates.get('docs/inflight/bug-b-older-stall.md') === '2026-01-01'
+                    && r.dates.get('docs/inflight/bug-a-newer-stall.md') === '2026-02-01'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'), "const token = raw.replace(/^\\n/, '')", 'const token = raw'),
+    },
+
 ]
 
 /**
@@ -3843,6 +3987,103 @@ function manyVersionsFixture() {
  *                                                    `refs/backup` closure the ref enumeration
  *                                                    reaches first, and a live branch's
  */
+/**
+ * A CORPUS WITH AGES, for `vet` and for the oldest-first order `rank` shares with it.
+ *
+ * Two dated commits, so first-added dates differ where path order disagrees with age order:
+ *
+ *   2026-01-01   bug-b-older-stall     cites astubbs#101 only; cites a real class by partial path,
+ *                                      by bare name, and a gone one; cites `RealClass` (in the
+ *                                      source) and `GhostClass` (in no source, only in this note)
+ *                src/main/java/x/state/PartitionState.java   the source `RealClass` lives in
+ *   2026-02-01   bug-a-newer-stall     cites astubbs#101 AND astubbs#102 - one of them open
+ *                bug-c-vetted-stall    a well-formed vetted marker
+ *                bug-d-malformed-vet   a vetted marker with no date - the gate's case, read as unvetted
+ *                bug-e-prose-vet       prose mentioning the marker with no closing `-->`
+ *                bug-f-deferred        deferred    - counted, not listed, unless --all
+ *                bug-g-closed          closed      - the same
+ *                bug-h-delete-when     a `## Delete when` section whose condition is the next line
+ *                ci-i-other-area       the one note outside the `bug-` area
+ *
+ * ITS OWN REPOSITORY for the reason the docs fixture gives: the rank checks assert exact counts on
+ * theirs, and a note added there for age would turn one of them red a phase later.
+ */
+let VET = null
+function vetFixture() {
+    if (VET) return VET
+    const { dir, git } = windowRepo()
+    const write = (rel, body) => {
+        mkdirSync(join(dir, dirname(rel)), { recursive: true })
+        writeFileSync(join(dir, rel), body)
+    }
+    const note = (name, body) => write(`docs/inflight/${name}.md`, body)
+    const stall = '<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n'
+    // BOTH DATES, because `%cs` is the committer date and `git commit` takes the author's from the
+    // environment separately; setting one leaves the other at "now" and the age is wrong silently.
+    const dated = (date, message) => {
+        const before = { a: process.env.GIT_AUTHOR_DATE, c: process.env.GIT_COMMITTER_DATE }
+        process.env.GIT_AUTHOR_DATE = date
+        process.env.GIT_COMMITTER_DATE = date
+        try {
+            git('add', '-A')
+            git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', message)
+        } finally {
+            if (before.a === undefined) delete process.env.GIT_AUTHOR_DATE; else process.env.GIT_AUTHOR_DATE = before.a
+            if (before.c === undefined) delete process.env.GIT_COMMITTER_DATE; else process.env.GIT_COMMITTER_DATE = before.c
+        }
+    }
+    write('src/main/java/x/state/PartitionState.java', 'class PartitionState { void RealClass() {} }\n')
+    write('docs/inflight/process-candidate-ranking.md', '# Ranked\n\n<!-- inflight-type: register -->\n\n- `bug-b-older-stall.md`\n')
+    note('bug-b-older-stall', `# Older\n\n${stall}\nFound by astubbs#101. See \`state/PartitionState.java\`, \`PartitionState.java\`, \`Gone.java\`,`
+        + ' `RealClass` and `GhostClass`.\n')
+    dated('2026-01-01T12:00:00 +0000', 'older')
+    note('bug-a-newer-stall', `# Newer\n\n${stall}\nastubbs#101 landed; astubbs/parallel-consumer#102 is still open.\n`)
+    note('bug-c-vetted-stall', `# Vetted\n\n${stall}<!-- inflight-vetted: 2026-03-01 - re-read against the tree -->\nbody\n`)
+    note('bug-d-malformed-vet', `# Malformed vet\n\n${stall}<!-- inflight-vetted: re-read, no date -->\nbody\n`)
+    note('bug-e-prose-vet', `# Prose vet\n\n${stall}\nprose about inflight-vetted: 2026-01-01 - which is not a marker\n`)
+    note('bug-f-deferred', `# Deferred\n\n${stall}<!-- inflight-state: deferred - after v6 -->\nbody\n`)
+    note('bug-g-closed', `# Closed\n\n${stall}<!-- inflight-state: closed - it landed -->\nbody\n`)
+    note('bug-h-delete-when', `# Delete when\n\n${stall}\n## Delete when\n\nThe thing lands.\n`)
+    note('ci-i-other-area', '# Another area\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nbody\n')
+    dated('2026-02-01T12:00:00 +0000', 'newer')
+    // A SWEEP BRANCH: one note the baseline has never had, for `--ref`. Left checked out on
+    // master afterwards, so the baseline reads are unaffected.
+    git('checkout', '-q', '-b', 'sweep')
+    note('bug-j-only-on-the-sweep-branch', `# Only on the sweep branch\n\n${stall}<!-- inflight-vetted: 2026-04-01 - stamped on the branch -->\nbody\n`)
+    dated('2026-03-01T12:00:00 +0000', 'the sweep')
+    git('checkout', '-q', 'master')
+    VET = dir
+    return dir
+}
+
+async function inVetFixture(fn) {
+    const before = cwd()
+    chdir(vetFixture())
+    try { return await fn(vetFixture()) } finally { chdir(before) }
+}
+
+/** The number snapshot `vet` is driven with - no gh: 101 is settled, 102 is open. */
+const VET_NUMBERS = { ok: true, map: new Map([[101, { kind: 'pull-request', state: 'MERGED' }], [102, { kind: 'issue', state: 'OPEN' }]]) }
+
+/** `vet` over the fixture through the real git wrappers, with the number snapshot above. */
+async function vetRun(binDir, opts = {}) {
+    const { vet, baselineNotes, baselineTree, symbolsPresent, symbolCandidates } = await vetLib(binDir)
+    const { firstAddedDates } = await gitlib(binDir)
+    const listed = baselineNotes()
+    if (!listed.ok) throw new Error(`vet fixture: ${listed.reason}`)
+    return vet(listed.notes, {
+        numbers: VET_NUMBERS,
+        tree: baselineTree(listed.baseline),
+        symbols: symbolsPresent(listed.baseline, symbolCandidates(listed.notes)),
+        ages: firstAddedDates('docs/inflight/'),
+        baseline: listed.baseline,
+        ...opts,
+    })
+}
+
+const vetRow = (v, stem) => v.groups.flatMap((g) => g.rows).find((r) => r.name === `${stem}.md`)
+const vetNames = (v) => v.groups.flatMap((g) => g.rows.map((r) => r.name))
+
 let RANK = null
 function rankFixture() {
     if (RANK) return RANK

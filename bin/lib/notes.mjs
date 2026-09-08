@@ -262,6 +262,47 @@ export function prsByBranch({ cache = true, network = true } = {}) {
 }
 
 /**
+ * The `gh` fields the numbers snapshot is keyed on - the same reason `PR_LIST_FIELDS` is exported.
+ */
+export const NUMBER_LIST_FIELDS = 'number,state'
+
+/**
+ * number -> {kind: 'pull-request'|'issue', state}. Two gh calls for the whole repository, cached
+ * a day; never one per number.
+ *
+ * ISSUES AND PULL REQUESTS SHARE ONE COUNTER on GitHub, so a note citing `astubbs#301` names one or
+ * the other and the reader cannot tell which from the text. Both lists are read and the kind
+ * travels with the state, because "merged" is a fact about a pull request and "closed" about
+ * either - a row that said `#301 CLOSED` without the kind would leave the reader to look it up.
+ *
+ * `network: false` answers from the cache or not at all, for the same rate-limit reason
+ * `prsByBranch` has it. The repository is NAMED on every call: a bare `gh` here resolves to
+ * confluentinc, whose numbers overlap this fork's entirely, and an answer for the wrong repository
+ * reads exactly like an answer for the right one.
+ */
+export function numbersByValue({ cache = true, network = true } = {}) {
+    const shape = NUMBER_LIST_FIELDS
+    const cached = cache ? cacheRead('numbers.json', { key: shape }) : null
+    if (cached) return { ok: true, cached: true, map: new Map(cached) }
+    if (!network) return { ok: false, reason: 'no cached number list, and this path never calls gh', cached: false, map: new Map() }
+    const pairs = []
+    for (const [kind, sub] of [['pull-request', 'pr'], ['issue', 'issue']]) {
+        const res = exec('gh', [sub, 'list', '-R', REPO, '--state', 'all', '--limit', '1000', '--json', shape], { timeout: 20000 })
+        if (!res.ok) return { ok: false, reason: 'gh unavailable or unauthenticated', map: new Map() }
+        let rows = []
+        try {
+            rows = JSON.parse(res.out)
+        } catch {
+            return { ok: false, reason: 'gh returned output that is not JSON', map: new Map() }
+        }
+        for (const r of rows) pairs.push([r.number, { kind, state: r.state }])
+    }
+    if (pairs.length === 0) return { ok: false, reason: 'gh listed no issues and no pull requests, which is a failed listing rather than an empty repository', map: new Map() }
+    if (cache) cacheWrite('numbers.json', pairs, shape)
+    return { ok: true, cached: false, map: new Map(pairs) }
+}
+
+/**
  * The first `# ` heading of a blob - a note's own title, read without checking anything out.
  *
  * Memoised for the process, which is always safe: a blob SHA names its content, so the answer cannot

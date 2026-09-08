@@ -4,6 +4,7 @@
 <!-- inflight-type: task -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-vetted: 2026-09-07 - partly true, shrunk: the "Nothing runs the lane" section is REMOVED because maven.yml now carries a gating `- suite: lincheck` matrix entry running bin/lincheck-test.sh, and the same commit block cites this note by name; the "against ever gating the lane" clause was corrected to the wall-clock trade for the same reason. Everything else re-checked and still open - the four harnesses plus the two probes are all present, LincheckToolchainProbeTest still sets no .actorsBefore/.actorsAfter and still has no near-miss arm, QuarantinedAnnotationContractTest still uses containsAtLeastElementsIn, and no docs/solutions/ entry exists for the ASM silent-instrumentation incident. Delete-when condition NOT met -->
 
 <!-- post-merge: checked-begin -->
 The lane arrived with astubbs#347. What is below is what that PR deliberately did **not** close, plus
@@ -425,17 +426,10 @@ the Lincheck arm is a search running beside it.
 **What the inversion costs, which is now the lane's largest single number.** An inverted arm cannot
 stop at the first violation, so it pays its whole bound on every run. The whole lane used to finish
 well under a minute; it is now about two and a half, essentially all of it this one arm. That is a
-real trade against item 8 and against ever gating the lane, and it is the price of keeping the bound
-where it was measured rather than re-pricing it on thin evidence.
+real trade against item 8 and against the gating lane wall-clock, and it is the price of
+keeping the bound where it was measured rather than re-pricing it on thin evidence.
 
 <!-- post-merge: checked-end -->
-
-## Nothing runs the lane, so the tripwire it promises cannot fire
-
-`bin/lincheck-test.sh` is excluded from every gating suite by design, and no workflow invokes it. The
-ASM instrumentation tripwire - the control that exists because a broken transformer once reported a
-clean pass against code that cannot survive two threads - therefore never runs. Three reviewers
-converged on this independently.
 
 ## The red control has drifted from a standard that landed after it
 

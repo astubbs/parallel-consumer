@@ -3,6 +3,7 @@
 <!-- inflight-type: register -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - the lane still runs (`bin/infer-test.sh` from `maven.yml`) and the ratchet still matches what this note describes: `config/infer-known-findings.txt` now holds only the `NULLPTR_DEREFERENCE` `getPartitionState` group plus `INTEGER_OVERFLOW_L2 BackportUtils.readFully`, with every `THREAD_SAFETY_VIOLATION` and `resetOffsetMapAndRemoveWork` retired exactly as written. The delete-when is NOT met - the overflow finding is still in the ratchet with no note of its own. The six settled fork numbers it cites are cited as the PRs that fixed things, not as open work -->
 
 `bin/infer-test.sh` runs Infer over `parallel-consumer-core`'s main code in CI (`static: racerd` on
 `ubuntu-latest`), gating on an identity ratchet. **One register for one lane**: this file owns what

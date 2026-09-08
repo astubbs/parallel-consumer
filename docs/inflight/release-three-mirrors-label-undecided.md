@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: release-gate -->
+<!-- inflight-vetted: 2026-09-07 - all three mirrors are still closed and still carry NO 0.6.0.0 label, so the labelling question is still open; upstream-map.yamls sweep-2023-already-fixed entry still records the code check for astubbs#233 and astubbs#252, and commit ed78d6cc9 is still on master with the astubbs#118 comment the note points at already posted -->
 
 
 astubbs#118, astubbs#233 and astubbs#252 are closed `upstream-mirror` issues carrying no `0.6.0.0`

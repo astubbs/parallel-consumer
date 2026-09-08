@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
+<!-- inflight-vetted: 2026-09-07 - every branch in section 1 still exists on origin and none has acquired a manifest entry, so the look each one needs is still outstanding; the three `archive/` tags it names still resolve; astubbs#300 is still OPEN and no branch-audit mode exists in `scripts/upstream-sweep.sh`; `core-auto-scaling.md` and `core-241-tx-commit-failure-taxonomy.md` both still exist. The `ControllerEventBus` / `PartitionEpochTracker` anchor warning is a FALSE POSITIVE - they are on `origin/improvements/privacy-restriction`, which is the note's own point -->
 
 
 A full sweep of all 196 origin branches against the tracking corpus (upstream-map.yaml,

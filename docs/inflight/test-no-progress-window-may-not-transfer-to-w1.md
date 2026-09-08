@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - still true and still unsettled: the calibration asymmetry is unchanged in the tree (ProgressProbe.NO_PROGRESS_WINDOW is still 30s and TAIL_SLACK still 500, AbstractRevokeUnderWorkScenario still calls withNoProgressWindow(Duration.ofSeconds(60)), ChaosChurnStormIT still takes the default), and no replay with -Dchaos.diagnoseStallRecovery has been recorded against any seed in the table. bin/inflight.mjs codecov test churnStormMeetsSlosAndBalancesLedger shows 10 recent passes, which does not refute a one-in-twenty rate and the tool warns the page is bounded -->
 
 Two chaos detectors have now been found asserting a timing bound that the scenario's own disturbances
 legitimately cross - `CLASS2_STALL` (demoted to an observation) and `REBALANCE_DWELL` (disarmed in
