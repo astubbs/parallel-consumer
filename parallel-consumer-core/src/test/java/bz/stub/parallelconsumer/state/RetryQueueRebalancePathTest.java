@@ -8,7 +8,7 @@ import bz.stub.parallelconsumer.BrokerlessWorkManagerTestBase;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
-import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
+import bz.stub.parallelconsumer.internal.utils.BlockedThreadAsserter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -19,8 +19,6 @@ import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
 
 import java.time.Duration;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static com.google.common.truth.Truth.assertThat;
@@ -64,7 +62,7 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
      * is parked on the write lock until the iterator below is closed - so no deadline in this range can be
      * "nearly" met.
      */
-    private static final long CALLBACK_DEADLINE_SECONDS = 10;
+    private static final Duration CALLBACK_DEADLINE = Duration.ofSeconds(10);
 
     /**
      * Registers one record, takes it as work, fails it, and lets the work manager park it for retry - the only
@@ -91,7 +89,7 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
      * parked when the deadline passes.
      */
     @Test
-    void aRevokeDoesNotTouchTheRetryQueueAndSoCannotWaitForItsWriteLock() throws InterruptedException {
+    void aRevokeDoesNotTouchTheRetryQueueAndSoCannotWaitForItsWriteLock() {
         WorkContainer<String, String> parkedForRetry = aFailedRecordParkedForRetry();
 
         withTheControllerThreadHoldingTheReadLock(
@@ -125,7 +123,7 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
      * {@code retryQueue::remove} over what it swept.
      */
     @Test
-    void theStaleSweepDoesNotTouchTheRetryQueueEither() throws InterruptedException {
+    void theStaleSweepDoesNotTouchTheRetryQueueEither() {
         WorkContainer<String, String> parkedForRetry = aFailedRecordParkedForRetry();
 
         withTheControllerThreadHoldingTheReadLock(
@@ -320,26 +318,18 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
      * Adapted from the harness astubbs/parallel-consumer#431 built for the same lock, against the design that
      * superseded it.
      *
-     * @param whileStillContended handed whether the callback returned inside {@link #CALLBACK_DEADLINE_SECONDS}
+     * @param whileStillContended handed whether the callback returned inside {@link #CALLBACK_DEADLINE}
      */
     private void withTheControllerThreadHoldingTheReadLock(Runnable rebalanceCallback,
-                                                           ContendedAssertions whileStillContended)
-            throws InterruptedException {
-        var callbackReturned = new CountDownLatch(1);
-        Thread pollThread = null;
+                                                           ContendedAssertions whileStillContended) {
+        var pollThread = new BlockedThreadAsserter();
         try (RetryQueue.RetryQueueIterator heldByTheControllerThread = sm.getRetryQueue().iterator()) {
             assertWithMessage("FIXTURE: the iterator must actually be holding something, or it is not modelling a scan")
                     .that(heldByTheControllerThread.hasNext()).isTrue();
 
-            pollThread = new Thread(() -> {
-                rebalanceCallback.run();
-                callbackReturned.countDown();
-            }, "broker-poll");
-            pollThread.start();
-
-            whileStillContended.run(callbackReturned.await(CALLBACK_DEADLINE_SECONDS, TimeUnit.SECONDS));
+            whileStillContended.run(pollThread.returnsWithin(rebalanceCallback, "broker-poll", CALLBACK_DEADLINE));
         } finally {
-            ThreadUtils.joinQuietly(pollThread, Duration.ofSeconds(CALLBACK_DEADLINE_SECONDS));
+            pollThread.joinQuietly(CALLBACK_DEADLINE);
         }
     }
 

@@ -488,18 +488,24 @@ public class ShardManager<K, V> {
             // this order closes the window that asking first only narrows.
             if (!shard.isResident(wc)) {
                 // The removal's answer is LOGGED rather than dropped, because a bare call here cannot be told
-                // from a forgotten check - and it says which of the two racing removals won, which is the only
-                // interesting thing about this branch. BOTH answers are correct and neither is actionable:
-                // false means the sweep's own paired removal reached the entry first, which is the outcome this
-                // method is arranging for, and true means this call is the one that kept the pair whole. The
-                // argument above needs only that AT LEAST ONE of the two removals observes the entry, never
-                // which. (Logged rather than assigned to an ignored local: a dead store in main code trades one
-                // static-analysis finding for another - see docs/inflight/static-error-prone-rule-registry.md,
-                // `ReturnValueIgnored`.)
+                // from a forgotten check. What it MEANS changed when the sweep stopped touching the queue: it
+                // used to say which of two racing removals won, and both answers were correct. Now nothing
+                // races it. The add a few lines above put the entry there, the sweep never removes from this
+                // queue, and every other removal - purgeDepartedRetryEntries, ProcessingShard's removeAll and
+                // its last-resort stale branch - is on this same controller thread and later in the pass. So
+                // TRUE is the only outcome production can now produce.
+                //
+                // FALSE IS THEREFORE A SIGNAL, not an alternative: it would mean a second writer of the retry
+                // queue exists, which is the one thing that would invalidate purgeDepartedRetryEntries()'s
+                // scan-then-remove. Nothing asserts it here - this is main code on a hot path - so it is logged
+                // in the form a reader can act on. (Logged rather than assigned to an ignored local: a dead
+                // store in main code trades one static-analysis finding for another - see
+                // docs/inflight/static-error-prone-rule-registry.md, `ReturnValueIgnored`.)
                 boolean thisCallRemovedIt = this.retryQueue.remove(wc);
                 log.debug("Failed work left its shard while it was being re-queued (its partition was revoked); " +
                         "taking the retry queue entry back out so it cannot be orphaned - this call removed it: " +
-                        "{} (false means the revoke sweep's own paired removal got there first). {}",
+                        "{} (FALSE would mean something else removed it, i.e. a second writer of the retry " +
+                        "queue, which nothing should be). {}",
                         thisCallRemovedIt, wc);
             }
         }

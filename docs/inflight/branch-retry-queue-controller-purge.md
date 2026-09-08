@@ -37,6 +37,16 @@ which owns the mechanism, both designs and the evidence. Do not re-derive any of
 - **The runtime controller-ownership guard is what would make the purge's premise checkable** -
   [`core-retry-queue-needs-a-runtime-controller-ownership-guard.md`](core-retry-queue-needs-a-runtime-controller-ownership-guard.md),
   whose case the purge strengthens rather than resolving.
+- **The purge's scan is unmetered, and gating it on a departure counter is the open optimisation.**
+  Both reviewers of the change found this independently: it is the only unconditional full scan of
+  the retry queue on the control loop, because shard residency does not follow the queue's
+  `retryDueAt` sort order and so cannot early-stop the way every other reader there does. The
+  rejected-alternatives section of
+  [`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md)
+  owns the shape (a monotonic `LongAdder` on departure, not a boolean flag) and the order of work:
+  meter it first - `DispatchScanMeter` is the precedent - then decide. Do not adopt the counter
+  without the measurement; it puts poll-thread-written state back on the rebalance path, which is
+  what the change removed.
 - **The shard-displacement orphan is narrowed, not fixed** -
   [`bug-shard-displacement-orphans-the-retry-queue-entry.md`](bug-shard-displacement-orphans-the-retry-queue-entry.md)
   carries what changed and what did not.

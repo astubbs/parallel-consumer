@@ -224,10 +224,30 @@ must not be assumed from the fact that both exist.
   revocation is not correct until the commit has happened. It is the wrong shape here: the purge
   needs no hand-off at all, since the controller can discover departed entries by scanning, and
   reusing that PR's shape would reintroduce the very poll-thread wait being removed.
-- **A dirty flag the callbacks set and the purge reads**, to skip the scan on ticks where nothing
-  departed. Rejected as a second piece of cross-thread state on a class whose whole difficulty is
-  cross-thread state, for a scan the control loop already performs twice per tick on the same
-  structure.
+- **A dirty signal the callbacks set and the purge reads**, to skip the scan on ticks where nothing
+  departed. Rejected for this change as a second piece of cross-thread state on a class whose whole
+  difficulty is cross-thread state - written by the poll thread, on the rebalance path, in the change
+  that is removing the poll thread's coupling to this structure.
+
+  **The cost it would avoid is real, and both reviewers of the shipped design found it
+  independently**, so the rejection is a judgement rather than a dismissal. The purge is the FIRST
+  unconditional full scan of the retry queue on the control loop: every other reader of it there
+  early-stops on the `retryDueAt` sort order (`getNumberOfFailedWorkReadyToBeRetried` breaks at the
+  first not-ready entry, `getLowestRetryTime` returns at the first not-in-flight one) and
+  `ProcessingShard`'s `removeAll` is bounded by the batch. Shard residency has no relationship to
+  that sort order, so the purge cannot early-stop, and it finds nothing on the overwhelming majority
+  of ticks.
+
+  **What the reviews sharpened, and it is not what was rejected:** the right primitive is a
+  *monotonic counter* incremented on departure and read plainly by the controller, not a boolean
+  flag - a `LongAdder` in the shape `RecordPopulation` already uses at those same call sites, with no
+  lock and an uncontended increment. A counter also keeps the one-tick bound trivially: a departure
+  landing between the read and the scan costs one extra tick and can never lose an entry.
+
+  **What should happen before it is adopted: a measurement.** The scan's cost is bounded by
+  retry-queue size, which is bounded by the in-flight target, so this is not a blow-up - it is a
+  fixed tax whose size nobody has measured. `DispatchScanMeter` is the precedent for metering exactly
+  this class of cost in this class, and the honest order is to meter the scan before optimising it.
 - **Shorten the read-lock hold** so the write acquire is short rather than declined. Does not fix
   anything: the acquire is still a wait, and the ArchUnit rule is still red on merit.
 - **A bounded `tryLock(timeout)`.** Still a wait, still spent out of `max.poll.interval.ms`.
