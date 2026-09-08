@@ -2,13 +2,15 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - re-read against the tree: `bin/ci-mutation-test.sh` still defaults `PIT_DECIDABLE_PACKAGES` to `offsets.` and still answers in exit codes 0/2/3, and `maven.yml`'s `mutation:` job maps them; struck the two stale trigger claims - `mutation-full-sweep.yml` now runs on a nightly cron, not dispatch-only -->
 
 Shipped in astubbs#111. Recorded because it is a deliberate *reduction* in coverage, which is the kind of
 thing a future session otherwise rediscovers as a bug.
 
 **What runs automatically:** one per-PR job (`maven.yml`) that mutates *only changed classes*, and
-*only* those within `PIT_DECIDABLE_PACKAGES` - currently `offsets.` alone. Nothing else is automatic:
-the full sweep is dispatch-only (`mutation-full-sweep.yml`). So on most PRs mutation testing does
+*only* those within `PIT_DECIDABLE_PACKAGES` - currently `offsets.` alone. The full sweep
+(`mutation-full-sweep.yml`) runs nightly plus manual dispatch, never on a pull request; its `on:`
+block owns why nightly beat per-push here. So on most PRs mutation testing does
 nothing, by design - elsewhere the mutants hang by construction and a survivor cannot be told from a
 race that did not happen. Reasoning and measurements:
 [`docs/plans/2026-08-03-002-mutation-testing-plan.md`](../plans/2026-08-03-002-mutation-testing-plan.md).
@@ -219,12 +221,6 @@ package that is off is off for new code too, permanently, until its trigger fire
 ## The rest of the re-widening list
 
 - ~~Run the sweep once and record the runtime~~ **DONE** - see the baseline above.
-- **Then give it a trigger** - now unblocked, at roughly 31m27s of job-elapsed per run (21m55s of that is the PIT phase; n=1). Prefer
-  `push: branches: [master]` over a cron: the score changes only when the code does, so a nightly
-  recomputes an identical answer whenever master did not move, and blames a date rather than a merge.
-  Add a `concurrency` group with `cancel-in-progress` - only the latest master state is worth scoring.
-  Still unwired - now the *only* way the lane scores anything regularly, given that the PR lane
-  correctly skips most PRs, so this is a bigger lever than it looked when it was written.
 - **`excludedGroups`: verify before "fixing".** pitest-maven's `parseSurefireConfig` defaults to true
   and may already import our surefire `<excludedGroups>`; a throwaway `@Quarantined` *unit* test
   settles it. The warning comment in `bin/ci-mutation-test.sh` may be obsolete.

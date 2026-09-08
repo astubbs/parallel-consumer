@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - astubbs#161 is still OPEN with no comments and its `## Fork status` still says the `subscribeOn` moves the user function off the control thread; astubbs#303 is still an OPEN DRAFT and no per-module reactor README exists on master; `ReactorProcessor` still has only `subscribeOn(getScheduler())` with `getScheduler()` calling `schedulerSupplier.get()` per invocation while `MutinyProcessor` resolves its supplier once in the constructor; `ReactorUnitTestBase` still builds the one-arg form only; "scheduler" still appears nowhere in `src/docs/README_TEMPLATE.adoc`; astubbs#161 is still absent from `release-0600-blockers.md` -->
 
 astubbs#161 (mirror of confluentinc#543) asks why `ReactorProcessor` subscribes on a `Scheduler` when
 the user's pipeline is already non-blocking. There is no defect and no code work: the question has an

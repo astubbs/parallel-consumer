@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - unreconciled: `static-spotbugs-latent-findings.md` still opens on "30 findings" and still says at its foot that the count reads 30 for that reason, and nothing records a re-run. The `static-spotbugs-coverage-and-extension-detectors.md` anchor warning is expected - that note was retired, which this one says in its own last paragraph -->
 
 [`static-spotbugs-latent-findings.md`](static-spotbugs-latent-findings.md) records **30** findings in
 core, surfaced when the package rename made the baseline miss. A fresh unbaselined run of core on

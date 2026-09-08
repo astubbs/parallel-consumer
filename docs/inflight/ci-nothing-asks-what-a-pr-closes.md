@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
+<!-- inflight-vetted: 2026-09-07 - re-read the harness: no hook in `.claude/hooks/` reads `closingIssuesReferences` or asks what a PR closes - `remind-inflight-on-push.sh` and `check-merge-outstanding-work.sh` are still the only push/merge hooks and still ask about the agent's own work; both sibling notes (`pr-mirror-fixes-and-what-they-close.md`, `issue-index.md`) are still on master, so the first-slice argument stands and the delete-when is unmet -->
 
 Push and merge both have hooks, and neither asks the question. `remind-inflight-on-push.sh` surfaces
 what the branch's own note still has open; `check-merge-outstanding-work.sh` refuses a merge while

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-state: closed - the gap is covered: VertxTest.serverErrorStatusStillCommits and transportFailureIsDistinctFromANonSuccessStatus landed in c30aaee15 (astubbs#116) and pin the contract (a 500 is a delivered response, onUserFunctionSuccess runs, the offset commits; only a transport error fails the future). The stub was deleted in cadf4c952 and the new javadoc says so; the note is kept rather than removed because the owner ruling it records - a disabled empty test is a TODO with a name and a location - is written down nowhere else -->
 
 <!-- post-merge: checked-begin -->
 **Priority: high.** The vertx module ships response-code handling that nothing exercises, and this

@@ -3,6 +3,7 @@
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - still true: no efficacy or dead-time probe exists anywhere in the tree (grep for deadTime/efficacy/wakeupsFired returns nothing), ProgressProbe still only samples counters for movement, and both cited docs (the timing-bound solution write-up and perf-throughput-regression-gate.md) still resolve -->
 
 **Every probe here measures one thing: is the system still progressing.** `NO_PROGRESS`,
 `INSTANCE_STALL`, `LAG_STAGNATION`, the drain bound - all sample a counter over time and ask whether

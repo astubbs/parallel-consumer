@@ -128,12 +128,15 @@ reds, and it must now resolve the `tryCommitOffsetsOnRevoke` collision with the 
 astubbs#466), then astubbs#420 (producer-ownership polish, after v6 in any case).
 
 **One thing the 2026-09-07 decision did not name, and the owner should:** the poisoned-transaction
-wedge ([`bug-wedged-after-poisoned-transaction.md`](bug-wedged-after-poisoned-transaction.md),
-[`bug-poisoned-transaction-not-aborted-while-running.md`](bug-poisoned-transaction-not-aborted-while-running.md))
+wedge ([`bug-poisoned-transaction-not-aborted-while-running.md`](bug-poisoned-transaction-not-aborted-while-running.md),
+which astubbs#476's vetting sweep merged its sibling note into)
 is fixed by astubbs#434, which also stacks on astubbs#410. If the stack is outside v6, the claim
 has two named exceptions, not one - a single oversized record stops its partition for the life of
 the process in transactional mode. Either name it beside astubbs#44 in `release-0.6.0.0.md`, or
-carry a smaller standalone abort for v6.
+carry a smaller standalone abort for v6. The astubbs#476 vetting sweep read the pair as **not
+gating** ("today's behaviour is strictly better than what it replaced"); that is an agent's reading,
+recorded in [`process-candidate-ranking.md`](process-candidate-ranking.md), and the call is still
+the owner's.
 
 ### Tier 3 - release plumbing, then tag
 
@@ -176,7 +179,11 @@ churn rather than a PC defect.
 
 **Still open, and the release note names each:**
 
-- The transactional revoke wait, astubbs#44 (confluentinc#803) - outside v6 by the 2026-09-07 decision; the release claim names it as the known exception. Fix is astubbs#408, tier 2.
+- The transactional revoke wait, astubbs#44 (confluentinc#803) - outside v6 by the 2026-09-07
+  decision; the release claim names it as the known exception. The decision predates astubbs#466,
+  which replaced the unbounded spin with a wait bounded by `commitLockAcquisitionTimeout`, so what
+  astubbs#408 (tier 2) still owns is declining instead of waiting, and whether that bound is right.
+  The exception the claim names should say "bounded, not yet declined", not "unbounded".
 - An eager-mode (`PERIODIC_CONSUMER_SYNC`) stall that reproduces on trees carrying astubbs#29's fix
   (the family note's "fourth open item"). Unattributed.
 - A rebalance stall in async unordered mode from `MultiInstanceRebalanceTest` (the "fifth open
@@ -229,6 +236,14 @@ churn rather than a PC defect.
 
 ## Open defects with no PR - each one's disposition against the bar
 
+The astubbs#476 vetting sweep produced its own reading of what gates v6, with each agent's stated
+confidence, under "What gates v6, as the sweep read it" in
+[`process-candidate-ranking.md`](process-candidate-ranking.md). It agrees with the two look-at items
+below, and adds one this section had filed as 0.6.0.x: `batchSize(0)` silently processes nothing,
+and the sweep calls the `validate()` bound "the cheapest real fix in the set" (astubbs#311). It also
+lists the instruments the release decision is read through that are currently lying or unproven;
+read that list before trusting a green.
+
 "Gate on open bugs" only works if every open bug has a disposition, so this is every `bug-` note on
 master that no queue PR addresses (`ls docs/inflight/bug-*.md` is the list; the impact tag on each
 is the sort key). Re-derive it before the tag rather than trusting it: a note can gain a PR or lose
@@ -257,7 +272,8 @@ its subject at any merge.
 **0.6.0.x - open, real, not a gate for a bug release:**
 
 - Config lies: `maxFailureHistory` is read nowhere; `offsetCommitTimeout` bounds two different
-  waits; `batchSize` is unvalidated (astubbs#311, already deferred with its sibling).
+  waits; `batchSize` is unvalidated (astubbs#311, deferred with its sibling - but see the sweep's
+  "cheapest real fix" reading above; a one-line `validate()` bound could ride in tier 1).
 - Blind spots: the racy and uncalled pause API; no metric for a discarded offset map under the
   default `IGNORE` policy; the worker future swallowing framework exceptions.
 - Misdirection: the plain-`int` out-for-processing counter; the module's processor reference
@@ -298,9 +314,15 @@ the tracker is astubbs#197.
   `docs/data/staging/module-maturity-rows.yaml` and the records in `docs/features/staging/` stay
   staged: under the bug-release decision no module PR is in the queue, and each moves with the PR
   that lands its module.
-- **The release page must not be empty** - astubbs#199, tier 3 above. The rest of astubbs#197's
-  triage list has been picked up (the magic-byte hazard in astubbs#217, the load-factor WARN in
-  astubbs#201, MDC in astubbs#205); the tracker's own checklist boxes lag the work.
+- **The release page must carry the curated notes.** `release.yml` already builds a notes file from
+  the `CHANGELOG.adoc` section (astubbs#72) - the 2026-09-07 vet of the old blockers note was right
+  that "the body is empty" was never the whole story - but its heading match is exact and the
+  section is headed `== 0.6.0.0 (unreleased)`, so it matches nothing and falls back to generated
+  notes; astubbs#199 fixes the match (tier 3). The rest of astubbs#197's triage list has been picked
+  up: the magic-byte hazard in astubbs#217, the load-factor WARN in astubbs#201, and MDC in
+  astubbs#205 (`MdcPropagation` on master captures and restores the caller's context; the
+  2026-09-08 vet that called the gap "real" grepped for a name the class does not use). The
+  tracker's own checklist boxes lag the work.
 - **Three `3.9.1` references, and only one was wrong.** The CI description that named the default
   Kafka version was fixed in astubbs#272 by dropping the number. The `bin/ci-build.sh 3.9.1` command
   examples in `AGENTS.md` and in `src/docs/README_TEMPLATE.adoc` (which reaches the published

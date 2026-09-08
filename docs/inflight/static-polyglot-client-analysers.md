@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - the survey's premise still holds: the per-language policy doc and the clients workflow are both still absent from master and still present on `feats/proxy-requirements`, and all three named polyglot branches still exist, so every `file-refs: N/A` exemption is still earned. The one actionable finding has since been taken - the Go client's pom on `feats/polyglot-demos` now gates on `go test -race`, and that section is marked CLOSED rather than deleted because the survey's ranking rests on it. The dated version and liveness figures were not re-checked; they are a dated snapshot and this note says so -->
 
 A survey, so it is read rather than done. It answers three questions for the polyglot proxy/sidecar
 work: what already analyses each client, what a race detector could add, and which of these
@@ -168,20 +169,22 @@ Scala are not listed at all. For none of these is the build the blocker.
 | Python | **Nothing mature exists.** The GIL prevents corruption of interpreter internals; it does not prevent a check-then-act race in client code, and no analyser looks for one. |
 | Ruby | **Nothing.** Same reasoning. |
 
-### The one concrete concurrency gap the survey found
+### The one concrete concurrency gap the survey found - CLOSED
 
-**The Go client's gating test command does not use the race detector.** The module's pom declares
-`<pc.foreign.test.args>test ./...</pc.foreign.test.args>` - no `-race`. Yet
-`docs/inflight/clients/go.md` says of a demo assertion "Covered by `go test -race`", which is a
-developer-run claim the recipe that actually gates does not make.
+**The Go client's gating test command did not use the race detector.** The module's pom declared
+`<pc.foreign.test.args>test ./...</pc.foreign.test.args>` - no `-race` - while
+`docs/inflight/clients/go.md` said of a demo assertion "Covered by `go test -race`", a developer-run
+claim the recipe that actually gated did not make.
 <!-- file-refs: N/A - the Go module and its per-language note ship on the polyglot branches, not on master -->
 
 
-Go's race detector is built into the toolchain, costs one flag, and this is the client with the
-executor fan-out. **This is the cheapest real win in the survey** and it is worth more than adding
-any new tool to any other language. It is not free at runtime (roughly 2-10x slower, higher memory),
-so if the full suite is too slow under it, a `-race` run of the concurrency-bearing packages is
-still strictly better than none.
+**Fixed on `feats/polyglot-demos`**: that pom now gates on `go test -race -count=1 ./...` and carries
+a comment calling `-race` the Go client's own concurrency check and the cheapest real win available.
+Kept here rather than deleted because the survey's *ranking* rests on it - it was the one finding
+worth more than adding a tool to any other language, and a later reader comparing the ranking against
+today's tree needs telling that the top item is the one already taken. The runtime cost that made it a
+judgement (roughly 2-10x slower, higher memory) is unchanged, so a suite that becomes too slow under
+it falls back to a `-race` run of the concurrency-bearing packages, not to none.
 
 ## CodeQL: nine of the ten, and two are already paid for
 
