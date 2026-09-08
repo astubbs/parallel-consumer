@@ -95,10 +95,8 @@ what is on master is still a release.
 
 Data-shaped and stall-shaped, no design question open, no stack. These are the release.
 
-- [ ] **astubbs#470** - an async commit counts as committed when the broker answers, not when it is
-  sent. Silent loss on the shipped default commit mode. Closes the
-  [`bug-async-commit-marked-successful-before-broker-ack.md`](bug-async-commit-marked-successful-before-broker-ack.md)
-  note; serves astubbs#248.
+- [x] **astubbs#470** - merged 2026-09-08. An async commit counts as committed when the broker
+  answers, not when it is sent; silent loss on the shipped default commit mode. Serves astubbs#248.
 - [x] **astubbs#466** - merged 2026-09-08. The revoke-path commit drains the work mailbox first; in
   transactional mode a rebalance could publish a transaction whose offsets omitted records it
   contained. Its proof left quarantine with it. Its commit body says it **collides with astubbs#408
@@ -116,8 +114,10 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   confluentinc#857 defect-class sweep: an unbounded fair write-lock wait inside the rebalance
   callback, spent out of `max.poll.interval.ms`. astubbs#483 (the shard-displacement reachability
   verdict) stacks on it.
-- [ ] **astubbs#473** - clears the two remaining quarantine entries by fixing what they were about.
-  The release guard blocks while `docs/quarantined-tests.md` has any.
+- [x] **astubbs#473** - merged 2026-09-08. Cleared the two remaining quarantine entries by fixing
+  what they were about; `docs/quarantined-tests.md` is empty and the release guard no longer blocks
+  on it. It also moved the capacity profiles behind a `capacity` tag with scheduled runners, so
+  their pass rate is measured rather than gating.
 - [ ] **astubbs#480** - an offset map whose run or bitset extends past the partition's log end
   offset is an unreadable payload, not a completed range. Silent skip of real records on a corrupt
   or foreign payload; proven red through the real assignment path, green with the guard, mutation
@@ -231,7 +231,7 @@ churn rather than a PC defect.
 
 ## What v6 must say about data loss and duplicates
 
-- **Fixed in the queue:** the async-commit acknowledgement (astubbs#470).
+- **Fixed on master, 2026-09-08:** the async-commit acknowledgement (astubbs#470).
 - **Fixed on a branch outside v6 scope, and needing a named exception or an owner decision:** the
   poisoned-transaction wedge (astubbs#434, stacked on the producer-recovery work) - see tier 2.
 - **Fixed on master:** the revoke-path transaction omitting offsets (astubbs#466); the torn-read family
