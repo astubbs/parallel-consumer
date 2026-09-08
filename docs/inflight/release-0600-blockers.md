@@ -2,7 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: release-gate -->
-<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: most of it holds (kafka.version is 3.9.2 so the two 3.9.1 examples are still correct-as-written, the staging rows and feature record are still staged, no copyOfContextMap anywhere so the MDC gap is real, and confluentinc#857 is still open via astubbs#44), but two facts moved: astubbs#444 has MERGED so the third-mechanism fix attempt is no longer open, and the release.yml empty-body claim was false since astubbs#72 - corrected in place here -->
+<!-- inflight-vetted: 2026-09-08 - applied: the astubbs#444 line rewritten and dropped from the recheck-at-cut list, since it merged 2026-09-07 carrying no product change and measured that third mechanism as the Kafka group protocol rather than a PC defect; checked: astubbs#44 is open so confluentinc#857 still blocks the critical-defect gate, no copyOfContextMap anywhere in the tree so the MDC gap is real, kafka.version is 3.9.2 so the two 3.9.1 command examples stay correct-as-written, the Streams and Connect staging rows and the staged feature record are still staged with astubbs#269 and astubbs#271 open, and the release.yml correction the 2026-09-07 pass made in place (astubbs#72) is left standing -->
 
 
 Scope: are the things 0.6.0.0 *publishes* (`CHANGELOG.adoc`, `README.adoc`) true on the day we cut it?
@@ -55,13 +55,16 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
   unmerged", and astubbs#29 merged 2026-09-02, fixing one confluentinc#857 mechanism (the
   poll/control revoke-path deadlock). Corrected in place, without weakening what was already true:
   the family is **not** closed by that merge. astubbs#44 (the transactional revoke wait) is a
-  separate defect the merged fix cannot reach, a third mechanism (a closing instance polling too
-  little to leave its group cleanly) has an open fix attempt in astubbs#444, and
-  `docs/inflight/bug-857-family.md` records unattributed stall sightings reproducing on trees that
-  already carry astubbs#29's fix. So `confluentinc#857` is still the open critical defect blocking
-  this gate, and the "amend the claim rather than the standard" instruction above still applies.
-  **Still open: recheck again after astubbs#44, astubbs#444 and the family ledger's remaining
-  sightings resolve** - this pass only established today's state, not the state at cut.
+  separate defect the merged fix cannot reach, and `docs/inflight/bug-857-family.md` records
+  unattributed stall sightings reproducing on trees that already carry astubbs#29's fix.
+  The third mechanism this bullet used to carry - a closing instance
+  polling too little to leave its group cleanly - is no longer a PC-side candidate: astubbs#444
+  merged 2026-09-07 carrying no product change, having measured that residual as the Kafka consumer
+  group protocol under the churn rate of the `largeNumberOfInstances` profile. So `confluentinc#857`
+  is still the open critical defect blocking this gate, and the "amend the claim rather than the
+  standard" instruction above still applies.
+  **Still open: recheck again after astubbs#44 and the family ledger's remaining sightings resolve** -
+  this pass only established today's state, not the state at cut.
 <!-- post-merge: checked-begin -->
 - **The rest of astubbs#197's triage list**, minus the ones that have since been picked up (an
   `OffsetEncoding` magic-byte hazard in astubbs#217, the "Max loading factor steps reached" WARN in
