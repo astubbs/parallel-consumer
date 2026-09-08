@@ -335,11 +335,13 @@ public class ShardManager<K, V> {
         // (KEY ordering removes empty shards), NPE-ing out of the rebalance listener into consumer.poll
         Optional<ProcessingShard<K, V>> shardOpt = getShard(shardKey);
         if (shardOpt.isPresent()) {
-            // Named rather than discarded: a bare call cannot be told from a forgotten check, and what this
-            // answer USED to decide - whether to pair a retry-queue removal with it - is exactly what moved to
-            // the controller thread. Null here means the container had already gone, which is not an error on
-            // this path and never was.
-            WorkContainer<K, V> ignoredRemovedFromTheShard = shardOpt.get().removeWorkAtOffset(consumerRecord.offset());
+            // LOGGED rather than parked in an ignored local, which is a dead store SpotBugs reports in main
+            // code - the same trade already settled at onFailure below. What this answer USED to decide was
+            // whether to pair a retry-queue removal with it, and that is exactly what moved to the controller
+            // thread; null means the container had already gone, which is not an error on this path.
+            WorkContainer<K, V> removedFromTheShard = shardOpt.get().removeWorkAtOffset(consumerRecord.offset());
+            log.trace("Revoke/lost sweep removed {} from shard {} - the retry queue is deliberately untouched here",
+                    removedFromTheShard, shardKey);
 
             // remove the shard if empty
             removeShardIfEmpty(shardKey);
@@ -532,8 +534,8 @@ public class ShardManager<K, V> {
     public List<WorkContainer<K, V>> getWorkIfAvailable(final int requestedMaxWorkToRetrieve) {
         // FIRST, and before the shard scan below: this is the once-per-control-loop-pass point the purge's
         // one-tick bound is expressed in, and drain() reads the awaiting-selection figure later in the same
-        // pass. Named rather than discarded so the count is visible at the site that pays for it.
-        long ignoredCollected = purgeDepartedRetryEntries();
+        // pass.
+        purgeDepartedRetryEntries();
 
         LoopingResumingIterator<ShardKey, ProcessingShard<K, V>> shardQueueIterator =
                 new LoopingResumingIterator<>(iterationResumePoint, this.processingShards);
@@ -656,10 +658,13 @@ public class ShardManager<K, V> {
      * nothing checks the general case, and the runtime ownership guard that would is tracked in
      * {@code docs/inflight/core-retry-queue-needs-a-runtime-controller-ownership-guard.md}.
      *
-     * @return how many entries were collected
+     * <b>It returns nothing on purpose.</b> Nothing in production reads a count, and a caller that named one
+     * only to drop it would be a dead store - the same finding already avoided at {@link #onFailure} by
+     * logging instead. What is worth knowing is logged below; a meter, if the scan's cost is ever measured,
+     * belongs inside here rather than at the one call site.
      */
     @ControllerThreadOnly
-    long purgeDepartedRetryEntries() {
+    void purgeDepartedRetryEntries() {
         List<WorkContainer<?, ?>> departed = new ArrayList<>();
         try (RetryQueue.RetryQueueIterator entries = this.retryQueue.iterator()) {
             while (entries.hasNext()) {
@@ -673,13 +678,18 @@ public class ShardManager<K, V> {
         // OUTSIDE the read lock: the iterator holds it until it is closed, and this needs the write lock.
         // removeAll's own fast path returns without acquiring anything when the list is empty, which is the
         // common case on every tick.
-        boolean ignoredModified = this.retryQueue.removeAll(departed);
+        boolean modified = this.retryQueue.removeAll(departed);
         if (!departed.isEmpty()) {
+            // `modified` is read here rather than dropped, and it is the same signal as the one at onFailure:
+            // this thread is the queue's only writer, so it can only be false if something else removed these
+            // entries first - i.e. a second writer, which is exactly what would invalidate the scan-then-remove
+            // above.
             log.debug("Collected {} retry queue entries whose containers are resident in no shard - a rebalance " +
-                    "callback removed them from their shards and deliberately left the queue alone: {}",
-                    departed.size(), departed);
+                    "callback removed them from their shards and deliberately left the queue alone. Queue " +
+                    "reported modified={} (FALSE would mean a second writer of the retry queue, which nothing " +
+                    "should be). {}",
+                    departed.size(), modified, departed);
         }
-        return departed.size();
     }
 
     private boolean isResidentInItsShard(WorkContainer<?, ?> wc) {
