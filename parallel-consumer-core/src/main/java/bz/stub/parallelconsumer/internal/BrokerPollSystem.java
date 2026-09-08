@@ -301,9 +301,10 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * genuinely still open and the control thread's retry closes it - which is the whole point. If it came from
      * the guarded {@code consumer.close()} itself, the dead poll thread still holds ownership,
      * {@code tryClaimOwnership()} refuses to steal it, and the retry lands on the warning that already explains
-     * the cost rather than closing a consumer twice. Not exercised by
-     * {@code PollerDeathClosesTheConsumerTest}, which kills the poll thread at {@code poll()} time; named here so
-     * a later reader does not have to re-derive it from the statement order.
+     * the cost rather than closing a consumer twice. Characterised by
+     * {@code PollerDeathClosesTheConsumerTest.aCloseThatStartedAndThrewIsNotRetriedIntoASecondClose}, which
+     * records that behaviour but - unlike its sibling arm - does not go red without this predicate, and says so
+     * itself. So this paragraph is where the reasoning lives; the test only stops it changing unnoticed.
      *
      * @return true when the poll thread has ended (or never started) and this system did not close the consumer
      */

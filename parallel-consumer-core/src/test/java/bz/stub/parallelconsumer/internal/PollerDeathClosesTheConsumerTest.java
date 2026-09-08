@@ -64,6 +64,9 @@ class PollerDeathClosesTheConsumerTest extends ParallelEoSStreamProcessorTestBas
     /** Marks the simulated failure so the assertions can prove it, and not some other close, ran. */
     private static final String SIMULATED = "simulated: poll failed and killed the broker-poll thread";
 
+    /** As {@link #SIMULATED}, for the close-time arm: the close STARTED and then threw. */
+    private static final String SIMULATED_CLOSE = "simulated: consumer close threw after closing";
+
     /**
      * Armed <b>before</b> the instance starts, so the first poll dies and there is no timing to lose. The
      * metrics-teardown test arms late for the opposite reason - there the death path is what got in the way
@@ -118,6 +121,90 @@ class PollerDeathClosesTheConsumerTest extends ParallelEoSStreamProcessorTestBas
                                 + "sent and this member holds its partitions until max.poll.interval.ms "
                                 + "expires (commit mode: %s)", commitMode)
                         .that(consumerSpy.closed()).isTrue());
+    }
+
+    /**
+     * The second way {@code BrokerPollSystem.pollThreadEndedWithoutClosingTheConsumer()} can answer true, and
+     * the one the arm above does not reach: the poll thread <b>did</b> get to {@code doClose()} and
+     * {@code maybeCloseConsumerManager()}, and the close itself threw. {@code runState = CLOSED} is the
+     * statement <em>after</em> that call, so the flag is left short of {@code CLOSED} with the poll thread
+     * dead, exactly as if it had never started closing - and the control thread's backstop fires again.
+     * <p>
+     * <b>Modelled on what a real consumer does, not on what a mock finds convenient.</b>
+     * {@code KafkaConsumer.close()} sets its {@code closed} flag in a {@code finally}, so a close that throws
+     * has still closed the consumer. The stub therefore closes and <em>then</em> throws; a stub that threw
+     * first would be asserting against a consumer no production close leaves behind.
+     * <p>
+     * <b>What this pins is that the backstop does not blindly close twice.</b> The dying poll thread claimed
+     * consumer ownership on its way in ({@code ConsumerManager.close} → {@code tryClaimOwnership}) and never
+     * released it, so the control thread's retry is refused by {@link ThreadConfinedConsumer} rather than
+     * reaching the delegate a second time - and {@code innerDoClose} catches that refusal and logs the
+     * max.poll.interval.ms warning. One delegate close, a terminal instance, no hang.
+     * <p>
+     * <b>Consumer-commit modes only.</b> In {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} the poll thread
+     * is not the designated closer, so there is no first close for this fixture to make fail; that mode's
+     * close-time failure is a different path and is not what this change touches.
+     * <p>
+     * <b>This arm does NOT go red without the fix, and is not offered as evidence for it.</b> Measured, not
+     * assumed: with {@code pollThreadEndedWithoutClosingTheConsumer()} removed from
+     * {@code maybeCloseConsumer} - the same one-term control that turns the sibling arm above red - both of
+     * these stay green, because every property asserted here is the ABSENCE of a second close, and a backstop
+     * that never fires trivially satisfies that. It is a characterisation of the close-time path: it records
+     * what the code does today so that a later change which turns the backstop into a blind second close, or
+     * which stops reporting the failure to the caller, arrives as a red test rather than as a silent
+     * behaviour change. The discriminating evidence for this PR is the sibling arm, and only that one.
+     */
+    @ParameterizedTest
+    @EnumSource(value = CommitMode.class, names = {"PERIODIC_CONSUMER_SYNC", "PERIODIC_CONSUMER_ASYNCHRONOUS"})
+    @Timeout(120)
+    void aCloseThatStartedAndThrewIsNotRetriedIntoASecondClose(CommitMode commitMode) {
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .commitMode(commitMode)
+                .ordering(UNORDERED)
+                .build());
+
+        AtomicInteger delegateCloses = new AtomicInteger();
+        Mockito.doAnswer(invocation -> {
+            delegateCloses.incrementAndGet();
+            // Close first, then throw - see the javadoc: this is KafkaConsumer's own shape.
+            Object result = invocation.callRealMethod();
+            throw new KafkaException(SIMULATED_CLOSE);
+        }).when(consumerSpy).close(Mockito.any(Duration.class));
+
+        parallelConsumer.poll(ignored -> {
+            // the close path is the subject, not the processing
+        });
+
+        // close() REPORTS the failure rather than swallowing it - the poll thread's exception reaches the
+        // caller. Asserted, not tolerated: a close that failed and returned quietly would be the worse
+        // outcome, and this is the assertion that would notice it changing.
+        // Exception, not RuntimeException: close(DrainingMode) is @SneakyThrows, so the poll thread's
+        // ExecutionException escapes unwrapped and undeclared. The cause-chain assertion below is what
+        // carries the strength here; the type is only what the caller can actually catch today.
+        Exception reported = org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
+                () -> parallelConsumer.close(),
+                "close() returned normally after the consumer close threw, so the user is never told that "
+                        + "this member may not have left the group");
+
+        assertWithMessage("close() threw for some reason other than the simulated close failure, so this run "
+                + "says nothing about a close that started and failed")
+                .that(describeCauseChain(reported)).contains(SIMULATED_CLOSE);
+
+        assertWithMessage("the consumer close was never attempted, so nothing made it throw and this run says "
+                + "nothing about a close that started and failed - the fixture, not the engine, is what failed")
+                .that(delegateCloses.get()).isGreaterThan(0);
+
+        // THE PROPERTY. The backstop must not turn a failed close into a second close of the same consumer.
+        // Ownership is still held by the dead poll thread, so ThreadConfinedConsumer refuses the retry and
+        // innerDoClose logs it. A second delegate close here would mean the guard had been bypassed.
+        assertWithMessage("the control thread's backstop closed the consumer a SECOND time after the poll "
+                + "thread's own close had already thrown - the ownership guard should have refused it "
+                + "(commit mode: %s)", commitMode)
+                .that(delegateCloses.get()).isEqualTo(1);
+
+        assertWithMessage("a close that threw left the consumer open, so no LeaveGroup was sent (commit "
+                + "mode: %s)", commitMode)
+                .that(consumerSpy.closed()).isTrue();
     }
 
     /**
