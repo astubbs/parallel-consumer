@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-vetted: 2026-09-07 - re-checked: `rewrite-maven-plugin` appears in no pom in the tree, so renames are still regex sweeps verified by "it still compiles"; `bin/rename-packages.sh` still carries the freeze-region and rename-pairing assertions that are the case for adopting it. Nothing here has been settled either way -->
 
 Every rename in this repo is a `sed`/`grep` sweep whose only check is whether the build still
 compiles. `bin/rename-packages.sh` is the biggest instance, and its own header records the class of

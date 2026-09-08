@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - checked every branch named here against `git branch -r` and `gh pr list`. Still live: `feats/ks-on-pc-spike` (astubbs#271 OPEN), `feats/connect-on-pc-spike` (astubbs#269 OPEN), `docs/assess-kafka-streams-pc-integration` (no PR), `feats/web-gui` (astubbs#268 OPEN), `feats/health-check-api` (astubbs#226 OPEN), `feat/java-17-baseline` (no PR), and the docs-testing-evidence plan. Removed as spent: `fix/transactional-produce-callback-abort` (merged as astubbs#261) and `features/enable-virtual-threads` (astubbs#51 CLOSED, branch gone). The v6-docs entry is rewritten - astubbs#273 merged as `docs/data/roadmap.yaml` and `STRATEGY.md` still has no Milestones section and no mention of it -->
 
 
 `STRATEGY.md` is a claims document, and unlike the README nothing tests it. The branches below either
@@ -10,7 +11,8 @@ named section as part of its own merge prep - not afterwards, when nobody is loo
 
 This file exists because the coupling runs the wrong way for tooling to catch: the work lives in
 product code and spikes, the consequence lives in a root-level prose document, and no gate connects
-them. `git rm` this file when the last branch below has merged and the doc reflects them.
+them. It stops earning its place when `STRATEGY.md` reflects every trigger listed below - which is a
+claim about the document's contents, not about anything merging.
 
 Named here is *why* each branch touches the strategy, which no command can answer. For their status,
 titles, or divergence, ask `gh` and `git`.
@@ -29,15 +31,6 @@ register is `TransactionalClaim` and `TransactionalClaimCoverageTest` under
 `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/`, which fail the build when a claim is
 recorded as covered with no test behind it, or when a recorded sentence leaves the file it was quoted
 from.
-<!-- post-merge: checked-end -->
-
-<!-- post-merge: checked-begin -->
-Same family, same section: **`fix/transactional-produce-callback-abort`**, still open, and the
-produce-lock double release, which landed as astubbs#257. A transactional guarantee that needed a fix
-to hold is still a guarantee that holds - but the doc should not claim it more strongly than the fixed
-code supports. astubbs#257's answer is recorded in §11 of
-[`../plans/2026-08-03-001-investigate-transactional-commit-flake.md`](../plans/2026-08-03-001-investigate-transactional-commit-flake.md),
-so the trigger it represents has fired and only the callback-abort branch is still pending here.
 <!-- post-merge: checked-end -->
 
 ## Change who the product is for
@@ -78,14 +71,14 @@ intent.
 **`feats/health-check-api`** (astubbs#126) - same track. A health-check surface is the other half of
 "you moved the queue into the client, so you owe the operator visibility".
 
-**`features/enable-virtual-threads`** - Performance track. The doc's concurrency-ceiling story
-currently rests on the non-blocking modules; virtual threads change what the core alone can reach.
-
-**`docs/v6-release-ideas`, `docs/v6-module-maturity-table`** and the `next-` ideation notes beside
-this file - these are strategy artefacts in their own right. A living roadmap of high-level themes
-overlaps `STRATEGY.md`'s **Tracks**; per-module maturity and what pre-1.0 reserves overlap
-**Milestones**, which `STRATEGY.md` currently omits entirely. The risk is not contradiction, it is
-two documents owning the same question. Settle the division of labour when the first of them merges.
+**`docs/data/roadmap.yaml`** - the v6 release documentation, landed as astubbs#273 (branches
+`docs/v6-release-ideas` and `docs/v6-module-maturity-table` are gone). This is a strategy artefact in
+its own right: a living roadmap of high-level themes overlaps `STRATEGY.md`'s **Tracks**, and
+per-module maturity and what pre-1.0 reserves overlap **Milestones**, which `STRATEGY.md` still omits
+entirely. The risk is not contradiction, it is two documents owning the same question. **The trigger
+fired and the decision was not made** - `STRATEGY.md` does not mention the roadmap and has no
+Milestones section, so the division of labour is now an open question against master rather than a
+thing to settle at a merge.
 
 **`docs/plans/2026-08-10-001-docs-testing-evidence-plan.md`** - promoting the test suite from hygiene to a positioning
 asset is a strategy-level move, not a chore. If it holds, Reliability is no longer only an internal

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: deps-debt -->
+<!-- inflight-vetted: 2026-09-07 - the counter-evidence is still on disk: .github/dependabot.yml still carries the maven-non-major group and the four scoped ignores this note quotes, each with its reason, so the case against switching stands and none of the three candidate gaps has been established; delete-when unmet -->
 
 **Leaning: no, on current evidence.** This note began as a case *for* switching and the case did not
 survive checking. It is kept rather than deleted because the reasoning is the useful part - the next

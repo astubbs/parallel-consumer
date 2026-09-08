@@ -9,6 +9,7 @@ here instead. This is the same trade `docs/inflight/test-retry-queue-behaviour-u
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - still true as the measurement record, and two of its closing recommendations have since been actioned: the @Quarantined reason on largeNumberOfInstances now states the mechanism ("mechanism MEASURED (2026-09-05)") instead of "unexplained", and BrokerPollSystem.dischargeCoordinatorBeforeClose() is gone from the tree. Still outstanding: the ConsumerManager one-attempt close allowance is still there (the "allow to try to commit at least once during close / shutdown" comment in commitSync), and the lane-placement question is now owned by test-largenumberofinstances-cannot-gate-a-merge.md. The anchor-missing signal on RetryQueueRebalancePathTest is a false positive - it lives on astubbs#431, still OPEN, exactly as the note says; ClosingMemberRebalanceIT, bin/exp-measure-large-instances-failure-rate.sh and docs/testing-at-write-time.md all still resolve -->
 
 **Renamed 2026-09-01.** This note was `...-residual-failures-unmeasured.md`, and the "unmeasured"
 was true for as long as every run happened on a machine that never failed. It stopped being true when

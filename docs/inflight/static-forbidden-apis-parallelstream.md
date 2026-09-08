@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - the parent pom's `forbiddenapis` block still carries only the `jdk-unsafe` bundled signature and no `signatures` element, and all three call sites are still there: `ProcessingShard`'s `slowWork.parallelStream()` and two in `PartitionState`'s incomplete-offset accessors -->
 
 `de.thetaphi:forbiddenapis` runs over main code with the `jdk-unsafe` bundle, so the default charset,
 locale and timezone are banned and the build is green. Register item 6 asked for one more thing that

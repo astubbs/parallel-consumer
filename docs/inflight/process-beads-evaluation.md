@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: process -->
+<!-- inflight-vetted: 2026-09-07 - still open and correctly scoped to the Beads half: the 2026-09-02 plan says twice that bd was not run and that Probe 1 is still open and owned here, and process-adopt-external-harness.md is still deferred with no verdict recorded - so the delete-when is unmet -->
 
 [`process-adopt-external-harness.md`](process-adopt-external-harness.md) **owns the adopt-or-build
 decision** and defers it until after v6.

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
+<!-- inflight-vetted: 2026-09-07 - re-checked every strand against the tree: the single `catch (CommitFailedException e)`, `notifyPollerDied` (declared in `ConsumerOffsetCommitter`, called from `BrokerPollSystem`) and the single `this.state = CLOSED` are all still there, so the first four rows hold. The AB-BA row is rewritten - astubbs#29 merged 2026-09-02. confluentinc#809 and its mirror astubbs#175 are both still OPEN, the mirror body still credits astubbs#100 alone, and astubbs#317 / astubbs#352 (open draft) still own the resilience decision -->
 
 
 Mirror: [astubbs/parallel-consumer#175](https://github.com/astubbs/parallel-consumer/issues/175).
@@ -28,15 +29,16 @@ Same symptom string, overlapping triggers, one extra defect that confluentinc#83
 | Poll thread killed some other way, symptom names neither subsystem nor cause | Fixed by astubbs#204. `notifyPollerDied` (declared in the same file, called from `internal/BrokerPollSystem.java`) releases the waiter with the poller's exception at the moment of death. |
 | `commitSync` retrying a broker outage forever, stranding the poll thread | Fixed by astubbs#204 (per-call rather than per-attempt budget). This is the closest match to gtassone's trigger: connectivity blips on a large shared cluster, one-second commit interval. |
 | Close path aborting before the state transition, leaving an undetectable zombie | Fixed **upstream**, by confluentinc#818, and this tree carries it: in `internal/AbstractParallelEoSStreamProcessor.java`, `doClose` wraps `innerDoClose` and sets the state from a `finally` - grep `this.state = CLOSED`, the only one in the tree, and the comment above the `try` still names the issue. Not fork work, and not astubbs#204's. |
-| Poll thread **alive but wedged** - the AB-BA cycle | Still reachable. Owned by astubbs#29 (whose fix had not been observed working when this was written) and `docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`. | <!-- post-merge: checked -->
+| Poll thread **alive but wedged** - the AB-BA cycle | Fixed by astubbs#29, merged 2026-09-02: the revoke path declines the commit lock instead of blocking on it. The cycle it closes is reachable only in `PERIODIC_CONSUMER_SYNC`, which is gtassone's mode, so this strand is closed for this report. `docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md` owns the mechanism. | <!-- post-merge: checked -->
 
 ## What a future session should actually do with this
 
-**gtassone is a better wedge candidate than the one astubbs#204 nominated.** That PR flagged
-`dumontxiong` on confluentinc#833 as the possible AB-BA case. gtassone is stronger evidence: he posts
-his configuration, and it is `PERIODIC_CONSUMER_SYNC` - the only mode in which the cycle can close -
-with 128 partitions, concurrency 64 and a user function running from 100ms to minutes. Anyone picking
-up this cycle should read his comments before building a reproducer.
+**gtassone remains the best evidence for this report's configuration.** astubbs#204 flagged
+`dumontxiong` on confluentinc#833 as the possible AB-BA case; gtassone is stronger, because he posts
+his configuration and it is `PERIODIC_CONSUMER_SYNC` - the only mode in which the cycle can close -
+with 128 partitions, concurrency 64 and a user function running from 100ms to minutes. With astubbs#29
+merged that is no longer a reproducer hunt, but his comments are still the thing to read before
+claiming anything to him about this report.
 
 **The mirror's `## Fork status` is stale in three ways**, and it is what a future reader trusts:
 it credits astubbs#100 alone and predates astubbs#204; it treats the two 0.5.3.1 changes as upstream

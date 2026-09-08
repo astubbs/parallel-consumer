@@ -3,6 +3,7 @@
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - re-read `ProcessingShard#getWorkIfAvailable` and `WorkContainer#onQueueingForExecution`: the refused claim is still `log.trace` plus `addToSlowWorkMaybe` and nothing else, no counter and no warn, so the proposal is still open; corrected the one drifted citation (the shard field is `workMap`, and the per-container `excludeFromSelection` replaced `dcrAvailableWorkContainerCntByDelta`) -->
 
 Recorded 2026-08-22 on `research/market-analysis-recut`, left open by the change that made the claim
 one atomic transition (`WorkContainer.ExecutionState`).
@@ -26,9 +27,8 @@ case should be loud (log at `warn`) rather than merely countable.
 <!-- post-merge: checked -->
 Asked on the astubbs#335 review, and worth answering in the note rather than re-deriving. A refused
 claim leaves the record exactly where it was: `ProcessingShard#getWorkIfAvailable` takes the `else`
-branch, the container stays in `entries`, and
-`dcrAvailableWorkContainerCntByDelta(workTaken.size())` counts only what was actually taken - so
-nothing is decremented on its behalf and the next scan reaches it again. The refusal excludes it from
+branch, the container stays in `workMap`, and `excludeFromSelection` runs only inside the won-claim
+branch - so nothing is released on its behalf and the next scan reaches it again. The refusal excludes it from
 *this* batch and from nothing else. Under the default engine the branch is unreachable anyway, since
 the control loop is the only selector.
 
