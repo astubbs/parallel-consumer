@@ -2,7 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
-<!-- inflight-vetted: 2026-09-07 - re-read `PartitionState#maybeTruncateBelowOrAbove` at HEAD: `expectedBootstrapRecordOffset = getOffsetToCommit()` still never asks whether commit data existed, the comparison is still strict, and the `Truncating state` warn still says "expected {} from loaded commit data"; `OffsetMapCodecManager` still builds the `defaultEntry` for uncommitted partitions and still routes the `OffsetDecodingError` catch into it. No test in either suite names the method or the warning. The delete-when condition is not met - both live cases are still open -->
+<!-- inflight-vetted: 2026-09-08 - shrunk to the one live case. The below-expected branch is refuted: read `ClassicKafkaConsumer.updateAssignmentMetadataIfNeeded` and `ConsumerCoordinator.initWithCommittedOffsetsIfNeeded` in kafka-clients 3.9.2 - the fetcher's position read follows the rebalance listener, so the named race yields the ABOVE branch - and `PartitionStateBootstrapTruncation162Test` round-trips four commit shapes with the expectation equal to the committed offset every time. The absent-commit-data warning is unchanged at HEAD: `expectedBootstrapRecordOffset = getOffsetToCommit()` still never asks whether commit data existed, and nothing asserts a no-commit-data partition starts quietly -->
 
 [astubbs#162](https://github.com/astubbs/parallel-consumer/issues/162), mirroring
 [confluentinc issue #546](https://github.com/confluentinc/parallel-consumer/issues/546). That thread
@@ -36,29 +36,45 @@ The same default entry is reached from `catch (OffsetDecodingError offsetDecodin
 file, so the foreign-metadata recovery landed by astubbs#217 routes its partitions into this false
 warning rather than the crash it replaced.
 
-## Live and never diagnosed: the below-expected branch resets and replays
+## Refuted: the below-expected branch is not a defect PC can reach on its own
 
-The thread's second warning, `Bootstrap polled offset has been reset to an earlier offset`, survived
-the 0.5.2.6 snapshot for the original reporter and was never explained upstream. Its branch discards
-all loaded state and replays, so the cost is duplicate processing, not loss. Reported gaps were small
-and were seen on already-running instances taking on new partitions, which points at handoff rather
-than retention.
+The thread's second warning, `Bootstrap polled offset has been reset to an earlier offset`, was never
+explained upstream. The hypothesis this note carried - that PC's own `consumer.committed()` in
+`loadPartitionStateForAssignment` races the consumer's resolution of the fetch position for a newly
+assigned partition, so a commit landing between the two reads leaves PC one commit ahead - is
+**wrong, and wrong in a way that names the other branch**. It is not a race at all:
+`ClassicKafkaConsumer.updateAssignmentMetadataIfNeeded` runs `coordinator.poll` (which invokes the
+rebalance listener, and so PC's `committed()`) and only afterwards `updateFetchPositions`, whose
+`ConsumerCoordinator.initWithCommittedOffsetsIfNeeded` is what gives an initializing partition its
+position. PC's read strictly precedes the fetcher's, so a commit landing between them is the one the
+**fetcher** sees: the polled offset comes out at or above PC's expectation, which is the
+above-expected branch. Read against kafka-clients 3.9.2, the version this tree builds on.
 
-**Untested hypothesis, stated so it can be refuted:** PC issues its own `consumer.committed()` in
-`loadPartitionStateForAssignment`, separate from the consumer's own position resolution for a newly
-assigned partition. If the previous owner's commit lands between those two reads, PC's expectation is
-one commit newer than the position the fetcher starts from. The control arm is a test that delays the
-old owner's commit past assignment, predicting the warning appears in that arm only.
+That leaves one route to the branch that belongs to PC rather than to the broker: a commit whose
+encoded payload decodes to an expectation **above** the offset that commit was filed under. That is
+the defect astubbs#337 closed, and it is now pinned - `PartitionStateBootstrapTruncation162Test`
+round-trips a commit PC wrote back through `MockConsumer`, `WorkManager#onPartitionsAssigned` and the
+decoders, over four shapes PC can genuinely commit, and asserts the bootstrap expectation equals the
+committed offset exactly. Negative control: dropping the payload's lowest incomplete on decode flips
+the two shapes that carry a payload, at gaps of 4 and 10.
 
-## Neither case is tested, and the open offset PRs do not touch them
+With that invariant held, every remaining way to reach the branch is the broker handing back a
+position below the committed offset - an offset reset, a manual rewind, another member committing
+lower, a stale `OffsetFetch` across a coordinator failover - and there the branch is doing the right
+thing. The same test pins what it costs when it does fire, as a controlled pair against the
+above-expected branch: every loaded incomplete is discarded, including ones above the poll batch that
+the batch does not re-register, and `offsetHighestSucceeded` resets, so records the previous owner
+completed and committed are processed again. **Duplicate processing, and structurally not loss** -
+the expectation the branch fires against IS the lowest tracked incomplete, so nothing tracked can lie
+below the polled offset the fetcher is about to read from.
 
-`PartitionStateCommittedOffsetIT` covers deliberate truncation only - compaction, committed offset
-moved higher or lower, no reset policy on startup. No test in the surefire or failsafe suites references the
-warning or `maybeTruncateBelowOrAbove` - the other references are javadoc in
-`state/PartitionStateManager.java` and `state/PartitionState.java`, plus a jcstress probe in
-`jcstress-poc/` that models the same branch but is not part of the test suite - so a partition with
-no commit data is never asserted to start quietly. A test wants both cases: first offset 0, and first offset
-above 0.
+## What is still untested is the false warning, not the branches
+
+`PartitionStateBootstrapTruncation162Test` now covers both branches and the round trip above;
+`PartitionStateCommittedOffsetIT` covers deliberate truncation - compaction, committed offset moved
+higher or lower. What still has no test is the case at the top of this note: **a partition with no
+commit data is never asserted to start quietly**, in either the first-offset-0 or the
+first-offset-above-0 shape.
 
 <!-- post-merge: checked-begin -->
 astubbs#106 (stop walking every offset), astubbs#306 (encoding density) and astubbs#207
@@ -82,8 +98,12 @@ qualified because it is destined for GitHub, where `astubbs#NN` renders as plain
 > `PartitionState#maybeTruncateBelowOrAbove` never checks whether commit data existed, so absence
 > computes to an expectation of 0 and the warning fires having truncated nothing.
 >
-> A third path, the "reset to an earlier offset" branch, was never diagnosed upstream and is also
-> still open. It causes replay, not loss.
+> A third path, the "reset to an earlier offset" branch, was never diagnosed upstream. It is **not**
+> a defect this fork can reach on its own: the client resolves a newly assigned partition's fetch
+> position after the rebalance listener runs, so PC's own committed-offset read can never be the
+> newer of the two, and a commit PC writes decodes back to exactly the offset it was filed under. It
+> now fires only on a genuine rewind by the broker, where replaying - not losing - is the right
+> answer.
 >
 <!-- post-merge: checked-begin -->
 > `PartitionStateCommittedOffsetIT` covers deliberate truncation only; neither remaining case is
@@ -99,4 +119,6 @@ that is a behaviour change to a log line operators alert on.
 
 ## Delete when
 
-Both live cases are closed, or the maintainer rules the warning acceptable as it stands.
+The false warning on a partition with no commit data is closed, or the maintainer rules it acceptable
+as it stands. The reset-to-earlier branch no longer gates this note - it is refuted above and guarded
+by a test.
