@@ -231,9 +231,17 @@ churn rather than a PC defect.
   (confluentinc#777, [`upstream-173-revocation-duplicate-processing.md`](upstream-173-revocation-duplicate-processing.md)).
   One chaos cell (cooperative plus draining) was predicted and never run; a revocation grace period
   is an owner decision.
-- **Open, no PR:** the "reset to earlier offset" replay branch behind confluentinc#546
-  ([`bug-162-offset-state-truncation.md`](bug-162-offset-state-truncation.md)) is an untested
-  hypothesis. **Proposed: 0.6.0.x**, and say so in the release note rather than claim it.
+- **Refuted, astubbs#484 (2026-09-08):** the "reset to earlier offset" replay branch behind
+  confluentinc#546 ([`bug-162-offset-state-truncation.md`](bug-162-offset-state-truncation.md)).
+  One fixture, one differing term, both arms' predictions held: polled-below-expected discards every
+  loaded incomplete and rewinds the commit frontier, which is duplicates by construction, never
+  loss; and the note's own hypothesis - that `committed()` races the client's position resolution -
+  is refuted against the kafka-clients source, where the listener runs strictly before the fetcher
+  resolves positions. The only PC-owned route to that branch was astubbs#337's defect, now pinned
+  by a four-shape round-trip test. What remains under astubbs#162 is the **false-truncation WARN**:
+  a new group, and every partition recovered through the foreign-metadata path, logs "truncating"
+  having truncated nothing. Misdirection operators may alert on; cheap once decided, and it wants
+  the owner's call on message and level. Name it in the release note; not a data risk.
 - **Never reproduced:** the commit-response timeout (confluentinc#809, confluentinc#833). astubbs#471
   is the first experiment that hunts it, and its first runs found a stall. Not a v6 gate; the
   release note says the symptom's known causes are fixed and the reports were never reproduced.
@@ -268,9 +276,14 @@ astubbs#471's soak found.
   2026-09-08, astubbs#483: unreachable**, with a three-arm regression test and an ablation that goes
   red only when both sweeps are removed. The caveat is the finding: the last leg of the proof is a
   Kafka property, not this engine's - the consumer's fetch position never goes backwards within a
-  generation - so an in-generation offset replay (a seek, or an offset-reset/truncation replay)
-  reopens the window at once and nothing goes red. astubbs#481's controller purge bounds any such
-  orphan to one control-loop tick, so the cost would be misdirection, not a stall. The sweep for the
+  generation - so an in-generation replay of an offset whose resident was **fenced but not swept**
+  would reopen the window and nothing goes red. Narrower than it first read: a non-stale resident
+  makes the replayed record dropped, not displaced (`addWorkContainer` returns on "already exists"),
+  and astubbs#484 showed PC's own bootstrap truncation path cannot produce such a replay - it runs
+  only inside `onPartitionsAssigned`, after the stale sweep has emptied the shards and the queue. A
+  backwards `seek` on a running assignment is the remaining route, and main has none today.
+  astubbs#481's controller purge bounds any such orphan to one control-loop tick, so the cost would
+  be misdirection, not a stall. The sweep for the
   same shape found two more by-key removals (`ProcessingShard.onSuccess`, the revoke sweep in
   `ShardManager.removeWorkFromShardFor`), left for astubbs#468 whose identity-`equals` change is
   what makes conditional removal possible. Not a v6 gate; astubbs#483 stacks on astubbs#481.
@@ -495,7 +508,8 @@ these get answered.
 
 - confluentinc#843 (astubbs#178) - same key on two threads across a rebalance. A contract question,
   wait-for-info; [`core-178-key-order-across-a-rebalance.md`](core-178-key-order-across-a-rebalance.md).
-- confluentinc#546 (astubbs#162) - truncating state; the replay branch above.
+- confluentinc#546 (astubbs#162) - truncating state; the replay branch is refuted (astubbs#484),
+  the false-truncation WARN is what remains and wants an owner decision.
 - confluentinc#551 (astubbs#164) - batching not as expected; the fork verified the over-request as
   astubbs#311, no PR.
 - confluentinc#887 (astubbs#189) - a poison record re-forms the identical batch on every retry;
