@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: refactor -->
+<!-- inflight-vetted: 2026-09-07 - re-read `PCModule`: the `@Setter` on `parallelEoSStreamProcessor` is still there, `pc()` still has no `src/main` caller (its callers are all `ProducerManagerTest`), and `AbstractParallelEoSStreamProcessor` still passes itself to `module.brokerPoller(this)` rather than the module resolving the field. `PCModule.workManager` still carries its `@Setter`, `WorkManagerStaleCheckDoubleLookupTest` still installs its double through `module.setWorkManager(wm)`, and `PCModuleTestEnv` still shadows `workManager` behind the `workManagerController` latch - so the setter still stays. The vet tools missing `Lazy` anchor is prose about Daggers usual answer, not a symbol claim -->
 
 `PCModule` is a hand-rolled DI container - "Minimum dependency injection system, modled on how Dagger
 works", deliberately not Dagger because PC has a zero-dependency policy. Dependencies come from lazy

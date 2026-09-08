@@ -157,11 +157,13 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *   that keeps the commit path alive indefinitely, which promotes it from "a different mechanism" to
  *   "the first arm that can actually falsify the assertion".</li>
  *   <li><b>{@code gtassone}'s configuration from confluentinc#809</b> - 128 partitions, concurrency
- *   64, a user function from 100ms to minutes, {@code PERIODIC_CONSUMER_SYNC}.
- *   {@code docs/inflight/upstream-175-sporadic-commit-timeouts.md} nominates him explicitly as the
- *   better wedge candidate, because he posted his configuration and it is the only mode in which the
- *   AB-BA cycle can close. This scenario transcribes the OTHER reporter, whose defect
- *   {@code upstream-tell-809-833-the-hang-is-fixed.md} says is already fixed.</li>
+ *   64, a user function from 100ms to minutes, {@code PERIODIC_CONSUMER_SYNC}. It is the closest
+ *   recorded configuration to astubbs#175, the live report, and this scenario does not have it - the
+ *   workload here transcribes the now-closed astubbs#177 instead, whose defect
+ *   {@code upstream-tell-809-833-the-hang-is-fixed.md} says is already fixed.
+ *   {@code docs/inflight/upstream-175-sporadic-commit-timeouts.md} no longer nominates it as a WEDGE
+ *   candidate - astubbs#29 merged 2026-09-02 and closed the AB-BA cycle for that report - so this arm
+ *   buys the configuration, not the cycle.</li>
  *   <li>{@code -Dsoak.failureFraction=0} - the control arm, and worth less than it looked: with no
  *   poisoning this is a plain throughput soak, and the two runs above have already shown the
  *   interesting axis is intake, not the poisoned share.</li>

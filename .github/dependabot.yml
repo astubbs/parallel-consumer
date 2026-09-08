@@ -51,7 +51,8 @@ updates:
           - "version-update:semver-minor"
           - "version-update:semver-major"
       # The second Jackson pin: the jackson-bom import in
-      # parallel-consumer-example-streams, which holds that module at 2.18.9. It needs
+      # parallel-consumer-example-streams, which holds that module on the 2.18 line
+      # (jackson.examples.version in the examples parent says which patch). It needs
       # the same hand management as the databind pin above, and it is a *different*
       # coordinate, so the rule above does not cover it.
       #
@@ -59,7 +60,7 @@ updates:
       # an automated bump can move you INTO a vulnerability: CVE-2026-59889 was
       # introduced in 2.18.0 and fixed only in 2.18.9, and CVE-2026-54518 applies to
       # 2.21.0-2.21.3 only. The root pom greenlights CVE-2026-54518 as a false positive
-      # *because this module resolves 2.18.9*; a bump into 2.21.0-2.21.3 would make that
+      # *because this module resolves a 2.18.x*; a bump into 2.21.0-2.21.3 would make that
       # finding real while the exclusion silently hid it. Leaving the LINE is therefore a
       # hand-managed decision, and the exclusion list gets re-checked when it happens.
       #
@@ -67,13 +68,14 @@ updates:
       # micrometer entry below, but here the patch allowance is load-bearing rather than
       # tidy. This started out blanket, which was wrong in a way worth recording: every
       # danger named above is a LINE change (2.18 -> 2.21), while a patch inside 2.18 is
-      # the exact thing we are waiting for. The root pom's TEMPORARY exclusions for
-      # CVE-2026-68497 and CVE-2026-19032 retire when jackson-databind 2.18.10 reaches
-      # Central - a patch bump IS the retirement mechanism - and a blanket ignore
-      # suppressed the only PR that would have announced it. Neither id is in OSV, NVD or
-      # GHSA, so no Dependabot alert can arrive instead: the ignore was covering the one
+      # the exact thing we are waiting for. The worked case: the root pom's TEMPORARY
+      # exclusions for CVE-2026-68497 and CVE-2026-19032 retired when jackson-databind
+      # 2.18.10 reached Central (astubbs/parallel-consumer#445, 2026-09-04) - a patch bump
+      # WAS the retirement mechanism - and while this entry was blanket it suppressed the
+      # only PR that would have announced it. Neither id is in OSV, NVD or GHSA, so no
+      # Dependabot alert could arrive instead: the ignore was covering the one
       # notification we were relying on. bin/check-cve-exclusions.sh is the backstop for
-      # when that happens anyway. See docs/inflight/deps-cve-backlog.md.
+      # when that happens again. See docs/inflight/deps-cve-backlog.md.
       - dependency-name: "com.fasterxml.jackson:jackson-bom"
         update-types:
           - "version-update:semver-minor"

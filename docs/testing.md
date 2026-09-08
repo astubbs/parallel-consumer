@@ -368,9 +368,9 @@ recipe above).
   its javadoc lists the alternative arms in priority order, each changing one term - including the
   control arm that removes the term under suspicion and nothing else.
 
-Members today: `CommitResponseTimeoutSoakIT` - the reproduction attempt for astubbs#177 /
-astubbs#175 (`Timeout waiting for commit response`), whose question, candidate mechanisms and
-discriminator are owned by
+Members today: `CommitResponseTimeoutSoakIT` - the reproduction attempt for astubbs#175
+(`Timeout waiting for commit response`), built from the workload shape of the now-closed astubbs#177
+report; its question, candidate mechanisms and discriminator are owned by
 [`bug-177-commit-response-timeout-unreproduced.md`](inflight/bug-177-commit-response-timeout-unreproduced.md).
 
 ## Lincheck lane (`@Tag("lincheck")`) - scheduler-controlled concurrency testing, never gates

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-read against the tree: all eight successor notes named in the table exist in docs/inflight/, and the "once merged" qualifier is now stale - `LincheckHarness.java` and the `jcstress-poc` module are both on master -->
 
 Every entry in the first list is grounded in a failure observed in this repo in August 2026, not in
 a tool catalogue. The recurring shape behind almost all of them: **a check that dies or is blind
@@ -46,7 +47,7 @@ it is why this file still exists at all.
 
 **Already in place, so not re-proposed:** the chaos lane, the quarantine lane, dup-code and
 similarity gates, CodeQL default setup, the copyright/issue-ref/file-ref/inflight-tag gates, the
-Lincheck lane (astubbs#347) and jcstress probe module (astubbs#348) once merged.
+Lincheck lane (astubbs#347) and the jcstress probe module (astubbs#348), both now merged.
 
 **Not proposed, with reasons:** a jcstress CI lane (its only FORBIDDEN outcomes live in control arms
 that cannot go red when product code changes - a green run would assert the JVM honours `volatile`);

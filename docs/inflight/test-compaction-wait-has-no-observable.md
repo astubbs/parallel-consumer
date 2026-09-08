@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-vetted: 2026-09-07 - still true: PartitionStateCommittedOffsetIT.triggerCompactionProcessing still does `final int pauseSeconds = 20` + sleepSecondsLog beside the author`s `// or wait?`, called from two sites, and nothing in the class observes compaction -->
 
 `PartitionStateCommittedOffsetIT.triggerCompactionProcessing()` produces records and then sleeps a
 flat 20 seconds, with the author's own `// or wait?` beside it. It is called from two sites in a

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - re-read `.claude/hooks/check-branch-behind-its-own-remote.sh`: the PreToolUse arm still does `cd "$root"` from `git rev-parse --show-toplevel` in the hook's own cwd and then `git rev-parse --abbrev-ref HEAD`, so the bug is unchanged. One detail in the closing paragraph HAS gone stale - the hook now sources `lib/hook-common.sh` (with an unreadable-lib fail-open) rather than inlining -->
 
 `.claude/hooks/check-branch-behind-its-own-remote.sh` reads
 `git rev-parse --abbrev-ref HEAD` from the hook process's own directory - the SESSION's branch,

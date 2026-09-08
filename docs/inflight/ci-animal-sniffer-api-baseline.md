@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-checked: `animal-sniffer` appears in no pom in the tree (root or module), so nothing checks called APIs against the Java 8 floor; the root pom's `release.target` of 8 is still the only guard, and astubbs#315 (the complementary published-API gate) is still OPEN. Neither delete-when arm is met -->
 
 
 **The gap.** This project compiles Java 17 source to Java 8 bytecode with Jabel, so a call to a

@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.TopicPartition;
 import org.jetbrains.lincheck.datastructures.IntGen;
 import org.jetbrains.lincheck.datastructures.Operation;
 import org.jetbrains.lincheck.datastructures.Param;
@@ -104,6 +105,31 @@ public class ShardManagerLincheckTest {
 
     private static final String TOPIC = "lincheck-topic";
 
+    /**
+     * The partition every record here belongs to, ASSIGNED in the constructor.
+     * <p>
+     * Not decoration. {@code PartitionStateManager.getPartitionState} is an unguarded
+     * {@code partitionStates.get(tp)}, so with no assignment it answers {@code null} for every container in
+     * this harness - and {@link ProcessingShard#addWorkContainer} dereferences it, through
+     * {@code isWorkContainerStale}, the moment an arrival finds a RESIDENT at its offset. While every
+     * revoke sweep removes the resident - and, under KEY ordering, the empty shard with it - that branch is
+     * unreachable here, because every {@code addWork} is an insertion into nothing. A sweep that DECLINES
+     * leaves the resident in place, the next {@code addWork} takes the branch, and the harness reports
+     * {@code NullPointerException} on the fixture rather than on the shard map. That is where this was
+     * measured: astubbs/parallel-consumer#431's branch, which adds the declining sweep and is still open.
+     * <p>
+     * <b>So on master this is latent, and fixing it here is deliberate.</b> The harness is green without the
+     * assignment today - re-measured, not assumed - and would go red the moment that PR lands, on its
+     * fixture rather than on the thing it tests. A harness whose fixture contradicts its own comment is a
+     * false green waiting for a schedule, so it is corrected where the correction is cheap and separable.
+     * <p>
+     * Assigning the partition is what the fixture already claims to model - the constructor's "ordinary
+     * steady state of a running consumer", which has its partition assigned. It does not touch the parked
+     * policy question of whether an absent {@code PartitionState} should be an error, which
+     * {@code docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md} owns.
+     */
+    private static final TopicPartition TP = new TopicPartition(TOPIC, 0);
+
     private final PCModuleTestEnv module = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
             .ordering(KEY)
             .build());
@@ -146,6 +172,10 @@ public class ShardManagerLincheckTest {
     }
 
     public ShardManagerLincheckTest() {
+        // The partition these records came from is assigned first, so the shard's staleness question has an
+        // answer instead of a null - see TP.
+        module.workManager().onPartitionsAssigned(UniLists.of(TP));
+
         // Initial state: one record already tracked, i.e. the shard exists and is not empty. This is the
         // ordinary steady state of a running consumer, not a state contrived to expose anything.
         sm.addWorkContainer(EPOCH, records[0]);

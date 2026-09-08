@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - re-read against the tree: `bin/inflight.mjs` answers `note find`, `note drift` and `stranded` as the note records, but the GitHub tunnel it is still open for is NOT built - no PreToolUse hook in `.claude/hooks/` intercepts or redirects a raw `gh` call, and there is no graph store; both sibling notes it names (`process-adopt-external-harness.md`, still `deferred - after v6`, and `ci-issue-index-has-no-edges.md`) are still present and open -->
 
 **Proposal (2026-09-01):** keep the data model - markdown notes in the tree, three tag axes - and put
 a Node client in front of it that (a) answers "what is open" by reading notes across *every* branch

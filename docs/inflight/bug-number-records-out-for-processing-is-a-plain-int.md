@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - `WorkManager.numberRecordsOutForProcessing` is still `private int ... = 0`, still mutated at four unsynchronised sites and still read by `hasWorkInFlight()`, `isWorkInFlightMeetingTarget()` and the `INFLIGHT_RECORDS` gauge. The two counters it says were dissolved are dissolved: `ShardManager.getWorkableRecords`/`RecordPopulation` and `ProcessingShard.includeInSelection`/`WorkContainer.claimSelection` are all present, as is the `ProcessingShard.getCountWorkInFlight()` scan named as the independent truth -->
 
 `WorkManager.numberRecordsOutForProcessing` is a plain `int`, mutated on several controller-thread paths and
 read without synchronisation. It is what is left of the *two drifting counters feeding one throttle decision*
