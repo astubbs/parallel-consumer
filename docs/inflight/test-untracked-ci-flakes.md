@@ -15,6 +15,12 @@ astubbs#265, and `OffsetEncodingBackPressureTest.backPressureShouldPreventTooMan
 (4/45, the most frequent), which asserted an offset that back pressure exists to stop advancing -
 written up in
 [`back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md`](../solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md).
+Also fixed and out: `simpleBatchTest` in `CoreBatchTest`, `ReactorBatchTest`, `MutinyBatchTest` and
+`VertxBatchTest` (six sightings, the most in this register), which asserted a batch count of
+`ceil(records / batchSize)` over an input whose key distribution it randomised - under KEY ordering a
+key drawn three times out of five forces a fourth batch, deterministically, and the library is right to
+produce it -
+[`a-randomised-key-draw-decided-a-batch-count-the-test-computed-from-the-record-count-2026-09-08.md`](../solutions/test-flakiness/a-randomised-key-draw-decided-a-batch-count-the-test-computed-from-the-record-count-2026-09-08.md).
 Also fixed and out: `MdcContextPropagationTest.anEmptyCallerContextIsHandledAndNothingLeaks`, which
 asserted a null MDC on a runner thread two other classes had left holding `{}` (four sightings, the
 last one master's own build for the astubbs#415 merge; fixed twice over, by two sessions that did not see each other) -
@@ -26,7 +32,6 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 <!-- post-merge: checked - the row states the fix and the lift as things that happened -->
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#265**, which deleted the wall-clock assertion rather than repairing it. astubbs#262, its owner, lifted the quarantine and deleted the registry entry - see below |
 | `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and `.testFlatMapProduce` | 1 seen (2026-09-01) | Not from the original scan - found in a **local** core unit run on a parallel re-cut of astubbs#207, not on astubbs#207 itself. Both failed together on produced-record count (`Expected size: 1/2 but was: 0`), i.e. the returned stream carried nothing. **Mechanism now known and owned by astubbs#116** - see below | <!-- post-merge: checked -->
-| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 6 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01, 2026-09-02, 2026-09-05) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third, fourth and fifth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 | `Mutation Tests (PIT, PR-scoped)` lane | 1 seen (2026-09-02, astubbs#207, [run 33610711974](https://github.com/astubbs/parallel-consumer/actions/runs/33610711974)) | Not a test - the LANE hit its `timeout-minutes: 30` cap and was cancelled, on a **markdown-only** delta from a head where it had scored in 19m18s with the same class set. The cap had about a third headroom over a normal run, so it flapped on a slow runner. Addressed 2026-09-07: the bound is now `timeout-minutes: 20` on the PIT **step**, so a hit ends that step and the job still reports, where a hit on the old job cap cancelled the whole row. It arrived with the fold into `scan: repo` and outlived it - astubbs#463 un-folded PIT into its own `mutation` job again and the step bound moved with the step ([`ci-fewer-jobs-ruleset-edits.md`](ci-fewer-jobs-ruleset-edits.md)). Still `continue-on-error: true`, so it never gates a merge <!-- post-merge: checked --> |
 | `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 3 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225); 2026-09-07, astubbs#428, [job 101592337448](https://github.com/astubbs/parallel-consumer/actions/runs/34072492940/job/101592337448); 2026-09-07, astubbs#452, [job 101607850077](https://github.com/astubbs/parallel-consumer/actions/runs/34078008311/job/101607850077)) - the first two the first run of a branch that had just taken a change to how this lane runs; the third a re-run after a merge from master, with no `.github/` change in the merged range | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
 | `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | Recurring, always at the guard ceiling, across unrelated branches - `bin/inflight.mjs codecov test freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` enumerates every recorded outcome, so no total is kept here; the dated sightings are 2026-09-01; 2026-09-03 seven times - once on a producer branch, twice on astubbs#419, twice in a row on astubbs#429, whose same head then passed on a deliberate re-run, once on a `ce-optimize` measurement branch, and once on astubbs#438, and once on astubbs#433; on astubbs#442 four times - 2026-09-05 at 7075b26f, at 2ee84193 three heads later, and at 4fc15b8b, a head that differs from the green 69ecd0d1 before it by one markdown file, so the same-code control arm is the run immediately preceding it; and 2026-09-06 at eb1e88a1, again a documentation-only head; 2026-09-05 on astubbs#452 at 9071c9baa ([job 101230691107](https://github.com/astubbs/parallel-consumer/actions/runs/33938334747/job/101230691107)) and on astubbs#449 at 0182f0862 ([job 101270402248](https://github.com/astubbs/parallel-consumer/actions/runs/33952704824/job/101270402248)), the latter a docs-only branch; and 2026-09-04 on astubbs#444, whose SAME HEAD then passed on a deliberate re-run of just that job - the identical `mid-loop pause point (offset 25)` guard every time, in the catch-all shard of a two-shard run, so still roughly one in two on that lane) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below **It also has a same-day cross-branch control**: `bin/inflight.mjs codecov test freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` shows it failing on two unrelated branches within an hour with the identical `mid-loop pause point (offset 25)` signature, while passing on both of those same branches at neighbouring commits - so it is master-state and test-side, not any one branch's regression, answered from recorded history rather than by re-running builds. **And a WITHIN-branch control, which establishes something none of the others can**: astubbs#433 ran the same content twice, passing at `01fb0c4` and failing at `53ef4d6` after a re-cut that changed only the commit split and merged one unrelated reactor-test commit - so one tree produced both outcomes. The controls above rule out branch content; this one rules out the tree entirely, leaving only the runner. The astubbs#444 sighting is one more of the same-day cross-branch kind: the identical signature had appeared on `ci/shard-integration-gate` ninety minutes earlier, while `docs/codex-strategy-conversation` passed the same test in the same hour. **astubbs#438 is the strongest of these controls and needs no neighbouring commit at all**: the documentation-only heads above still sit on branches whose earlier commits changed Java, so the tree that was built carries those changes - whereas astubbs#438's whole branch diff is `bin/` and `docs/`, compiling no Java and changing no test, so the tree built there IS master's. A branch that cannot have caused an integration failure produced one. Confirm with `gh pr diff 438 -R astubbs/parallel-consumer --name-only | grep -vE '^(bin/|docs/)'`, which prints nothing - asked of the pull request rather than of `origin/feats/inflight-rank-cli`, because that branch is deleted on merge and the check has to outlive it. <!-- post-merge: checked --> |
@@ -428,128 +433,6 @@ Cleared on mechanism the same way as the first two: astubbs#452's whole diff is
 `PERIODIC_CONSUMER_ASYNCHRONOUS` + `UNORDERED` path against a fresh topic can reach. Not re-diagnosed
 here - the fixed-sleep defect and assertion-attribution problem above already cover it. Not
 quarantined for the same reason as before: quarantine needs a rate, not a third data point.
-<!-- post-merge: checked-end -->
-
-### `simpleBatchTest` - three modules, one shared helper, and a lead nobody has tested
-
-2026-08-18 it was `ReactorBatchTest`. 2026-08-19 it was `MutinyBatchTest`, on
-astubbs/parallel-consumer#320 - and the failure is the same one, not a similar one: the alias, the
-30-second timeout and the lambda all come from `BatchTestMethods` in **core**, which both wrapper
-modules drive. One sighting looked like a Reactor flake. Two, in different modules, means the
-Reactor and Mutiny wrappers are not the variable.
-
-**Sixth sighting, 2026-09-05, `ReactorBatchTest` parameter `[3]` on astubbs/parallel-consumer#442 at f1e87d81, the Unit Tests lane** - identical code had passed that lane at the three previous heads of the same PR. Same alias, same 30s, expected 3 batches and got 4 - and the dump shows **key 66 at offsets 0, 1 and 2**, three records on one key out of five, which is the three-way collision the third, fourth and fifth sightings each carried. Four in a row now. Recorded and re-run on the same head, not diagnosed. <!-- post-merge: checked -->
-
-The 2026-08-19 assertion is the useful part, because it is off by exactly one in the direction that
-matters: **`Expected size: 3 but was: 4`** - grep `BatchTestMethods` for `expected number of
-batches`. The test received the right records in one batch too many, so this is a batch-BOUNDARY
-question, not a lost-work question. Two readings, and they need separating rather than assuming:
-
-- **Contention.** The runner is slow or loaded, so work arrives spread out and the batcher closes a
-  batch early. Test-side, and the honest fix is making the test drive the boundary it asserts
-  instead of racing it.
-- **Product.** The batcher can split a batch under a timing the library is supposed to tolerate,
-  in which case an over-eager boundary is a real defect and the test is right to complain.
-
-**No sighting is on a branch whose diff contains main Java**, which is what rules out "a PR broke
-it" and makes it master state - the same reasoning applied to `ProducerManagerTest` below. That is
-also why none was quarantined on the branch that met it: quarantine is master-state and needs a
-diagnosis, and no sighting has one.
-
-The 2026-08-18 sighting passed on re-run, and so did the 2026-08-25 one - three consecutive clean
-re-runs of the same test, so **1 failure in 4 local runs, not deterministic**. A re-run is diagnosis
-here, not a way to go green - it distinguishes flaky from deterministic - and AGENTS.md's ban is on
-the automatic `surefire.rerunFailingTestsCount` that hid this whole ledger, not on re-running a job
-to learn something.
-
-#### The 2026-08-25 sighting: a third module, and the first look at what was in the batches
-
-`VertxBatchTest`, KEY ordering, on a local macOS full unit run of the branch that added
-`ShardMapIsNeverReplacedArchTest` - one new core test class plus docs, no main Java. Same
-`Expected size: 3 but was: 4`. **Three modules now, so the wrapper is definitively not the
-variable.**
-
-What is new is the payload the assertion printed. The five records carried keys `29, 36, 36, 36,
-71` - a **three-way key collision** - and arrived as `{o0, o4}`, `{o1}`, `{o2}`, `{o3}`, so every
-key-36 record came alone. Meanwhile `simpleBatchTest` computes its expectation from the record count
-and nothing else: grep `BatchTestMethods` for `expectedNumOfBatches`, which is
-`ceil(numRecsExpected / batchSizeSetting)` for every ordering except PARTITION. **The keys are
-random** - `KafkaTestUtils.getRandomKey` draws from `defaultKeys`, a hundred integers - so the shard
-distribution the batcher works against varies run to run while the expected batch count does not.
-
-That is a third reading to separate, not a diagnosis, and it displaces neither of the two above:
-
-- **Expectation-versus-input.** The test randomises the key distribution and then asserts a batch
-  count that only holds for some distributions. A rare draw would explain a rare failure without any
-  contention or product defect at all.
-
-The experiment that settles it is cheap and has a control arm, and **nobody has run it**: pin the
-keys through the Lombok setter on `KafkaTestUtils`'s `defaultKeys`, force a three-way collision
-under KEY ordering, and predict a deterministic failure; then five distinct keys, and predict it
-always passes. If both hold, this is
-the test's own input and neither the runner nor the batcher. If the collision case passes, the draw
-is a red herring and contention-versus-product stands as before.
-
-<!-- post-merge: checked-begin -->
-#### The 2026-09-01 sighting: the collision reproduces, in a second module, unprompted
-
-`ReactorBatchTest`, KEY ordering (`simpleBatchTest(ProcessingOrder)[3]` - `@EnumSource` orders the
-enum `UNORDERED, PARTITION, KEY`, so index 3 is KEY, the same parameter as 2026-08-25). Seen on the
-Unit Tests lane of astubbs/parallel-consumer#393, the thread-confinement extraction. Same
-`Expected size: 3 but was: 4`.
-
-**This is the first sighting whose branch carried main Java, so the master-state argument above is
-restated here rather than reused.** It still holds, for two reasons specific to
-astubbs/parallel-consumer#393. Relative to the head the failure was first seen on, the commit under
-test changed only comments and one core test fixture, and that fixture is loaded by two core
-ownership tests `ReactorBatchTest` never touches. That PR's one behavioural change to a poll path
-moves an existing `updateCache()` call from after `pollingBroker.set(true)` to before it - a
-reordering, not an addition, so the poll does no more work than master's does. Neither could reach a
-batch boundary in another module.
-
-**What makes the sighting worth recording is the payload, because it is the 2026-08-25 one again.**
-The five records carried keys `34, 62, 34, 34, 77` by offset - a **three-way collision on key 34** -
-and arrived as `{o0, o1}`, `{o4}`, `{o2}`, `{o3}`. 2026-08-25 saw keys `29, 36, 36, 36, 71`, a
-three-way collision on key 36, arriving as `{o0, o4}`, `{o1}`, `{o2}`, `{o3}`. Two independent
-draws, different modules, different collided key, **same shape**: one key drawn three times, two
-drawn once, and four batches where the expectation is `ceil(5 / 2) = 3`.
-
-That is what the expectation-versus-input reading predicts, and it is no longer resting on a single
-observation. Under KEY ordering the three colliding records share a shard and must be processed in
-order, so they cannot batch with each other however fast the runner is; only the two singletons are
-free to pair with anything. A three-way collision therefore forces at least four batches on
-arithmetic, while `expectedNumOfBatches` - grep `BatchTestMethods` for it - is computed from the
-record count alone and stays at three.
-
-**It still is not a diagnosis, and the experiment named above is still the thing that settles it**
-(pin `defaultKeys` through the Lombok setter on `KafkaTestUtils`, force the collision, predict a
-deterministic failure; then five distinct keys, predict it always passes). What has changed is the
-prior: the collision is now the leading reading rather than one of three equals, and a control arm
-that failed to reproduce under a forced collision would be a genuinely surprising result. Recorded
-while the CI log carrying the payload still existed - those logs expire, and the payload is the
-whole value of the sighting.
-<!-- post-merge: checked-end -->
-
-<!-- post-merge: checked-begin - a dated sighting against a PR number and a sha, both durable -->
-#### The 2026-09-02 sighting: the same shape a third time, on a branch with no Java at all
-
-`ReactorBatchTest`, KEY ordering (`simpleBatchTest(ProcessingOrder)[3]` again), on the Unit Tests
-lane of astubbs/parallel-consumer#414 at `36cd68593`. Same `Expected size: 3 but was: 4`, the alias
-timing out at 30.53s. That branch's diff was workflow YAML and docs - no Java of any kind - so the
-master-state argument needs no restating: nothing in it can reach a batch boundary in any module.
-
-**The payload is the 2026-08-25 and 2026-09-01 shape for the third time.** Keys by offset
-`49, 74, 74, 74, 59` - a **three-way collision on key 74** - arriving as `{o0, o1}`, `{o4}`, `{o2}`,
-`{o3}`: the two singletons paired, the three colliding records one to a batch, four batches against
-an expectation of three. Three independent draws, two modules between them, three different
-collided keys, one shape.
-
-What it changes is not the diagnosis - that is still the unrun pin-the-keys experiment above, and a
-third collision-shaped payload moves the prior very little past where the second left it. What it
-changes is the cost: this is the second day running that the flake failed a PR's required Unit Tests
-lane outright, each time on a branch that could not have caused it, so it now charges a CI round to
-work that has nothing to do with it. That is the condition under which a cheap unrun experiment
-stops being deferrable.
 <!-- post-merge: checked-end -->
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
