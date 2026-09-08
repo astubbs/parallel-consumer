@@ -527,6 +527,11 @@ cosmetic - see the last bullet.*
   comparison" analysis-only code once the encoding choice is settled.
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
   missing `max-uncommitted < Short.MAX` bound.
+- **astubbs#480 deepens the consumer dependency the split above would remove**: decode-on-assignment
+  now also calls `consumer.endOffsets(...)` (`findHighestOffsetsHeld`) - a blocking ListOffsets
+  round trip inside the rebalance callback, batched and failing open - to bound every run and
+  bitset by the partition's log end offset. When the split happens, the ground-truth lookup moves
+  out with the decode side, so the codec proper never holds a `Consumer` or talks to a broker.
 
 - **The cached-and-shared instance is still only safe by the schedule, not by construction.**
   Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition
