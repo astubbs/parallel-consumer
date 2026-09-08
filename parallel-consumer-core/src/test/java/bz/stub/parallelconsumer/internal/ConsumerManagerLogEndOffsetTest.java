@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
@@ -41,8 +42,8 @@ class ConsumerManagerLogEndOffsetTest {
 
     static final Duration TIMEOUT = Duration.ofSeconds(1);
 
-    private ConsumerManager<String, String> managerFor(MockConsumer<String, String> mockConsumer) {
-        return new ConsumerManager<>(new ThreadConfinedConsumer<>(mockConsumer), TIMEOUT, TIMEOUT, TIMEOUT);
+    private ConsumerManager<String, String> managerFor(Consumer<String, String> consumer) {
+        return new ConsumerManager<>(new ThreadConfinedConsumer<>(consumer), TIMEOUT, TIMEOUT, TIMEOUT);
     }
 
     /**
