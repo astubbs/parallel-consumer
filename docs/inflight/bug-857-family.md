@@ -1,9 +1,9 @@
 # The confluentinc#857 family - what is still open
 
-<!-- inflight-type: bug -->
+<!-- inflight-type: register -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: stall -->
-<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: the register itself is still live and still earning its place - astubbs#119 is OPEN, and the fourth (protocol-invisible `PERIODIC_CONSUMER_SYNC` stall) and fifth (`MultiInstanceRebalanceTest.largeNumberOfInstances` `ZOMBIE_MEMBER`) items are unexplained. Three parts are now stale against the tree. (1) astubbs#29 is MERGED and its fix is in `AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke` (`commitLock.tryLock()`), so by this files own retirement criterion that mechanisms section may go. (2) "astubbs#29s own reproducer cannot currently settle anything" is superseded: `RebalanceEoSDeadlockTest` was rewritten to assert coordinator-visible outcomes instead of the `commitOffsetsThatAreReady()` latch, its mode choice is now deliberate and documented, and `Rebalance857CommitSyncDeadlockProbeIT` - the sibling at `PERIODIC_CONSUMER_SYNC` this file asks for - exists. (3) The fifth items claim that `ProgressTracker.withDiagnostic(...)` has never been wired is false: `MultiInstanceRebalanceTest` now passes it a `describeFleet` supplier. Separately, at 2530 lines this note is far past what the session index can carry -->
+<!-- inflight-vetted: 2026-09-08 - applied: retyped as a register, which is what it describes itself as; the revoke-path deadlock's mechanism section retired per this file's own criterion now that astubbs#29 has merged, the reproducer section replaced with what the rewritten test and its new sibling probe establish, and the fifth item's `withDiagnostic` claim corrected; checked: astubbs#29 is MERGED with its fix in `AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke` (`commitLock.tryLock()`), `Rebalance857CommitSyncDeadlockProbeIT` exists, `RebalanceEoSDeadlockTest`'s javadoc documents its transactional mode as deliberate (it guards confluentinc#541), `MultiInstanceRebalanceTest` passes a `describeFleet(allPCRunners)` supplier to `withDiagnostic`, and astubbs#119 plus the fourth and fifth items are still open -->
 <!-- post-merge: checked-begin - every astubbs#29 mention below states what its fix DOES (the AB-BA pair it replaces, the modes its cycle can close in, what its reproducer cannot settle), not that it is open; the three state claims that were here have been rewritten -->
 
 
@@ -48,14 +48,13 @@ permanently killing the broker-poll thread) and astubbs#80 (a draining consumer 
 `consumer.poll()` - ~10kHz busy-spin plus a rebalance-unresponsive member zombie-holding its
 assignment). Write-ups in `docs/solutions/test-flakiness/`.
 
-**The family's third defect - the original deadlock - is astubbs#29's** - `synchronized(commitCommand)` between the poll thread
-(`onPartitionsRevoked`) and the control thread (`commitOffsetsThatAreReady`), replaced there with
-`ReentrantLock.tryLock()`. A sibling of the two landed fixes, not a duplicate: astubbs#29/#31 were verified
-*not* to fix the drain defect, and the uber-branch experiment showed the astubbs#80 stack composes cleanly
-with both. Live confirmation the deadlock is still present: `RebalanceEoSDeadlockTest` failed once
-under the 20-run stress hunt (see `test-load-tightness-flakes.md`, where it is explicitly *not* a
-member). astubbs#29 has since been retargeted onto `master`; `pr-blockers-and-collisions.md` carries the
-coordination state.
+**The family's third defect - the original deadlock - has landed and its mechanism section is
+retired**, per this register's own criterion at the foot of the file. It was
+`synchronized(commitCommand)` between the poll thread (`onPartitionsRevoked`) and the control thread
+(`commitOffsetsThatAreReady`); astubbs#29 replaced it with `ReentrantLock.tryLock()` in
+`AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke`, and the durable write-up is
+[`../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md).
+The register stays: what remains is by definition about the mechanisms that fix does not reach.
 
 **THE FAMILY'S OWN ACCOUNTING WAS OUT OF DATE - re-totalled 2026-08-27/28.** This file, and
 astubbs#119's `## Fork status`, both said three defects landed and one remained. **At least six more
@@ -139,20 +138,17 @@ full evidence is the last section of this file; three consequences bind anyone p
   box, and the Class 2 findings **continue at roughly the same rate**, because they are the bound
   meeting the load and no deadlock fix touches that. **If they instead drop off, this reading is
   wrong** - say so loudly here, because the whole 2026-08-25 section then needs revisiting.
-- **The reproducer named for this deadlock runs in the one mode the deadlock cannot reach.**
-  `RebalanceEoSDeadlockTest` configures `PERIODIC_TRANSACTIONAL_PRODUCER`, while
+- **The reproducer question is settled, and the sibling test now exists.**
+  `RebalanceEoSDeadlockTest` configures `PERIODIC_TRANSACTIONAL_PRODUCER` deliberately - its javadoc
+  says so, and names what it guards: the confluentinc#541 AB-BA pair, which is a *different* cycle in
+  a transactional mode. The consumer-sync cycle
   [`revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md)
-  states the AB-BA cycle is *"Only reachable in PERIODIC_CONSUMER_SYNC - the reproducer test runs a
-  transactional mode where this cycle cannot occur"*. That sentence is in the solutions doc and the
-  test still has the name, so the two disagree in the open. **Whichever is right matters to
-  astubbs#29:** if the doc is right, the test's name promises coverage it does not have, and this
-  file's "live confirmation the deadlock is still present: `RebalanceEoSDeadlockTest` failed once
-  under the 20-run stress hunt" was a *different* failure being read as this one. If the doc is too
-  narrow, the mode restriction it rests on needs revising. The cheap resolution is a sibling test at
-  `PERIODIC_CONSUMER_SYNC` with the same rebalance shape - deliberately not added here, because on a
-  branch with no fix it would land as a knowingly-red test and that is
-  [`docs/quarantined-tests.md`](../quarantined-tests.md)'s decision to make, not a side effect of a
-  chaos-suite change.
+  describes has its own reproducer, `Rebalance857CommitSyncDeadlockProbeIT`, which is what the A/B
+  above ran on. So this file's old "live confirmation the deadlock is still present:
+  `RebalanceEoSDeadlockTest` failed once under the 20-run stress hunt" was a *different* failure
+  being read as this one - see
+  [`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md), which owns that
+  sighting and its correction.
 - **The old sequencing advice - "land the backlog, then re-run" - was sound when written and no
   longer applies to `CLASS2_STALL` specifically.** It still applies to any signature this file
   records that is *not* the lag bound. (It lived in a chaos-lane note since deleted; the reasoning
@@ -246,23 +242,23 @@ silent, and the members are PC instances - so it is a member-side story, not a c
 **What stops it being a diagnosis** is that the capacity profile kills instances continuously, so an
 instance killed mid-`JoinGroup` is by construction a member that stops answering. The sharp question
 is one of identity - **is the unresponsive member one the harness stopped, or one still running?** -
-and it is unanswerable from what the runs currently record, because
-`ProgressTracker.withDiagnostic(...)` has never been wired, so every stall ends "no consumer
-diagnostic supplied". `test-largenumberofinstances-residual-failures-measured-not-explained.md` owns
+and it was unanswerable from what those two runs recorded, because
+`ProgressTracker.withDiagnostic(...)` was not wired there and every stall ended "no consumer
+diagnostic supplied". `MultiInstanceRebalanceTest` now passes it a `describeFleet` supplier, so a
+fresh reproduction should carry the fleet's own view of which instances were live - nobody has
+reproduced it since. `test-largenumberofinstances-residual-failures-measured-not-explained.md` owns
 the thread and the three instrumentation gaps.
 
-## astubbs#29's own reproducer cannot currently settle anything
+## What settled the deadlock, and what `RebalanceEoSDeadlockTest` is for
 
-`RebalanceEoSDeadlockTest` fails 5/5 in CI on that branch for two reasons independent of the
-deadlock, either of which alone is sufficient:
+This section used to say that reproducer could settle nothing - it ran the wrong mode for the cycle,
+and it counted a latch by overriding `commitOffsetsThatAreReady()` while the revoke path called the
+private `tryCommitOffsetsOnRevoke()` instead, so it would have failed against a perfect fix. Both are
+gone: the test now asserts coordinator-visible outcomes rather than that latch, and its transactional
+mode is deliberate and documented - it guards confluentinc#541's AB-BA pair, not this one.
 
-- **Wrong mode** - it runs `PERIODIC_TRANSACTIONAL_PRODUCER`, where the cycle cannot occur.
-- **Unreachable latch** - it counts a latch by overriding `commitOffsetsThatAreReady()`, but the
-  revoke path on that branch calls the private `tryCommitOffsetsOnRevoke()` instead. It would fail
-  against a perfect fix.
-
-The `tryLock()` contended arm has never been observed executing: its INFO skip-log appears **zero**
-times in the 741,161-line CI log of the run meant to prove it.
+The consumer-sync cycle was settled instead by `Rebalance857CommitSyncDeadlockProbeIT`, purpose-built
+for it, in the twelve-invocation A/B recorded above.
 
 ## Cluster decomposition and the A/B result
 
@@ -2525,7 +2521,7 @@ about the mechanisms that fix does not reach.
 The revoke-path deadlock is the worked example, and the reason this criterion is written this way
 rather than the way it was. Its fix is astubbs/parallel-consumer#29 and its write-up is
 [`../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md),
-so that mechanism is settled and its section may go. The register may not: two of its open items
+so that mechanism is settled and its section has gone. The register may not: two of its open items
 reproduce on trees already carrying that fix, so retiring the file on that merge would delete two
 live unexplained stalls. That is exactly why "the 857 PR merged" was never the right test.
 <!-- post-merge: checked-end -->
