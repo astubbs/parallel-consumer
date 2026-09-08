@@ -126,20 +126,15 @@ class PollerDeathClosesTheConsumerTest extends ParallelEoSStreamProcessorTestBas
     /**
      * The second way {@code BrokerPollSystem.pollThreadEndedWithoutClosingTheConsumer()} can answer true, and
      * the one the arm above does not reach: the poll thread <b>did</b> get to {@code doClose()} and
-     * {@code maybeCloseConsumerManager()}, and the close itself threw. {@code runState = CLOSED} is the
-     * statement <em>after</em> that call, so the flag is left short of {@code CLOSED} with the poll thread
-     * dead, exactly as if it had never started closing - and the control thread's backstop fires again.
+     * {@code maybeCloseConsumerManager()}, and the close itself threw.
+     * {@link BrokerPollSystem#pollThreadEndedWithoutClosingTheConsumer()} <b>owns the reasoning</b> for why
+     * the predicate answers true there and why the retry is refused rather than closing twice; it is not
+     * restated here, so there is one copy to keep true. What is here is only what the fixture does about it.
      * <p>
      * <b>Modelled on what a real consumer does, not on what a mock finds convenient.</b>
      * {@code KafkaConsumer.close()} sets its {@code closed} flag in a {@code finally}, so a close that throws
      * has still closed the consumer. The stub therefore closes and <em>then</em> throws; a stub that threw
      * first would be asserting against a consumer no production close leaves behind.
-     * <p>
-     * <b>What this pins is that the backstop does not blindly close twice.</b> The dying poll thread claimed
-     * consumer ownership on its way in ({@code ConsumerManager.close} → {@code tryClaimOwnership}) and never
-     * released it, so the control thread's retry is refused by {@link ThreadConfinedConsumer} rather than
-     * reaching the delegate a second time - and {@code innerDoClose} catches that refusal and logs the
-     * max.poll.interval.ms warning. One delegate close, a terminal instance, no hang.
      * <p>
      * <b>Consumer-commit modes only.</b> In {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} the poll thread
      * is not the designated closer, so there is no first close for this fixture to make fail; that mode's
