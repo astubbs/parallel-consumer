@@ -100,8 +100,11 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   transactional mode a rebalance could publish a transaction whose offsets omitted records it
   contained. Its proof left quarantine with it. Its commit body says it **collides with astubbs#408
   on `tryCommitOffsetsOnRevoke`**, so astubbs#408 now carries that resolution.
-- [ ] **astubbs#468** - the stale sweep removes only the container it inspected, never a fresh
-  replacement racing in from the controller. Rebalance-shaped.
+- [x] **astubbs#468** - merged 2026-09-08. `WorkContainer` equality is identity, so the stale
+  sweep removes only the container it inspected, never a fresh replacement racing in from the
+  controller. Marked breaking (`fix(core)!`) for the equality change; the release note carries it.
+  The two further by-key removals astubbs#483 found were left for this PR's identity-`equals`
+  change to make fixable - check its body for whether it took them.
 - [ ] **astubbs#469** - the two remaining `PartitionState` flags that cross threads, measured and then
   fenced or redesigned. The follow-on astubbs#349 deliberately left.
 - [ ] **astubbs#481** - the poll thread never touches the retry queue; the controller collects
@@ -236,14 +239,26 @@ churn rather than a PC defect.
 own branch; `gh pr list -R astubbs/parallel-consumer` shows the PRs as they open.** Code-shaped
 questions run in parallel; the replay-shaped ones (chaos and soak) run one at a time, because
 several replay agents on one machine produce exactly the starvation artefacts they are meant to
-rule out. Order of the replay queue: the eager-mode stall (done - withdrawn, astubbs#478), then the six deadlock captures
-with the fix applied, then the async-unordered rebalance stall with its progress-tracker
-instrumentation, then the `INSTANCE_STALL`/`ZOMBIE_MEMBER` idle-versus-loaded replay, then the
-commit-response-timeout stall astubbs#471's soak found.
+rule out. Order of the replay queue: the eager-mode stall (done - withdrawn, astubbs#478), the six deadlock
+captures with the fix applied (done - proven by control arm, astubbs#485), then the async-unordered
+rebalance stall with its progress-tracker instrumentation (running), then the
+`INSTANCE_STALL`/`ZOMBIE_MEMBER` idle-versus-loaded replay, then the commit-response-timeout stall
+astubbs#471's soak found.
 
 
-- Whether the six deadlock captures that verified astubbs#29's mechanism ever replay clean **with
-  the fix applied** - the owning solutions doc still says "unproven".
+- ~~Whether the six deadlock captures that verified astubbs#29's mechanism ever replay clean with
+  the fix applied~~ - **known, 2026-09-08, astubbs#485: the question was unanswerable by replay, and
+  the fix is proven another way.** The captures identify the defect as the poll thread `BLOCKED` on
+  an `AtomicBoolean` monitor; astubbs#29 replaced that monitor with a `ReentrantLock`, and a thread
+  waiting on a lock parks rather than blocks - so a clean replay would have said "no BLOCKED frame"
+  with or without the deadlock, and the family note's own header already warned that replaying
+  captured seeds does not reproduce it. Proven instead with a control arm on the deterministic
+  probe: with the fix, both assignors pass every run; with the deadlock deliberately restored
+  (`tryLock` back to `lock`), every run fails and every dump shows the waiting frame. The solutions
+  doc's "Unproven" section is superseded in place, and the deadlock line carries a `PROPOSED
+  closed` marker for the owner. Two side findings worth keeping: the JVM's deadlock detector cannot
+  see this cycle (its other edge is a queue poll, not a lock), and one replay in two was VOID
+  because the window never opened - check the discriminator fired before banking a green.
 - ~~Whether the shard-displacement orphan window is reachable in production~~ - **known,
   2026-09-08, astubbs#483: unreachable**, with a three-arm regression test and an ablation that goes
   red only when both sweeps are removed. The caveat is the finding: the last leg of the proof is a
