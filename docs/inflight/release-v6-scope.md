@@ -108,12 +108,12 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   change to make fixable - check that PR's body for whether it took them.
 - [ ] **astubbs#469** - the two remaining `PartitionState` flags that cross threads, measured and then
   fenced or redesigned. The follow-on astubbs#349 deliberately left.
-- [ ] **astubbs#481** - the poll thread never touches the retry queue; the controller collects
-  what it leaves. The owner's own PR, ready and green, superseding astubbs#431 (closed 2026-09-08 -
-  correct and proven, but more machinery than the defect needed). Same stall from the
-  confluentinc#857 defect-class sweep: an unbounded fair write-lock wait inside the rebalance
-  callback, spent out of `max.poll.interval.ms`. astubbs#483 (the shard-displacement reachability
-  verdict) stacks on it.
+- [x] **astubbs#481** - merged 2026-09-08. The poll thread never touches the retry queue; the
+  controller collects what it leaves. The owner's own PR, superseding astubbs#431 (closed - correct
+  and proven, but more machinery than the defect needed). Same stall from the confluentinc#857
+  defect-class sweep: an unbounded fair write-lock wait inside the rebalance callback, spent out of
+  `max.poll.interval.ms`. astubbs#483 (the shard-displacement reachability verdict) stacked on it
+  and is being brought level.
 - [x] **astubbs#473** - merged 2026-09-08. Cleared the two remaining quarantine entries by fixing
   what they were about; `docs/quarantined-tests.md` is empty and the release guard no longer blocks
   on it. It also moved the capacity profiles behind a `capacity` tag with scheduled runners, so
