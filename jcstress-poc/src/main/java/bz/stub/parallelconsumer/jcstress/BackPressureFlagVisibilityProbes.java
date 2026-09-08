@@ -81,14 +81,90 @@ import static org.openjdk.jcstress.annotations.Expect.FORBIDDEN;
  * Run 2026-09-07, {@code -m quick}, macOS 15 / arm64 (Apple silicon), JDK 17.0.18-tem, 10 CPUs.
  * {@link CalibrationProbes.PlainFieldStoreLoadReordering}'s positive control fired in the same run, so
  * the zeros below are interpretable rather than vacuous. Results are recorded on each arm.
+ * <p>
+ * Those figures were measured before {@link SurroundedBackPressureState} hoisted the shared scaffolding
+ * out of the two faithful arms. The re-run after that refactor confirmed the <b>outcome kinds</b> are
+ * unchanged - the plain arm still fires, the volatile arm still reads FORBIDDEN at zero - which is what
+ * the numbers above are cited for. They are not re-recorded per run: a rate is machine- and
+ * load-specific, and re-running is the way to get today's.
  *
- * <h2>Why the arms below duplicate each other</h2>
+ * <h2>What these arms share, and what they deliberately do not - read before deduplicating further</h2>
  *
- * Each arm pair below is deliberately near-identical, differing only in the modifier under test - a
- * jcstress arm must be a copy of its neighbour with that one term varied, or the comparison between
- * arms stops isolating the thing being measured. Do not refactor the duplication away.
+ * The duplicate-code check flagged the two faithful arms as clones of each other, and it was half right.
+ * The split:
+ *
+ * <ul>
+ *   <li><b>Shared</b>, in {@link SurroundedBackPressureState}: every field that is <i>not</i> under test
+ *       (the {@link ConcurrentSkipListMap}, the neighbouring {@code stateChangedSinceCommitStart} write,
+ *       the {@code blockedAtPayloadLength} instrumentation payload), the setup that seeds the map, and
+ *       the "real surrounding accesses" scaffolding
+ *       {@link SurroundedBackPressureState#encodeOverThreshold()}. None of it is the thing being
+ *       measured, and two copies of it were two places to drift.</li>
+ *   <li><b>Deliberately duplicated</b>, and it must stay that way: <b>the measured field keeps its own
+ *       declaration in its own arm</b>, because plain-versus-{@code volatile} on
+ *       {@code allowedMoreRecords} is the entire term under test - hoisting it would erase the
+ *       difference between the arms. And <b>each actor's sequence of accesses stays literal in the
+ *       arm</b>, so the JIT compiles the same shape production has, in the same order. That is why
+ *       {@code controlThread} keeps both of its lines rather than calling a shared mapper: it is an
+ *       actor, its two reads happen <i>inside</i> the raced window, and their order is the
+ *       measurement.</li>
+ *   <li><b>{@link ReducedPlainBackPressureFlag} shares nothing on purpose</b> and does not extend the
+ *       base. Its whole point is the <i>absence</i> of the surrounding accesses - giving it the
+ *       scaffolding would make it a third copy of the faithful arm and destroy the 51x comparison it
+ *       exists to provide.</li>
+ * </ul>
+ *
+ * The scaffolding helper is {@code final} and tiny, so it inlines; it contains <i>no</i> access to any
+ * arm's measured field, which is the rule that decides what may move into it.
+ * <p>
+ * jcstress permits this - its annotation processor requires a {@code @State} class to be public and
+ * non-final, and bans inheritance only on {@code @Result} classes. The actors stay declared on each
+ * {@code @State} arm regardless, which is also what the literal-actor rule above requires.
  */
 public class BackPressureFlagVisibilityProbes {
+
+    /** The single offset the modelled encode runs against. */
+    static final long ENCODED_OFFSET = 1L;
+
+    /**
+     * Scaffolding shared by the two <i>faithful</i> arms: the state that is not under test, and the real
+     * surrounding accesses that make them faithful rather than reduced.
+     * <p>
+     * {@link ReducedPlainBackPressureFlag} deliberately does not extend this - see the class javadoc.
+     * Nothing here touches a measured field.
+     */
+    abstract static class SurroundedBackPressureState {
+
+        final ConcurrentSkipListMap<Long, Optional<Object>> incompleteOffsets = new ConcurrentSkipListMap<>();
+
+        boolean stateChangedSinceCommitStart;
+
+        /**
+         * INSTRUMENTATION ONLY - nothing in {@code PartitionState} corresponds to it. The real flag
+         * publishes no payload (see the class javadoc), so an arm that measures publication has to
+         * invent one. It stands for the encode result the block decision was taken from.
+         */
+        boolean blockedAtPayloadLength;
+
+        SurroundedBackPressureState() {
+            incompleteOffsets.put(ENCODED_OFFSET, Optional.empty());
+        }
+
+        /**
+         * {@code getCommitDataIfDirty()} → {@code tryToEncodeOffsets()} →
+         * {@code updateBlockFromEncodingResult()}, taking the over-threshold branch - everything the poll
+         * thread does <i>before</i> it writes the flag under test.
+         * <p>
+         * The branch is kept rather than simplified to a single value: this models the over-threshold
+         * path, which production takes regardless of {@code isEmpty()}, so the arm performs the same read
+         * production does and lands on the same value either way.
+         */
+        final void encodeOverThreshold() {
+            stateChangedSinceCommitStart = false;
+            boolean ignoredEmpty = incompleteOffsets.isEmpty(); // tryToEncodeOffsets' first branch
+            blockedAtPayloadLength = ignoredEmpty || true;      // instrumentation payload
+        }
+    }
 
     /**
      * The back-pressure flag <b>as shipped</b> before this change: plain, written last by the poll
@@ -113,24 +189,11 @@ public class BackPressureFlagVisibilityProbes {
     @Outcome(id = {"true, false", "true, true", "false, true"}, expect = ACCEPTABLE,
             desc = "Non-anomalous orderings - either the block is not visible yet, or its cause is")
     @State
-    public static class PlainBackPressureFlagPublishesNothing {
+    public static class PlainBackPressureFlagPublishesNothing extends SurroundedBackPressureState {
 
-        final ConcurrentSkipListMap<Long, Optional<Object>> incompleteOffsets = new ConcurrentSkipListMap<>();
-
-        boolean stateChangedSinceCommitStart;
-
-        /**
-         * INSTRUMENTATION ONLY - nothing in {@code PartitionState} corresponds to it. The real flag
-         * publishes no payload (see the class javadoc), so an arm that measures publication has to
-         * invent one. It stands for the encode result the block decision was taken from.
-         */
-        boolean blockedAtPayloadLength;
-
+        // THE TERM UNDER TEST - the absence of a modifier on this line is the whole experiment, which is
+        // why it is declared here and not in the shared base.
         boolean allowedMoreRecords = true;
-
-        public PlainBackPressureFlagPublishesNothing() {
-            incompleteOffsets.put(1L, Optional.empty());
-        }
 
         /**
          * {@code getCommitDataIfDirty()} → {@code tryToEncodeOffsets()} →
@@ -138,17 +201,13 @@ public class BackPressureFlagVisibilityProbes {
          */
         @Actor
         public void brokerPollThread() {
-            stateChangedSinceCommitStart = false;
-            boolean ignoredEmpty = incompleteOffsets.isEmpty(); // tryToEncodeOffsets' first branch
-            // branch kept, not simplified to a single value: this arm models the over-threshold path,
-            // which production takes regardless of isEmpty() - this arm performs the same read
-            // production does, and lands on the same value either way
-            blockedAtPayloadLength = ignoredEmpty || true;      // instrumentation payload
+            encodeOverThreshold();                              // the real surrounding accesses
             allowedMoreRecords = false;                         // setAllowedMoreRecords(false)
         }
 
         /**
-         * {@code couldBeTakenAsWork(wc)} - the flag read first, its cause read second.
+         * {@code couldBeTakenAsWork(wc)} - the flag read first, its cause read second. Kept literal: both
+         * reads happen inside the raced window and their order is the measurement.
          */
         @Actor
         public void controlThread(ZZ_Result r) {
@@ -173,28 +232,14 @@ public class BackPressureFlagVisibilityProbes {
     @Outcome(id = {"true, false", "true, true", "false, true"}, expect = ACCEPTABLE,
             desc = "Orderings the release/acquire edge permits")
     @State
-    public static class VolatileBackPressureFlagPublishesEncode {
+    public static class VolatileBackPressureFlagPublishesEncode extends SurroundedBackPressureState {
 
-        final ConcurrentSkipListMap<Long, Optional<Object>> incompleteOffsets = new ConcurrentSkipListMap<>();
-
-        boolean stateChangedSinceCommitStart;
-
-        boolean blockedAtPayloadLength;
-
+        // THE TERM UNDER TEST - identical to the plain arm's declaration but for this one keyword.
         volatile boolean allowedMoreRecords = true;
-
-        public VolatileBackPressureFlagPublishesEncode() {
-            incompleteOffsets.put(1L, Optional.empty());
-        }
 
         @Actor
         public void brokerPollThread() {
-            stateChangedSinceCommitStart = false;
-            boolean ignoredEmpty = incompleteOffsets.isEmpty();
-            // branch kept, not simplified to a single value: this arm models the over-threshold path,
-            // which production takes regardless of isEmpty() - this arm performs the same read
-            // production does, and lands on the same value either way
-            blockedAtPayloadLength = ignoredEmpty || true;
+            encodeOverThreshold();
             allowedMoreRecords = false;
         }
 
@@ -210,6 +255,9 @@ public class BackPressureFlagVisibilityProbes {
      * touch, no neighbouring plain write. It exists to separate "the plain field is unpublished" from
      * "the plain field is unpublished but the code around it happens to fence it", which is the only way
      * to read {@link PlainBackPressureFlagPublishesNothing}'s zero.
+     * <p>
+     * It does not extend {@link SurroundedBackPressureState}, and must not: inheriting that scaffolding
+     * is precisely the thing this arm is defined by not having.
      * <p>
      * <b>Result, 2026-09-07: 213,452 anomalies in 455,930,388 samples - 4.7e-4 per raced pair, 51x the
      * faithful arm.</b> So the faithful arm's much lower rate is explained by the surrounding accesses,

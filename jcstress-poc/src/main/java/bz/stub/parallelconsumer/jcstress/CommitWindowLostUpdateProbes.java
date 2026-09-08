@@ -100,14 +100,108 @@ import static org.openjdk.jcstress.annotations.Expect.FORBIDDEN;
  * step, moves the anomaly by nothing at all. That is the measurement that rejects "one more volatile" as
  * the fix, and it is why this field got a protocol instead. The protocol arm is FORBIDDEN at 0 in
  * 121,707,028 samples.
+ * <p>
+ * Those figures were measured before {@link CommitWindowState} hoisted the shared scaffolding out of the
+ * arms. The re-run after that refactor confirmed the <b>outcome kinds</b> are unchanged - both flag arms
+ * still fire, the protocol arm still reads FORBIDDEN at zero - which is what the numbers above are cited
+ * for. They are not re-recorded per run: a rate is machine- and load-specific, and re-running is the way
+ * to get today's.
  *
- * <h2>Why the plain and volatile arms below duplicate each other</h2>
+ * <h2>What these arms share, and what they deliberately do not - read before deduplicating further</h2>
  *
- * Each arm pair below is deliberately near-identical, differing only in the modifier under test - a
- * jcstress arm must be a copy of its neighbour with that one term varied, or the comparison between
- * arms stops isolating the thing being measured. Do not refactor the duplication away.
+ * The duplicate-code check flagged the arms as clones of each other, and it was half right. The split:
+ *
+ * <ul>
+ *   <li><b>Shared</b>, in {@link CommitWindowState}: every field that is <i>not</i> under test (the
+ *       {@link ConcurrentSkipListMap}, {@code offsetHighestSucceeded}, the {@code offsetThisCycleCommitted}
+ *       instrumentation), the setup that seeds the map, the "real surrounding accesses" scaffolding -
+ *       {@link CommitWindowState#applyCompletionToOffsetState()} and
+ *       {@link CommitWindowState#encodeAndCaptureCommittedOffset()} - and the arbiter's result mapping.
+ *       None of it is the thing being measured, and three copies of it were three places to drift.</li>
+ *   <li><b>Deliberately duplicated</b>, and it must stay that way: <b>the measured field keeps its own
+ *       declaration in its own arm</b>, because plain-versus-{@code volatile} on that declaration is the
+ *       entire term under test - hoisting it would erase the difference between the arms. And <b>each
+ *       actor's sequence of accesses stays literal in the arm</b>, so the JIT compiles the same shape
+ *       production has, in the same order, rather than a shape assembled from calls that vary per arm.</li>
+ * </ul>
+ *
+ * The scaffolding helpers are {@code final} and tiny, so they inline; they contain <i>no</i> access to any
+ * arm's measured field, which is the rule that decides what may move into them. The arbiter may use a
+ * shared helper where an actor may not: it runs <i>after</i> both actors finish, so nothing it does is
+ * inside the raced window.
+ * <p>
+ * jcstress permits this - its annotation processor requires a {@code @State} class to be public and
+ * non-final, and bans inheritance only on {@code @Result} classes. The actors and the arbiter stay
+ * declared on each {@code @State} arm regardless, which is also what the literal-actor rule above
+ * requires.
  */
 public class CommitWindowLostUpdateProbes {
+
+    /**
+     * The offset the control thread completes inside the commit window, and the one the arbiter asks
+     * whether the commit covered.
+     */
+    static final long COMPLETED_OFFSET = 1L;
+
+    /**
+     * Scaffolding shared by all three arms: the state that is not under test, and the surrounding real
+     * accesses that make the arms faithful rather than reduced.
+     * <p>
+     * Nothing here touches a measured field - see the class javadoc for the rule this follows. Extending
+     * it costs the arms nothing at jcstress level: only {@code @Result} classes are barred from
+     * inheriting, and each arm still declares its own actors and its own arbiter.
+     */
+    abstract static class CommitWindowState {
+
+        final ConcurrentSkipListMap<Long, Optional<Object>> incompleteOffsets = new ConcurrentSkipListMap<>();
+
+        long offsetHighestSucceeded;
+
+        /**
+         * Instrumentation - the offset this commit cycle captured, so the arbiter can say whether the
+         * commit covered the completion. Written and read by the poll actor only.
+         */
+        long offsetThisCycleCommitted;
+
+        CommitWindowState() {
+            incompleteOffsets.put(COMPLETED_OFFSET, Optional.empty());
+        }
+
+        /**
+         * The first two steps of {@code PartitionState.onSuccess} - the map removal and the plain write of
+         * the highest succeeded offset. What follows them is the commit-protocol write, which differs per
+         * arm and therefore stays in the arm.
+         */
+        final void applyCompletionToOffsetState() {
+            incompleteOffsets.remove(COMPLETED_OFFSET);
+            offsetHighestSucceeded = COMPLETED_OFFSET;
+        }
+
+        /**
+         * {@code createOffsetAndMetadata()} → {@code tryToEncodeOffsets()}: the map touch, then the plain
+         * read of {@code offsetHighestSucceeded} that yields the offset this cycle commits.
+         * <p>
+         * The branch is kept rather than simplified to a single value: {@code tryToEncodeOffsets()}
+         * branches on {@code isEmpty()} too, but {@code offsetOfNextExpectedMessage} is computed before
+         * that branch and returned unchanged by both its paths - so an arm that models the branch
+         * faithfully lands on the same value either way, and performs the same reads production performs.
+         */
+        final long encodeAndCaptureCommittedOffset() {
+            boolean ignoredEmpty = incompleteOffsets.isEmpty();
+            return ignoredEmpty ? offsetHighestSucceeded : offsetHighestSucceeded;
+        }
+
+        /**
+         * The arbiter's result mapping, identical across the arms because the invariant is. Safe to share
+         * where an actor's body is not: the arbiter runs after both actors, outside the raced window.
+         *
+         * @param stillDirty the arm's own answer to "is the partition still going to be committed?"
+         */
+        final void reportInvariant(ZZ_Result r, boolean stillDirty) {
+            r.r1 = stillDirty;
+            r.r2 = offsetThisCycleCommitted >= COMPLETED_OFFSET;   // did this cycle's commit cover it?
+        }
+    }
 
     /**
      * The commit window <b>as shipped</b>: {@code dirty} volatile (astubbs/parallel-consumer#349),
@@ -126,31 +220,20 @@ public class CommitWindowLostUpdateProbes {
     @Outcome(id = "true, true", expect = ACCEPTABLE, desc = "Covered and still dirty - one pessimistic extra commit")
     @Outcome(id = "false, true", expect = ACCEPTABLE, desc = "Covered and clean - the intended case")
     @State
-    public static class PlainStateChangedFlagAcrossTheCommitWindow {
+    public static class PlainStateChangedFlagAcrossTheCommitWindow extends CommitWindowState {
 
-        final ConcurrentSkipListMap<Long, Optional<Object>> incompleteOffsets = new ConcurrentSkipListMap<>();
-
-        long offsetHighestSucceeded;
+        // THE TERM UNDER TEST - the pair of flags this arm's protocol is made of, declared here and not
+        // hoisted: the modifiers on these two lines are the only thing that separates this arm from
+        // VolatileStateChangedFlagAcrossTheCommitWindow.
         volatile boolean dirty = true;
         boolean stateChangedSinceCommitStart = true;
-
-        /**
-         * Instrumentation - the offset this commit cycle captured, so the arbiter can say whether the
-         * commit covered the completion. Written and read by the poll actor only.
-         */
-        long offsetThisCycleCommitted;
-
-        public PlainStateChangedFlagAcrossTheCommitWindow() {
-            incompleteOffsets.put(1L, Optional.empty());
-        }
 
         /**
          * {@code PartitionState.onSuccess(1)} - a completion landing inside the commit window.
          */
         @Actor
         public void controlThread() {
-            incompleteOffsets.remove(1L);
-            offsetHighestSucceeded = 1;
+            applyCompletionToOffsetState();
             stateChangedSinceCommitStart = true;
             dirty = true;
         }
@@ -162,11 +245,7 @@ public class CommitWindowLostUpdateProbes {
         public void brokerPollThread() {
             if (dirty) {                                        // getCommitDataIfDirty
                 stateChangedSinceCommitStart = false;
-                boolean ignoredEmpty = incompleteOffsets.isEmpty();  // tryToEncodeOffsets
-                // branch kept, not simplified to a single value: tryToEncodeOffsets() branches on
-                // isEmpty() too, but offsetOfNextExpectedMessage is computed before that branch and
-                // returned unchanged by both its paths - this arm performs the same read production does
-                offsetThisCycleCommitted = ignoredEmpty ? offsetHighestSucceeded : offsetHighestSucceeded;
+                offsetThisCycleCommitted = encodeAndCaptureCommittedOffset();
             }
             // ... commitOffsets() to the broker ...
             if (!stateChangedSinceCommitStart) {                // setClean
@@ -176,8 +255,7 @@ public class CommitWindowLostUpdateProbes {
 
         @Arbiter
         public void arbiter(ZZ_Result r) {
-            r.r1 = dirty;                             // is the partition still going to be committed?
-            r.r2 = offsetThisCycleCommitted >= 1;     // did this cycle's commit cover the completion?
+            reportInvariant(r, dirty);
         }
     }
 
@@ -198,24 +276,16 @@ public class CommitWindowLostUpdateProbes {
             desc = "ANOMALY SURVIVES THE VOLATILE: check-then-act and lost update are not visibility problems")
     @Outcome(id = {"true, false", "true, true", "false, true"}, expect = ACCEPTABLE, desc = "Invariant held")
     @State
-    public static class VolatileStateChangedFlagAcrossTheCommitWindow {
+    public static class VolatileStateChangedFlagAcrossTheCommitWindow extends CommitWindowState {
 
-        final ConcurrentSkipListMap<Long, Optional<Object>> incompleteOffsets = new ConcurrentSkipListMap<>();
-
-        long offsetHighestSucceeded;
+        // THE TERM UNDER TEST - identical to the plain arm's pair but for the modifier on the second
+        // line. That one keyword is the whole experiment; the arm exists to hold it.
         volatile boolean dirty = true;
         volatile boolean stateChangedSinceCommitStart = true;
 
-        long offsetThisCycleCommitted;
-
-        public VolatileStateChangedFlagAcrossTheCommitWindow() {
-            incompleteOffsets.put(1L, Optional.empty());
-        }
-
         @Actor
         public void controlThread() {
-            incompleteOffsets.remove(1L);
-            offsetHighestSucceeded = 1;
+            applyCompletionToOffsetState();
             stateChangedSinceCommitStart = true;
             dirty = true;
         }
@@ -224,11 +294,7 @@ public class CommitWindowLostUpdateProbes {
         public void brokerPollThread() {
             if (dirty) {
                 stateChangedSinceCommitStart = false;
-                boolean ignoredEmpty = incompleteOffsets.isEmpty();
-                // branch kept, not simplified to a single value: tryToEncodeOffsets() branches on
-                // isEmpty() too, but offsetOfNextExpectedMessage is computed before that branch and
-                // returned unchanged by both its paths - this arm performs the same read production does
-                offsetThisCycleCommitted = ignoredEmpty ? offsetHighestSucceeded : offsetHighestSucceeded;
+                offsetThisCycleCommitted = encodeAndCaptureCommittedOffset();
             }
             if (!stateChangedSinceCommitStart) {
                 dirty = false;
@@ -237,8 +303,7 @@ public class CommitWindowLostUpdateProbes {
 
         @Arbiter
         public void arbiter(ZZ_Result r) {
-            r.r1 = dirty;
-            r.r2 = offsetThisCycleCommitted >= 1;
+            reportInvariant(r, dirty);
         }
     }
 
@@ -265,11 +330,10 @@ public class CommitWindowLostUpdateProbes {
             desc = "Partition clean over an uncovered completion - would invalidate the protocol")
     @Outcome(id = {"true, false", "true, true", "false, true"}, expect = ACCEPTABLE, desc = "Invariant held")
     @State
-    public static class GenerationCountedCommitWindow {
+    public static class GenerationCountedCommitWindow extends CommitWindowState {
 
-        final ConcurrentSkipListMap<Long, Optional<Object>> incompleteOffsets = new ConcurrentSkipListMap<>();
-
-        long offsetHighestSucceeded;
+        // THE TERM UNDER TEST - this arm's protocol replaces the flag pair above outright, so its three
+        // fields are what differs from the other arms and they stay declared here.
 
         /** {@code PartitionState.completionCount} - only the completing thread touches it, and only upwards. */
         final AtomicLong completionCount = new AtomicLong();
@@ -280,16 +344,9 @@ public class CommitWindowLostUpdateProbes {
         /** {@code PartitionState.completionCountBeingCommitted} - confined to the committer thread. */
         long completionCountBeingCommitted;
 
-        long offsetThisCycleCommitted;
-
-        public GenerationCountedCommitWindow() {
-            incompleteOffsets.put(1L, Optional.empty());
-        }
-
         @Actor
         public void controlThread() {
-            incompleteOffsets.remove(1L);
-            offsetHighestSucceeded = 1;
+            applyCompletionToOffsetState();
             completionCount.incrementAndGet();          // recordCompletion()
         }
 
@@ -298,11 +355,7 @@ public class CommitWindowLostUpdateProbes {
             long collected = completionCount.get();
             if (collected != completionCountCommitted) {            // isDirty()
                 completionCountBeingCommitted = collected;
-                boolean ignoredEmpty = incompleteOffsets.isEmpty();
-                // branch kept, not simplified to a single value: tryToEncodeOffsets() branches on
-                // isEmpty() too, but offsetOfNextExpectedMessage is computed before that branch and
-                // returned unchanged by both its paths - this arm performs the same read production does
-                offsetThisCycleCommitted = ignoredEmpty ? offsetHighestSucceeded : offsetHighestSucceeded;
+                offsetThisCycleCommitted = encodeAndCaptureCommittedOffset();
                 // ... commitOffsets() to the broker ...
                 completionCountCommitted = completionCountBeingCommitted;   // setClean()
             }
@@ -310,8 +363,7 @@ public class CommitWindowLostUpdateProbes {
 
         @Arbiter
         public void arbiter(ZZ_Result r) {
-            r.r1 = completionCount.get() != completionCountCommitted;
-            r.r2 = offsetThisCycleCommitted >= 1;
+            reportInvariant(r, completionCount.get() != completionCountCommitted);
         }
     }
 }
