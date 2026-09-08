@@ -16,6 +16,7 @@ import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.RebalanceInProgressException;
+import org.apache.kafka.common.errors.RetriableException;
 
 import java.time.Duration;
 import java.util.Map;
@@ -121,24 +122,124 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                 consumerMgr.commitSync(offsetsToSend);
             }
             case PERIODIC_CONSUMER_ASYNCHRONOUS -> {
-                //
                 log.debug("Committing offsets Async");
-                consumerMgr.commitAsync(offsetsToSend, (offsets, exception) -> {
-                    if (exception != null) {
-                        // Every partition and offset stays on this line - astubbs#168 (confluentinc#629) asked for
-                        // exactly them - and only the metadata string is reduced, to its length: it is PC's encoded
-                        // offset map, up to OffsetMapCodecManager.DefaultMaxMetadataSize of base64 PER PARTITION, and
-                        // interpolating the map rendered all of it on the one line that most needs to survive log
-                        // truncation. The map in full is one level down, where it has to be asked for.
-                        log.error("Error committing offsets: {}, exception: ", RecordBatchSummary.summariseCommit(offsets), exception);
-                        log.debug("Failed commit in full: {}", offsets);
-                        // todo keep work in limbo until async response is received?
-                    }
-                });
+                consumerMgr.commitAsync(offsetsToSend, this::onAsyncCommitAnswered);
             }
             default ->
                     throw new IllegalArgumentException("Cannot use " + commitMode + " when using " + this.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * {@code commitAsync} returns as soon as the request is handed to the client, so in that mode - and only that
+     * mode - the offsets are recorded as committed by {@link #onAsyncCommitAnswered}, when the broker answers.
+     * {@code commitSync} blocks until the broker has answered, so the base class's inline marking is correct
+     * there and is left untouched.
+     *
+     * @see AbstractOffsetCommitter#commitOffsetsReturnsOnlyOnceAcknowledged()
+     */
+    @Override
+    protected boolean commitOffsetsReturnsOnlyOnceAcknowledged() {
+        return isSync();
+    }
+
+    /**
+     * The broker's answer to one {@code commitAsync} request: the moment the offsets it carried become durable,
+     * or fail to.
+     * <p>
+     * <b>Success is recorded here rather than at the send</b>, which is the whole point. Previously
+     * {@link AbstractOffsetCommitter#retrieveOffsetsAndCommit()} marked the partition clean as soon as
+     * {@code commitAsync} returned, so a failure arriving in this callback - or no callback at all - had no
+     * dirty state left to retry: nothing was re-committed and the broker's position silently stayed behind
+     * PC's. Now every route out of a commit that is not an acknowledged success leaves the offsets dirty, and
+     * the next commit cycle re-sends them.
+     * <p>
+     * <b>A failure is a DEFERRAL, not a swallow</b>, and lands in the same handling the synchronous path's
+     * rejections do (see {@link #commitDeferringOnRebalance()}, option 3): logged, not fatal, and the offsets
+     * stay marked as needing a commit. That is right for the failure {@code commitAsync} is specified to
+     * report - a {@link org.apache.kafka.clients.consumer.RetriableCommitFailedException} for a coordinator
+     * that was unavailable, timed out or was mid-rebalance - and it is also the conservative answer for any
+     * other exception: re-committing an offset the broker already has costs one request, whereas recording a
+     * commit that did not happen loses records.
+     * <p>
+     * <b>The failure is classified for the LOG, though, because the deferral promise is not always true.</b>
+     * {@link #isDeferrable} decides, and owns the reasoning: a transient failure is a WARN saying a later request
+     * carries these offsets, while a permanent one is an ERROR saying it will not, since every later request fails
+     * the same way and the committed offset stops advancing until a person intervenes. What neither does is
+     * escalate - a non-retriable failure does not fail the instance, because the async mode has no commit budget
+     * and so cannot reach the commit-failure seam (astubbs#317) at all - see below.
+     * <p>
+     * <b>This committer keeps no record of what it has in flight, deliberately.</b> Deferring the clean-marking is
+     * what makes two async commits able to be in flight at once - before this change the first send marked the
+     * partition clean, so there was never a second - and an answer can therefore arrive for a request a later one
+     * has partly overtaken. Deciding that here would mean tracking, per partition, an offset the partition already
+     * knows: {@code PartitionState} hands out the offset it wants committed and can recognise the answer to its own
+     * latest offer. So an acknowledgement is passed straight through, whole, and the partition decides whether it
+     * ends the story - {@code PartitionState}'s {@code offerLastMadeForCommit} owns that rule. A request that is
+     * the newest word on one partition and superseded on another needs no special case here, because nothing here
+     * is deciding per request.
+     *
+     * @param offsets   the offsets the answered request carried
+     * @param exception {@code null} if and only if the broker acknowledged the commit
+     */
+    private void onAsyncCommitAnswered(Map<TopicPartition, OffsetAndMetadata> offsets, Exception exception) {
+        if (exception != null) {
+            // Every partition and offset stays on all of these lines - astubbs#168 (confluentinc#629) asked for
+            // exactly them - and only the metadata string is reduced, to its length: it is PC's encoded
+            // offset map, up to OffsetMapCodecManager.DefaultMaxMetadataSize of base64 PER PARTITION, and
+            // interpolating the map rendered all of it on the one line that most needs to survive log
+            // truncation. The map in full is one level down, where it has to be asked for.
+            String summary = RecordBatchSummary.summariseCommit(offsets);
+            if (isDeferrable(exception)) {
+                // WARN rather than ERROR: a request really did fail, which is worth seeing, but nothing is lost and
+                // nothing needs an operator tonight - the partitions were never marked clean, so they are still
+                // dirty and a later request carries the same offsets.
+                log.warn("Async offset commit failed - these partitions stay dirty and are committed when a later " +
+                                "request is acknowledged. Offsets: {}, exception: ",
+                        summary, exception);
+            } else {
+                log.error("Async offset commit failed permanently - these partitions stay dirty and every later " +
+                                "request fails the same way, so the committed offset will not advance and the " +
+                                "retries will not succeed without intervention. Offsets: {}, exception: ",
+                        summary, exception);
+            }
+            log.debug("Failed commit in full: {}", offsets);
+            return;
+        }
+
+        log.debug("Async commit acknowledged by the broker: {}", RecordBatchSummary.summariseCommit(offsets));
+        onOffsetCommitSuccess(offsets);
+    }
+
+    /**
+     * Whether a failed asynchronous commit is a <b>deferral</b> - a later request carries the same offsets and is
+     * expected to succeed - or a <b>permanent</b> failure that every later request will hit identically.
+     * <p>
+     * <b>This is the synchronous path's classification, deliberately, and not a second one.</b>
+     * {@link #commitDeferringOnRebalance()} catches exactly {@link RebalanceInProgressException} and
+     * {@link CommitFailedException} and lets everything else escape - so the set below says that the async mode
+     * reports at ERROR precisely what the sync mode would have let out, and defers precisely what it defers. Two
+     * modes disagreeing about which failures are routine would be worse than either answer on its own. Add
+     * {@link RetriableException} to those two because it is the class {@code commitAsync} is specified to report
+     * transient conditions with - {@code RetriableCommitFailedException} extends it - and the sync path never sees
+     * it, since {@code commitSync} exhausts its own retries first.
+     * <p>
+     * <b>What this does NOT do is escalate.</b> A permanent failure is logged at ERROR and the offsets stay dirty;
+     * it does not fail the instance, because the async mode has no commit budget and so cannot reach the
+     * commit-failure seam (astubbs/parallel-consumer#317, astubbs/parallel-consumer#352) at all - that seam's own
+     * options validation rejects a {@code commitFailureHandler} configured under this mode. Inventing a second
+     * escalation policy here would be the thing that seam exists to prevent. Raised by the Codex review on
+     * astubbs/parallel-consumer#470, which asked for both halves; the level is the half that is this PR's to fix.
+     * <p>
+     * Note the asymmetry with the sync path is deliberate and unavoidable: there, "let it escape" is available
+     * because a caller is waiting. Here nobody is - this runs on the broker-poll thread from a Kafka callback, and
+     * throwing would take down the only producer of commit responses, which is option 1 in
+     * {@link #commitDeferringOnRebalance()}'s javadoc and rejected there for the same reason.
+     */
+    private static boolean isDeferrable(Exception exception) {
+        return exception instanceof RebalanceInProgressException
+                || exception instanceof CommitFailedException
+                || exception instanceof RetriableException;
     }
 
     /**

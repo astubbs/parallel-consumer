@@ -75,7 +75,6 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ConsumerOffsetCommitter.java`**
 
-- todo keep work in limbo until async response is received?
 - TODO(refactor): a user-facing failure wants a PC-named type, not "internal runtime" -
 - TODO(refactor): a user-facing failure wants a PC-named type - see
 

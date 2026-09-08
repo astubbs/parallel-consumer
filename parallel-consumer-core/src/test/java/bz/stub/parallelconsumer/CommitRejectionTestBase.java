@@ -13,7 +13,6 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -44,6 +43,13 @@ abstract class CommitRejectionTestBase extends MockConsumerTestBase {
 
     /** Commits rejected before the mock consumer starts accepting them. */
     private static final int REJECTED_COMMITS = 3;
+
+    /**
+     * How long each stage of the scenario may take. Stated here rather than inside the shared helpers in
+     * {@link MockConsumerTestBase}, because a deadline has to clear the outage its own scenario simulates -
+     * here, {@value #REJECTED_COMMITS} rejections at a 200ms commit interval, with ample headroom for CI.
+     */
+    private static final Duration SCENARIO_TIMEOUT = Duration.ofSeconds(30);
 
     private final AtomicInteger commitAttempts = new AtomicInteger();
 
@@ -78,24 +84,19 @@ abstract class CommitRejectionTestBase extends MockConsumerTestBase {
 
         startProcessing();
 
-        // the offsets must still be dirty after a rejection, so commits keep being attempted
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        // The discriminating assertion, and the reason it is written out here rather than shared: the offsets
+        // must still be dirty after a rejection, so commits keep being ATTEMPTED. Were they marked clean,
+        // collectCommitDataForDirtyPartitions() would return empty and this counter would stall.
+        Awaitility.await().atMost(SCENARIO_TIMEOUT).untilAsserted(() ->
                 assertThat(commitAttempts.get()).isGreaterThan(REJECTED_COMMITS));
 
         // and the rejection must not be fatal - the backlog still drains
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(processedRecords).hasSize(RECORDS));
+        awaitAllRecordsProcessed(RECORDS, SCENARIO_TIMEOUT);
 
         // deferral means the offsets are re-committed later, not lost - so ask the broker side
         // rather than inferring it from the attempt count
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
-            var committed = mockConsumer.committed(Collections.singleton(topicPartition)).get(topicPartition);
-            assertThat(committed).isNotNull();
-            assertThat(committed.offset()).isEqualTo(RECORDS);
-        });
+        awaitBrokerCommittedOffset(RECORDS, SCENARIO_TIMEOUT);
 
-        // the exact property the chaos suite asserts: no instance ends with an unclassified cause
-        assertThat(parallelConsumer.getFailureCause()).isNull();
-        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
+        assertParallelConsumerStillRunningWithNoFailureCause();
     }
 }
