@@ -440,6 +440,16 @@ cosmetic - see the last bullet.*
     could be, because the iterator holds a read lock only its opener can release.
     SpotBugs reads no confinement annotation and will keep reporting it; do not "fix" it
     with `volatile`, which would assert a sharing that does not exist.
+  - **`PartitionState`'s commit-window pair is confined by construction - do not "fix" either with
+    `volatile`.** `stateChangedSinceCommitStart` and `offerLastMadeForCommit` share one lifecycle:
+    written where a commit window opens, read where it closes. **`offerLastMadeForCommit`'s javadoc
+    owns the thread model** - which thread writes and reads it in each commit mode, the one
+    `Consumer#close()` hand-over, and why `dirty` being the fence is what keeps the rest plain; it is
+    not restated here, because two copies of a concurrency argument drift and the field is where a
+    reader forms the question. What belongs on this list is only the work item: if anyone declares
+    the confinement with `@ThreadConfined` plus a runtime assertion (the `RetryQueue.closed`
+    treatment above), **do the pair together** - annotating one of two fields with the same lifecycle
+    reads as a claim about the other.
   - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
     on the astubbs#119 branch:**
     `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
@@ -829,9 +839,12 @@ Only the items needing a decision are listed here - do not restate the inventory
   `LoadTest` stays at 4,000: it is untagged, so it runs in the gating lane, and it is already a
   listed member of the load-tightness flake family at that volume.
 
-Not listed as work: `largeNumberOfInstances` stays in `docs/quarantined-tests.md` as an unowned entry -
-astubbs#29 merged on 2026-09-02 fixing one confluentinc#857 mechanism without lifting this quarantine, so it
-is tracked by the registry, not here. The three
+Not listed as work: `largeNumberOfInstances` **left the quarantine registry on 2026-09-07** and is not
+tracked here either. Its residual failures were measured as the consumer group protocol under the
+profile's churn rate, so it is a capacity measurement rather than a test that can be red - it carries
+`@Tag("capacity")`, which the required lane excludes and the scheduled `experiments` workflow runs
+([`docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md`](inflight/test-largenumberofinstances-cannot-gate-a-merge.md)).
+The three
 `@Timeout(60000L)` annotations (`MockConsumerEarlyCloseTest`, `MockConsumerSaslAuthenticationTest`,
 `MockConsumerCommitTimeoutTest`) are owned by open PR astubbs#206, which replaces them with
 `@Timeout(120)` on a shared `MockConsumerTestBase` and adds the assertion

@@ -75,7 +75,7 @@
     <!-- The two coordinator classes are raised SEPARATELY, on their own property, because they are the
          only Kafka loggers that say whether a closing member sent LeaveGroup and what generation it
          held at close - the discriminator for the CLOSING-state zombie-member stall
-         (docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md).
+         (docs/solutions/test-flakiness/large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md).
          Raising all of org.apache.kafka to see two lines floods the run; a committed debug default is
          what bin/check-test-log-config.sh exists to refuse. Default stays warn.
              -Dkafka.coordinator.log.level=debug -Dit.test=ClosingMemberRebalanceIT -->
