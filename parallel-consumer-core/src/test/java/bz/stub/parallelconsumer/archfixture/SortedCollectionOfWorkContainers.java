@@ -41,9 +41,17 @@ public class SortedCollectionOfWorkContainers {
     /** NOT reported, deliberately: the container is a map VALUE, which no sorted contract constrains. */
     private final NavigableMap<Long, WorkContainer<?, ?>> containersAsValues = new ConcurrentSkipListMap<>();
 
-    /** Reported: a constructor parameter, the position a field-only rule would miss. */
+    /**
+     * Reported: a constructor parameter, the position a field-only rule would miss.
+     * <p>
+     * The body reads {@link PriorityQueue#comparator()} rather than treating the argument as a plain
+     * {@code Collection}, and that is not incidental: the DECLARED type is the whole of what this fixture presents
+     * to the rule, and fb-contrib's {@code OCP_OVERLY_CONCRETE_PARAMETER} correctly asks for the widest type the
+     * body needs. Widening it to satisfy that finding would delete the control, so the body uses the concrete
+     * type's own method and the finding does not arise - which beats suppressing a detector that is right.
+     */
     public SortedCollectionOfWorkContainers(PriorityQueue<WorkContainer<?, ?>> byRetryTime) {
-        this.orderedByTheContainerItself = new TreeSet<>(byRetryTime);
+        this.orderedByTheContainerItself = new TreeSet<>(byRetryTime.comparator());
     }
 
     /** Reported: a return type. The {@code TreeMap} in the body is not - only the declared type is visible. */
