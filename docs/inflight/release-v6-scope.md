@@ -122,11 +122,12 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   offset is an unreadable payload, not a completed range. Silent skip of real records on a corrupt
   or foreign payload; proven red through the real assignment path, green with the guard, mutation
   lane green on the bound. Promoted from the owner's-decision list on 2026-09-08.
-- [ ] **astubbs#477** - a dead broker-poll thread now closes the consumer in the consumer-commit
-  modes, the shipped default among them, so the group rebalances at once instead of after
-  `max.poll.interval.ms`. Promoted from the no-PR triage on 2026-09-08: the fix is one derived
-  predicate and one condition, proven red on every consumer-commit mode and green on the
-  transactional control arm. Retires its inflight note into `docs/solutions/`.
+- [x] **astubbs#477** - merged 2026-09-08. A dead broker-poll thread now closes the consumer in
+  the consumer-commit modes, the shipped default among them, so the group rebalances at once instead
+  of after `max.poll.interval.ms`. One derived predicate and one condition, proven red on every
+  consumer-commit mode and green on the transactional control arm; the review's close-time
+  subtlety was characterised by running it (no second close - the ownership guard declines the
+  retry). Retires its inflight note into `docs/solutions/`.
 
 ### Tier 2 - the producer-recovery stack: OUTSIDE v6 by the 2026-09-07 decision, named in the claim
 
@@ -238,7 +239,10 @@ churn rather than a PC defect.
   what reads as red is the detector's no-progress window closing inside a real protocol freeze. The
   PC half - that PC holds nothing during it - was re-verified with a one-term control arm on
   `ClosingMemberRebalanceIT` after astubbs#451, astubbs#466 and astubbs#468 moved the revoke and close seam. Not a
-  defect; the release note need not name it.
+  defect; the release note need not name it. One new fact worth keeping: the
+  `ZOMBIE_MEMBER/REBALANCE_BLOCKED` probe line does not discriminate a PC-side hold from a
+  coordinator holding its join phase open, so a future sighting is told apart by what the closing
+  members' threads are in. astubbs#486 is green with the owner's LGTM and awaits the merge.
 - A dead broker-poll thread leaving the consumer open in consumer-commit modes, no LeaveGroup until
   `max.poll.interval.ms` - **fixed in the queue, astubbs#477, tier 1.**
 ## What v6 must say about data loss and duplicates
@@ -353,8 +357,8 @@ Where it disagrees with the tiers above, the tiers say so: the poisoned-transact
 not gating; the owner's call is still open in tier 2), the transactional revoke wait (the sweep read
 astubbs#466 as having replaced the unbounded wait, which is right, and astubbs#408 as owning the
 bound), and the `batchSize` validation bound (the sweep: cheapest real fix; the triage below filed
-it as 0.6.0.x - it could ride in tier 1). Item 2 in its list, the dead poll thread, is now
-astubbs#477 in tier 1.
+it as 0.6.0.x - it could ride in tier 1). Item 2 in its list, the dead poll thread, is
+astubbs#477, merged.
 
 The bar above is "the bugs that are already open". Six area sweeps each named what they read as gating (the owner's pass over
 the sweep's proposals is done - [`process-inflight-vet-sweep.md`](process-inflight-vet-sweep.md)
@@ -373,9 +377,11 @@ comes first because nothing else matters until it clears.
      `core-revoke-commit-skips-the-work-mailbox-drain.md` as gating - a deterministic exactly-once
      break with C9 refuted - and the same commit fixed it; the note is gone and the record is in
      `docs/solutions/logic-errors/`.
-  2. `bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md` - in the default commit
-     mode, a dead poll thread holds its partitions for `max.poll.interval.ms`; traced end to end,
-     untested, unfixed.
+  2. A dead poll thread holding its partitions for `max.poll.interval.ms` in the default commit
+     mode - read as gating, traced end to end but untested and unfixed when the sweep ran. Now
+     tested and fixed by astubbs#477 (merged): `maybeCloseConsumer` gained an arm for a poll thread
+     that ended without closing the consumer; the note is gone and the record is in
+     `docs/solutions/logic-errors/`.
   3. `pr-431-must-pair-its-queue-removal-with-the-shard-removal.md` with
      `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the retry-queue orphan window; master
      is still shard-first and astubbs#431 is a draft. *(Since overtaken: astubbs#431 closed as
