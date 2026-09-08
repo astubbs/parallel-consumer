@@ -105,8 +105,8 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
 - [x] **astubbs#468** - merged 2026-09-08. `WorkContainer` equality is identity, so the stale
   sweep removes only the container it inspected, never a fresh replacement racing in from the
   controller. Marked breaking (`fix(core)!`) for the equality change; the release note carries it.
-  The two further by-key removals astubbs#483 found were left for this PR's identity-`equals`
-  change to make fixable - check its body for whether it took them.
+  The two further by-key removals astubbs#483 found were left for astubbs#468's identity-`equals`
+  change to make fixable - check that PR's body for whether it took them.
 - [ ] **astubbs#469** - the two remaining `PartitionState` flags that cross threads, measured and then
   fenced or redesigned. The follow-on astubbs#349 deliberately left.
 - [ ] **astubbs#481** - the poll thread never touches the retry queue; the controller collects
@@ -176,8 +176,10 @@ Named so nobody re-argues them in: the producer-recovery stack in tier 2 (by the
 decision, unless reopened); astubbs#352 (commit-failure seam - a feature, even though
 confluentinc#833's reporter patched the library for it), astubbs#226 (health check), astubbs#306
 (offset density), astubbs#360 (virtual threads), astubbs#471 and astubbs#405 (soak and torture
-harnesses - test infrastructure, unless a run finds a data-loss defect), and every Streams, proxy,
-perf, rate-limiting and dashboard stack.
+harnesses - test infrastructure, unless a run finds a data-loss defect), astubbs#479 (the
+God-class decomposition plan and the five classes below it - a refactor track whose own notes say
+which open PRs must merge before each cut, so it follows the release rather than gating it), and
+every Streams, proxy, perf, rate-limiting and dashboard stack.
 
 ## What v6 must say about the confluentinc#857 family
 
