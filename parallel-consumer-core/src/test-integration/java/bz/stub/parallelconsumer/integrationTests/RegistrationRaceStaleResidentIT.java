@@ -8,7 +8,6 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
-import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.state.PausableInsertShardManager;
@@ -63,9 +62,9 @@ import static org.awaitility.Awaitility.await;
  * <ol>
  *   <li><b>Saturate the pipeline</b>: {@code maxConcurrency=4} with {@code messageBufferSize=8} (static
  *       load factor - the dynamic one would grow the target mid-experiment and re-open the scan). Stage-1
- *       records (offsets 0..11) are fed to a user function GATED on a latch: 8 records go out for
+ *       records (offsets 0..7) are fed to a user function GATED on a latch: all 8 go out for
  *       processing and stay there, pinning {@code delta} at 0.</li>
- *   <li><b>Park mid-loop</b>: stage-2 records (offsets 12..49) arrive; {@link PausableInsertShardManager}
+ *   <li><b>Park mid-loop</b>: stage-2 records (offsets 8..49) arrive; {@link PausableInsertShardManager}
  *       (injected through the {@link PCModule#shardManager(WorkManager)} DI seam) parks the control
  *       thread at the FIRST insert of offset {@value #PAUSE_AT_OFFSET}.</li>
  *   <li><b>Rebalance under the park</b>: a second consumer joins the same GROUP subscribed to a DIFFERENT
@@ -79,6 +78,17 @@ import static org.awaitility.Awaitility.await;
  *       registered - the collisions at {@value #PAUSE_AT_OFFSET}..49 included - and only THEN opens the
  *       processing gate.</li>
  * </ol>
+ * <b>A FOURTH precondition belongs to this staging rather than to the defect</b>, and it is what made
+ * this test flaky rather than what made it wrong: <b>the record-intake gate must stay OPEN across the
+ * stage-1/stage-2 boundary.</b> Saturation is achieved by never completing a record, so everything
+ * stage 1 produces stays counted in {@link WorkManager#isSufficientlyLoaded()}'s records-in-shards
+ * term for the rest of the run - and one record over the target pauses the partition for back
+ * pressure with nothing able to resume it (both resume paths are conditioned on
+ * {@code !isSufficientlyLoaded()}), so stage 2 is never fetched and the pause point is never reached.
+ * That is what {@link #STAGE_1_RECORDS} being derived from {@link #MESSAGE_BUFFER_SIZE} buys, and
+ * what the assertion before the stage-2 produce protects. It is a property of the TEST's staging,
+ * not of PC: back pressure declining to fetch while the buffer is over target is the gate working.
+ * <p>
  * <b>The invariant asserted</b> is the chaos ledger's own: every produced record is eventually processed.
  * Pre-fix (stale resident preferred, fresh arrival dropped), offsets {@value #PAUSE_AT_OFFSET}..49 can
  * never complete - the resident is epoch-fenced at take, the dropped arrival is never re-fetched while
@@ -99,12 +109,36 @@ class RegistrationRaceStaleResidentIT extends BrokerIntegrationTest<String, Stri
     /** In stage 2, past the saturation records, so the pre-pause inserts prove the guard passed. */
     static final long PAUSE_AT_OFFSET = 25;
 
-    static final int STAGE_1_RECORDS = 12;
     static final int RECORD_COUNT = 50;
     static final int MAX_CONCURRENCY = 4;
     /** With {@code maxConcurrency=4} gives a STATIC load factor of 2: out-for-processing target is 8,
      * permanently - the scan-suppression arithmetic in the class javadoc depends on it not stepping. */
     static final int MESSAGE_BUFFER_SIZE = 8;
+
+    /**
+     * <b>Exactly the out-for-processing target, and DERIVED from it rather than written as a literal -
+     * a surplus of even one record makes stage 2 unreachable.</b> This is precondition 4 in the class
+     * javadoc, and getting it wrong is what made this test flaky rather than what made it wrong.
+     * <p>
+     * {@link WorkManager#isSufficientlyLoaded()} gates record intake on {@code recordsInShards >
+     * targetAmountOfRecordsInFlight * loadingFactor}, which is {@value #MESSAGE_BUFFER_SIZE} here, and
+     * a record is "in shards" from insert until it is finished with - being out at a parked worker
+     * does not remove it. With the processing gate closed nothing ever retires, so whatever stage 1
+     * produces is the permanent value of that term. At exactly the target the gate stays OPEN
+     * (the comparison is strictly greater-than) and stage 2 is fetched; one record more and
+     * {@code BrokerPollSystem} pauses the partition for back pressure and never resumes - neither
+     * {@code resumeIfPaused} nor {@code maybeWakeupPoller} can fire, both being conditioned on
+     * {@code !isSufficientlyLoaded()}.
+     * <p>
+     * At the historical value of 12 the test still passed most runs, purely by racing: pausing takes
+     * effect only at the top of a poll iteration, so a {@code consumer.poll()} already in flight went
+     * on delivering for up to {@code BrokerPollSystem}'s 2s long-poll timeout after the gate shut.
+     * Winning that race produced a ~10s pass; losing it produced a mute 30s timeout on the setup guard
+     * below, which is the failure CI kept seeing on unrelated branches (astubbs#440,
+     * {@code docs/solutions/test-flakiness/}). Measured: forcing the poller to pause before stage 2 is
+     * produced failed the guard 3 out of 3, at the target it passes.
+     */
+    static final int STAGE_1_RECORDS = MESSAGE_BUFFER_SIZE;
 
     private ParallelEoSStreamProcessor<String, String> pc;
     private final AtomicReference<PausableInsertShardManager> pausableSm = new AtomicReference<>();
@@ -116,20 +150,10 @@ class RegistrationRaceStaleResidentIT extends BrokerIntegrationTest<String, Stri
     private final CountDownLatch processingGate = new CountDownLatch(1);
 
     @Test
-    @Quarantined(
-            reason = "Times out after ~31s on its own SETUP GUARD - the awaited condition is the "
-                    + "control thread reaching the mid-loop pause point (offset 25) that saturates "
-                    + "the pipeline - not the confluentinc#909 signature assertion this test exists "
-                    + "to make, so a failure says nothing about the defect it reproduces. A pass "
-                    + "completes in about 10s; every recorded failure sits at the 30s timeout, which "
-                    + "is the shape of a precondition the test cannot force under load rather than a "
-                    + "wrong answer.",
-            tracking = "docs/inflight/test-untracked-ci-flakes.md",
-            flapping = true)
     void freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed() throws Exception {
         setupTopic();
 
-        // stage 1 - just enough records to fill the out-for-processing target (8) with a margin
+        // stage 1 - EXACTLY the out-for-processing target, never a margin: see STAGE_1_RECORDS
         Set<String> expectedKeys = ConcurrentHashMap.newKeySet();
         expectedKeys.addAll(getKcu().produceOffsetKeyedRange(getTopic(), 0, STAGE_1_RECORDS));
 
@@ -145,14 +169,34 @@ class RegistrationRaceStaleResidentIT extends BrokerIntegrationTest<String, Stri
         // inject the pausable ShardManager through the module's DI seam - production code carries no hook.
         // createShardManager, not shardManager: the memoising getter is final so that a substituted shard
         // manager still gets the module's one-owner guard, and this override is called at most once.
-        PCModule<String, String> module = new PCModule<>(options) {
+        class ProbeModule extends PCModule<String, String> {
+            ProbeModule(ParallelConsumerOptions<String, String> options) {
+                super(options);
+            }
+
             @Override
             protected ShardManager<String, String> createShardManager(WorkManager<String, String> workManagerInstance) {
                 var pausable = new PausableInsertShardManager(this, workManagerInstance, PAUSE_AT_OFFSET);
                 pausableSm.set(pausable);
                 return pausable;
             }
-        };
+
+            /**
+             * Whether the poller has paused the subscription for back pressure - the state that
+             * decides whether stage 2 can be fetched at all. Reachable only from inside a subclass
+             * body, which is why this module is a named local class rather than the anonymous one it
+             * used to be.
+             */
+            boolean pollerPausedForBackPressure() {
+                return brokerPoller(pc).isSubscriptionsPausedForBackPressure();
+            }
+
+            /** The poll thread's own last observation of Kafka's pause state, with its age. */
+            String describePollerPauseObservation() {
+                return brokerPoller(pc).describePauseObservation();
+            }
+        }
+        ProbeModule module = new ProbeModule(options);
         pc = new ParallelEoSStreamProcessor<>(options, module);
 
         // counts assignments of the data topic; fires AFTER WorkManager's own callback, so when the second
@@ -224,12 +268,41 @@ class RegistrationRaceStaleResidentIT extends BrokerIntegrationTest<String, Stri
                 .until(() -> workersInsideGate.get() == MAX_CONCURRENCY
                         && module.workManager().getNumberRecordsOutForProcessing() == MESSAGE_BUFFER_SIZE);
 
+        // 1b - the RECORD-INTAKE gate must still be open, or stage 2 can never be fetched and the
+        //      setup guard below times out saying nothing about why (precondition 4, and the reason
+        //      STAGE_1_RECORDS is derived rather than chosen). Asserted rather than left implicit
+        //      because the failure is otherwise mute: a paused partition and a slow broker produce
+        //      the same 30s timeout on the same line.
+        assertWithMessage("record intake must NOT be throttled when stage 2 is produced - a paused "
+                        + "partition is never resumed while the processing gate is closed, so the "
+                        + "stage-2 records (offset %s among them) would never be fetched and the "
+                        + "pause-point guard below would time out. recordsInShards=%s vs threshold %s",
+                        PAUSE_AT_OFFSET,
+                        module.workManager().getNumberOfWorkableRecordsInSystem(),
+                        MESSAGE_BUFFER_SIZE)
+                .that(module.workManager().isSufficientlyLoaded()).isFalse();
+
         // stage 2 - the records whose registration will be caught mid-loop
         expectedKeys.addAll(getKcu().produceOffsetKeyedRange(getTopic(), STAGE_1_RECORDS, RECORD_COUNT));
 
         // 2 - control thread parks mid-registration-loop at the designated offset
-        assertWithMessage("control thread must reach the mid-loop pause point (offset %s)", PAUSE_AT_OFFSET)
-                .that(pausableSm.get().awaitPausePoint(30, SECONDS)).isTrue();
+        // The state is read AFTER the wait, and reported whether or not the wait succeeded: this
+        // guard used to fail with nothing but its own name, which cannot tell "the broker was slow"
+        // from "the records were never fetched" - and it was the second, every time.
+        boolean reachedPausePoint = pausableSm.get().awaitPausePoint(30, SECONDS);
+        assertWithMessage("control thread must reach the mid-loop pause point (offset %s)."
+                        + " Intake state at expiry: sufficientlyLoaded=%s, recordsInShards=%s,"
+                        + " threshold=%s, outForProcessing=%s, pollerPausedForBackPressure=%s, %s."
+                        + " sufficientlyLoaded=true with a paused poller means stage 2 was never"
+                        + " fetched - see STAGE_1_RECORDS, not the broker",
+                        PAUSE_AT_OFFSET,
+                        module.workManager().isSufficientlyLoaded(),
+                        module.workManager().getNumberOfWorkableRecordsInSystem(),
+                        MESSAGE_BUFFER_SIZE,
+                        module.workManager().getNumberRecordsOutForProcessing(),
+                        module.pollerPausedForBackPressure(),
+                        module.describePollerPauseObservation())
+                .that(reachedPausePoint).isTrue();
         int assignmentsBeforeRebalance = dataTopicAssignments.get();
         log.info("Pause point reached; data-topic assignments so far: {}", assignmentsBeforeRebalance);
 

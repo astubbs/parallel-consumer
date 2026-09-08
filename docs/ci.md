@@ -1235,3 +1235,15 @@ it, so the lane reports nothing at all and looks merely quiet.
 **Beware: `performance` names two unrelated things.** It is the *test suite*
 (`bin/performance-test.sh`, the required **Performance Tests** check, on every PR from `maven.yml`,
 `ubuntu-latest`). It is **not** a runner label - the only self-hosted label is `highcpu`.
+
+**Not every `@Tag("performance")` test runs in that required check.** Since 2026-09-07 a test may
+also carry `@Tag("capacity")`, which `bin/performance-test.sh` excludes
+(`-Dexcluded.groups=quarantined,capacity`) while the experiment runners, passing an empty exclusion,
+still select it. That is for tests whose output is a pass **rate** over many runs rather than an
+outcome - `MultiInstanceRebalanceTest`'s three churn profiles - and it exists because a required
+check that fails one run in fifteen for a reason no change to PC can move blocks merges while saying
+nothing about the change being merged. `MultiInstanceRebalanceTest#CAPACITY_TAG` and
+[`docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md`](inflight/test-largenumberofinstances-cannot-gate-a-merge.md)
+own the reasoning. **A lane that selects nothing passes**, so when either side of that split changes,
+read what the lane actually ran - `bin/performance-test.sh`'s own `NOT MEASURED` / `NONE FOUND`
+report is there for exactly this.
