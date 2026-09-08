@@ -584,6 +584,11 @@ between two of *your own* commands. Work only under `.claude/worktrees/<name>`, 
 none does. Commit with `git -C <worktree> commit ...` spelled as a **literal path, not a variable**:
 the pre-commit hook reads the command before the shell expands it, and refuses a `-C "$W"` rather
 than gating a tree the command never named (`.claude/hooks/pre-commit-gate.sh` owns the why).
+**Name the tree on EVERY commit, not just the first** - a bare `git commit` resolves against the
+session root, which is some *other* worktree. Do not lean on having `cd`-ed there earlier: the
+shell's working directory is **not reliably** carried between commands (it survives some and not
+others, and when it resets you are in a different worktree, not an error). A leading literal
+`cd <worktree> &&` on the commit itself works as well as `-C`.
 
 **Reaching for `git checkout <branch>` is the tell that you are in the wrong directory** - and it is
 how the rule gets broken silently. Git refuses to check out a branch another worktree already holds,

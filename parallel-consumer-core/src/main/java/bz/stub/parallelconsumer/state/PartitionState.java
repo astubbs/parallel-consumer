@@ -253,6 +253,31 @@ public class PartitionState<K, V> {
     @Getter
     private final long partitionsAssignmentEpoch;
 
+    /**
+     * Set once a revocation's commit has drained this partition's completed work and is about to commit it, and
+     * never cleared - the state is replaced at truncation. From then on every container of this partition reads as
+     * stale ({@link #checkIfWorkIsStale}), so no worker starts one, no worker produces for one, and a completion
+     * that arrives anyway is dropped like any other stale result.
+     * <p>
+     * <b>Why the epoch cannot do this job.</b> {@link #partitionsAssignmentEpoch} is final, captured at
+     * construction; bumping the manager's epoch map leaves this state comparing containers against its own old
+     * epoch, and they match - the fact
+     * {@code docs/solutions/logic-errors/stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md}
+     * established from the other direction ("a final long set at construction"). Truncation replaces the state, which is what makes the epoch scheme work - but
+     * truncation runs on the broker-poll thread after the revocation commit returns, and the gap between that
+     * commit releasing the producer write lock and the truncation is wide enough for a worker parked on the
+     * produce lock to start a record of the revoked partition, produce its output into the next transaction,
+     * and have its completion dropped as stale at truncation: output published, offset never committed, the
+     * partition's next owner reprocesses it. {@code RebalanceEoSDeadlockTest} saw two or three such duplicates
+     * per rebalance with the drain fixed and this fence absent. The fence is set on the control thread INSIDE
+     * the write lock - after the drain, before the commit - so there is no such gap: a worker that acquires the
+     * produce lock after the commit finds the partition fenced
+     * ({@code ParallelEoSStreamProcessor#acquireProduceLockRefusingRevokedWork}).
+     * <p>
+     * volatile: written by the control thread, read by the workers and the poll thread.
+     */
+    private volatile boolean fencedForRevocation;
+
     private long lastCommittedOffset;
     private Gauge lastCommittedOffsetGauge;
     private Gauge highestSeenOffsetGauge;
@@ -569,6 +594,16 @@ public class PartitionState<K, V> {
 
     public boolean isPartitionRemovedOrNeverAssigned() {
         return false;
+    }
+
+    /**
+     * Marks every container of this partition stale from now on - see {@link #fencedForRevocation} for when, on
+     * which thread, and why the epoch cannot do it.
+     */
+    public void fenceForRevocation() {
+        log.debug("Fencing {} for revocation: its completed work is drained and about to be committed, nothing " +
+                "further may start or produce for it", getTp());
+        this.fencedForRevocation = true;
     }
 
     // visible for legacy testing
@@ -959,6 +994,11 @@ public class PartitionState<K, V> {
 
         boolean epochMissMatch = currentPartitionEpoch != workEpoch;
 
+        if (fencedForRevocation) {
+            log.debug("Partition {} is fenced for revocation - its work is stale whatever its epoch. Skipping {}",
+                    getTp(), workContainer);
+            return true;
+        }
         if (epochMissMatch || partitionNotAssigned) {
             log.debug("Epoch mismatch {} vs {} for record {}. Skipping message - it's partition has already assigned to a different consumer.",
                     workEpoch, currentPartitionEpoch, workContainer);

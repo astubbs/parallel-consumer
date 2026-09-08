@@ -66,4 +66,27 @@ public class ThreadUtils {
     public static void sleepSecondsLog(int seconds) {
         sleepLog(seconds * 1000);
     }
+
+    /**
+     * Joins {@code thread} for at most {@code timeout}, restoring the interrupt flag if interrupted.
+     * <p>
+     * It lives here rather than in the one test that calls it today because this wrapper is what gets
+     * hand-rolled: `join` with a timeout plus an interrupt restore is four lines that every thread-racing test
+     * in {@code state} needs, and a second private copy is how the drift starts. Putting it in the shared
+     * utility on the way past is cheaper than deduplicating two copies later.
+     * <p>
+     * A {@code null} thread is a no-op, so a {@code finally} block can call this before it knows whether the
+     * thread was ever started - which is the shape that makes it usable for cleanup and not only for the happy
+     * path.
+     */
+    public static void joinQuietly(Thread thread, Duration timeout) {
+        if (thread == null) {
+            return;
+        }
+        try {
+            thread.join(timeout.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
 }
