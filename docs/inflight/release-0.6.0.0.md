@@ -215,7 +215,7 @@ than waive the item.
 **The claim is amended, 2026-09-07: one known critical defect is outside 0.6.0.0's scope, and the
 release notes must name it.** The transactional revoke wait - astubbs#44, upstream's only
 verified-bug label, `PERIODIC_TRANSACTIONAL_PRODUCER` only; **bounded since astubbs#466 by
-`commitLockAcquisitionTimeout`, not yet declined** (that is what astubbs#408 adds), so the release
+`commitLockAcquisitionTimeout`, not yet declined** (astubbs#408 measures that bound and holds the decline seam; astubbs#466 refuted declining as the fix, so it is only the deadline fallback), so the release
 note says "bounded, not yet declined" rather than "unbounded" - detail in
 [`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md) - has its fix in
 astubbs#408, which depends on producer-fencing recovery (astubbs#410) by design, and the owner has

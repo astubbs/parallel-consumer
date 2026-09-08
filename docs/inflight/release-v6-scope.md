@@ -242,7 +242,7 @@ churn rather than a PC defect.
   defect; the release note need not name it. One new fact worth keeping: the
   `ZOMBIE_MEMBER/REBALANCE_BLOCKED` probe line does not discriminate a PC-side hold from a
   coordinator holding its join phase open, so a future sighting is told apart by what the closing
-  members' threads are in. astubbs#486 is green with the owner's LGTM and awaits the merge.
+  members' threads are in. astubbs#486 merged 2026-09-08.
 - A dead broker-poll thread leaving the consumer open in consumer-commit modes, no LeaveGroup until
   `max.poll.interval.ms` - **fixed in the queue, astubbs#477, tier 1.**
 ## What v6 must say about data loss and duplicates
@@ -305,7 +305,7 @@ hypothesis).
   see this cycle (its other edge is a queue poll, not a lock), and one replay in two was VOID
   because the window never opened - check the discriminator fired before banking a green.
 - ~~Whether the shard-displacement orphan window is reachable in production~~ - **known,
-  2026-09-08, astubbs#483: unreachable**, with a three-arm regression test and an ablation that goes
+  2026-09-08, astubbs#483 (merged): unreachable**, with a four-arm regression test, one per ordering mode plus a same-key cross-partition case, and an ablation that goes
   red only when both sweeps are removed. The caveat is the finding: the last leg of the proof is a
   Kafka property, not this engine's - the consumer's fetch position never goes backwards within a
   generation - so an in-generation replay of an offset whose resident was **fenced but not swept**
@@ -318,7 +318,7 @@ hypothesis).
   be misdirection, not a stall. The sweep for the
   same shape found two more by-key removals (`ProcessingShard.onSuccess`, the revoke sweep in
   `ShardManager.removeWorkFromShardFor`), left for astubbs#468 whose identity-`equals` change is
-  what makes conditional removal possible. Not a v6 gate; astubbs#483 stacks on astubbs#481.
+  what makes conditional removal possible. Not a v6 gate; astubbs#483 stacked on astubbs#481 and merged after it.
 - ~~Whether "rejoin" after producer fencing is expressible in PC's lifecycle~~ - **known,
   2026-09-08, by a read of the astubbs#472/#474/#410 diffs against the engine's ownership rules:**
   it is, and the stack expresses it, with the correction that the question dissolves - PC's
