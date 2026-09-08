@@ -17,15 +17,13 @@ package bz.stub.parallelconsumer.streams;
  * Turn it on for a whole JVM with {@code -Dpc.streams.dispatch.enabled=true}, or per test with
  * {@link #enable(int)}.
  * <p>
- * <b>Two reasons have been closed and the default still has not moved. Each time, the measurement that
- * closed one uncovered the next.</b> The reason was originally a missing refusal: joins, windows,
- * suppression, versioned and session stores and exactly-once are now refused, loudly and by name, at build
- * time and at task construction ({@link PcUnsupportedConstruct}, {@link PcSupportedEnvelope}). The reason
- * then became revival: {@code StreamTask.revive()} threw rather than rebuilding the dispatcher that went
- * down with the task, and the throw left Kafka's run loop uncaught. <b>Both are now closed. The trigger is
- * a third thing, and it is the one this class is waiting on:</b> a typed control-flow exception raised
- * <em>inside the processor chain</em> - {@code TaskCorruptedException}, {@code TaskMigratedException} - does
- * not reach Kafka's recovery machinery, so a recoverable event still becomes a fatal one.
+ * <b>THREE reasons have now been closed and the default still has not moved. Each time, the measurement
+ * that closed one uncovered the next - and this time it did not.</b> The reason was originally a missing
+ * refusal: joins, windows, suppression, versioned and session stores and exactly-once are now refused,
+ * loudly and by name, at build time and at task construction ({@link PcUnsupportedConstruct},
+ * {@link PcSupportedEnvelope}). It then became revival: {@code StreamTask.revive()} threw rather than
+ * rebuilding the dispatcher that went down with the task, and the throw left Kafka's run loop uncaught.
+ * It then became exception surfacing, which this rung closed and which is described below.
  * <p>
  * <b>The evidence for closing the revival reason, because "it looks fixed now" is not one.</b> Run Apache
  * Kafka's own suite against the patched classes with the seam <em>on</em>, before and after the task
@@ -38,20 +36,34 @@ package bz.stub.parallelconsumer.streams;
  * five {@code StreamTaskTest} close/checkpoint cases went green with it, because the same unit taught
  * {@code validateClean} to see work that is still running.
  * <p>
- * <b>What is still red, and why it holds the default.</b> {@code shouldReinitializeRevivedTasksInAnyState}
- * fails identically before and after, so this unit neither caused nor fixed it: a
- * {@code TaskCorruptedException} thrown by a <em>processor</em> is caught by the worker, surfaced one or
- * more pump cycles later, and wrapped in a {@code StreamsException}. Kafka's {@code TaskManager} therefore
- * never sees the type it dispatches recovery on, and an application that stock Streams would have recovered
- * shuts down instead. That is the same shape as the reason just closed - a recoverable event turned fatal -
- * arriving by the other route, and it is unrefusable, because it is a property of the exception rather than
- * of the topology. It belongs to the error-surfacing unit, along with
- * astubbs/parallel-consumer#271's open thread on a worker failure being committed past. <b>Stream-time
- * punctuation is a separate outstanding item</b>, recorded in {@code docs/inflight/}; it was already priced
- * in when the refusal reason was closed, and is not what this paragraph is about.
+ * <b>And the evidence for closing the third one, exception surfacing.</b> A {@code TaskCorruptedException}
+ * or {@code TaskMigratedException} thrown by a <em>processor</em> was caught by the worker, wrapped in a
+ * {@code StreamsException} and delivered one or more pump cycles later, so Kafka's {@code TaskManager}
+ * never saw the type it dispatches recovery on. <b>Both halves are fixed</b> - the patched
+ * {@code StreamTask.pcClassifyFailure} passes the control-flow types through unchanged, and
+ * {@link PcTaskDispatcher#awaitOutcomeIfIdle()} makes a pump that has run out of work wait for the
+ * outcome of what it already dispatched, so the failure reaches the {@code TaskManager} from the same
+ * {@code runOnce}. Nothing commits past it either
+ * ({@link PcTaskDispatcher#collectCommitData()} fences on a pending failure), which is
+ * astubbs/parallel-consumer#271's other open thread. Same experiment as above, one term changed:
+ * {@code shouldReinitializeRevivedTasksInAnyState} goes green on both parameter combinations this module
+ * supports, {@code StreamTaskTest.shouldRecordBufferedRecords} goes green with the backpressure work, and
+ * <b>nothing regresses</b>. Each half was sabotaged separately with the prediction stated first, and each
+ * time exactly those two cases went red and nothing else moved - so neither half is carrying the other.
+ * <p>
+ * <b>Why the default nevertheless stays where it is.</b> Its third parameter combination stays red under
+ * Kafka's private processing-threads config, where {@code DefaultTaskExecutor} calls {@code task.process}
+ * from its own thread - out of scope since the seam landed, and named as such in {@link PcTaskDispatcher}'s
+ * threading contract. <b>Stream-time punctuation is a separate outstanding item</b>, recorded in
+ * {@code docs/inflight/}, and belongs to a different piece of work. Most of all, the flip is a decision
+ * about the <em>reconciled</em> module: sibling rungs of astubbs#255 are in flight against this same base
+ * and every one of them moves the seam-on numbers, so a flip argued from any one of them is arguing from a
+ * state that will not exist when it merges. That reservation, and what to do at consolidation, are in
+ * {@code docs/inflight/streams-dispatch-default-flip-is-reserved-until-the-rungs-reconcile.md}.
  * <p>
  * Whoever flips this next should re-run the seam-on measurement rather than trusting these paragraphs, and
- * should expect the pattern to repeat: three times now, the measurement has named the next reason.
+ * should expect the pattern to repeat: three times now, the measurement has named the next reason - so
+ * "no reason left" is something to show, not to assume.
  * <p>
  * <b>This reverses an inherited decision, and the argument it reverses was a different one.</b> The seam
  * defaulted <em>on</em> in the feasibility study (astubbs#271) on the grounds that depending on a separate,
@@ -62,11 +74,11 @@ package bz.stub.parallelconsumer.streams;
  * every user of the artifact, and it is not being paid for here - the arms below still state their
  * requirement at each site. What the artifact-is-the-opt-in argument does not cover is a user who opts in
  * to <em>per-key concurrency</em> and gets <em>silently altered semantics</em> on a topology shape nobody
- * refused. That objection is now answered by the refusal envelope above, and the revival one by the
- * lifecycle unit; what is not answered is the exception-type route named above, which is why the default is
- * where it is. Do not restore on-by-default merely because these paragraphs look like timidity - restore it
- * when a corruption signal raised inside a topology still reaches Kafka's recovery, and say so with a
- * measurement.
+ * refused. That objection is now answered by the refusal envelope above, the revival one by the lifecycle
+ * unit, and the exception-type route by this rung. Do not restore on-by-default merely because these
+ * paragraphs look like timidity - and do not restore it merely because they no longer name a defect either.
+ * Restore it against a fresh seam-on measurement taken on the reconciled module, and say so with the
+ * numbers.
  * <p>
  * Tests that want the stock path still say so explicitly with {@link #disable()} rather than leaning on the
  * default, because a control arm that is only a control by default stops being one the moment the default
@@ -107,6 +119,22 @@ public final class PcDispatchSwitch {
      */
     public static final String WAKE_ON_WORK_PROPERTY = "pc.streams.wakeOnWork.enabled";
 
+    /**
+     * Set {@code -Dpc.streams.backpressure.enabled=false} to stop the PC path pausing a partition when it is
+     * holding more than {@code buffered.records.per.partition} records for it.
+     * <p>
+     * Two reasons this exists, the same two as {@link #WAKE_ON_WORK_PROPERTY}. It is the <b>control arm</b>:
+     * the memory-bound proof has to vary exactly one term, and flipping this leaves the build, the JVM, the
+     * broker and the data identical in a way that comparing against a parent commit never can. And it is an
+     * escape hatch on the one change in this module whose failure mode is a <em>silent stall</em> rather
+     * than an exception - a partition that is paused and never resumed looks exactly like an idle topology -
+     * so an operator needs a way to take it out of the picture without rebuilding.
+     * <p>
+     * Turning it off restores unbounded accumulation under a processor slower than the broker feed. That is
+     * the point of a control arm, and it is not a mode anyone should run in production.
+     */
+    public static final String BACKPRESSURE_PROPERTY = "pc.streams.backpressure.enabled";
+
     private static final int DEFAULT_POOL_SIZE = 4;
 
     /**
@@ -120,11 +148,20 @@ public final class PcDispatchSwitch {
     private static final boolean SEAM_DEFAULT = false;
     private static final boolean WAKE_ON_WORK_DEFAULT = true;
 
+    /**
+     * ON, like wake-on-work and for the same reason: given that a topology is running through PC, the stock
+     * answer to "should inflow be bounded" is unambiguously yes - stock Kafka Streams pauses the partition
+     * itself, and the PC path silently stopped doing so. Off is the control arm, not a supported mode.
+     */
+    private static final boolean BACKPRESSURE_DEFAULT = true;
+
     private static volatile boolean enabled = readBooleanProperty(ENABLED_PROPERTY, SEAM_DEFAULT);
 
     private static volatile int poolSize = Integer.getInteger(POOL_SIZE_PROPERTY, DEFAULT_POOL_SIZE);
 
     private static volatile boolean wakeOnWork = readBooleanProperty(WAKE_ON_WORK_PROPERTY, WAKE_ON_WORK_DEFAULT);
+
+    private static volatile boolean backpressure = readBooleanProperty(BACKPRESSURE_PROPERTY, BACKPRESSURE_DEFAULT);
 
     private PcDispatchSwitch() {
     }
@@ -151,6 +188,31 @@ public final class PcDispatchSwitch {
      */
     public static void setWakeOnWork(final boolean wakeOnWorkEnabled) {
         wakeOnWork = wakeOnWorkEnabled;
+    }
+
+    /**
+     * Whether the patched {@code StreamTask} should pause a partition once PC is holding more than
+     * {@code buffered.records.per.partition} records for it.
+     * <p>
+     * Reports false whenever the seam is off, unconditionally - with records going through Kafka's own
+     * {@code PartitionGroup}, {@code addRecords} already applies the stock pause from the real queue size,
+     * and asking twice could only pause a partition Kafka had decided not to pause. Same shape as
+     * {@link #isWakeOnWorkEnabled()}, so the patch asks one question rather than two.
+     * <p>
+     * <b>The resume is deliberately NOT gated on this.</b> A pause is a durable effect on the consumer while
+     * this is only a flag, so releasing a pause has to happen whatever the flag says - see the resume loop in
+     * the patched {@code StreamTask.pcProcess}.
+     */
+    public static boolean isBackpressureEnabled() {
+        return enabled && backpressure;
+    }
+
+    /**
+     * Turn the PC-path pause off (or back on) for this JVM. Intended for the control arm of the memory-bound
+     * proof; the system property is the equivalent for a whole run.
+     */
+    public static void setBackpressure(final boolean backpressureEnabled) {
+        backpressure = backpressureEnabled;
     }
 
     public static int getPoolSize() {
@@ -188,6 +250,7 @@ public final class PcDispatchSwitch {
         poolSize = Integer.getInteger(POOL_SIZE_PROPERTY, DEFAULT_POOL_SIZE);
         enabled = readBooleanProperty(ENABLED_PROPERTY, SEAM_DEFAULT);
         wakeOnWork = readBooleanProperty(WAKE_ON_WORK_PROPERTY, WAKE_ON_WORK_DEFAULT);
+        backpressure = readBooleanProperty(BACKPRESSURE_PROPERTY, BACKPRESSURE_DEFAULT);
     }
 
     /**
@@ -196,9 +259,9 @@ public final class PcDispatchSwitch {
      * otherwise leave it wherever it already was, and the run would look like the arm it was asked for while
      * being nothing of the kind.
      * <p>
-     * Shared by both switches rather than copied, because that loud-failure rule is the whole point and two
+     * Shared by every switch rather than copied, because that loud-failure rule is the whole point and two
      * copies is how one of them quietly stops enforcing it. The default is a parameter for the same reason:
-     * the two switches genuinely differ (see {@link #SEAM_DEFAULT}), and a second reader is how they would
+     * the switches genuinely differ (see {@link #SEAM_DEFAULT}), and a second reader is how they would
      * drift.
      */
     private static boolean readBooleanProperty(final String property, final boolean whenAbsent) {

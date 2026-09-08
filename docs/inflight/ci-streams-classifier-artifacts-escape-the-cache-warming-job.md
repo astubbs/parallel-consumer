@@ -19,6 +19,30 @@ misses an artifactItem, why the warm names coordinates rather than building the 
 two guards are for; this note does not restate it.
 <!-- post-merge: checked-end -->
 
+## What the sightings established, for any branch still exposed
+
+<!-- post-merge: checked-begin -->
+The defect was observed on two independent rungs of this stack -
+astubbs/parallel-consumer#394 and astubbs/parallel-consumer#395 - which is what made it master-state
+rather than one PR's problem. Three findings from those sightings outlive the fix, because they
+describe what an *unwarmed* branch is still living with:
+
+- **It is every lane that builds this module, not one lane occasionally.** Unit and Integration went
+  red together on the same run, because they share the runner's route to Central.
+- **It is per-run, not per-branch, so a re-run is a coin flip and not a fix.** The referenced
+  write-up's "re-running does not reliably help" proved to be exactly the right strength: two
+  consecutive runs reproduced the identical failure at the same execution on the same artifact, and a
+  third then passed every lane. A green run is luck, and says nothing about the next one.
+- **It has nothing to do with the diff, and a control arm settles that rather than arguing it.** A
+  **markdown-only commit** - no Java, no pom, no workflow - reproduced the failure on both lanes
+  immediately after a green run. There is no reading of that in which the change under review is
+  implicated.
+
+If you are on an unwarmed branch looking at a red Unit lane on this module and wondering what you
+broke: the answer is the paragraph above, and the fix is to merge astubbs/parallel-consumer#379
+forward rather than to re-run.
+<!-- post-merge: checked-end -->
+
 ## What is still open
 
 <!-- post-merge: checked-begin -->
@@ -29,10 +53,11 @@ are
 minus those that already contain the step - `git grep -l 'Warm the Kafka sources jars' <ref> --
 .github/workflows/maven.yml`.
 
-**`feats/ks-streams-task-lifecycle` carries its own copy of this file**, written before the fix and
-describing the defect as unfixed. It already contains `feats/ks-streams-fork-machinery`'s pre-fix
-commits, so merging astubbs/parallel-consumer#379 forward collides add/add on this path: **take the
-version that names the step**, not the one that calls the fix a candidate.
+**A branch carrying the pre-fix copy of this file collides add/add on this path** when it merges
+astubbs/parallel-consumer#379 forward: **take the version that names the step**, not the one that
+calls the fix a candidate. The two rungs that hit it, `feats/ks-streams-task-lifecycle` and
+`feats/ks-streams-error-surfacing`, resolved it that way and are no longer exposed; the instruction
+stands for any rung above them that has not yet merged forward.
 <!-- post-merge: checked-end -->
 
 **`test-kafka-compat` is the one job whose Kafka version falls outside the warm.** It is `if: false`

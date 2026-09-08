@@ -299,9 +299,19 @@ class PcTaskDispatcherTest {
      * re-dispatch a failed record, which here would re-run the processor chain including {@code forward()}
      * calls that already emitted downstream - duplicates stock Streams never produces. Retries are therefore
      * disabled, and the failure is surfaced instead.
+     *
+     * <p><b>The "other keys keep flowing" half of this test was deliberately narrowed</b> (astubbs#255), and
+     * it is a narrowing rather than a regression. It used to assert that a poison key blocked only its own
+     * shard while every other key drained to completion. That is still the right description of the
+     * <em>shards</em> under KEY ordering - but it was also, accidentally, the dispatcher's policy after a
+     * failure it had already seen, and that policy was wrong. Stock Kafka Streams stops processing at the
+     * throw: the exception leaves {@code process()}, reaches the uncaught-exception handler, and the thread
+     * dies. Here the throw happens on a worker and reaches the StreamThread later, so continuing to hand out
+     * work in between produced {@code forward()} side effects for a task that was already dying, bounded by
+     * nothing but the poll budget.
      */
     @Test
-    void aFailingRecordSurfacesOnceAndIsNeverRetriedWhileOtherKeysKeepFlowing() {
+    void aFailingRecordSurfacesOnceIsNeverRetriedAndStopsFurtherDispatch() {
         dispatcher = new PcTaskDispatcher("task-failure", INPUT_PARTITIONS, 4);
 
         String poisonKey = "key-2";
@@ -331,21 +341,44 @@ class PcTaskDispatcherTest {
                         + "attempt already forwarded downstream")
                 .isEqualTo(1);
         assertThat(completedKeys)
-                .as("every record of every other key must still have been processed")
-                .hasSize(9);
+                .as("work already in flight when the failure happened is left to finish, not interrupted "
+                        + "mid-chain")
+                .isNotEmpty();
+        assertThat(completedKeys)
+                .as("STRICTLY fewer than the 9 the pre-bar dispatcher completed. isNotEmpty() alone would be "
+                        + "a weakened assertion - 9 satisfies it, so the test would pass identically with the "
+                        + "bar deleted and would pin nothing")
+                .hasSizeLessThan(9);
         assertThat(completedKeys).doesNotContain(poisonKey);
+        assertThat(dispatcher.hasPendingFailure())
+                .as("the dispatcher knows a record failed, and that bar is what stops further dispatch")
+                .isTrue();
+        assertThat(dispatcher.getRecordsDispatched())
+                .as("dispatch stopped at the failure - STRICTLY fewer than the 10 the pre-bar dispatcher "
+                        + "handed out")
+                .isLessThan(10);
 
-        assertThat(dispatcher.pollFailure())
+        PcTaskDispatcher.Failure failure = dispatcher.pollFailure();
+        assertThat(failure)
                 .as("the failure must be retrievable so the StreamThread can surface it the way stock does")
-                .isInstanceOf(IllegalStateException.class);
+                .isNotNull();
+        assertThat(failure.getCause()).isInstanceOf(IllegalStateException.class);
+        assertThat(failure.getTopic())
+                .as("and must name the record, because it is one of several running concurrently")
+                .isEqualTo(TOPIC);
         assertThat(dispatcher.pollFailure())
                 .as("and cleared once taken, so it is reported once rather than on every pump")
                 .isNull();
+        assertThat(dispatcher.hasPendingFailure())
+                .as("but the DISPATCH BAR outlives the poll that cleared the failure - suspend()'s drain runs "
+                        + "next, and an open bar there would hand out the entire remaining backlog")
+                .isTrue();
 
         assertThat(dispatcher.getRecordsFailed()).isEqualTo(1);
-        assertThat(dispatcher.getRecordsSucceeded()).isEqualTo(9);
-        // The two later records of the poison key are still queued behind it - blocked, not lost.
-        assertThat(dispatcher.getRecordsDispatched()).isEqualTo(10);
+        assertThat(dispatcher.getRecordsSucceeded()).isEqualTo(completedKeys.size());
+        assertThat(dispatcher.getRecordsSucceeded() + dispatcher.getRecordsFailed())
+                .as("every record handed to the pool reported an outcome back to PC")
+                .isEqualTo(dispatcher.getRecordsDispatched());
         assertThat(dispatcher.getRecordsOffered()).isEqualTo(12);
     }
 
@@ -1217,5 +1250,611 @@ class PcTaskDispatcherTest {
             this.key = key;
             this.offset = offset;
         }
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Backpressure occupancy (astubbs#255). What the patched StreamTask compares against
+    // buffered.records.per.partition to decide whether to pause the consumer - so a count that drifts LOW
+    // silently removes the memory bound, and one that drifts HIGH pauses a partition for good. These pin
+    // both directions.
+    // ------------------------------------------------------------------------------------------------
+
+    /** Prepares work that never finishes, so records stay in flight and cannot be drained mid-assertion. */
+    private static PcTaskDispatcher.WorkPreparer blockingPreparer(final CountDownLatch release) {
+        return record -> () -> awaitLatch(release);
+    }
+
+    private static PcTaskDispatcher.WorkPreparer noopPreparer() {
+        return record -> () -> {
+        };
+    }
+
+    @Test
+    void registeringRecordsRaisesTheBufferedCountByTheNumberPcTookOn() {
+        dispatcher = new PcTaskDispatcher("task-buffered-register", INPUT_PARTITIONS, 4);
+
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                .as("a fresh dispatcher holds nothing")
+                .isZero();
+
+        dispatcher.registerRecords(PARTITION, records(7, offset -> "key-" + offset));
+
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                .as("every registered record is buffered until a worker starts it")
+                .isEqualTo(7);
+        assertThat(dispatcher.getBufferedRecordCount())
+                .as("the total is the sum over the partitions this task holds")
+                .isEqualTo(7);
+    }
+
+    @Test
+    void aRecordPcHasAlreadyCompletedDoesNotRaiseTheBufferedCount() {
+        dispatcher = new PcTaskDispatcher("task-buffered-refused", INPUT_PARTITIONS, 4);
+
+        List<ConsumerRecord<byte[], byte[]>> batch = records(3, offset -> "key-" + offset);
+        dispatcher.registerRecords(PARTITION, batch);
+        dispatcher.pumpUntilQuiescent(noopPreparer(), PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                .as("everything registered has been consumed")
+                .isZero();
+
+        dispatcher.registerRecords(PARTITION, batch);
+
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                .as("PC refuses offsets it has already completed, so nothing was taken on")
+                .isZero();
+    }
+
+    /**
+     * The ranked defect this rung was asked to close, and the reason the occupancy count is derived from
+     * PC's incomplete set rather than predicted at registration.
+     * <p>
+     * Kafka can hand the same offset to {@code addRecords} twice without PC having completed it - a
+     * {@code seek} backwards, an offset reset, corruption recovery. PC keeps the container it already has
+     * ({@code ProcessingShard.addWorkContainer} drops the arrival when a live one for that offset is
+     * resident) and will therefore only ever hand that record out ONCE. A count raised per re-delivered
+     * record is raised twice and lowered once: it never returns to zero, and since the count is what pauses
+     * the partition, that partition is paused for good with no symptom but a topology that has gone quiet.
+     * <p>
+     * The second half of this test is the one that would have caught it: the count must come back to zero.
+     */
+    @Test
+    void aRedeliveredOffsetTheShardDropsDoesNotRaiseTheBufferedCount() {
+        dispatcher = new PcTaskDispatcher("task-buffered-redelivered", INPUT_PARTITIONS, 4);
+
+        // One key, so KEY ordering keeps all three resident in the shard rather than letting a pump take
+        // them - the state in which a re-delivery is dropped rather than replacing anything.
+        List<ConsumerRecord<byte[], byte[]>> batch = records(3, offset -> "the-one-key");
+        dispatcher.registerRecords(PARTITION, batch);
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION)).isEqualTo(3);
+
+        dispatcher.registerRecords(PARTITION, batch);
+
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                .as("the same three offsets re-delivered are the same three records - PC drops the arriving "
+                        + "containers, so counting them would leave the partition paused for ever")
+                .isEqualTo(3);
+
+        dispatcher.pumpUntilQuiescent(noopPreparer(), PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                .as("and it comes back to zero, which is what a permanent-pause residue could not do")
+                .isZero();
+        assertThat(dispatcher.getBufferedUnderflowCount()).isZero();
+    }
+
+    @Test
+    void theBufferedCountReturnsToZeroAndNeverUnderflowsAcrossRepeatedBatches() {
+        dispatcher = new PcTaskDispatcher("task-buffered-balance", INPUT_PARTITIONS, 4);
+
+        List<ConsumerRecord<byte[], byte[]>> batch = records(6, offset -> "key-" + (offset % 3));
+
+        for (int round = 0; round < 3; round++) {
+            // The same batch every round: after the first, every offset has already been completed, so PC
+            // refuses all six and the count must not move. That is the drift-high direction.
+            dispatcher.registerRecords(PARTITION, batch);
+            assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                    .as("round %s registered only what PC had not already completed", round)
+                    .isEqualTo(round == 0 ? 6 : 0);
+
+            dispatcher.pumpUntilQuiescent(noopPreparer(), PUMP_TIMEOUT);
+
+            assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                    .as("round %s consumed everything it registered", round)
+                    .isZero();
+        }
+
+        assertThat(dispatcher.getBufferedUnderflowCount())
+                .as("a negative occupancy is the drift direction that disables the pause, and nothing else "
+                        + "reports it")
+                .isZero();
+    }
+
+    /**
+     * Kafka's own {@code shouldResumePartitionWhenSkippingOverRecordsWithInvalidTs} drives five same-key
+     * records against a threshold of three and expects the partition still paused after one pump. Under KEY
+     * ordering one shard hands out one record at a time, so one pump must consume exactly one and leave four
+     * held - if it consumed more, occupancy would fall to the threshold and the resume would be correct by
+     * its own rule while being wrong against Kafka.
+     */
+    @Test
+    void onePumpOverOneKeyConsumesExactlyOneRecord() {
+        dispatcher = new PcTaskDispatcher("task-buffered-one-key", INPUT_PARTITIONS, 4);
+        CountDownLatch release = new CountDownLatch(1);
+
+        dispatcher.registerRecords(PARTITION, records(5, offset -> "the-one-key"));
+
+        int consumed = dispatcher.dispatchAvailable(blockingPreparer(release));
+
+        try {
+            assertThat(consumed)
+                    .as("KEY ordering hands out at most one record per key at a time")
+                    .isEqualTo(1);
+            assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                    .as("four of the five are still held, which is above a threshold of three - so a resume "
+                            + "computed from this number cannot fire yet")
+                    .isEqualTo(4);
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void aDispatchedRecordLeavesTheBufferEvenWhileItIsStillRunning() {
+        dispatcher = new PcTaskDispatcher("task-buffered-inflight", INPUT_PARTITIONS, 2);
+        CountDownLatch release = new CountDownLatch(1);
+
+        dispatcher.registerRecords(PARTITION, records(5, offset -> "key-" + offset));
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION)).isEqualTo(5);
+
+        int consumed = dispatcher.dispatchAvailable(blockingPreparer(release));
+
+        try {
+            assertThat(consumed)
+                    .as("the pool bounds how many can start at once")
+                    .isEqualTo(2);
+            assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                    .as("buffered means not yet started, so the two in flight have left the buffer")
+                    .isEqualTo(3);
+            assertThat(dispatcher.getInFlightCount()).isEqualTo(2);
+        } finally {
+            release.countDown();
+        }
+    }
+
+    /**
+     * The objection that kept this count standalone on the branch this work is reconstructed from: PC's
+     * incomplete set holds a failed record for ever, because retries are disabled, so backpressure derived
+     * from it would pause that partition permanently. Answered rather than ignored - a failed record is
+     * never subtracted back out of the handed-out tally, so it cancels itself out of the derivation.
+     */
+    @Test
+    void aFailedRecordStaysOutOfTheBufferedCountForever() {
+        dispatcher = new PcTaskDispatcher("task-buffered-poison", INPUT_PARTITIONS, 4);
+
+        dispatcher.registerRecords(PARTITION, records(1, offset -> "key-a"));
+        dispatcher.pumpUntilQuiescent(record -> () -> {
+            throw new IllegalStateException("boom");
+        }, PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getRecordsFailed()).isEqualTo(1);
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                .as("PC still counts the failed offset as incomplete and always will - but it is not "
+                        + "BUFFERED, and reporting it as such would pause this partition for ever")
+                .isZero();
+        assertThat(dispatcher.getBufferedUnderflowCount()).isZero();
+    }
+
+    /**
+     * A record dropped on the way in never reaches a worker, but it HAS left the buffer - it is consumed.
+     * Counting only pool submissions would leave the count high and pause the partition over records that no
+     * longer exist.
+     */
+    @Test
+    void aRecordDroppedDuringPreparationStillLeavesTheBuffer() {
+        dispatcher = new PcTaskDispatcher("task-buffered-dropped", INPUT_PARTITIONS, 4);
+
+        dispatcher.registerRecords(PARTITION, records(4, offset -> "key-" + offset));
+        dispatcher.pumpUntilQuiescent(record -> null, PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                .as("dropped is consumed")
+                .isZero();
+    }
+
+    @Test
+    void bufferedCountsAreKeptPerPartitionAndRevokedWithTheirPartition() {
+        final TopicPartition second = new TopicPartition(TOPIC, 1);
+        dispatcher = new PcTaskDispatcher("task-buffered-partitions", UniSets.of(PARTITION, second), 4);
+
+        dispatcher.registerRecords(PARTITION, records(PARTITION, 3, offset -> "key-" + offset));
+        dispatcher.registerRecords(second, records(second, 5, offset -> "key-" + offset));
+
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION)).isEqualTo(3);
+        assertThat(dispatcher.getBufferedRecordCount(second)).isEqualTo(5);
+        assertThat(dispatcher.getBufferedRecordCount()).isEqualTo(8);
+
+        dispatcher.updatePartitions(UniSets.of(PARTITION));
+
+        assertThat(dispatcher.getBufferedRecordCount(second))
+                .as("a revoked partition holds nothing - the new owner re-reads it. A count left behind here "
+                        + "would keep a partition paused by a task that no longer owns it")
+                .isZero();
+        assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                .as("the surviving partition is untouched")
+                .isEqualTo(3);
+        assertThat(dispatcher.getBufferedRecordCount())
+                .as("and the total follows the assignment")
+                .isEqualTo(3);
+    }
+
+    @Test
+    void theBufferedCountIsReadableFromAThreadThatIsNotTheOwner() throws InterruptedException {
+        dispatcher = new PcTaskDispatcher("task-buffered-foreign-read", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(6, offset -> "key-" + offset));
+
+        AtomicInteger seen = new AtomicInteger(-1);
+        // The memory-bound proof samples occupancy from a watcher thread while the run is in flight, so this
+        // is the call shape that must not hit the owner-thread guard.
+        Throwable thrown = runOffOwnerThread("not-the-owner",
+                () -> seen.set(dispatcher.getBufferedRecordCount(PARTITION)));
+
+        assertThat(thrown)
+                .as("a question may not be owner-thread-guarded")
+                .isNull();
+        assertThat(seen.get()).isEqualTo(6);
+    }
+
+    @Test
+    void closingClearsTheBufferedCounts() {
+        dispatcher = new PcTaskDispatcher("task-buffered-close", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(4, offset -> "key-" + offset));
+        assertThat(dispatcher.getBufferedRecordCount()).isEqualTo(4);
+
+        dispatcher.close();
+
+        assertThat(dispatcher.getBufferedRecordCount())
+                .as("a closed dispatcher holds nothing, and a count left behind outlives the task that "
+                        + "paused the partition")
+                .isZero();
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Failure surfacing (astubbs#255): the type, the timing, and the commit fence.
+    // ------------------------------------------------------------------------------------------------
+
+    @Test
+    void aFailurePollCarriesTheRecordThatCausedIt() {
+        dispatcher = new PcTaskDispatcher("task-failure-record", INPUT_PARTITIONS, 1);
+        RuntimeException boom = new IllegalStateException("boom");
+
+        dispatcher.registerRecords(PARTITION, records(1, offset -> "key-a"));
+        dispatcher.pumpUntilQuiescent(record -> () -> {
+            throw boom;
+        }, PUMP_TIMEOUT);
+
+        PcTaskDispatcher.Failure failure = dispatcher.pollFailure();
+
+        assertThat(failure).isNotNull();
+        assertThat(failure.getCause()).isSameAs(boom);
+        assertThat(failure.getTopic()).isEqualTo(TOPIC);
+        assertThat(failure.getPartition()).isEqualTo(PARTITION.partition());
+        assertThat(failure.getOffset())
+                .as("which of the concurrently running records failed is the first question anyone asks")
+                .isZero();
+        assertThat(dispatcher.pollFailure())
+                .as("cleared as it is handed over")
+                .isNull();
+    }
+
+    /**
+     * {@code pollFailure()} clears the failure as it hands it to the StreamThread, so a bar that read only
+     * that field would be open again immediately - and {@code StreamTask.suspend()}'s drain, which runs
+     * next, would dispatch the whole remaining backlog of a task that is already dying.
+     */
+    @Test
+    void aSurfacedFailureStillBarsDispatchSoTheSuspendDrainCannotRunTheBacklog() {
+        dispatcher = new PcTaskDispatcher("task-failure-sticky", INPUT_PARTITIONS, 1);
+        AtomicInteger started = new AtomicInteger();
+
+        dispatcher.registerRecords(PARTITION, records(20, offset -> "key-" + offset));
+        dispatcher.pumpUntilQuiescent(record -> () -> {
+            started.incrementAndGet();
+            throw new IllegalStateException("boom");
+        }, PUMP_TIMEOUT);
+
+        int startedBeforeSurfacing = started.get();
+        assertThat(dispatcher.hasPendingFailure()).isTrue();
+
+        // The StreamThread takes the exception - which clears firstFailure - and the task is then suspended.
+        assertThat(dispatcher.pollFailure()).isNotNull();
+        assertThat(dispatcher.hasPendingFailure())
+                .as("the bar must outlive the poll that cleared the failure")
+                .isTrue();
+
+        boolean quiesced = dispatcher.pumpUntilQuiescent(record -> () -> {
+            started.incrementAndGet();
+            throw new IllegalStateException("boom");
+        }, PUMP_TIMEOUT);
+
+        assertThat(started.get())
+                .as("the suspend-shaped drain must not hand out the backlog")
+                .isEqualTo(startedBeforeSurfacing);
+        assertThat(quiesced)
+                .as("and must still reach quiescence, or suspend() sits out its whole drain timeout")
+                .isTrue();
+    }
+
+    @Test
+    void recordsAlreadyInFlightWhenAFailureOccursStillCompleteAndReachPcsAccounting() {
+        dispatcher = new PcTaskDispatcher("task-failure-inflight", INPUT_PARTITIONS, 4);
+        AtomicInteger completed = new AtomicInteger();
+
+        dispatcher.registerRecords(PARTITION, records(8, offset -> "key-" + offset));
+        dispatcher.pumpUntilQuiescent(record -> () -> {
+            if (record.offset() == 0) {
+                throw new IllegalStateException("boom");
+            }
+            completed.incrementAndGet();
+        }, PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getRecordsFailed()).isEqualTo(1);
+        assertThat(completed.get())
+                .as("in-flight work is left to finish rather than interrupted mid-chain")
+                .isPositive();
+        assertThat(dispatcher.getRecordsSucceeded() + dispatcher.getRecordsFailed())
+                .as("every dispatched record reported an outcome to PC")
+                .isEqualTo(dispatcher.getRecordsDispatched());
+    }
+
+    @Test
+    void aFailedRecordIsNeverHandedOutAgain() {
+        dispatcher = new PcTaskDispatcher("task-failure-no-retry", INPUT_PARTITIONS, 1);
+        List<Long> seen = new CopyOnWriteArrayList<>();
+
+        dispatcher.registerRecords(PARTITION, records(1, offset -> "key-a"));
+        dispatcher.pumpUntilQuiescent(record -> {
+            seen.add(record.offset());
+            return () -> {
+                throw new IllegalStateException("boom");
+            };
+        }, PUMP_TIMEOUT);
+        dispatcher.pollFailure();
+        dispatcher.pumpUntilQuiescent(record -> {
+            seen.add(record.offset());
+            return () -> {
+            };
+        }, PUMP_TIMEOUT);
+
+        assertThat(seen)
+                .as("retries are disabled on purpose - a retry re-runs a chain that already called forward()")
+                .containsExactly(0L);
+    }
+
+    /**
+     * The TIMING half of the typed-exception fix, at unit level: a pump that has nothing left to hand out
+     * waits for the outcome of what it already dispatched, so a failure raised on a worker is available to
+     * the very next line rather than a pump - or a whole {@code runOnce} - later.
+     */
+    @Test
+    void awaitOutcomeReturnsAsSoonAsAWorkerReportsAFailure() {
+        dispatcher = new PcTaskDispatcher("task-settle-failure", INPUT_PARTITIONS, 1);
+        CountDownLatch startedRunning = new CountDownLatch(1);
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+
+        dispatcher.registerRecords(PARTITION, records(1, offset -> "key-a"));
+        int consumed = dispatcher.dispatchAvailable(record -> () -> {
+            startedRunning.countDown();
+            awaitLatch(releaseWorker);
+            throw new IllegalStateException("boom");
+        });
+        assertThat(consumed).isEqualTo(1);
+        awaitLatch(startedRunning);
+
+        assertThat(dispatcher.pollFailure())
+                .as("nothing has failed yet - without the wait this is what the pump would see and act on")
+                .isNull();
+
+        releaseWorker.countDown();
+
+        assertThat(dispatcher.awaitOutcome(PUMP_TIMEOUT))
+                .as("the wait ends because there is something to see, not because it ran out")
+                .isTrue();
+        assertThat(dispatcher.pollFailure())
+                .as("and the failure is now available on THIS pump")
+                .isNotNull();
+    }
+
+    @Test
+    void awaitOutcomeReturnsImmediatelyWhenNothingIsInFlight() {
+        dispatcher = new PcTaskDispatcher("task-settle-idle", INPUT_PARTITIONS, 1);
+
+        long startedAt = System.nanoTime();
+        boolean sawSomething = dispatcher.awaitOutcome(Duration.ofSeconds(30));
+        Duration waited = Duration.ofNanos(System.nanoTime() - startedAt);
+
+        assertThat(sawSomething).isTrue();
+        assertThat(waited)
+                .as("an idle dispatcher must not cost the StreamThread anything - the wait is for outcomes "
+                        + "of work in flight, and there is none")
+                .isLessThan(Duration.ofSeconds(5));
+    }
+
+    /**
+     * The discriminator that keeps the settle wait out of the saturated case, and it is not an optimisation.
+     * A pump consumes nothing for two quite different reasons: PC had nothing to hand out (idle - the
+     * outcome of running work is the only thing that can change anything, so wait) or the pool was full
+     * (saturated - there is plenty of work and nowhere to put it, and the StreamThread's next act would have
+     * been to poll). Waiting in the second case throttles INTAKE, measured at sixteen-fold with the pause
+     * switched off, which silently supplied a second memory bound and made the memory-bound proof's control
+     * arm look almost bounded.
+     */
+    @Test
+    void aFullPoolDeclinesToWaitSoThatIntakeIsNotThrottled() {
+        dispatcher = new PcTaskDispatcher("task-settle-saturated", INPUT_PARTITIONS, 1);
+        CountDownLatch startedRunning = new CountDownLatch(1);
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+
+        // Two distinct keys, so PC genuinely has more to give and only the single pool slot stops it.
+        dispatcher.registerRecords(PARTITION, records(2, offset -> "key-" + offset));
+        assertThat(dispatcher.dispatchAvailable(record -> () -> {
+            startedRunning.countDown();
+            awaitLatch(releaseWorker);
+        })).isEqualTo(1);
+        awaitLatch(startedRunning);
+
+        try {
+            assertThat(dispatcher.dispatchAvailable(noopPreparer()))
+                    .as("the pool is full, so this pump hands out nothing - which is the state the wait must "
+                            + "NOT be taken in")
+                    .isZero();
+
+            long startedAt = System.nanoTime();
+            boolean waited = dispatcher.awaitOutcomeIfIdle();
+            Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+
+            assertThat(waited).isFalse();
+            assertThat(elapsed)
+                    .as("it must return at once rather than holding the StreamThread away from poll() for "
+                            + "the settle budget on every saturated pump")
+                    .isLessThan(PcTaskDispatcher.OUTCOME_SETTLE_BUDGET);
+        } finally {
+            releaseWorker.countDown();
+        }
+    }
+
+    /**
+     * The other half of the discriminator: a pump that ran out of WORK while the pool still had room does
+     * wait, because there is nothing else it could usefully do.
+     */
+    @Test
+    void aPumpThatRanOutOfWorkWithASpareSlotDoesWait() {
+        dispatcher = new PcTaskDispatcher("task-settle-idle-pump", INPUT_PARTITIONS, 4);
+        CountDownLatch startedRunning = new CountDownLatch(1);
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+
+        // One key, so after the first record is handed out KEY ordering leaves nothing selectable while
+        // three pool slots stand empty - PC ran out of work, the pool did not.
+        dispatcher.registerRecords(PARTITION, records(2, offset -> "the-one-key"));
+        assertThat(dispatcher.dispatchAvailable(record -> () -> {
+            startedRunning.countDown();
+            awaitLatch(releaseWorker);
+            throw new IllegalStateException("boom");
+        })).isEqualTo(1);
+        awaitLatch(startedRunning);
+
+        assertThat(dispatcher.dispatchAvailable(noopPreparer()))
+                .as("nothing selectable, but the pool has room")
+                .isZero();
+
+        releaseWorker.countDown();
+
+        assertThat(dispatcher.awaitOutcomeIfIdle())
+                .as("so it waits, and the failure is available on this pump rather than the next")
+                .isTrue();
+        assertThat(dispatcher.pollFailure()).isNotNull();
+    }
+
+    @Test
+    void awaitOutcomeGivesUpAtItsBudgetWhenAWorkerIsStillRunning() {
+        dispatcher = new PcTaskDispatcher("task-settle-budget", INPUT_PARTITIONS, 1);
+        CountDownLatch startedRunning = new CountDownLatch(1);
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+
+        dispatcher.registerRecords(PARTITION, records(1, offset -> "key-a"));
+        dispatcher.dispatchAvailable(record -> () -> {
+            startedRunning.countDown();
+            awaitLatch(releaseWorker);
+        });
+        awaitLatch(startedRunning);
+
+        try {
+            assertThat(dispatcher.awaitOutcome(Duration.ofMillis(50)))
+                    .as("a worker that neither finishes nor fails must not hold the StreamThread past the "
+                            + "budget - the wait is bounded, which is what makes it safe to take at all")
+                    .isFalse();
+        } finally {
+            releaseWorker.countDown();
+        }
+    }
+
+    /**
+     * Control arm for {@link #aWorkerFailureFencesTheCommitFrontier}. Same shape, no failure: the frontier
+     * IS offered, so the fenced arm below is showing the fence rather than a dispatcher that never offers
+     * commit data at all.
+     */
+    @Test
+    void withNoFailureTheCommitFrontierIsOffered() {
+        dispatcher = new PcTaskDispatcher("task-fence-control", INPUT_PARTITIONS, 4);
+
+        dispatcher.registerRecords(PARTITION, records(4, offset -> "key-" + offset));
+        dispatcher.pumpUntilQuiescent(noopPreparer(), PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getRecordsSucceeded()).isEqualTo(4);
+        assertThat(dispatcher.collectCommitData())
+                .as("four records completed and no commit has covered them, so there is a frontier to commit")
+                .isNotEmpty();
+    }
+
+    /**
+     * astubbs/parallel-consumer#271's review thread, "a worker's processing failure can be committed past",
+     * answered as a property rather than as prose.
+     * <p>
+     * Key A fails; keys B, C, D succeed. On the stock path the throw leaves {@code process()} and the
+     * {@code runOnce} iteration never reaches its commit. Here the throw happens on a worker, so without the
+     * fence a scheduled commit landing before the failure is surfaced would make the other keys' offsets
+     * durable for a task that is about to be closed dirty and rewound - and for a
+     * {@code TaskCorruptedException} that is worse than a duplicate, because recovery wipes the state the
+     * committed offsets claim to cover.
+     */
+    @Test
+    void aWorkerFailureFencesTheCommitFrontier() {
+        dispatcher = new PcTaskDispatcher("task-fence", INPUT_PARTITIONS, 4);
+
+        dispatcher.registerRecords(PARTITION, records(4, offset -> "key-" + offset));
+        dispatcher.pumpUntilQuiescent(record -> () -> {
+            if (record.offset() == 0) {
+                throw new IllegalStateException("boom");
+            }
+        }, PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getRecordsFailed())
+                .as("the arm is only meaningful if a record really failed")
+                .isEqualTo(1);
+        assertThat(dispatcher.getRecordsSucceeded())
+                .as("and only if OTHER records really succeeded - those are the offsets that would be "
+                        + "committed past the failure")
+                .isPositive();
+        assertThat(dispatcher.hasCommitDataOutstanding())
+                .as("PC does hold completed, uncommitted work: the fence is what withholds it, not an "
+                        + "absence of anything to withhold")
+                .isTrue();
+
+        assertThat(dispatcher.collectCommitData())
+                .as("nothing may be committed past a record that failed")
+                .isEmpty();
+    }
+
+    /**
+     * The fence must not be paid for by making a failed task look CLEAN to close. Those are opposite
+     * questions and were deliberately kept apart: {@code StreamTask.validateClean} turns this one into a
+     * {@code TaskMigratedException} so the TaskManager closes the task dirty instead.
+     */
+    @Test
+    void theCommitFenceDoesNotMakeAFailedTaskLookSafeToCloseClean() {
+        dispatcher = new PcTaskDispatcher("task-fence-clean", INPUT_PARTITIONS, 4);
+
+        dispatcher.registerRecords(PARTITION, records(4, offset -> "key-" + offset));
+        dispatcher.pumpUntilQuiescent(record -> () -> {
+            if (record.offset() == 0) {
+                throw new IllegalStateException("boom");
+            }
+        }, PUMP_TIMEOUT);
+
+        assertThat(dispatcher.hasUncommittedWork())
+                .as("work completed that no commit covers - and the fence is why no commit will cover it, "
+                        + "which makes closing clean MORE wrong rather than less")
+                .isTrue();
     }
 }
