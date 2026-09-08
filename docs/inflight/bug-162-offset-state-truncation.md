@@ -106,8 +106,10 @@ qualified because it is destined for GitHub, where `astubbs#NN` renders as plain
 > answer.
 >
 <!-- post-merge: checked-begin -->
-> `PartitionStateCommittedOffsetIT` covers deliberate truncation only; neither remaining case is
-> tested. The open offset-encoding work (astubbs/parallel-consumer#106,
+> Both bootstrap branches, and the invariant that keeps the third path shut, are now covered by
+> `PartitionStateBootstrapTruncation162Test`; `PartitionStateCommittedOffsetIT` covers deliberate
+> truncation. The second defect above - the false warning on a partition with no commit data - is the
+> one that still has no test. The open offset-encoding work (astubbs/parallel-consumer#106,
 > astubbs/parallel-consumer#306, astubbs/parallel-consumer#207) addresses none of it.
 <!-- post-merge: checked-end -->
 
