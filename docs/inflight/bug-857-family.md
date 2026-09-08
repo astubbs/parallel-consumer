@@ -317,10 +317,10 @@ instance killed mid-`JoinGroup` is by construction a member that stops answering
 is one of identity - **is the unresponsive member one the harness stopped, or one still running?** -
 and it was unanswerable from what those two runs recorded, because
 `ProgressTracker.withDiagnostic(...)` was not wired there and every stall ended "no consumer
-diagnostic supplied". `MultiInstanceRebalanceTest` now passes it a `describeFleet` supplier, so a
-fresh reproduction should carry the fleet's own view of which instances were live - nobody has
-reproduced it since. `test-largenumberofinstances-residual-failures-measured-not-explained.md` owns
-the thread and the three instrumentation gaps.
+diagnostic supplied". `MultiInstanceRebalanceTest` now passes it a `describeFleet` supplier. Since
+resolved -
+`../solutions/test-flakiness/large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md`
+has the mechanism and the instrumentation that pinned it down.
 
 ## What settled the deadlock, and what `RebalanceEoSDeadlockTest` is for
 

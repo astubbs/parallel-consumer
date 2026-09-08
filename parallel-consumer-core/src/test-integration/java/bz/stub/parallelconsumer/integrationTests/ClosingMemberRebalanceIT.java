@@ -58,10 +58,13 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * <b>Reading a failure.</b> {@code -Dkafka.coordinator.log.level=debug} raises exactly the two
  * coordinator loggers, which say per member whether LeaveGroup was sent, what generation it held at
  * {@code onLeavePrepare}, and when the survivors were reassigned. The stall dump in the capacity
- * profile shows closers parked in {@code AbstractCoordinator.close -> awaitPendingRequests}; the
- * question this test exists to settle is whether that is the CAUSE of the freeze or a closing member
- * merely waiting on a group that froze for another reason.
- * See {@code docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md}.
+ * profile shows closers parked in {@code AbstractCoordinator.close -> awaitPendingRequests}; this
+ * test was built to settle whether that is the CAUSE of the freeze or a closing member merely
+ * waiting on a group that froze for another reason. Settled: a closing member's own LeaveGroup is
+ * not answered until the join phase completes, so it waits on the join phase rather than causing it
+ * to stay open - the storm-scale question of what keeps a 12-member join phase open for ~25s remains
+ * open. Mechanism:
+ * {@code docs/solutions/test-flakiness/large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md}.
  */
 @Timeout(300)
 @Testcontainers

@@ -5,8 +5,8 @@
 # Shared definitions for the confluentinc#857 experiment runners - THE single home of the maven
 # invocation, the JDK pin, the failsafe-report outcome classifier, the detector-verdict classifier
 # and the violation-trajectory parsing that exp-audit-stall-detector-silence.sh,
-# exp-measure-large-instances-failure-rate.sh, exp-sweep-large-instances-scale.sh and
-# exp-batch-857.sh all need. Source this; do not copy
+# exp-measure-large-instances-failure-rate.sh, exp-measure-capacity-profiles-failure-rate.sh,
+# exp-sweep-large-instances-scale.sh and exp-batch-857.sh all need. Source this; do not copy
 # from it.
 #
 # Same rule, and the same reason, as bin/lib/quarantine-common.sh: the copies drift, and the drift
@@ -261,6 +261,53 @@ pc_run_performance() { # tree-root it-test logfile [extra maven args...]
 
 # UTC stamp for a tally row. One format across every runner, so rows from different experiments sort
 # together.
+# --- the failure-rate loop --------------------------------------------------------------------
+#
+# One iteration loop for every "measure this MultiInstanceRebalanceTest profile's failure rate"
+# runner, so the two that exist (exp-measure-large-instances-failure-rate.sh and
+# exp-measure-capacity-profiles-failure-rate.sh) cannot drift apart in how they classify a run or
+# what they extract from it. It was a verbatim copy before it lived here, which is the drift this
+# file's header exists to prevent.
+#
+# Arguments: tree-root, the test method (a MultiInstanceRebalanceTest method name), the output
+# directory, the iteration count, and the ref stamp for the tally rows.
+#
+# STAMP EVERY ROW WITH THE TREE THAT PRODUCED IT. The tally is appended to a fixed /tmp path that
+# PERSISTS on a self-hosted runner, so rows from different dispatches share one file - and a
+# two-arm comparison (a suspected fix against its control) is exactly the case where attributing a
+# row to the wrong tree inverts the result. The timestamp alone cannot do it: concurrent dispatches
+# on one box interleave. The ref column is the cheap half of the fix the workflow header prescribes.
+#
+# The coordinator loggers are raised because these experiments exist to capture the failure's
+# SHAPE, and the one thing three sightings and a thread capture could not say is what a stuck
+# instance was waiting for. A LeaveGroup sent mid-join is answered only when the join phase
+# completes (measured: 2.7s in a healthy group), so a failing iteration's silos must show the
+# LeaveGroup/JoinGroup latencies and what the rest of the group was doing. Per-rebalance lines, not
+# per-record - the volume is tolerable. Both logback profiles carry the loggers on this property.
+#
+# A run that executed no test is NOT a data point: it is written as DID-NOT-RUN rather than
+# counted, because zero tests looks identical to a pass in a rate.
+pc_measure_profile_failure_rate() { # tree-root method out-dir iterations ref
+    local d="$1" method="$2" out="$3" iterations="$4" ref="$5"
+    local i log stats r progress keys
+    mkdir -p "$out"
+    for i in $(seq 1 "$iterations"); do
+        log="$out/run-$i.log"
+        pc_run_performance "$d" "MultiInstanceRebalanceTest#$method" "$log" \
+            -Dpc.log.dir="$out/pc-logs-$i" -Dkafka.coordinator.log.level=debug
+        stats=$(pc_failsafe_stats "$d" MultiInstanceRebalance)
+        r=$(pc_classify_failsafe_stats "$stats")
+        if [ "$r" = DID-NOT-RUN ]; then
+            printf '%s\tref=%s\trun=%s\tDID-NOT-RUN\t%s\n' "$(pc_now)" "$ref" "$i" "${stats:-no-report}" >> "$out/tally.tsv"
+            continue
+        fi
+        progress=$(grep -ohE 'No progress beyond [0-9]+ records after [0-9]+ rounds' "$log" | tail -1)
+        keys=$(grep -ohE 'missing keys: \[[^]]{0,70}' "$log" | tail -1)
+        printf '%s\tref=%s\trun=%s\t%s\t%s\t%s\n' "$(pc_now)" "$ref" "$i" "$r" "${progress:-no-progress-line}" \
+            "${keys:-no-keys-line}" >> "$out/tally.tsv"
+    done
+}
+
 pc_now() { date -u +%FT%TZ; }
 
 # The PRIMARY checkout, whichever worktree this script is running from - `--show-toplevel` would give

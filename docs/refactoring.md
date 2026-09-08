@@ -98,42 +98,15 @@ These change the public, user-visible surface, so they still may not be folded i
 patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
 refactors below, which are non-breaking and can land at any point in any line.
 
-- **DONE, landed in astubbs/parallel-consumer#267: `InternalRuntimeException` renamed to
-  `PCInternalRuntimeException`.** A user-visible break - it is what arrives from
-  `getFailureCause()`, and it is the type named in upstream's own report text
-  (`...internal.InternalRuntimeException: Timeout waiting for commit response PT30S`,
-  confluentinc#833). Renamed because the old name reads like a JDK type: in a stack trace or an IDE
-  exception picker that prints simple names, `InternalRuntimeException` could belong to anything, and
-  the `PC` prefix says whose it is at a glance. Recorded here rather than only in the commit, because
-  this section is what the release notes are assembled from.
-  [`docs/inflight/core-exception-hierarchy-cleanup.md`](inflight/core-exception-hierarchy-cleanup.md)
-  owns the rest of the naming work - `InternalException` and the two spellings of the PC prefix are
-  untouched, so a later pass will be a second break unless it is done in this same release.
-- **DONE, landing with astubbs/parallel-consumer#201: an inverted `initialLoadFactor` /
-  `maximumLoadFactor` pair is rejected instead of accepted.**
-  `ParallelConsumerOptions#validate()` now throws `IllegalArgumentException` naming both options and
-  both values. A break only for a configuration that never did what it said - today an initial factor
-  above the maximum is accepted and pinned at the initial value, surfacing at best as an inverted
-  `100/10` in the rate-limited saturation warning, so an application carrying the typo starts and
-  runs; after this it fails at construction. Small blast radius, but "started yesterday, will not
-  start today" is what a `=== Breaking` bullet exists for. Recorded here rather than only in the
-  commit, because this section is what the release notes are assembled from.
+**An entry is deleted in the PR that lands it**, because the commit message carries the release-note
+content and this section only lists what is still queued.
+
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
   (`public void setCommitInterval`, `private final Duration defaultMessageRetryDelay`,
   `isUsingTransactionalProducer`) **and retire the temporary Kafka-compat work-around flag**
   (`ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck`) - `ParallelConsumerOptions.java`.
-- **DONE, landing with astubbs/parallel-consumer#116: the `Stream` returned by
-  `pollProduceAndStream` / `vertxHttpReqInfoStream` now blocks until the processor closes.** It used
-  to return almost immediately, because the queue-to-`Stream` bridge ended the stream on the first
-  momentarily-empty poll - which is what `Spliterator.tryAdvance` returning `false` means, and it is
-  the confluentinc#912 OOM: results produced afterwards piled up behind a consumer that had already
-  walked away. A caller that collected on the calling thread and read a size got whatever had been
-  produced so far; the same caller now waits for close. **No compatibility path is offered and none
-  should be** - the old shape did not deliver the caller's results, so there is no correct behaviour
-  to preserve. Callers consume on their own thread, as the Vert.x example now shows. Recorded here
-  rather than only in the commit, because this section is what the release notes are assembled from.
 - ~~**Remove the JStream API** (deprecate first)~~ - **WITHDRAWN 2026-09-03, owner's call.** The
   removal was queued while the API was broken in the way above; deprecating something because it does
   not work is a different argument from deprecating something that does. It works now, so it stays,
@@ -467,6 +440,16 @@ cosmetic - see the last bullet.*
     could be, because the iterator holds a read lock only its opener can release.
     SpotBugs reads no confinement annotation and will keep reporting it; do not "fix" it
     with `volatile`, which would assert a sharing that does not exist.
+  - **`PartitionState`'s commit-window pair is confined by construction - do not "fix" either with
+    `volatile`.** `stateChangedSinceCommitStart` and `offerLastMadeForCommit` share one lifecycle:
+    written where a commit window opens, read where it closes. **`offerLastMadeForCommit`'s javadoc
+    owns the thread model** - which thread writes and reads it in each commit mode, the one
+    `Consumer#close()` hand-over, and why `dirty` being the fence is what keeps the rest plain; it is
+    not restated here, because two copies of a concurrency argument drift and the field is where a
+    reader forms the question. What belongs on this list is only the work item: if anyone declares
+    the confinement with `@ThreadConfined` plus a runtime assertion (the `RetryQueue.closed`
+    treatment above), **do the pair together** - annotating one of two fields with the same lifecycle
+    reads as a claim about the other.
   - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
     on the astubbs#119 branch:**
     `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
@@ -865,9 +848,12 @@ Only the items needing a decision are listed here - do not restate the inventory
   `LoadTest` stays at 4,000: it is untagged, so it runs in the gating lane, and it is already a
   listed member of the load-tightness flake family at that volume.
 
-Not listed as work: `largeNumberOfInstances` stays in `docs/quarantined-tests.md` as an unowned entry -
-astubbs#29 merged on 2026-09-02 fixing one confluentinc#857 mechanism without lifting this quarantine, so it
-is tracked by the registry, not here. The three
+Not listed as work: `largeNumberOfInstances` **left the quarantine registry on 2026-09-07** and is not
+tracked here either. Its residual failures were measured as the consumer group protocol under the
+profile's churn rate, so it is a capacity measurement rather than a test that can be red - it carries
+`@Tag("capacity")`, which the required lane excludes and the scheduled `experiments` workflow runs
+([`docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md`](inflight/test-largenumberofinstances-cannot-gate-a-merge.md)).
+The three
 `@Timeout(60000L)` annotations (`MockConsumerEarlyCloseTest`, `MockConsumerSaslAuthenticationTest`,
 `MockConsumerCommitTimeoutTest`) are owned by open PR astubbs#206, which replaces them with
 `@Timeout(120)` on a shared `MockConsumerTestBase` and adds the assertion
@@ -960,6 +946,13 @@ rather than fixed there so the gate's scope stayed one decision.
   `SubmitWorkToPoolShutdownRaceTest` still builds its own twice (grep `new ListAppender` there); its
   `getThrowableProxy()` filtering is already covered by `LogCapture.events()`, so no widening of the
   helper is needed.
+
+### Test infrastructure - `RandomUtils.nextInt()` is deprecated, and every chaos topic name uses it
+
+- **Replace the deprecated `org.apache.commons.lang3.RandomUtils.nextInt()` used to make a unique
+  topic name.** Four call sites, all in `integrationTests/chaostests` (grep `RandomUtils.nextInt()`),
+  and `-Xlint:all` warns on each. Do all four together or none: fixing one leaves a file that reads
+  as the odd one out, which is why the soak scenario that surfaced the warning deliberately did not.
 
 ### Cross-module test clones (the file-similarity backlog behind astubbs#40)
 
