@@ -259,7 +259,7 @@ churn rather than a PC defect.
   (confluentinc#777, [`upstream-173-revocation-duplicate-processing.md`](upstream-173-revocation-duplicate-processing.md)).
   One chaos cell (cooperative plus draining) was predicted and never run; a revocation grace period
   is an owner decision.
-- **Refuted, astubbs#484 (2026-09-08):** the "reset to earlier offset" replay branch behind
+- **Refuted, astubbs#484 (merged 2026-09-08):** the "reset to earlier offset" replay branch behind
   confluentinc#546 ([`bug-162-offset-state-truncation.md`](bug-162-offset-state-truncation.md)).
   One fixture, one differing term, both arms' predictions held: polled-below-expected discards every
   loaded incomplete and rewinds the commit frontier, which is duplicates by construction, never
@@ -542,7 +542,7 @@ these get answered.
 
 - confluentinc#843 (astubbs#178) - same key on two threads across a rebalance. A contract question,
   wait-for-info; [`core-178-key-order-across-a-rebalance.md`](core-178-key-order-across-a-rebalance.md).
-- confluentinc#546 (astubbs#162) - truncating state; the replay branch is refuted (astubbs#484),
+- confluentinc#546 (astubbs#162) - truncating state; the replay branch is refuted (astubbs#484, merged),
   the false-truncation WARN is what remains and wants an owner decision.
 - confluentinc#551 (astubbs#164) - batching not as expected; the fork verified the over-request as
   astubbs#311, no PR.
