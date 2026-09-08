@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - still true and current (its last section is dated today): the diagnosis it records has landed in the tree - InstanceStallDetector now emits the non-gating INSTANCE_BUSY_IN_USER_CODE observation and reserves the violation for nobody-in-user-code, reads -Dchaos.instanceStallDumpAfterSeconds defaulting to the bound, and InstanceStallProbeIT.takesOneThreadDumpPerFiringInTheDefaultConfiguration pins the count. ChaosChurnStormIT still sets CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS and still never sets useCooperativeAssignor, so the opening argument holds; all three cited sibling notes still resolve. The torture-harness anchors are covered by the file-refs N/A comments already in the note -->
 
 **Commit mode: `PERIODIC_CONSUMER_ASYNCHRONOUS`** (`ChaosChurnStormIT`, verified in source). This is
 why the file exists separately, and it is the most important fact in it:

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-vetted: 2026-09-07 - still true: the deterministic probe was still not landed (only OffsetEncodingBackPressureTest and OffsetEncodingBackPressureUnitTest exist, and the unit test still carries the single backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing method), and PartitionState.updateBlockFromEncodingResult is unchanged -->
 
 <!-- post-merge: checked-begin -->
 Found while reviewing astubbs#351, which un-quarantined

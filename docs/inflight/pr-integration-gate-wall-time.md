@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - the probe split has MERGED (astubbs#442, `c668acbfa`, which also sharded the gate), so that open question is retired and the Settled entry rewritten. Still open and verified against the tree: `PartitionStateCommittedOffsetIT.triggerCompactionProcessing` still sleeps flat with its `// or wait?` beside it and `optimize/ig-exp004-compaction-poll` still exists; the 857 probe still runs twenty repetitions in total; no workflow step prints `nproc` in `.github/workflows/maven.yml`. The 10m20s headline is now unmeasured against the sharded lane -->
 
 <!-- post-merge: checked-begin - both sentences name astubbs/parallel-consumer#439 explicitly and
      are written in the past tense, so they stay true once that PR has merged and its branch is
@@ -22,16 +23,17 @@ this note carries only what is still moving.
   same tests cost 11% more CPU time under six forks, plus a first-ever timeout failure in
   `ManagedPCInstanceLifecycleTest`. With thread-parallelism already closed in 2026-07, **both
   parallelism directions for this lane are now measured and closed.** The lever is work reduction.
-- **Splitting `Rebalance857CommitSyncDeadlockProbeIT` four ways is green, free, and buys nothing
-  at forkCount=4** - it removes a 339s tail that was never the binding constraint (work/4 = 382s
-  was). It is a precondition for later work-reduction wins, not a win. Measured on
-  `optimize/ig-exp002-probesplit`, which is NOT merged - see below.
+- **Splitting `Rebalance857CommitSyncDeadlockProbeIT` four ways is done.** It landed with
+  astubbs/parallel-consumer#442, which also sharded the gate into a heavy set and a catch-all. Four
+  package-private classes of five repetitions each now live in one file; the base class holds the
+  body. It removed a tail that was never the binding constraint at forkCount=4, so it was a
+  precondition for later work-reduction wins rather than a win itself.
 
 ## Open
 
-- **Whether to take the probe split at all.** It is proven green and costs nothing, but it edits a
-  calibrated instrument for zero measured gain today. That is a judgement for the author, not
-  something to merge silently. Branch `optimize/ig-exp002-probesplit` holds it.
+- **What the lane costs now.** The 10m20s figure above predates astubbs/parallel-consumer#442's
+  shard and astubbs/parallel-consumer#457's job batching, and nothing here has re-measured it. Take
+  the numbers below as the pre-shard picture until a fresh sample says otherwise.
 - **The compaction poll.** `PartitionStateCommittedOffsetIT.triggerCompactionProcessing()` sleeps a
   flat 20s from two call sites in a seven-test class - 60s+ of that class's 159s - with the author's
   own `// or wait?` beside it. Built and smoke-clean on `optimize/ig-exp004-compaction-poll`,

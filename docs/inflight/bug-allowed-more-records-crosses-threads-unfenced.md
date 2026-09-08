@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - `PartitionState.allowedMoreRecords` is still `private boolean ... = true` with no fence, and `dirty` is still the only `volatile` in the class, so the writer/reader pair and the non-self-clearing argument both stand. `docs/refactoring.md`s `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` list still omits every `PartitionState` field, which is the notes point. `core-control-thread-contract-debts.md`, `test-jcstress-probe-module-open-items.md` and `jcstress-poc/.../CommitPathVisibilityProbes.java` all still resolve. One supporting detail has drifted: that list no longer names `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`, which went `volatile` in astubbs#201 -->
 
 The offset-encoding back-pressure flag is a plain `boolean`, written on the broker-poll thread and
 read on the control thread with no happens-before edge between them. A stale read decides whether

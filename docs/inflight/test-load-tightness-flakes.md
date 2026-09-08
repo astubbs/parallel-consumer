@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - still true, still undiagnosed: no member of the family is quarantined (none of committedOffsetRemoved, commitTimeout, sameRegistryCanBeReusedAfterPcInstanceClosed, LoadTest or inFlightMessagesCommittedIfProcessedDuringShutdown appears in docs/quarantined-tests.md), and all five cited solution write-ups still resolve. bin/inflight.mjs codecov test committedOffsetRemoved and ... commitTimeout both show 10 recent passes per parameter, which is what a low-rate family looks like and refutes nothing - the tool warns its page is bounded -->
 
 
 Shared signature: a **fast-failing** assertion or timeout under heavy contention, passing in isolation

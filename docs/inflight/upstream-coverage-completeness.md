@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - the obligation is still open and nothing records any surface having been read since; re-confirmed the `projectsV2` INSUFFICIENT_SCOPES failure against confluentinc/parallel-consumer with the current token, and that `scripts/upstream-sweep.sh`, `docs/upstream.md`'s two named sections and the closed-as-completed write-up all still resolve. Replaced the hard-coded fork count, which had already drifted -->
 
 
 **This is not done.** The 2023 administrative sweeps are handled - 28 issues mirrored as
@@ -42,7 +43,7 @@ actually *read*, which is the only thing recorded below:
 
 - **Project boards.** `has_projects: true` upstream, but our token lacks the `read:project` scope, so
   `projectsV2` returns INSUFFICIENT_SCOPES. Never inspected. Needs a scoped token or a manual look.
-- **169 forks.** Other people's downstream fixes, entirely unexamined. Probably low yield per unit
+- **The forks.** Other people's downstream fixes, entirely unexamined (`gh api repos/confluentinc/parallel-consumer --jq .forks_count` for the number - the count written here had already drifted). Probably low yield per unit
   effort, but it is a genuine surface and worth one pass.
 
 ## Ruled out - do not re-investigate

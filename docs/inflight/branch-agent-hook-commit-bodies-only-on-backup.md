@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
+<!-- inflight-vetted: 2026-09-07 - re-confirmed the risk is intact: `origin/backup/pre-split-322` still resolves and all five SHAs still `git cat-file -t` as commits, and nothing under `docs/solutions/` carries the bodies, so that branch is still the only copy. `.claude/hooks/check-merge-outstanding-work.sh` still exists and is still the thing they document -->
 
 <!-- post-merge: checked-begin -->
 The **content** of these five commits is on master; their **bodies** are not, and in this repo a

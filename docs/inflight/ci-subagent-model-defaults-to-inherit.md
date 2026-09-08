@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-checked `.claude/settings.json`: every `PreToolUse` entry matches `Bash`, `Edit|Write|NotebookEdit`, `Write|Edit|MultiEdit` or `*` - none matches the Agent tool, so no hook denies a dispatch missing `model`, and `bin/test-check-agent-hooks.sh` has no case for one. The delete-when is unmet -->
 
 Omitting `model` on an Agent dispatch is not a neutral default - the subagent runs on whatever the
 foreground session is on, which is the expensive tier precisely when the foreground is doing the

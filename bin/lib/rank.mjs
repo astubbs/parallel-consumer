@@ -108,7 +108,7 @@ function positionalNumber(path) {
  * separate the last case, so attribution comes from the note's own text and the row prints both
  * commands when the note does not say. Three outcomes: `fork`, `upstream`, `unknown`.
  */
-function numberFor(path, text) {
+export function numberFor(path, text) {
     const numbered = positionalNumber(path)
     if (numbered === null) return null
     const isPullRequest = path.startsWith(`${NOTES_DIR}/pr-`)
@@ -179,6 +179,19 @@ function chooseVersion(seen, { onBaseline, readable, baseline }) {
     const impactful = rankable.filter((v) => INFLIGHT_IMPACT_ORDER.includes(v.group))
     const pool = impactful.length > 0 ? impactful : (rankable.length > 0 ? rankable : ordered)
     return (onBaseline ? pool.find((v) => v.refs.includes(baseline)) : null) ?? pool[0]
+}
+
+/**
+ * Oldest first by first-added date, undated last, path as the only tie-break. Exported so `vet`
+ * orders its rows by the same rule rather than a second copy of it.
+ */
+export const byAgeThenPath = (a, b) => {
+    if (a.age !== b.age) {
+        if (a.age === null) return 1
+        if (b.age === null) return -1
+        return a.age < b.age ? -1 : 1
+    }
+    return a.path.localeCompare(b.path)
 }
 
 /**
@@ -261,9 +274,12 @@ export function parseRegister(text) {
  *
  * @param {object} index a `corpusIndex` result, scoped to the notes area
  * @param {{prs: {ok: boolean, map: Map, reason?: string}, register: {ok: boolean, text?: string, reason?: string},
- *          group?: string|null}} opts
+ *          ages?: {ok: boolean, dates: Map<string, string>}, group?: string|null}} opts
+ *   `ages` is `firstAddedDates` over the notes directory - path -> the date the note was first
+ *   added on any ref. Optional so the fixture-driven checks that are not about order need not build
+ *   one; a row with no date sorts after every dated row in its group and says so.
  */
-export function rank(index, { prs, register, group = null }) {
+export function rank(index, { prs, register, ages = { ok: true, dates: new Map() }, group = null }) {
     // A FAILED WALK IS NOT AN EMPTY BACKLOG. Two P0s found while building this front door were both
     // a failure rendering as a confident empty result, which is why exit 0 and exit 2 differ.
     if (!index.ok) return { ok: false, reason: index.reason ?? 'the corpus index did not build' }
@@ -441,10 +457,17 @@ export function rank(index, { prs, register, group = null }) {
             // UNANSWERED IS NOT ABSENT. An unauthenticated or rate-limited `gh` reads exactly like a
             // branch with no pull request unless the shape carries the difference.
             prKnown: prs.ok === true,
+            // FIRST ADDED, on any ref - the age the row is ordered by. Null when the date walk did
+            // not answer or never saw the path, which the row states rather than sorting silently.
+            age: ages.ok ? (ages.dates.get(path) ?? null) : null,
         })
     }
 
-    for (const rows of buckets.values()) rows.sort((a, b) => a.path.localeCompare(b.path))
+    // OLDEST FIRST WITHIN A GROUP, path order only as the tie-break - operator ruling, 2026-09-07,
+    // on finding the rows inside every impact bucket were alphabetical: "impact, then by age, so
+    // oldest first". The bucket order is the impact scale and was never the problem; a filename
+    // sort inside it ranked nothing while reading as if it did. Undated rows sort last, together.
+    for (const rows of buckets.values()) rows.sort(byAgeThenPath)
 
     const computed = delta(register, { byName, byNumber, buckets, group })
     // WHICH ROWS THE REGISTER ALREADY NAMES, marked on the row itself. The scoped list previously

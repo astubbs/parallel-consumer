@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - still true, the decision recorded here is not yet implemented: largeNumberOfInstances, cooperativeStickyRebalanceShouldNotStall and gentleChaosRebalance all still carry @Tag("performance") in MultiInstanceRebalanceTest, largeNumberOfInstances is still @Quarantined (whose reason still says "where it should live is an open decision") and still listed in docs/quarantined-tests.md, and experiments.yml still runs only the rate -->
 
 ## The decision the 2026-09-01 handoff left open, now answerable
 

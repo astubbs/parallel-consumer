@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - unposted: astubbs#120 carries only the 2026-08-06 disambiguation comment, not this draft, so it stays whatever else is true; its claims still hold on the tree - registeredMeters and metersLock are both in PCMetrics, PCMetrics859Test exists, astubbs#57 merged -->
 <!-- post-merge: exempt-file - a drafted issue reply, held until the pre-release sweep posts it.
      It deliberately outlives the PR that wrote it, so it cannot be written in post-merge terms. -->
 
