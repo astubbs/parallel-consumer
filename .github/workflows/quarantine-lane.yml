@@ -6,8 +6,9 @@
 # verdict lives in the step summary), so only the fail-fast rule checks can make the job itself red.
 # Per-PR runs give PRE-MERGE attribution - a PR that accidentally fixes or breaks a quarantined test
 # learns it before merging; the push-to-master run keeps the canonical master-state record. No cron:
-# the signal cannot change without a code change, and both kinds are covered. The seconds-fast
-# per-PR rule enforcement is maven.yml's separate "Quarantine Audit" job. Manual: workflow_dispatch.
+# the signal cannot change without a code change, and both kinds are covered. The rule checks also
+# run, unauthenticated, in repo-hygiene.yml's `repo: hygiene` sweep; the authenticated owner-claim
+# verification lives here, in the fail-fast steps below. Manual: workflow_dispatch.
 
 name: Quarantine Lane
 
@@ -45,8 +46,8 @@ jobs:
   # and owner-claim checks, and re-executes the lane against that code.
   #
   # Red inside the run step is EXPECTED while the owning fix PR is open; the job itself never goes red
-  # for test failures (step-level continue-on-error) - only audit-class errors would, and those live in
-  # quarantine-audit. So a GREEN tick here does NOT mean the quarantined tests passed: the verdict is in
+  # for test failures (step-level continue-on-error) - only audit-class errors would, from the
+  # fail-fast rule checks below. So a GREEN tick here does NOT mean the quarantined tests passed: the verdict is in
   # the step summary and the sticky PR comment, not the check mark.
   test-quarantined:
     name: "tests"  # renders as "Quarantine Lane / tests" - the workflow name carries the identity
@@ -60,8 +61,11 @@ jobs:
       # of this branch's registry check, which shipped once without a test to hold them.
       - name: Self-test the quarantine scan
         run: bash bin/test-check-quarantine-registry.sh
-      # Fail fast on rule violations BEFORE spending a test run - same checks as quarantine-audit,
-      # here validating master's state.
+      # Fail fast on rule violations BEFORE spending a test run. The registry check also runs in the
+      # `repo: hygiene` sweep; the owner check needs the token below, which that lane deliberately
+      # holds none of, so THIS is where an orphaned or overdue owner claim goes red on a required
+      # check (`tests`). The dedicated per-PR "quarantine: audit" job that used to duplicate both
+      # was retired - docs/inflight/ci-fewer-jobs-ruleset-edits.md.
       - name: Enforce registry (docs/quarantined-tests.md matches @Quarantined annotations)
         run: bin/check-quarantine-registry.sh
       - name: Verify owner claims

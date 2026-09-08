@@ -6,9 +6,11 @@ package bz.stub.parallelconsumer.integrationTests;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
-import bz.stub.parallelconsumer.integrationTests.utils.DeclineCountingProducerManager;
-import bz.stub.parallelconsumer.integrationTests.utils.DeclineCountingProducerManager.DeclineCountingModule;
+import bz.stub.parallelconsumer.ProvesClaim;
+import bz.stub.parallelconsumer.TransactionalClaim;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.utils.TransactionalTopicVerifier;
+import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -25,7 +27,11 @@ import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -57,15 +63,10 @@ import static org.hamcrest.number.OrderingComparison.greaterThan;
  * AB-BA: the poll thread wedges inside the rebalance callback (or dies on {@code ProducerManager}'s
  * cross-thread-write-lock {@code ConcurrentModificationException}), the member is eventually kicked from the group,
  * and the offsets of the revoked partitions are never committed. confluentinc#548's fence: the revoke callback first
- * waited out any in-flight transactional commit ({@code while (isTransactionCommittingInProgress()) sleep} - the
+ * waits out any in-flight transactional commit ({@code while (isTransactionCommittingInProgress()) sleep} - the
  * predicate is "write lock A held"), and {@code isRebalanceInProgress} stops {@code pc-control} starting a new commit
- * cycle mid-rebalance. That wait had no deadline, and on a busy transactional instance it held the poll thread past
- * {@code max.poll.interval.ms} - astubbs#44 (confluentinc#803). astubbs#408 replaced it: <b>the revoke path now
- * declines both locks with a bare {@code tryLock()} and skips its commit when either is held.</b> The revoked
- * partitions' completed-but-uncommitted work is then redelivered to the next owner - the at-least-once contract,
- * and the cost {@code docs/features/rebalance-behaviour.yaml} records. The decision and the alternative not taken
- * (a bounded wait, viable once producer fencing is recoverable - astubbs#225) are in
- * {@code docs/inflight/bug-857-transactional-revoke-wait.md}.
+ * cycle mid-rebalance. Net behaviour: <b>revocation never truncates state until the offsets of completed work have
+ * been committed - either by the control-thread commit the revoke waited out, or by the revoke path's own commit.</b>
  * <p>
  * <b>What the detector observes - behaviour, not internals.</b> An earlier version of this test proved "the revoke
  * path committed" by overriding {@code commitOffsetsThatAreReady()} and counting a latch when the override ran on
@@ -74,19 +75,13 @@ import static org.hamcrest.number.OrderingComparison.greaterThan;
  * counted - the test passed 5/5 on the defective build and failed 5/5 on the fixed one, reporting a working fix as a
  * regression (the worked example in
  * {@code docs/solutions/workflow-issues/prove-the-problem-exists-before-writing-the-fix.md}).
- * This version asserts the outcome instead:
+ * This version asserts the outcome instead, via the group coordinator:
  * <ol>
  * <li><b>Deadlock bound</b>: the revoke callback, entered while {@code pc-control} is provably mid-commit-cycle
  * (holding lock A), completes within 30s.</li>
- * <li><b>Not by waiting</b>: the callback returns inside {@value #REVOKE_MUST_RETURN_WITHIN_MS}ms, a fraction of
- * the {@value #CONTROL_COMMIT_DELAY_MS}ms dwell it was timed into. The pre-astubbs#408 spin returned only once
- * the dwell ended, so it fails this by construction; a deadlock fails the first.</li>
- * <li><b>The window was resolved, not skipped</b>: either the revocation declined the held lock - counted by
- * {@link DeclineCountingProducerManager}, the same instrument {@code Revoke857TransactionalWaitProbeIT} uses, and
- * the only thing that distinguishes a fast fixed callback from one that never met a commit - or, if the dwell had
- * already ended by the time the callback got there, it committed inline and the group's committed offsets for the
- * revoked partitions moved. Until astubbs#408 the second was the only accepted outcome, and it held on master
- * <em>because of</em> the unbounded wait.</li>
+ * <li><b>The revoke window committed</b>: the group's committed offsets for the revoked partitions, read at the
+ * moment the callback returns, are strictly ahead of the baseline read just before the forced overlap. On the
+ * defective interleaving nothing can commit inside that window, so the offsets cannot move.</li>
  * <li><b>The instance survives</b>: no recorded failure cause, and processing continues after the rebalance.</li>
  * </ol>
  * <b>How the overlap is forced deterministically</b> (the same control-arm technique as
@@ -128,15 +123,6 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
     static final long OVERLAP_WAIT_BOUND_MS = 20_000L;
 
     /**
-     * How long the real {@code onPartitionsRevoked} may take once entered against a dwelling pc-control. A declining
-     * callback measured 4-11ms on a shared broker ({@code Revoke857TransactionalWaitProbeIT}); the deleted spin
-     * returned only when the {@value #CONTROL_COMMIT_DELAY_MS}ms dwell ended. A quarter of the dwell leaves two
-     * orders of magnitude of headroom for the fix and still fails the wait even when the baseline offset read has
-     * eaten most of the dwell before the callback enters.
-     */
-    static final long REVOKE_MUST_RETURN_WITHIN_MS = CONTROL_COMMIT_DELAY_MS / 4;
-
-    /**
      * Enough backlog that the WorkManager stays dirty - so pc-control keeps entering commit cycles - through
      * setup, the forced overlap and the post-rebalance liveness check. ~{@value #PROCESSING_DELAY_MS}ms per record
      * across 2 partitions ≈ 80 records/s ≈ 50s of work.
@@ -153,20 +139,21 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
      * happens well under a second after the callback returns.
      */
     static final long POST_REVOKE_PROCESSING_DELAY_MS = 500L;
+    /**
+     * How many records PC must have processed ON THE RETURNED PARTITIONS after they come back to it before the
+     * output topic is read for duplicates. Enough to cover the records a deferred duplicate would come from - the
+     * produced-but-undrained tail at the revocation, a handful at most - with margin; small enough that at
+     * {@link #POST_REVOKE_PROCESSING_DELAY_MS} per record the wait stays in seconds.
+     */
+    static final long RECORDS_PROCESSED_AFTER_THE_PARTITIONS_RETURN = 20L;
 
     Consumer<String, String> consumer;
     Producer<String, String> producer;
 
     ParallelEoSStreamProcessor<String, String> pc;
 
-    /** Hands PC a producer manager that counts declined revocations - the instrument behind assertion 3. */
-    DeclineCountingModule<String, String> module;
-
     /** Counts down when the first (forced-overlap) revocation's callback returns - the hard-deadlock detector. */
     CountDownLatch firstRevokeCompleted;
-
-    /** Wall time the real {@code onPartitionsRevoked} took on the forced-overlap revocation; -1 until it returns. */
-    volatile long revokeCallbackTookMs = -1;
 
     /** Incremented each time pc-control enters the artificial dwell (holding lock A, before lock B). */
     final AtomicLong controlDwellEpoch = new AtomicLong();
@@ -181,6 +168,10 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
 
     /** The input-topic partitions the first revocation revoked. */
     volatile Collection<TopicPartition> revokedPartitions;
+    /** Of those, the ones assigned back to PC after the second consumer left - the partitions a duplicate would come from. */
+    final Set<TopicPartition> returnedPartitions = ConcurrentHashMap.newKeySet();
+    /** Records processed on a returned partition after its return - the wait the duplicate check needs. */
+    final AtomicLong processedOnReturnedPartitions = new AtomicLong();
 
     volatile boolean slowProcessingAfterRevoke = false;
 
@@ -209,8 +200,7 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
                 .ordering(PARTITION) // just so we dont need to use keys
                 .build();
 
-        module = new DeclineCountingModule<>(pcOptions);
-        pc = new ParallelEoSStreamProcessor<>(pcOptions, module) {
+        pc = new ParallelEoSStreamProcessor<>(pcOptions, new PCModule<>(pcOptions)) {
 
             @Override
             protected void commitOffsetsThatAreReady() throws TimeoutException, InterruptedException {
@@ -225,6 +215,19 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
                     ThreadUtils.sleepQuietly(CONTROL_COMMIT_DELAY_MS);
                 }
                 super.commitOffsetsThatAreReady();
+            }
+
+            @Override
+            public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+                super.onPartitionsAssigned(partitions);
+                var revoked = revokedPartitions;
+                if (revoked != null) {
+                    for (var tp : partitions) {
+                        if (revoked.contains(tp)) {
+                            returnedPartitions.add(tp);
+                        }
+                    }
+                }
             }
 
             @Override
@@ -260,8 +263,7 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
                 try {
                     super.onPartitionsRevoked(partitions);
                 } finally {
-                    revokeCallbackTookMs = System.currentTimeMillis() - start;
-                    log.info("Revocation callback returned after {}ms", revokeCallbackTookMs);
+                    log.info("Revocation callback returned after {}ms", System.currentTimeMillis() - start);
                     firstRevokeCompleted.countDown();
                 }
             }
@@ -305,6 +307,7 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
 
     @SneakyThrows
     @RepeatedTest(5)
+    @ProvesClaim(TransactionalClaim.RESULTS_EXACTLY_ONCE_UNDER_FAILURE)
     void noDeadlockOnRevoke() {
         var count = new AtomicLong();
 
@@ -314,6 +317,10 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
         pc.pollAndProduce((recordContexts) -> {
             ThreadUtils.sleepQuietly(slowProcessingAfterRevoke ? POST_REVOKE_PROCESSING_DELAY_MS : PROCESSING_DELAY_MS);
             count.getAndIncrement();
+            var record = recordContexts.getSingleConsumerRecord();
+            if (returnedPartitions.contains(new TopicPartition(record.topic(), record.partition()))) {
+                processedOnReturnedPartitions.incrementAndGet();
+            }
             log.debug("Processed record, count now {} - offset: {}", count, recordContexts.offset());
             return new ProducerRecord<>(outputTopic, recordContexts.key(), recordContexts.value());
         });
@@ -351,32 +358,17 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
             Assertions.assertNotNull(committedAtRevokeReturn, "Committed-offset read at revoke return failed");
             Assertions.assertFalse(revokedPartitions.isEmpty(), "Revocation carried no input-topic partitions");
 
-            // assertion 2: returned, and not by waiting the dwell out
-            long took = revokeCallbackTookMs;
-            Assertions.assertTrue(took >= 0 && took < REVOKE_MUST_RETURN_WITHIN_MS,
-                    "confluentinc#803 regression: the revocation callback took " + took + "ms against a bound of " +
-                            REVOKE_MUST_RETURN_WITHIN_MS + "ms, timed into a " + CONTROL_COMMIT_DELAY_MS + "ms " +
-                            "pc-control commit dwell. It waited the in-flight commit out - the unbounded spin " +
-                            "astubbs#408 deleted - instead of declining. That wait runs inside poll() and is charged " +
-                            "against max.poll.interval.ms");
-
-            // assertion 3: the window was resolved, not skipped - declined (the fix path, counted), or committed
-            // inline because the dwell had already ended when the callback reached the lock
-            boolean anyRevokedPartitionAdvanced = false;
             for (var tp : revokedPartitions) {
                 long before = baseline.getOrDefault(tp, -1L);
                 long after = committedAtRevokeReturn.getOrDefault(tp, -1L);
                 log.info("Committed offset for {}: {} at revoke entry -> {} at revoke return", tp, before, after);
-                anyRevokedPartitionAdvanced |= after > before;
+                Assertions.assertTrue(after > before,
+                        "confluentinc#548 regression: the revocation window committed nothing for " + tp +
+                                " (committed offset " + before + " at entry, " + after + " at return). The revoke " +
+                                "path must not truncate until completed work is committed - either by waiting out " +
+                                "the in-flight pc-control commit, or by committing itself - otherwise the revoked " +
+                                "partitions' processed-but-uncommitted work is silently thrown away");
             }
-            long declines = module.manager().revocationDeclines();
-            log.info("Forced-overlap revocation: {} decline(s), committed offsets advanced inside the callback: {}",
-                    declines, anyRevokedPartitionAdvanced);
-            Assertions.assertTrue(declines > 0 || anyRevokedPartitionAdvanced,
-                    "Vacuous run: the revocation neither declined the producer transaction lock (" + declines +
-                            " declines counted) nor committed inline (no revoked partition's committed offset " +
-                            "moved between revoke entry and return), so it never met the in-flight pc-control " +
-                            "commit the forced overlap exists to put in its way - the window was not exercised");
 
             Assertions.assertNull(pc.getFailureCause(),
                     "PC recorded a failure after the forced revoke-during-commit overlap: " + pc.getFailureCause());
@@ -386,7 +378,60 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
             // liveness: the control thread must still be committing and distributing work after the rebalance
             long countAtRevoke = count.get();
             await().timeout(Duration.ofSeconds(30)).untilAtomic(count, is(greaterThan(countAtRevoke)));
-            log.debug("Test finished - processing continued after the rebalance");
+            log.debug("Processing continued after the rebalance");
         }
+
+        // The second consumer has left, so the revoked partitions come back to PC, which resumes them from their
+        // committed offsets. This is where the transactional revoke defect became visible: a revoke-time commit that
+        // published a transaction whose offsets omitted records it contained leaves those inputs uncommitted, PC now
+        // reprocesses them, and their outputs are produced a second time - a duplicate a read_committed consumer of
+        // the output topic can see (astubbs#436 for the defect, and the fix that hands the revoke commit to the
+        // control thread so that it drains first). Every input value is unique, so a repeated output value is a
+        // duplicated result and nothing else.
+        // Counted on the RETURNED partitions specifically - the still-owned partition keeps processing throughout and
+        // would satisfy a total count on its own before the follow-up rebalance has even given the others back.
+        await("PC has been given the revoked partitions back and has reprocessed them past where a deferred " +
+                "duplicate would come from")
+                .timeout(Duration.ofSeconds(90))
+                .untilAtomic(processedOnReturnedPartitions, is(greaterThan(RECORDS_PROCESSED_AFTER_THE_PARTITIONS_RETURN)));
+        Assertions.assertFalse(returnedPartitions.isEmpty(), "no revoked partition came back to PC");
+        try (var output = TransactionalTopicVerifier.readCommitted(getKcu(), "output", outputTopic)) {
+            readToTheCommittedEnd(output);
+            List<String> duplicated = output.consumed().stream()
+                    .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()))
+                    .entrySet().stream()
+                    .filter(e -> e.getValue() > 1)
+                    .map(Map.Entry::getKey)
+                    .sorted()
+                    .collect(Collectors.toList());
+            Assertions.assertTrue(duplicated.isEmpty(),
+                    "exactly-once broken across the rebalance: " + duplicated.size() + " result(s) reached the " +
+                            "output topic twice, visible to a read_committed consumer, out of " +
+                            output.consumed().size() + " read. The revoke-time commit published output whose " +
+                            "source offset it did not commit, so the returned partitions reprocessed those inputs. " +
+                            "Duplicated values: " + duplicated);
+            log.info("No duplicated result among {} committed outputs read after the partitions returned",
+                    output.consumed().size());
+        }
+        log.debug("Test finished");
+    }
+
+    /**
+     * Polls the verifier until its position on every assigned partition has reached the committed end (the last
+     * stable offset, since it reads committed), so the duplicate check covers everything PC had committed by then.
+     */
+    private static void readToTheCommittedEnd(TransactionalTopicVerifier output) {
+        await("the output topic is read to its committed end")
+                .timeout(Duration.ofSeconds(60))
+                .until(() -> {
+                    output.poll();
+                    var consumer = output.consumer();
+                    var assigned = consumer.assignment();
+                    if (assigned.isEmpty()) {
+                        return false;
+                    }
+                    var ends = consumer.endOffsets(assigned);
+                    return assigned.stream().allMatch(tp -> consumer.position(tp) >= ends.get(tp));
+                });
     }
 }

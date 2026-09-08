@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - the "one worth doing next" is unchanged: `PartitionStateManager`s `or is this a race? Please file a GH issue` is still `log.warn` interpolating a whole `PartitionState`, and `PartitionState` still carries a bare `@ToString` with no `@ToString.Exclude` over its `incompleteOffsets` map. The two other `PartitionState`-rendering sites still resolve, `RecordBatchSummary` is still the shared renderer, and every anchor in the checked-and-dismissed list still resolves in the file the note names -->
 
 A log line that interpolates a record batch, a partition map or a state object grows with
 `max.poll.records` and with the assignment, so log tooling truncates the line and takes with it the

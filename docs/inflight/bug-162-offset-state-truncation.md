@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - re-read `PartitionState#maybeTruncateBelowOrAbove` at HEAD: `expectedBootstrapRecordOffset = getOffsetToCommit()` still never asks whether commit data existed, the comparison is still strict, and the `Truncating state` warn still says "expected {} from loaded commit data"; `OffsetMapCodecManager` still builds the `defaultEntry` for uncommitted partitions and still routes the `OffsetDecodingError` catch into it. No test in either suite names the method or the warning. The delete-when condition is not met - both live cases are still open -->
 
 [astubbs#162](https://github.com/astubbs/parallel-consumer/issues/162), mirroring
 [confluentinc issue #546](https://github.com/confluentinc/parallel-consumer/issues/546). That thread
@@ -59,10 +60,12 @@ warning or `maybeTruncateBelowOrAbove` - the other references are javadoc in
 no commit data is never asserted to start quietly. A test wants both cases: first offset 0, and first offset
 above 0.
 
-<!-- post-merge: checked -->
+<!-- post-merge: checked-begin -->
 astubbs#106 (stop walking every offset), astubbs#306 (encoding density) and astubbs#207
 (`invalidOffsetMetadataPolicy` reachability) all touch this area and address neither case. The mirror
-body implies astubbs#106 might; it does not.
+body implies astubbs#106 might; it does not - re-confirmed against its merged tree, which changes only
+the offsets/ encoders and leaves `PartitionState#maybeTruncateBelowOrAbove` untouched.
+<!-- post-merge: checked-end -->
 
 ## Draft replacement for the mirror's `## Fork status` (NOT posted)
 

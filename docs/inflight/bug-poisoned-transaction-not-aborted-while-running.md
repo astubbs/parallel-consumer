@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-vetted: 2026-09-08 - applied: `bug-wedged-after-poisoned-transaction.md` folded in and removed, this note being the survivor the owner chose - the answered recovery question, the two mitigations and the freeze-behaviour test come with it; checked: `abortTransaction()` still has exactly one reachable call site in main, inside `ProducerManager`'s close path, `ProducerWrapper.isTransactionOpen()` is still `producerState.equals(BEGIN)`, the commit is still gated on `wm.isDirty()`, `PCRetriableException` still exists with no terminal counterpart, and there is still no dead-letter code in `parallel-consumer-core/src/main` -->
 
 
 Opened by astubbs#261, which fixed the data-correctness half of this and deliberately left the
@@ -26,6 +27,46 @@ other traffic there is nothing to observe.
 
 **No partial result set is published.** The all-or-none guarantee holds either way. This is a
 liveness and observability gap, not corruption.
+
+## What the instance does while wedged, and why there is no recovery short of close
+
+Folded in from `bug-wedged-after-poisoned-transaction.md`, which asked whether PC recovers and was
+answered from the code on 2026-08-08 rather than by the experiment it proposed.
+
+Once a terminally failed send moves the transaction to abortable-error, every subsequent record
+fails with `KafkaException: Cannot execute transactional method because we are in an error state`. In
+`TransactionalPartialResultSetIT` all 10 follow-on records failed that way across a 20s window while
+the instance stayed up, dying only at close (`PC closed due to error`). That test cannot settle
+recovery: `defaultMessageRetryDelay` is 120s, far longer than its window, so the failed records never
+reach a retry inside the run - and it deliberately asserts only the guarantee it was written for.
+
+**The code settles it instead.** `ProducerWrapper.isTransactionOpen()` is
+`producerState.equals(BEGIN)`, and the state stays `BEGIN` after a poisoned send, so
+`lazyMaybeBeginTransaction` never begins a replacement and nothing in band ever aborts the poisoned
+one. The instance therefore either dies at the next commit attempt, when the abortable-state
+`KafkaException` propagates out of `commitOffsets` and kills the control thread, or - if nothing is
+dirty - stays alive and stuck exactly as observed. Neither is recovery.
+
+**Why it is worth someone's time.** This is the *alive but not progressing* shape the chaos pain
+suite hunts. If PC is wedged until close after any terminal produce failure, a single oversized
+record could stop a partition indefinitely, and the symptom would look exactly like the stalls in the
+confluentinc#857 family rather than like a produce error. It is a natural candidate for the deferred
+transactional chaos scenario (Phase B of
+`docs/plans/2026-08-07-001-test-transactional-eos-battle-test-plan.md`): a scenario that injects a
+terminal produce failure and then asserts the fleet still makes progress would settle it under the
+churn where it matters.
+
+## Two things would make the wedge cheaper to live with meanwhile
+
+If the decision below takes a while:
+
+- `ProducerManager`'s `log.error("Error producing result message", exception)` fires once per record
+  per retry for the life of a wedged instance, unthrottled.
+- PC's failure reason after poisoning is a generic `KafkaException` with no hint that a restart is
+  the only cure.
+
+A small unit test asserting that a poisoned transaction is never re-begun would at least freeze
+today's behaviour, so a future recovery fix shows up as a visible change rather than a silent one.
 
 ## The decision pending
 
@@ -91,6 +132,13 @@ away.
 
 A DLQ or a max-attempt terminal outcome would give this defect somewhere to go: today the only
 terminal states are "retry forever" or "kill the transaction".
+
+## Related
+
+- astubbs#261 - the fix that makes this state reachable, and its `TransactionalPartialResultSetIT`
+- `docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md` -
+  a different defect with the same user-visible shape, where the cause was that no commit was ever
+  *attempted*. Worth reading first: it is the closest prior art for telling these apart.
 
 ## Do not re-derive
 

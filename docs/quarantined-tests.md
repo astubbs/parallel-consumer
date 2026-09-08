@@ -82,10 +82,18 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-The one entry below is an unreliable failure rather than a deterministic one, so it carries
-`flapping = true`: a pass proves nothing and the lane reports it without demanding action. It was never
-hidden by the surefire retry astubbs#224 removed, because the test did not run in a gating lane until
-the PR that quarantines it.
+The entries below are of two opposite kinds, and the checklist is the inventory - not this paragraph.
+`RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`
+and `MultiInstanceRebalanceTest.largeNumberOfInstances` are **unreliable failures**, so both carry
+`flapping = true`: a pass proves nothing and the lane reports it without demanding action.
+`MultiInstanceRebalanceTest` was never hidden by the surefire retry astubbs#224 removed, because the
+test did not run in a gating lane until the PR that quarantines it.
+A **deterministic** quarantine is the other kind - left at the annotation's default `flapping = false`,
+so a PASS is strict-xfail: the lane opens a merge-blocking thread demanding the annotation and its
+entry be deleted, which is correct, because the only way it passes is the defect being fixed. The
+revoke-path exactly-once proof (`ProducerManagerTest.aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced`)
+was one, from astubbs#436 until its fix landed; its record is now
+[`docs/solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md`](solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md).
 
 **The other entry that stood here has gone, and not by a lapse.**
 `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is astubbs#262's rule-3
@@ -116,17 +124,16 @@ earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it
   before touching any timeout - the rule that governs the load-tightness family governs this one too,
   and a test failing under load may be exposing a real product bug.
 
-- [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is
-  measured but not explained. The progress detector returns `FLAT` - the record count *stops* rather
-  than slowing, which is the discriminator it exists to report - and the `AMBIENT PROBE AUTOPSY`
-  block names `ZOMBIE_MEMBER/REBALANCE_BLOCKED`: the group dwells in `PreparingRebalance` because a
-  member stopped answering, with the whole assignment frozen at comparable lag rather than one shard
-  wedged. Measured at one failure in ten consecutive runs on an idle Linux box, plus repeated CI
-  failures, always that signature. It reproduces on the tree carrying this branch's log-argument
-  fix, so it is neither the confluentinc#857 revoke deadlock nor the SLF4J argument-evaluation
-  defect but a third, open mechanism. Sighting ledger, including what would settle the attribution:
+- [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is now
+  **measured**: the Kafka consumer group protocol under this profile's churn rate, not a PC defect. The
+  chaos monkey restarts members faster than a join phase completes, a LeaveGroup sent mid-join is
+  answered only when the phase completes, and one phase was observed open for 17s during which
+  `consumer.poll()` returns nothing to any member - the `FLAT` count. In every failing run no
+  coordinator request was slow. Every PC-side candidate was refuted by measurement. 4 in 60 on the Linux
+  runner, 0 in 22 on an M2 desktop. Full chain, instruments and the refuted hypotheses:
   [`docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md`](inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md).
-  Unowned - no fix PR exists, because no diagnosis does.
+  Stays quarantined because a test whose failures are the protocol's cannot gate merges; where it
+  should live instead is `docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md`.
 
   **Rule 2 is satisfied prospectively rather than retrospectively, and that is worth stating plainly
   rather than letting a later reader find it.** The ledger was measured while this test was
@@ -136,3 +143,4 @@ earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it
   check that fails about one run in ten. The quarantine lands in the same change as the enablement,
   so the test never spends a day blocking merges on an unexplained stall. If the enablement were
   ever reverted, this entry should go with it.
+

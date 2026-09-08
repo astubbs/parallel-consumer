@@ -131,7 +131,7 @@ set -euo pipefail
 # The groups the gating run excludes. ONE list, handed both to failsafe and to the coverage gate
 # below - a class tagged into one of these is not expected to report, and two copies of this list
 # would drift in the direction that matters: a group excluded here but not there fails every build.
-readonly EXCLUDED_GROUPS=performance,chaos,quarantined,lincheck
+readonly EXCLUDED_GROUPS=performance,chaos,quarantined,lincheck,soak
 readonly HEAVY_CLASSES="PartitionStateCommittedOffsetIT,Rebalance857CommitSyncDeadlockProbe3IT,Rebalance857CommitSyncDeadlockProbe2IT,TransactionAndCommitModeTest,MultiInstanceRebalanceTest,RebalanceEoSDeadlockTest,Rebalance857CommitSyncDeadlockProbeIT"
 
 # A class in two lists would run twice and be paid for twice, and both shards would pass. With one

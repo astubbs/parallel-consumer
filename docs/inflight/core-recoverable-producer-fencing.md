@@ -1,8 +1,8 @@
-# Recoverable producer fencing: what is still open once the implementation is on master
+# Next: make producer fencing recoverable instead of fatal
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: crash -->
-
+<!-- inflight-impact: reliability -->
+<!-- inflight-vetted: 2026-09-07 - the behaviour the note describes is unchanged at HEAD: `ProducerManager#commitOffsets` still catches `ProducerFencedException` from `sendOffsetsToTransaction` and rethrows it wrapped in `PCInternalRuntimeException`, which still ends the instance, and astubbs#225 is still OPEN. One rung of the dated 2026-09-03 stack header has since moved - astubbs#426 is MERGED and `producerConfig` is on `ParallelConsumerOptions` - while astubbs#410 and astubbs#420 are still OPEN, which is why the plan document and `ProducerFactory` still do not resolve on master -->
 
 ## In flight as a stack of three PRs (2026-09-03)
 
@@ -17,56 +17,62 @@
   the instance option, migrating the examples. Stacked on astubbs#410.
 <!-- post-merge: checked-end -->
 
-<!-- post-merge: checked -->
-The feature was implemented by astubbs/parallel-consumer#410 against the plan
-`docs/plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md`, which owns the requirements, the
-decisions and the mechanisms (its "Inherited from astubbs#262" section records what the merge brought).
-Tracked as astubbs#225. This note keeps only what a later PR has to do, because it depends on which of
-the PRs that were open beside it lands second.
+The plan the stack implements is `docs/plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md`,
+which arrives with astubbs#410. What follows is the note as it read before the work started.
+<!-- file-refs: N/A - the plan lands with astubbs#410, above this rung in the stack -->
 
-## Merge-time reconciliation with astubbs/parallel-consumer#352 (KTD10)
 
-That PR's R6 - a fenced transactional producer stays immediately fatal without consulting its handler -
-was true of the code it was written against and is untrue once recovery exists. Whichever of the two
-lands second rewrites, in that PR's own terms:
+> Extracted from `origin/docs/session-learnings-857-family` @94bb98a9d, `docs/inflight/core-recoverable-producer-fencing.md`.
 
-- the two fencing tests in its `ProducerManagerCommitBudgetTest`
-  (`producerFencedOnSendOffsetsStaysFatalAndNeverReachesTheCommitLoop` and
-  `recoveryAbortFailureStaysFatalAndHandlerFree`) - on the PC-built path a fencing condition now
-  unwinds with `ProducerInvalidatedException` and is recovered; on the producer-instance path it is
-  still fatal, which those tests can keep asserting if they pin that path;
-- its R6 line, the matching statements in its commit-failure-seam feature file, and its README section.
+A `ProducerFencedException` during a transactional commit currently kills the PC instance. It should
+be treated as "our partitions moved, clean up and rejoin" - which is what Kafka Streams does.
 
-Both PRs edit `ProducerManager.commitOffsets`; a textual conflict in the fencing branch there is
-<!-- post-merge: checked -->
-expected. The reasoning being overridden is recorded in the astubbs#410 commit that changed
-`commitOffsets` (`feat(core) astubbs#225: recognise an invalidated producer on both paths`), so the
-change does not read as an oversight.
+## What happens today
 
-<!-- post-merge: checked-begin - describes a reconciliation already made on the child branch, which
-     reads the same once both have landed -->
-## Reconciliation with astubbs/parallel-consumer#408 (KTD11) - done on that branch
+`ProducerManager.commitOffsets()` catches `ProducerFencedException` from `sendOffsetsToTransaction`
+and rethrows it wrapped in `PCInternalRuntimeException`. That propagates out of
+`AbstractOffsetCommitter.retrieveOffsetsAndCommit()`, out of `commitOffsetsThatAreReady()`, out of
+`controlLoop()`, and lands in the supervisor loop, which records it as `failureReason`, calls
+`doClose()` and rethrows. The instance is gone.
 
-That PR makes the revoke path decline both locks with `tryLock` instead of spinning. It used to
-rethrow `ProducerFencedException | InvalidProducerEpochException` from the revoke-path commit so
-fencing stayed fatal; with recovery in place that became record-and-decline, and astubbs#408 removed
-the rethrow when it merged this branch: `ProducerManager.commitOffsets` records the condition and
-unwinds with `ProducerInvalidatedException`, `tryCommitOffsetsOnRevoke`'s catch logs it, and the
-control thread recovers on its next pass - and that branch had to add the wake for that pass: the
-revoke path produces no mailbox event, so unlike the produce path (KTD4) nothing woke the control loop,
-and it sat out the rest of its commit-interval wait first. The revoke path now calls
-`notifySomethingToDo()` after releasing both locks when the manager is replacing, pinned by
-`ProducerRecoveryTest.fencedDuringTheRevokePathCommitIsRecordedAndDeclinedThenRecoveredByTheControlThread`.
-Its three `ProducerManager` lock helpers coexist with the waiting entry `beginReplacement` uses. The
-bounded wait and holder-deadlining that recovery makes viable are named in the plan's KTD11 and
-deliberately not taken; `RebalanceEoSDeadlockTest` on that branch asserts the decline.
-<!-- post-merge: checked-end -->
+Offset bookkeeping does survive this correctly - `onOffsetCommitSuccess()` is skipped, so offsets
+stay dirty and the records are redelivered - and `postCommit()` runs in a `finally`, so the produce
+lock is released. The data is safe. It is the liveness that is wrong.
 
-## Still outside this work
+## Why it matters
 
-- The wrapped-send-future spin on the producer-instance path:
-  `bug-411-wrapped-send-failure-spins-forever.md`, now pinned by
-  `ParallelEoSStreamProcessorTest#instancePathWrappedSendFailureStaysAliveAndRetriesAgainstTheSameProducer`.
-- A transaction poisoned by a cause outside the recoverable set (a `RecordTooLargeException`):
-  `bug-poisoned-transaction-not-aborted-while-running.md`.
-- The unbounded revoke wait itself: `bug-857-transactional-revoke-wait.md`.
+Under KIP-447 (`exactly_once_v2`), fencing by *consumer generation* is the normal mechanism by which
+a rebalance takes partitions away from a producer. Being fenced is a routine consequence of a
+rebalance you lost, not an error condition. Treating a routine event as fatal means any consumer
+that is slow enough to lose a race during a rebalance dies rather than rejoining.
+
+## The Kafka Streams model, which is the one to copy
+
+Streams unwraps `ProducerFencedException` in `RecordCollectorImpl` specifically so it can be
+converted into `TaskMigratedException` rather than triggering a shutdown. `TaskMigratedException` is
+handled by closing out the assigned tasks and **rejoining the consumer group**. The thread survives.
+
+Do not treat this as a solved problem upstream: `KAFKA-14567` ("Kafka Streams crashes after
+ProducerFencedException") shows the same class of bug reaching Streams in EOS-v2. Copy the shape of
+the design, not the assumption that it is airtight.
+
+## Proposal
+
+Introduce a distinct, recoverable exception - the PC equivalent of `TaskMigratedException` - raised
+where fencing is detected, and handle it in the control loop by aborting the transaction, leaving
+offsets dirty, and letting the consumer rejoin rather than closing.
+
+The bounded revoke wait (see the branch that carries this note) reduces how often fencing is reached
+on the revoke path, but does not remove it: fencing can still arrive from a slow commit that overran
+its generation for reasons unrelated to a revoke. The two changes are complementary and independent.
+
+## What is undecided
+
+- Whether "rejoin" is even expressible in PC's current lifecycle. Streams owns its thread and can
+  re-initialise tasks; PC's control loop has no equivalent re-entry point today, so this may need a
+  state-machine addition rather than just an exception swap. **This is the part to investigate
+  first** - it determines whether this is a small change or a structural one.
+- Whether other fatal paths deserve the same treatment. `PCInternalRuntimeException` is used widely;
+  this proposal deliberately does not widen beyond fencing.
+
+Tracked as astubbs#225.

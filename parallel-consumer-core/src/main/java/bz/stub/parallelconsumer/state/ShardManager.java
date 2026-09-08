@@ -84,6 +84,14 @@ public class ShardManager<K, V> {
     private final RecordPopulation recordPopulation = new RecordPopulation();
 
     /**
+     * Shared by every shard this manager creates, so it survives the removal of emptied shards.
+     *
+     * @see DispatchScanMeter
+     */
+    @Getter(AccessLevel.PACKAGE) // visible for testing
+    private final DispatchScanMeter dispatchScanMeter = new DispatchScanMeter();
+
+    /**
      * View of {@link WorkContainer}s that need retrying sorted by retryDue.
      */
     @Getter(AccessLevel.PACKAGE) // visible for testing
@@ -352,7 +360,7 @@ public class ShardManager<K, V> {
         // shard can no longer be dropped between being chosen and being written to.
         processingShards.compute(shardKey, (ignore, existingShard) -> {
             var shard = (existingShard == null)
-                    ? new ProcessingShard<>(shardKey, options, wm.getPm(), recordPopulation)
+                    ? new ProcessingShard<>(shardKey, options, wm.getPm(), recordPopulation, dispatchScanMeter)
                     : existingShard;
             shard.addWorkContainer(wc);
             return shard;

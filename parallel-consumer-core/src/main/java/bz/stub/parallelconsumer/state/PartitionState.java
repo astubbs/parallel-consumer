@@ -188,6 +188,31 @@ public class PartitionState<K, V> {
     @Getter
     private final long partitionsAssignmentEpoch;
 
+    /**
+     * Set once a revocation's commit has drained this partition's completed work and is about to commit it, and
+     * never cleared - the state is replaced at truncation. From then on every container of this partition reads as
+     * stale ({@link #checkIfWorkIsStale}), so no worker starts one, no worker produces for one, and a completion
+     * that arrives anyway is dropped like any other stale result.
+     * <p>
+     * <b>Why the epoch cannot do this job.</b> {@link #partitionsAssignmentEpoch} is final, captured at
+     * construction; bumping the manager's epoch map leaves this state comparing containers against its own old
+     * epoch, and they match - the fact
+     * {@code docs/solutions/logic-errors/stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md}
+     * established from the other direction ("a final long set at construction"). Truncation replaces the state, which is what makes the epoch scheme work - but
+     * truncation runs on the broker-poll thread after the revocation commit returns, and the gap between that
+     * commit releasing the producer write lock and the truncation is wide enough for a worker parked on the
+     * produce lock to start a record of the revoked partition, produce its output into the next transaction,
+     * and have its completion dropped as stale at truncation: output published, offset never committed, the
+     * partition's next owner reprocesses it. {@code RebalanceEoSDeadlockTest} saw two or three such duplicates
+     * per rebalance with the drain fixed and this fence absent. The fence is set on the control thread INSIDE
+     * the write lock - after the drain, before the commit - so there is no such gap: a worker that acquires the
+     * produce lock after the commit finds the partition fenced
+     * ({@code ParallelEoSStreamProcessor#acquireProduceLockRefusingRevokedWork}).
+     * <p>
+     * volatile: written by the control thread, read by the workers and the poll thread.
+     */
+    private volatile boolean fencedForRevocation;
+
     private long lastCommittedOffset;
     private Gauge lastCommittedOffsetGauge;
     private Gauge highestSeenOffsetGauge;
@@ -293,6 +318,21 @@ public class PartitionState<K, V> {
     }
 
     /**
+     * Records a completed offset: it leaves {@link #incompleteOffsets}, and the high-water mark and dirty flag
+     * follow.
+     * <p>
+     * <b>If you are here from the assert below, it has fired for three shapes, and all three are closed and
+     * pinned.</b> Do not read it as proof of a double delivery - that was the right inference for the 2026-08-22
+     * sightings because every one carried {@code deliveryCount == 2}, and it was the evidence that made it
+     * right, not the assert. The shapes: a work claim decided before another selector's completion (closed by
+     * astubbs#335, pinned by {@code WorkClaimStateMachineTest}); a completion acting on a partition state
+     * swapped by a rebalance after its staleness check (closed by astubbs#346, pinned by
+     * {@code WorkManagerStaleCheckDoubleLookupTest}); and a record selected and completed between being
+     * published to its shard and its offset being registered - the one shape with no double delivery at all
+     * (closed by astubbs#370, pinned by {@code PartitionStateRegistrationOrder370Test}). A fourth would need
+     * an offset removed from the incomplete set by some route other than this method, or a completion for an
+     * offset this state never registered.
+     * <p>
      * @see #onSuccess(WorkContainer) which is what the engine calls; this overload keeps the record out of the ledger
      *         and exists for the tests that drive offsets directly
      */
@@ -430,6 +470,39 @@ public class PartitionState<K, V> {
         return !Objects.equals(epochOfInboundRecords, currentPartitionEpoch);
     }
 
+    /**
+     * Registers a polled batch: each record not already complete goes into {@link #incompleteOffsets} and then
+     * into its shard, in that order - see the loop body for why the order is the contract.
+     * <p>
+     * <b>Thread model, derived from the callers rather than declared (2026-09-05).</b> The one production route
+     * here is {@code AbstractParallelEoSStreamProcessor#processWorkCompleteMailBox}, on the control thread: the
+     * broker-poll thread's {@code registerWork} only posts the batch to the mailbox, and the same drain loop
+     * that calls {@code WorkManager#registerWork} also calls {@code WorkManager#handleFutureResult}, so on the
+     * shipped engine a registration and a completion never overlap. That is what made the old publish-first
+     * order safe by accident. It is <em>not</em> asserted here: the Lincheck harnesses
+     * ({@code PartitionStateLincheckTest}, {@code WorkManagerLincheckTest}) deliberately drive
+     * {@link #onSuccess(long)} and {@code handleFutureResult} from several threads to measure exactly the
+     * interleavings a guard would refuse, and the direct-pull engine will select from worker threads. The
+     * register-then-publish order is the invariant that survives all of those; the plain {@code long}s
+     * are the residue that still assumes one writer. There are two, and the second is the one with teeth:
+     * {@code offsetHighestSeen}, written here through {@link #addNewIncompleteRecord}, and
+     * {@code offsetHighestSucceeded}, which {@link #onSuccess(long)} read-modify-writes and which
+     * {@link #getOffsetHighestSequentialSucceeded()} returns <em>directly</em> whenever
+     * {@code incompleteOffsets} is empty - so a stale read of it is an offset committed to the broker, not
+     * only bookkeeping. The {@code dirty} field's own javadoc records jcstress measuring that exact
+     * staleness (the reader seeing {@code dirty} set while {@code offsetHighestSucceeded} was still stale),
+     * and what closes it is the release/acquire pair that field's {@code volatile} provides - nothing on
+     * this method.
+     * <p>
+     * <b>What would reopen this, and what would catch it (2026-09-05).</b> A second writer of either
+     * {@code long} - the direct-pull engine selecting from worker threads, or a completion path moved off
+     * the control thread - reopens it, and the {@code volatile} on {@code dirty} does not cover a
+     * write/write pair. <b>Nothing in this repository would catch that today.</b> The
+     * {@code jcstress-poc} module's {@code SeenSucceededOrderingProbes} owns the question, and that module
+     * is absent from the root {@code pom.xml}'s {@code <modules>} list, so no reactor build reaches it; no
+     * workflow and no script in {@code bin/} names it either - {@code grep -rn jcstress .github/ bin/}
+     * returns nothing. It is run by hand or not at all.
+     */
     public void maybeRegisterNewPollBatchAsWork(@NonNull EpochAndRecordsMap<K, V>.RecordsAndEpoch recordsAndEpoch) {
         if (epochIsStale(recordsAndEpoch)) {
             // Expected during any rebalance: a rebalance between poll() and registration means these
@@ -455,8 +528,18 @@ public class PartitionState<K, V> {
             if (isRecordPreviouslyCompleted(aRecord)) {
                 log.trace("Record previously completed, skipping. offset: {}", aRecord.offset());
             } else {
-                getShardManager().addWorkContainer(epochOfInboundRecords, aRecord);
+                // REGISTER, then PUBLISH - the order is the invariant, and it is the only thing here that
+                // keeps a completion valid whichever thread selects the record. The offset enters
+                // incompleteOffsets first, so by the time a shard scan can reach the container, the state
+                // its completion removes from already holds it. Publishing first (the order until
+                // astubbs#370) left a gap in which the container was selectable and its offset absent:
+                // a completion landing there tripped onSuccess's assert, and without -ea it silently
+                // re-registered an already-completed offset that nothing could ever complete again, pinning
+                // the commit frontier below it. Both maps are concurrent, so the put here happens-before
+                // the shard's put and that happens-before any scanner's get - no thread model required.
+                // Pinned by PartitionStateRegistrationOrder370Test.
                 addNewIncompleteRecord(aRecord);
+                getShardManager().addWorkContainer(epochOfInboundRecords, aRecord);
             }
         }
 
@@ -473,6 +556,16 @@ public class PartitionState<K, V> {
 
     public boolean isPartitionRemovedOrNeverAssigned() {
         return false;
+    }
+
+    /**
+     * Marks every container of this partition stale from now on - see {@link #fencedForRevocation} for when, on
+     * which thread, and why the epoch cannot do it.
+     */
+    public void fenceForRevocation() {
+        log.debug("Fencing {} for revocation: its completed work is drained and about to be committed, nothing " +
+                "further may start or produce for it", getTp());
+        this.fencedForRevocation = true;
     }
 
     // visible for legacy testing
@@ -854,6 +947,11 @@ public class PartitionState<K, V> {
 
         boolean epochMissMatch = currentPartitionEpoch != workEpoch;
 
+        if (fencedForRevocation) {
+            log.debug("Partition {} is fenced for revocation - its work is stale whatever its epoch. Skipping {}",
+                    getTp(), workContainer);
+            return true;
+        }
         if (epochMissMatch || partitionNotAssigned) {
             log.debug("Epoch mismatch {} vs {} for record {}. Skipping message - it's partition has already assigned to a different consumer.",
                     workEpoch, currentPartitionEpoch, workContainer);

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
+<!-- inflight-vetted: 2026-09-07 - unposted: astubbs#168 has no comments and its Fork status still needs the replacement; the new line the draft quotes is live in RecordBatchSummary and ConsumerOffsetCommitter, including the sync-path "Offset commit deferred" gap it corrects -->
 
 **Not posted.** Post only on explicit instruction, and delete this file when it is posted - never
 when the PR that wrote it lands.

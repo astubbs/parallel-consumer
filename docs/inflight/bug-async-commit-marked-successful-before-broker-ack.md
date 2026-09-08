@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: data-loss -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - still true: `ConsumerOffsetCommitter.commitOffsets` `PERIODIC_CONSUMER_ASYNCHRONOUS` branch still returns as soon as `consumerMgr.commitAsync` is handed its callback, the callback still only logs, and `AbstractOffsetCommitter.retrieveOffsetsAndCommit` still calls `onOffsetCommitSuccess(offsetsToCommit)` straight after `commitOffsets(...)` returns - so an async commit that never lands is marked durable. One citation has drifted: the marker is the lowercase `// todo keep work in limbo until async response is received?`, and the notes uppercase `grep -rn "TODO"` now finds only two unrelated `TODO(refactor)` lines -->
 
 Surfaced by the torn-read hunt of 2026-08-24 as an out-of-family finding, and split out of
 [`bug-torn-read-family.md`](bug-torn-read-family.md) so it is not deleted with that dossier when the

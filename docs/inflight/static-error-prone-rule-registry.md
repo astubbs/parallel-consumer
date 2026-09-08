@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - the off-set still matches the pom exactly: the fifteen `-Xep:NAME:OFF` flags on the `-Xplugin:ErrorProne` argument are precisely the fifteen Tier 2 rows, in the same set. The pin is unmoved (`error-prone.version` 2.42.0, `nullaway.version` 0.12.7), `-Xmaxwarns` and `-XepExcludedPaths:` are both still there in the colon form, and `pr-53-java-baseline-kafka4.md` and the Jabel solutions write-up both still exist. The 36 anchor warnings are false positives - they are Error Prone check names, which do not appear in this tree by design. One gap left rather than fixed: the Tier 2 table has no Profile column, so `static-analysis-rule-profiles.md`'s classification is incomplete here -->
 
 **Consult this before suppressing an Error Prone finding, before adding a `-Xep:` flag, and before
 asking why a check is not firing.** Every check this repo switches off is listed here with a reason

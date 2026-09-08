@@ -330,7 +330,8 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
                     pc.getParallelConsumer().close();
                 }
             } catch (Exception e) {
-                log.warn("Settle-close of instance {}: {}", pc.getInstanceId(), e.getMessage());
+                log.warn("Settle-close of instance {}: {}: {}", pc.getInstanceId(),
+                        e.getClass().getSimpleName(), e.getMessage()); // type too - a null-message TimeoutException is the common case here
             }
         }
     }
@@ -440,7 +441,7 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
      * LIVE fleet view - a supplier, because JOIN_NEW grows the fleet mid-run. */
     protected void startRun(ProgressProbe probe, ChaosConductor conductor) {
         probe.withInstanceProgress(() -> conductor.getFleet().stream()
-                .map(ProgressProbe.InstanceProgressView::of)
+                .map(InstanceProgressView::of)
                 .collect(Collectors.toList()));
         probe.start();
         conductor.start();

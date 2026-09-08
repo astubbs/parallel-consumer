@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: reliability -->
+<!-- inflight-vetted: 2026-09-07 - the asymmetry is still in `ProducerManager`: `sendCallback` is still built once from `usingTransactions` and still throws `PCInternalRuntimeException` only when `!usingTransactions`, with the `Installed on every send` javadoc still carrying the reasoning. The decision between (a), (b) and (c) is still untaken and the async-inertness test the note asks for does not exist. The `TODO(refactor)` it points at is still the `sendCallback` line in docs/refactoring.md -->
 
 `ProducerManager`'s `sendCallback` throws from `Callback#onCompletion` when the producer is **not**
 transactional, and does not when it is. The asymmetry is deliberate and documented; whether it should

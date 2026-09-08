@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - all ten mirrors are still OPEN and none of the drafted corrections has been posted; spot-checked two bodies against the tree and both still carry the wrong claim (astubbs#161 still says the `subscribeOn` moves the user function "off the PC control thread", astubbs#175 still credits astubbs#100 alone and treats confluentinc#818/#819 as upstream-only). All ten linked per-issue notes still exist. astubbs#173, astubbs#175 and astubbs#178 have since gained triage COMMENTS, but those reason FROM the stale `## Fork status` rather than correcting it, which is this note's point -->
 
 Every open `upstream-mirror` issue carries a `## Fork status` section written when it was mirrored.
 That section, not
