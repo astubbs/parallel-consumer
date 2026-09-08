@@ -106,8 +106,8 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   controller. Marked breaking (`fix(core)!`) for the equality change; the release note carries it.
   The two further by-key removals astubbs#483 found were left for astubbs#468's identity-`equals`
   change to make fixable - check that PR's body for whether it took them.
-- [ ] **astubbs#469** - the two remaining `PartitionState` flags that cross threads, measured and then
-  fenced or redesigned. The follow-on astubbs#349 deliberately left.
+- [x] **astubbs#469** - merged 2026-09-08. The two remaining `PartitionState` flags that cross
+  threads, measured and then fenced or redesigned; the follow-on astubbs#349 deliberately left.
 - [x] **astubbs#481** - merged 2026-09-08. The poll thread never touches the retry queue; the
   controller collects what it leaves. The owner's own PR, superseding astubbs#431 (closed - correct
   and proven, but more machinery than the defect needed). Same stall from the confluentinc#857
@@ -294,8 +294,9 @@ hypothesis).
   with or without the deadlock, and the family note's own header already warned that replaying
   captured seeds does not reproduce it. Proven instead with a control arm on the deterministic
   probe: with the fix, both assignors pass every run; with the deadlock deliberately restored
-  (`tryLock` back to `lock`), every run fails and every dump shows the waiting frame. The solutions
-  doc's "Unproven" section is superseded in place, and the deadlock line carries a `PROPOSED
+  (`tryLock` back to `lock`), every run fails and every dump shows the waiting frame. Merged to
+  master 2026-09-08. The solutions doc's "Unproven" section is superseded in place, and the
+  deadlock line carries a `PROPOSED
   closed` marker for the owner. Two side findings worth keeping: the JVM's deadlock detector cannot
   see this cycle (its other edge is a queue poll, not a lock), and one replay in two was VOID
   because the window never opened - check the discriminator fired before banking a green.
