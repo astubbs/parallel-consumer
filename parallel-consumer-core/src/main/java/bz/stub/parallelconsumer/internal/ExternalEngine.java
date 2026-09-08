@@ -82,8 +82,11 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
     private final Semaphore dispatchCeiling;
 
     /**
-     * The records currently holding a permit, by IDENTITY - {@link WorkContainer#equals} is offset-based, and two
-     * generations of the same offset are different flights. Membership is what makes the return idempotent: a
+     * The records currently holding a permit, by IDENTITY - two generations of the same offset are different
+     * flights and each owes its own permit. The {@link IdentityHashMap} predates
+     * {@link WorkContainer} equality becoming identity itself (astubbs/parallel-consumer#468) and is kept
+     * deliberately: it states the requirement at the site that depends on it rather than inheriting it from a
+     * value type a later change could re-open. Membership is what makes the return idempotent: a
      * completion signal delivered more than once for one record (a user {@code Publisher} that emits several
      * elements reaches the mailbox once per element) must not hand back a permit it does not hold, or the ceiling
      * would ratchet upwards for the life of the process.
