@@ -123,6 +123,27 @@ class QuarantinedAnnotationContractTest {
     }
 
     /**
+     * Every lane whose members are too long to gate a merge must be in the pom's default exclusions.
+     * <p>
+     * This is membership of NAMED tags, not a pinned literal, so it is the same contract shape as
+     * {@link #pomExcludesTheQuarantinedGroupFromDefaultSuites()} and adding an unrelated lane does not
+     * fail it. It exists because the two checks around it cannot see this failure at all: they compare
+     * the pom against the wrappers, so a tag missing from BOTH is perfectly consistent and green. That
+     * is exactly what happened when the {@code soak} lane arrived - its pom comment, its javadoc and
+     * {@code docs/testing.md} all said the tag was excluded, the {@code excluded.groups} default did
+     * not list it, and nothing went red while a six-hour scenario sat in the gating integration lane.
+     */
+    @Test
+    void pomExcludesEveryLaneTooLongToGateAMerge() throws IOException {
+        String excluded = pomDefaultExcludedGroups();
+        assertWithMessage("root pom's default excluded.groups must contain every opt-in lane, or its " +
+                "scenarios gate every PR at their own runtime (soak members run for tens of minutes to " +
+                "hours). Found: " + excluded)
+                .that(groups(excluded))
+                .containsAtLeast("performance", "chaos", "lincheck", "soak");
+    }
+
+    /**
      * The two lists are maintained by hand in two places, and drift is silent in the direction that
      * matters: a tag the pom excludes but a gating wrapper does not RUNS in the gating suite. Nothing else
      * checks this - the wrappers deliberately do not inherit the pom default, precisely so that a pom edit

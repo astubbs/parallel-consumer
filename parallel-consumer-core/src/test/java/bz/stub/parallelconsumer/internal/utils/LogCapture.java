@@ -10,11 +10,14 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.slf4j.LoggerFactory.getLogger;
 
 /**
@@ -100,6 +103,32 @@ public class LogCapture implements AutoCloseable {
                 .filter(event -> event.getLevel() == level)
                 .map(ILoggingEvent::getFormattedMessage)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * {@link #messagesAt(Level)} narrowed to the lines mentioning every one of {@code mentioning} - the second
+     * obligation in this class's javadoc made into API, since a caller reading a shared logger must filter on
+     * something unique to its own test rather than on the level alone.
+     *
+     * @param mentioning substrings that must ALL appear in a line for it to be returned; typically one string
+     *                   identifying the test (a per-test topic name) and, where the level carries more than one
+     *                   statement, one identifying the statement
+     */
+    public List<String> messagesAt(Level level, String... mentioning) {
+        return messagesAt(level).stream()
+                .filter(message -> Stream.of(mentioning).allMatch(message::contains))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * @return the one message at this level mentioning all of {@code mentioning}, asserting there is exactly one -
+     * so a second matching line fails the test rather than being silently discarded by a {@code findFirst()}
+     */
+    public String onlyMessageAt(Level level, String... mentioning) {
+        List<String> matches = messagesAt(level, mentioning);
+        assertWithMessage("captured %s lines mentioning %s", level, Arrays.toString(mentioning))
+                .that(matches).hasSize(1);
+        return matches.get(0);
     }
 
     @Override

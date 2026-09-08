@@ -141,7 +141,7 @@ is what made either comparison a control arm rather than a coincidence.
 `PreparingRebalance` - and that reproduces on the fixed tree with the same signature it had before.
 It was briefly suspected that a control thread doing this scan every pass was why a live member
 answered late; enabling the test put that under test and it lost. Two problems found in the same
-week, not one. `../../inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md`
+week, not one. `../test-flakiness/large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md`
 owns the survivor.
 
 ## How to find the next one
