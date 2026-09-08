@@ -2,7 +2,8 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
-<!-- inflight-vetted: 2026-09-07 - PROPOSED closed: both halves have landed - `.claude/hooks/check-merge-outstanding-work.sh` now probes the platform once (`if stat -c %Y .`) and picks a GNU or BSD `_mtime`, then fails CLOSED on any non-numeric mtime, recording the task as "mtime unreadable - assuming live" instead of skipping it; fixed in ffba75936 for astubbs#341. `repo-hygiene.yml` also gained a `shell: macos` job on `macos-latest` (11c6551ab) that runs the self-tests where BSD stat is real -->
+<!-- inflight-state: closed - both halves shipped. The hook probes the platform once (`if stat -c %Y .`) and defines a GNU or BSD `_mtime`, then fails CLOSED on any non-numeric mtime, recording the task as "mtime unreadable - assuming live" rather than skipping it (ffba75936, astubbs#341); `repo-hygiene.yml` gained a `shell: macos` job on `macos-latest` (11c6551ab) so the self-tests run where BSD stat is real. Kept rather than deleted because the fail-open CLASS it describes - a guard that finds its evidence and discards it, and a suite that is green because it only ever runs on the platform where the bug is invisible - is the part a later reader wants. -->
+<!-- inflight-vetted: 2026-09-08 - applied: closed per the accepted proposal, state marker added, body left as the record; checked: the hook carries the platform probe and the fail-closed `case` arm, `repo-hygiene.yml` carries the `macos-latest` job, and both cited commits resolve -->
 
 `.claude/hooks/check-merge-outstanding-work.sh` reads each background task's mtime with GNU
 `stat -c %Y`. BSD `stat` rejects `-c`, so on macOS the guard silently allows every merge it was

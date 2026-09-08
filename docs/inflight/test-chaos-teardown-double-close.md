@@ -2,7 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
-<!-- inflight-vetted: 2026-09-07 - PROPOSED partly true, and the state change is for the owner: items 1 and 4 are unchanged (ChaosScenarioBase.settleFleet still calls close() after its 15s wait whether or not the wait timed out - only narrowed by a new !isClosedOrFailed() check, still a check-then-act; settleRun is still five bare statements that throw InterruptedException with no try/finally). Item 2 is half fixed: ChaosConductor.doStopDrain now calls victim.markStopRequested() so stopRequested IS set for a drain, but closePending still is not (closingPcs is only added in stopAsync/closeQuietly), so the settleFleet wait still reads false immediately for a drain stop. Item 3 stands: settleFleet still never consults startInFlight and never calls stop()/stopAsync() -->
+<!-- inflight-vetted: 2026-09-08 - applied: item 2 rewritten to the half that is still open - `doStopDrain` now calls `markStopRequested()`, but a drain still adds nothing to `closingPcs`, so `settleFleet`'s `isClosePending` wait still reads false immediately. Items 1, 3 and 4 unchanged; checked: `settleFleet` still closes the raw PC after its 15s wait whether or not the wait timed out (the new `!isClosedOrFailed()` narrows it but is still a check-then-act), still never consults `startInFlight` and never calls `stop()`/`stopAsync()`, and `settleRun` is still five bare statements that propagate `InterruptedException` from the join -->
 
 
 The double-start race inside `ChaosConductor`'s draw loop is fixed (astubbs/parallel-consumer#292:
@@ -28,14 +28,19 @@ conductor's own draws. The per-instance `try/catch` swallows it to a WARN, but t
 unclassified failure cause can then trip `assertScenarioSlos` - so this teardown race can fail a
 scenario on its own.
 
-## 2. `STOP_DRAIN` never engages `closePending` at all
+## 2. `STOP_DRAIN` still never engages `closePending`
 
 `ChaosConductor.doStopDrain` (grep `chaos-drain-`) calls
 `victim.getParallelConsumer().closeDrainFirst()` on its own thread, never going through
-`ManagedPCInstance.stopAsync()`. `closePending` is therefore never set for a drain stop, so
-`settleFleet`'s wait above does not even wait - it reads `false` immediately and proceeds to close.
-`joinDrainers` gives *all* outstanding drainers one shared 60s budget and logs
-`still running after 60s join budget - teardown may race them`, conceding the same window.
+`ManagedPCInstance.stopAsync()`. **Half of this is fixed**: `doStopDrain` now calls
+`victim.markStopRequested()`, so a drain sets `stopRequested` like every other stop and the
+queued-start abort is no longer inert for the most frequently drawn stop in the default profile.
+
+`closePending` is the half that is not. It is `closingPcs`, and only `stopAsync` and `closeQuietly`
+add to it - a drain adds nothing, so `settleFleet`'s wait above does not even wait: it reads `false`
+immediately and proceeds to close. `joinDrainers` gives *all* outstanding drainers one shared 60s
+budget and logs `still running after 60s join budget - teardown may race them`, conceding the same
+window.
 
 ## 3. A `run()` merely queued at teardown can orphan a live PC
 

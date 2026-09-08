@@ -3,7 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-vetted: 2026-09-07 - PROPOSED partly true (bug/blind-spot, owner to decide): the blind spot is still real - nothing in the tree distinguishes "recovered by X" from "never came back", so whether the astubbs#267 guards are a latency or a stall fix is still unestablished. What has moved is the "Where it surfaces concretely" half: option 2 shipped. `AbstractParallelEoSStreamProcessor#failFatallyOnUnmailboxableRecord` exists and is called from core, `ExternalEngine` and the vert.x `send.onFailure` handler, so an un-mailboxed record now terminates PC rather than stalling silently; the log line the note says to grep, "Failed to return {} to the mailbox", no longer exists anywhere in the tree, and options 1 and 3 are no longer live choices. Suggest shrinking to the recovery-mechanism question plus the one test it names -->
+<!-- inflight-vetted: 2026-09-08 - applied: shrunk. The "where it surfaces concretely" half is replaced by a record that its option 2 shipped - the three options are no longer live choices - and the note now holds only the recovery-mechanism blind spot and the one test that would settle it; checked: `failFatallyOnUnmailboxableRecord` is called from core, `ExternalEngine` and the vert.x handler and is pinned by `UnmailboxableRecordIsFatalTest`, and the quoted log line "Failed to return {} to the mailbox" is nowhere in the tree. Still nothing anywhere distinguishes "recovered by X" from "never came back" -->
 
 A `WorkContainer` reaches the control thread by being put on the mailbox. Every failure path in core
 and in the engines ends with `addToMailbox`, and each is now wrapped so a throw earlier in the
@@ -17,8 +17,9 @@ The question matters in two directions and neither has an answer:
 - **If something recovers it** - a timeout sweep, a redelivery on the next poll, anything - then the
   per-container guards astubbs#267 added are a **latency** fix, not a stall fix, and every write-up
   that calls them a stall fix is overclaiming.
-- **If nothing recovers it** then an un-mailboxed container is a permanent, silent stall for that
-  record's shard, and the `catch` blocks that log "it may stay in flight" are accepting it.
+- **If nothing recovers it** then an un-mailboxed container would be a permanent stall for that
+  record's shard - no longer a silent one, since the escalation below now stops PC instead, but a
+  stall that only a restart clears.
 <!-- post-merge: checked-end -->
 
 **It was ablated, and the ablation does not settle it.** Removing the guards three ways across two
@@ -28,41 +29,38 @@ motivating claim, and is exactly why the guards are documented as defence in dep
 owns that lesson). It does **not** identify the recovery mechanism, so it cannot tell you whether the
 mechanism covers this case too, or whether the ablation simply never produced the shape that fails.
 
-## Where it surfaces concretely
+## The escalation shipped; the recovery question did not move
 
 <!-- post-merge: checked-begin -->
-The vert.x `send.onFailure` handler, at its `catch (Throwable mailboxingThrew)` - grep
-`Failed to return {} to the mailbox`. The question was raised as a review thread on astubbs#267 -
-should that catch be fatal - and the options below are the ones weighed there. Whichever way that PR
-went, the question this note holds is unchanged, because none of the three can be chosen without it:
+This was raised as a review thread on astubbs#267 - should the vert.x `send.onFailure` handler's
+`catch (Throwable mailboxingThrew)` be fatal - and it has since been answered in code.
+`AbstractParallelEoSStreamProcessor#failFatallyOnUnmailboxableRecord` is the escalation path, called
+from core, from `ExternalEngine` and from the vert.x handler, with
+`UnmailboxableRecordException`/`ProduceLockNotHeldException` naming the two shapes and
+`UnmailboxableRecordIsFatalTest` holding it to the contract. An un-mailboxed record now terminates PC
+instead of disappearing quietly, and the log line this note used to send readers to grep is gone with
+the `catch` that wrote it.
 <!-- post-merge: checked-end -->
 
-1. **Leave it and state the bound in the comment.** `addToMailbox` is PC's own code, so a throw means
-   something is already badly wrong. **The bound got tighter after this note was written, and that
-   weakens this option rather than strengthening it.** It used to be more than a queue add:
-   `onPostAddToMailBox` released the produce lock in transactional mode and `ProducerManager`'s
-   <!-- post-merge: checked -->
-   `ensureProduceStarted` threw when the hold count was below one. astubbs#257 fixed that double
-   release, deleted the method and made `cleanUpContext` the single release point, so core's
-   `addToMailbox` is now a queue add and nothing else. PC therefore no longer has a *named* reachable
-   throw here - which means "state the bound in the comment" now has almost nothing to state, and the
-   comment cannot point a reader at a real route the way it could when this option was written.
-2. **Route the failure to the control thread's own failure path**, so an un-mailboxed record surfaces
-   as a PC failure rather than a silent stall. A new escalation path in core and all three engines.
-3. **Mark the container so a sweep recovers it** - which presupposes the sweep this note is asking
-   about.
+**That closes the "what should the handler do" question and not this one.** Failing fatally is what
+you do when you do not know whether anything recovers the record - it converts an unknown into a
+loud, bounded outcome. It still does not say whether something *would* have recovered it, which is
+what decides whether astubbs#267's per-container guards are a latency fix or a stall fix.
 
-**Rethrowing is not among them.** `FutureImpl` iterates its listener array with no per-listener
-try/catch, so a throw escaping the handler skips every remaining listener and strands the sibling
-containers as well - a bigger blast radius, not an escalation.
+Two details from that decision are worth not re-deriving. Rethrowing was never an option:
+`FutureImpl` iterates its listener array with no per-listener try/catch, so a throw escaping the
+handler skips every remaining listener and strands the sibling containers too - a bigger blast
+radius, not an escalation. And core's `addToMailbox` is now a queue add and nothing else: astubbs#257
+deleted `onPostAddToMailBox` and made `cleanUpContext` the single produce-lock release point, so PC
+has no *named* reachable throw there any more.
 
 ## Why it is filed as a blind spot rather than a defect
 
 Nothing is known to be broken. What is missing is the signal: there is no test, no assertion and no
 log line anywhere that distinguishes "recovered by X" from "never came back", so both worlds look
 identical from outside. Answering it is a reading exercise plus one test - drop a container on the
-floor deliberately and see whether it returns - and the answer decides which of the three options
-above is right, and whether several existing write-ups need weakening.
+floor deliberately and see whether it returns - and the answer decides whether astubbs#267's guards
+are described correctly, and whether several existing write-ups need weakening.
 
 Related: [`core-control-thread-contract-debts.md`](core-control-thread-contract-debts.md) owns the
 mailbox-versus-interrupt protocol, which is the adjacent question of how the control thread is *told*
