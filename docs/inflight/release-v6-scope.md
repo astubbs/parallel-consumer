@@ -196,13 +196,30 @@ counts (astubbs#336), the sign-reversed shard count (astubbs#373), the retry-que
 demoted to a timing proxy, and astubbs#444 measured the large-instance residual as group-protocol
 churn rather than a PC defect.
 
-**Still open, and the release note names each:**
+**Still open - the release note names each, and each has an agent on it (2026-09-08):**
 
 - The transactional revoke wait, astubbs#44 (confluentinc#803) - outside v6 by the 2026-09-07
   decision; the release claim names it as the known exception. The decision predates astubbs#466,
   which replaced the unbounded spin with a wait bounded by `commitLockAcquisitionTimeout`, so what
   astubbs#408 (tier 2) still owns is declining instead of waiting, and whether that bound is right.
   The exception the claim names should say "bounded, not yet declined", not "unbounded".
+- `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on idle runners, so they read as
+  starvation rather than a wedge. Not a confirmed defect; not ruled out either.
+- **An intake stall under an always-failing key, found by astubbs#471's soak (merged 2026-09-08).**
+  Under KEY ordering with records that throw on every attempt, successes froze inside the first
+  minute of both runs while the failure rate held exactly constant: the instance stopped taking new
+  work at all, and a stalled instance can never reach the commit-response timeout the soak was
+  hunting. Named, untested candidate: `WorkManager#isSufficientlyLoaded` counts records queued
+  BEHIND a blocked shard head while only the failing head is parked, so head-of-line blocking on a
+  few keys reads as "sufficiently loaded" and the poller pauses for good - the silent-stall shape
+  the gate's own comment names against confluentinc#857. Offset-encoding back pressure is
+  eliminated (neither transition logged). One run reading the gate's DEBUG line settles it; that is
+  the last item of the replay queue. confluentinc#833's reporter showed the processed-records
+  counter flat across their window, which is this state, so this may be the better lead than the
+  timeout itself.
+
+**Resolved or reassigned since this list was written - kept so the release note can say what was ruled out:**
+
 - ~~An eager-mode (`PERIODIC_CONSUMER_SYNC`) stall that reproduces on trees carrying astubbs#29's
   fix (the family note's "fourth open item")~~ - **withdrawn 2026-09-08, astubbs#478.** Four replays
   of the recorded seed on today's master all drained completely with zero loss; the "stall" was the
@@ -222,23 +239,8 @@ churn rather than a PC defect.
   PC half - that PC holds nothing during it - was re-verified with a one-term control arm on
   `ClosingMemberRebalanceIT` after astubbs#451, astubbs#466 and astubbs#468 moved the revoke and close seam. Not a
   defect; the release note need not name it.
-- `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on idle runners, so they read as
-  starvation rather than a wedge. Not a confirmed defect; not ruled out either.
-- **An intake stall under an always-failing key, found by astubbs#471's soak (merged 2026-09-08).**
-  Under KEY ordering with records that throw on every attempt, successes froze inside the first
-  minute of both runs while the failure rate held exactly constant: the instance stopped taking new
-  work at all, and a stalled instance can never reach the commit-response timeout the soak was
-  hunting. Named, untested candidate: `WorkManager#isSufficientlyLoaded` counts records queued
-  BEHIND a blocked shard head while only the failing head is parked, so head-of-line blocking on a
-  few keys reads as "sufficiently loaded" and the poller pauses for good - the silent-stall shape
-  the gate's own comment names against confluentinc#857. Offset-encoding back pressure is
-  eliminated (neither transition logged). One run reading the gate's DEBUG line settles it; that is
-  the last item of the replay queue. confluentinc#833's reporter showed the processed-records
-  counter flat across their window, which is this state, so this may be the better lead than the
-  timeout itself.
 - A dead broker-poll thread leaving the consumer open in consumer-commit modes, no LeaveGroup until
   `max.poll.interval.ms` - **fixed in the queue, astubbs#477, tier 1.**
-
 ## What v6 must say about data loss and duplicates
 
 - **Fixed on master, 2026-09-08:** the async-commit acknowledgement (astubbs#470).
