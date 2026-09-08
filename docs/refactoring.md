@@ -460,9 +460,9 @@ cosmetic - see the last bullet.*
   - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` - primitive written in one thread may not
     be visible to another. **Re-derive the membership, do not trust a list here**:
     `./mvnw -o spotbugs:spotbugs -pl :parallel-consumer-core` and read
-    `parallel-consumer-core/target/spotbugsXml.xml` for that bug type. As of astubbs#469 it
-    names `ConsumerManager.commitRequested`, `ProgressTracker.highestRoundCountSeen`,
-    `PartitionState.bootstrapPhase` and `RetryQueue.closed`.
+    `parallel-consumer-core/target/spotbugsXml.xml` for that bug type. **No membership is written
+    here, deliberately** - an enumeration would be one more list to maintain, and the paragraph
+    below is the record of what that cost last time.
     <!-- file-refs: N/A - the report path above is build output, written by the command on the line before it and absent from a clean checkout -->
     **This entry was wrong about that membership for a month, in the direction that matters**:
     it listed two fields and a count, while the analyser named six - three of them in

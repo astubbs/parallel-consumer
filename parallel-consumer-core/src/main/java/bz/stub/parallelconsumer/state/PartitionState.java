@@ -365,7 +365,11 @@ public class PartitionState<K, V> {
      * method's.
      */
     private void recordCompletion() {
-        completionCount.incrementAndGet();
+        // The new count is deliberately not used: this is a VERSION STAMP, not a quantity. No reader anywhere
+        // wants the number for its own sake - only its inequality with completionCountCommitted, which is
+        // isDirtyAt(long)'s question and is asked on the committer thread, not here. Named rather than left as
+        // a bare call so the discard reads as the decision it is.
+        long ignoredNewCompletionCount = completionCount.incrementAndGet();
     }
 
     /**
