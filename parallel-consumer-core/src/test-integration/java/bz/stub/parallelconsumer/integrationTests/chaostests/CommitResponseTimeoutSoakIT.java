@@ -96,7 +96,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * covers the poll thread, and the remaining question ("what is the control thread doing, and who holds
  * what") needs every thread.
  *
- * <h2>Calibration status</h2>
+ * <h2>Calibration status, 2026-09-07 - two runs that measured the experiment rather than the defect</h2>
  * <b>2026-09-07, two runs, zero timeouts - and NEITHER is a sighting-ledger entry, because in both
  * the assertion was unfalsifiable for all but the first minute.</b> Common to both: 30 min, single
  * instance, {@code KEY}/{@code PERIODIC_CONSUMER_SYNC} at a 1s interval, {@value #KEY_SPACE} keys
@@ -142,17 +142,62 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * BEHIND a blocked shard head - records that can never be worked - while only the failing head itself
  * is {@code parkedForRetry}. A shard set full of unworkable queued records therefore reads as
  * "sufficiently loaded", the broker poller stays paused, and nothing ever arrives to change it. That
- * is the silent-stall shape the gate's own comment names against confluentinc#857. <b>It is a
- * hypothesis, not a result</b> - the gate logs {@code isSufficientlyLoaded=} with its own operands at
- * DEBUG precisely so this can be settled, and no run has yet read it.
+ * is the silent-stall shape the gate's own comment names against confluentinc#857. <b>It was a
+ * hypothesis, and the three runs below settle it: half right.</b>
+ *
+ * <h2>Calibration status, 2026-09-08 - the load gate IS what stops intake, and head-of-line blocking
+ * is NOT why</h2>
+ * Three arms, each differing from the first by exactly one term, all six minutes rather than thirty
+ * because the stall is reached in the first second. Same seed {@code 3747722682837130843}, same
+ * {@code failureFraction} 0.5, same 1000 keys over {@value #PARTITIONS} partitions,
+ * {@code maxConcurrency} 14, 100ms user function, 1000 records every {@value #BURST_INTERVAL_SECONDS}s,
+ * the suite's Testcontainers Kafka on Docker, maintainer's macOS arm64 workstation under 5-13 load
+ * average. {@code WorkManager} at DEBUG throughout ({@code -Dpc.loadgate.log.level=debug}), and the
+ * config that carried it verified in the log by {@code OnConsoleStatusListener} rather than assumed.
+ * <ul>
+ *   <li><b>Arm 1, the experimental arm - {@code KEY}.</b> Reproduced astubbs#471's thirty-minute
+ *   result in six minutes and at the same number: succeeded froze at <b>451</b>, failed 47,977. The
+ *   gate read {@code true} on 37,356 of 37,360 evaluations - the four {@code false} ones are the
+ *   first 800ms, before the first fetch landed - and all 20 partitions were paused at every sample.
+ *   It latched at {@code inShards=500 vs target(14)*loadingFactor(2)=28}, i.e. on the FIRST fetch,
+ *   0.8s in, and never unlatched. {@code inShards} then pinned at <b>549 = 1000 - 451</b> for 36,749
+ *   of the samples: one burst arrived, the non-poisoned part of it succeeded, and nothing was ever
+ *   fetched again.</li>
+ *   <li><b>Arm 2, the control on ORDERING - {@code UNORDERED}, everything else identical.</b> Under
+ *   {@code UNORDERED} no shard head can block anything behind it, so every held record is genuinely
+ *   selectable. <b>It stalled the same way</b>: gate {@code true} on 39,689 of 39,693 evaluations, 20
+ *   partitions paused throughout, and successes crawling 232 -> 314 across six minutes on the
+ *   records already in the buffer rather than on anything new.</li>
+ *   <li><b>Arm 3, the control on the GATE ITSELF - {@code -Dsoak.messageBufferSize=20000}</b>, which
+ *   moves the threshold from 42 to 20,006 and moves nothing else. <b>The outcome flips</b>: the gate
+ *   read {@code false} on all 35,652 evaluations, <b>zero</b> partitions were paused at any sample,
+ *   {@code inShards} climbed monotonically 549 -> 17,103 tracking the producer, and successes reached
+ *   897 rather than freezing at 451.</li>
+ * </ul>
+ * <b>Verdict.</b> Arm 3 is the positive control: changing only the gate's threshold changes only
+ * whether intake stops, so <b>the gate is what stops intake</b>. Arm 2 kills the stated mechanism:
+ * the stall is identical with no ordering constraint at all. Arm 1's own arithmetic says the same
+ * thing more directly - 549 records over 1000 distinct keys, from ONE burst, is at most one record
+ * per key, so <b>nothing was queued behind any blocked head</b>. What latches the gate is records
+ * that are themselves perfectly workable - they are retried at 14 workers / 100ms, about 133 per
+ * second all run - and that never retire. Head-of-line blocking makes it worse in principle and
+ * contributed nothing here.
  * <p>
- * <b>Arms not run, re-ordered by what these two runs established.</b> Each changes ONE term:
+ * <b>The failure count is the second bound, and arm 3 is what exposes it.</b> Lifting the intake
+ * bound did not restore throughput - successes doubled and then plateaued at 897 by minute three
+ * while {@code inShards} kept climbing. The poisoned population re-offers itself every retry delay
+ * and consumes the whole worker budget, so removing the buffer bound converts a hard stall into an
+ * unbounded-memory slow starve. <b>There is therefore no threshold, and no counting rule, that fixes
+ * this</b> - the fix has to bound the FAILURES rather than the buffer, which is astubbs#149's dead
+ * letter queue. Full write-up and the design decision:
+ * {@code docs/inflight/bug-119-load-gate-counts-blocked-work-as-available.md}.
+ * <p>
+ * <b>Still eliminated, re-measured on all three arms:</b> offset-encoding back pressure. Neither
+ * {@code Offset map data too large} nor {@code not allow further messages} appears once in any of the
+ * three logs.
+ * <p>
+ * <b>Arms not run, re-ordered by what these three runs established.</b> Each changes ONE term:
  * <ol>
- *   <li><b>Re-run either arm with {@code WorkManager} at DEBUG and read the
- *   {@code isSufficientlyLoaded=(inShards=... - parkedForRetry=... vs target(...)*loadingFactor)}
- *   line at the moment successes freeze.</b> It either confirms the load gate is latched by
- *   unworkable queued records or eliminates it, and until it is read every other arm is guesswork.
- *   This costs one run and settles the question the other arms are built on.</li>
  *   <li><b>Per-ATTEMPT failure instead of per-record</b>, so records eventually succeed, the shards
  *   drain, and the instance keeps committing for the whole run. On this evidence it is the only shape
  *   that keeps the commit path alive indefinitely, which promotes it from "a different mechanism" to
@@ -166,7 +211,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *   candidate - astubbs#29 merged 2026-09-02 and closed the AB-BA cycle for that report - so this arm
  *   buys the configuration, not the cycle.</li>
  *   <li>{@code -Dsoak.failureFraction=0} - the control arm, and worth less than it looked: with no
- *   poisoning this is a plain throughput soak, and the two runs above have already shown the
+ *   poisoning this is a plain throughput soak, and the runs above have already shown the
  *   interesting axis is intake, not the poisoned share.</li>
  * </ol>
  * <b>The stall may be the more interesting lead than the timeout.</b> confluentinc#833's reporter
