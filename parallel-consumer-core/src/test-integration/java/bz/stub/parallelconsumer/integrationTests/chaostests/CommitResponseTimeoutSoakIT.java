@@ -145,10 +145,11 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * is the silent-stall shape the gate's own comment names against confluentinc#857. <b>It was a
  * hypothesis, and the three runs below settle it: half right.</b>
  *
- * <h2>Calibration status, 2026-09-08 - the load gate IS what stops intake, and head-of-line blocking
- * is NOT why</h2>
- * Three arms, each differing from the first by exactly one term, all six minutes rather than thirty
- * because the stall is reached in the first second. Same seed {@code 3747722682837130843}, same
+ * <h2>Calibration status, 2026-09-08 - the load gate IS what stops intake, it does NOT need
+ * head-of-line blocking, and it does NOT need a high failure rate</h2>
+ * Four arms, each differing from the first by exactly one term, six minutes rather than thirty
+ * because the stall is reached in the first second (the fourth runs ten, because its whole question
+ * is <em>when</em> the latch arrives). Same seed {@code 3747722682837130843}, same
  * {@code failureFraction} 0.5, same 1000 keys over {@value #PARTITIONS} partitions,
  * {@code maxConcurrency} 14, 100ms user function, 1000 records every {@value #BURST_INTERVAL_SECONDS}s,
  * the suite's Testcontainers Kafka on Docker, maintainer's macOS arm64 workstation under 5-13 load
@@ -173,31 +174,82 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *   read {@code false} on all 35,652 evaluations, <b>zero</b> partitions were paused at any sample,
  *   {@code inShards} climbed monotonically 549 -> 17,103 tracking the producer, and successes reached
  *   897 rather than freezing at 451.</li>
+ *   <li><b>Arm 4, the control on the POISON RATE - {@code -Dsoak.failureFraction=0.01}</b>, ten
+ *   minutes, ~10 poisoned records per 1000-record burst against a healthy stream of ~50/s. This is
+ *   the arm that says the stall is not an artefact of the reporter's 50% rate. <b>The gate OSCILLATED
+ *   and then stopped</b> - 264 {@code false} readings interleaved with {@code true}, against exactly
+ *   four in each of arms 1 and 2, all of those at startup. Successes rose 992 -> 1,971 -> 2,946 ->
+ *   3,902 while it oscillated, then froze at <b>3,902 for the remaining nine minutes</b>. The last
+ *   {@code false} reads {@code inShards=71 - parkedForRetry=29 = 42 vs target(14)*loadingFactor(3)=42}
+ *   - the boundary exactly - and the final unbroken {@code true} run is <b>8m57s</b>.</li>
  * </ul>
- * <b>Verdict.</b> Arm 3 is the positive control: changing only the gate's threshold changes only
- * whether intake stops, so <b>the gate is what stops intake</b>. Arm 2 kills the stated mechanism:
- * the stall is identical with no ordering constraint at all. Arm 1's own arithmetic says the same
- * thing more directly - 549 records over 1000 distinct keys, from ONE burst, is at most one record
- * per key, so <b>nothing was queued behind any blocked head</b>. What latches the gate is records
- * that are themselves perfectly workable - they are retried at 14 workers / 100ms, about 133 per
- * second all run - and that never retire. Head-of-line blocking makes it worse in principle and
- * contributed nothing here.
+ * <b>Verdict, part one - what stops intake.</b> Arm 3 is the positive control: changing only the
+ * gate's threshold changes only whether intake stops, so <b>the gate is what stops intake</b>. Arm 2
+ * kills the stated mechanism: the stall is identical with no ordering constraint at all. Arm 1's own
+ * arithmetic says the same thing more directly - 549 records over 1000 distinct keys, from ONE burst,
+ * is at most one record per key, so <b>nothing was queued behind any blocked head</b>.
  * <p>
- * <b>The failure count is the second bound, and arm 3 is what exposes it.</b> Lifting the intake
- * bound did not restore throughput - successes doubled and then plateaued at 897 by minute three
- * while {@code inShards} kept climbing. The poisoned population re-offers itself every retry delay
- * and consumes the whole worker budget, so removing the buffer bound converts a hard stall into an
- * unbounded-memory slow starve. <b>There is therefore no threshold, and no counting rule, that fixes
- * this</b> - the fix has to bound the FAILURES rather than the buffer, which is astubbs#149's dead
- * letter queue. Full write-up and the design decision:
+ * <b>Verdict, part two - the latch point, and why it is reached by any instance that runs long
+ * enough.</b> The gate fires on {@code inShards - parkedForRetry > target * loadingFactor}, and
+ * {@code parkedForRetry} is not a property of the population: by Little's law it is
+ * {@code retry throughput * retryDelay}. So with {@code P} permanently-failing records held,
+ *
+ * <pre>{@code
+ *   unparked  =  P - (retry throughput * retryDelay)
+ *   latch when  unparked > targetAmountOfRecordsInFlight * loadingFactor
+ * }</pre>
+ *
+ * {@code P} only grows under retry-forever while the subtracted term is BOUNDED - retry throughput
+ * cannot exceed {@code maxConcurrency / userFunctionDuration}, so the parked term cannot exceed
+ * {@code maxConcurrency * retryDelay / userFunctionDuration}, which at these defaults is
+ * {@code 14 * 1000/100 = 140}. <b>The latch is therefore an eventual certainty for any instance with
+ * retry-forever and any poison at all</b>, at a computable ceiling of {@code 140 + 42 = 182} held
+ * poison records here.
+ * <p>
+ * <b>Measured, not asserted, and the measurement beats the bound.</b> {@code parkedForRetry} has
+ * median 135 and hard max <b>140</b> in arms 1, 2 and 3 while {@code inShards} ranges over 549 to
+ * 17,103 - a 31x population change with an unchanged parked count, which is only possible if parked
+ * is set by throughput rather than population. Arm 1's predicted {@code unparked} of
+ * {@code 549 - 140 = 409} is exactly its observed minimum. But <b>the bound is not the arrival</b>:
+ * arm 4 latched at {@code inShards} <b>98</b>, about 64 seconds in, and 182 was never approached.
+ * That is because its retry throughput settled at 30.6/s, so its parked term was ~30 rather than 140,
+ * and {@code 98 - 30} already cleared the threshold. <b>A SLOWER retry service latches the gate
+ * SOONER</b>, because fewer records are in back-off and more therefore read as workable - which is
+ * the opposite of the intuition, and it is why 182 is a ceiling rather than an estimate.
+ * <p>
+ * <b>Saturation is NOT a precondition, and this is the correction worth carrying.</b> At arm 4's
+ * latch the pool was doing 30.6 failures/s = about 3 of its 14 workers, <b>22% utilisation</b> -
+ * against arm 1's 95%. The instance stopped fetching from the broker while it was 78% idle. Whatever
+ * limits the retry cadence to ~3.2s per record against a static 1s
+ * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#defaultMessageRetryDelay} (confirmed static
+ * - no provider is set and there is no progressive backoff) is NOT measured here, and it is the first
+ * arm below.
+ * <p>
+ * <b>Where head-of-line blocking DOES bite - a role it has, and a role it does not.</b> It is not
+ * what latches the gate (arm 2). It is what stops the residue draining afterwards: arm 4's
+ * {@code inShards} fell 103 -> 98 and then sat at exactly 98 for 6,201 consecutive evaluations,
+ * nothing retiring for nine minutes. Its 98 residents are ~40 poison plus ~58 healthy records queued
+ * behind poisoned heads on their own keys - at 1% over four bursts a key holds several records, where
+ * arm 1's single burst gave each key exactly one. So eleven idle workers sat beside 58 deliverable
+ * records they were not allowed to reach.
+ * <p>
+ * <b>Why no threshold and no counting rule fixes this.</b> Arm 3 lifts the intake bound and throughput
+ * still dies: successes doubled and plateaued by minute three while {@code inShards} climbed linearly.
+ * Removing the buffer bound converts a hard stall into an unbounded-memory slow starve. <b>The fix has
+ * to bound the FAILURES rather than the buffer</b> - astubbs#149's dead letter queue. Full write-up,
+ * the operator-visible shape and the interim mitigation:
  * {@code docs/inflight/bug-119-load-gate-counts-blocked-work-as-available.md}.
  * <p>
- * <b>Still eliminated, re-measured on all three arms:</b> offset-encoding back pressure. Neither
+ * <b>Still eliminated, re-measured on all four arms:</b> offset-encoding back pressure. Neither
  * {@code Offset map data too large} nor {@code not allow further messages} appears once in any of the
- * three logs.
+ * four logs.
  * <p>
- * <b>Arms not run, re-ordered by what these three runs established.</b> Each changes ONE term:
+ * <b>Arms not run, re-ordered by what these four runs established.</b> Each changes ONE term:
  * <ol>
+ *   <li><b>Why is the retry cadence ~3.2s when the configured delay is 1s?</b> Arm 4's pool sat at 22%
+ *   with ready records waiting, so something between "delay passed" and "dispatched" is rate-limiting,
+ *   and it is what decides how early the latch arrives. Instrument the dispatch path rather than the
+ *   gate. This is now the most valuable arm, because the latch point is a function of this number.</li>
  *   <li><b>Per-ATTEMPT failure instead of per-record</b>, so records eventually succeed, the shards
  *   drain, and the instance keeps committing for the whole run. On this evidence it is the only shape
  *   that keeps the commit path alive indefinitely, which promotes it from "a different mechanism" to
@@ -210,9 +262,10 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *   {@code docs/inflight/upstream-175-sporadic-commit-timeouts.md} no longer nominates it as a WEDGE
  *   candidate - astubbs#29 merged 2026-09-02 and closed the AB-BA cycle for that report - so this arm
  *   buys the configuration, not the cycle.</li>
- *   <li>{@code -Dsoak.failureFraction=0} - the control arm, and worth less than it looked: with no
- *   poisoning this is a plain throughput soak, and the runs above have already shown the
- *   interesting axis is intake, not the poisoned share.</li>
+ *   <li><s>{@code -Dsoak.failureFraction=0}</s> - <b>withdrawn, superseded by arm 4.</b> It was
+ *   proposed as the control that removes the poison entirely, but arm 4 answers the question it was
+ *   aimed at with a live workload rather than an empty one: the poisoned share is not the axis, and
+ *   1% reaches the same terminal state as 50% - later, and with successes flowing until it does.</li>
  * </ol>
  * <b>The stall may be the more interesting lead than the timeout.</b> confluentinc#833's reporter
  * showed {@code pc_processed_records_total} FLAT across the window in which their timeout fired -

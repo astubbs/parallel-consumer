@@ -1,9 +1,9 @@
-# A poison record stops the whole instance fetching, and the record-intake gate is what stops it
+# Retry-forever plus any poison eventually stops the instance fetching, at a threshold you can compute
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-state: open - measured and settled; what remains is a product decision, not a diagnosis -->
+<!-- inflight-state: open - mechanism settled and the latch point derived; waiting on astubbs#149 for the real fix -->
 
 **The filename carries astubbs#119, the fork mirror of confluentinc#857**, per this directory's rule
 that a note's number is always the fork's. `bug-857-family.md` carries an upstream number because it
@@ -12,22 +12,30 @@ predates the rule; do not read the two prefixes as naming different things.
 This note is about the **intake stall**, which is not the report the soak that found it was hunting.
 [`bug-177-commit-response-timeout-unreproduced.md`](bug-177-commit-response-timeout-unreproduced.md)
 **owns astubbs#175's question** - the commit-response timeout, the candidate list and the
-discriminator. What is here is the mechanism its first runs left named-but-untested, now settled, and
-the product decision that is all that remains.
+discriminator. What is here is the mechanism its first runs left named-but-untested: now settled, with
+the latch point derived and measured, and the mitigations that are open.
 
 ## What an operator sees
 
-A single instance, `KEY` ordering, records that throw on every attempt, no rebalance and no
-misconfiguration. Within the first second the instance stops fetching from the broker **permanently**
-- every partition paused - while its workers stay busy retrying the records it already holds. From
-outside it looks alive and loaded; nothing is logged, nothing is thrown, throughput is zero, and only
-`pc_num_paused_partitions` says so. confluentinc#833's reporter showed
-`pc_processed_records_total` flat across the window their timeout fired in, which is this state.
+A single instance, no rebalance and no misconfiguration, with records that throw on every attempt.
+The instance stops fetching from the broker **permanently** - every partition paused - while its
+workers keep retrying the records it already holds. From outside it looks alive and loaded; nothing
+is logged, nothing is thrown, throughput is zero, and only `pc_num_paused_partitions` says so.
+confluentinc#833's reporter showed `pc_processed_records_total` **flat** across the window their
+timeout fired in, which is this state and not a busy one - so this is the best explanation anyone has
+produced for confluentinc#809 and confluentinc#833.
+
+**This is not a pathological-workload result.** It does not need a 50% failure rate, it does not need
+`KEY` ordering, and it does not need the workers to be busy. At 1% poison the instance ran normally
+for a minute, delivering ~3,900 records, and then latched for good with **11 of its 14 workers idle**.
+Any long-lived instance that retries forever and meets any poison at all arrives here; the only
+question is when, and that is computable - see the latch point below.
 
 ## Settled: the gate is the mechanism, and head-of-line blocking is not why
 
-Three six-minute arms on 2026-09-08, each differing from the first by exactly one term, with
-`WorkManager` at DEBUG and the logging config that carried it verified in the log rather than assumed.
+Four arms on 2026-09-08, each differing from the first by exactly one term - three of six minutes and
+one of ten, because that one's whole question is *when* the latch arrives - with `WorkManager` at DEBUG
+and the logging config that carried it verified in the log rather than assumed.
 Full conditions and numbers are in `CommitResponseTimeoutSoakIT`'s `Calibration status` block, which
 owns them; what matters here is what each settled.
 
@@ -40,12 +48,49 @@ owns them; what matters here is what each settled.
 - **`messageBufferSize=20000`, the control on the gate itself** - the threshold moves from 42 to
   20,006 and nothing else moves. **The outcome flips**: the gate never read `true`, zero partitions
   were paused at any sample, records kept arriving, and successes roughly doubled.
+- **`failureFraction=0.01`, the control on the poison rate**, ten minutes. **The gate oscillated and
+  then stopped.** Successes rose steadily to 3,902 while it oscillated, then froze there for the
+  remaining nine minutes; the final unbroken `true` run is nearly nine minutes long. This is the arm
+  that says the stall is not an artefact of the reporter's 50% rate.
 
 **So the gate is what stops intake** (arm 3 is the positive control), **and the stated mechanism is
 wrong** (arm 2). Arm 1's own arithmetic agrees more directly: the records it held came from a single
 burst over 1000 distinct keys, so there was **at most one record per key and nothing queued behind
-any blocked head at all**. What latches the gate is records that are perfectly workable - they are
-retried continuously, saturating the workers - and that never retire.
+any blocked head at all**.
+
+## The latch point, and why every long-lived instance reaches it
+
+The gate is `inShards - parkedForRetry > target * loadingFactor`, and **`parkedForRetry` is not a
+property of the population**. By Little's law it is `retry throughput * retryDelay`. So with `P`
+permanently-failing records held:
+
+    unparked = P - (retry throughput * retryDelay)
+    latch when unparked > targetAmountOfRecordsInFlight * loadingFactor
+
+Under retry-forever `P` only grows, while the term subtracted from it is **bounded**: retry
+throughput cannot exceed `maxConcurrency / userFunctionDuration`, so the parked term cannot exceed
+
+    maxConcurrency * retryDelay / userFunctionDuration
+
+which at this scenario's defaults (14 workers, a 1s static `defaultMessageRetryDelay`, a 100ms user
+function) is **140** records. The latch is therefore an eventual certainty, at a ceiling of
+`140 + 42 = 182` held poison records here.
+
+**Measured, and the measurement beats the bound in the dangerous direction.** `parkedForRetry` has
+median 135 and hard max **140** across arms 1-3 while the population ranges from 549 to 17,103 - a 31x
+population change with an unchanged parked count, which is only possible if parked is set by
+throughput. Arm 1's predicted `unparked` of `549 - 140 = 409` is exactly its observed minimum. But
+arm 4 latched at **98** held records, about 64 seconds in, because its retry throughput settled at
+30.6/s and so its parked term was ~30 rather than 140. **A slower retry service latches the gate
+sooner**, because fewer records are in back-off and more therefore read as workable. 182 is a
+ceiling, not an estimate.
+
+**Saturation is not a precondition - the instance stalls while idle.** At arm 4's latch the pool was
+doing 30.6 failures/s, about 3 of its 14 workers: **22% utilisation**, against arm 1's 95%. It
+stopped fetching from the broker while 78% idle. What limits the retry cadence to ~3.2s per record
+against a *static* 1s delay (confirmed static - no `retryDelayProvider` is set and there is no
+progressive backoff in `WorkContainer#computeRetryDueAt`) is **not measured**, and it is the first
+arm in the scenario's list, because the latch point is a function of that number.
 
 ## What is still true about the accounting gap, and what it is not
 
@@ -57,10 +102,21 @@ counted anyway. `WorkManagerTest#theLoadGateCountsRecordsQueuedBehindABlockedKey
 it: three records of one key with a failing head, and the gate reads two workable while nothing is
 selectable, then three while one is.
 
-**That gap is real and it is not this stall.** It makes a stall arrive sooner where records DO queue
-behind blocked heads; it did not participate in the runs above. Do not cite it as the cause.
+**That gap is real, and it has a role - just not the one astubbs#471 gave it.** It is not what
+latches the gate: arm 2 latches identically with no ordering constraint at all, and arm 1 held one
+record per key. What it does is stop the residue draining *after* the latch. Arm 4's `inShards` fell
+103 -> 98 and then sat at exactly 98 for 6,201 consecutive gate evaluations, nothing retiring for
+nine minutes: those 98 are ~40 poison plus ~58 healthy records queued behind poisoned heads on their
+own keys, because at 1% over four bursts a key holds several records where arm 1's single burst gave
+each key exactly one. **Eleven idle workers sat beside 58 deliverable records they were not allowed
+to reach.** So: not the cause of the latch, and the reason the latch is unrecoverable.
 
-## The decision: no gate change fixes this
+## Not a product decision to be weighed - an eventual certainty to be bounded
+
+The earlier close called this "a decision", which understates it. There is no configuration of the
+existing code in which a long-lived instance with retry-forever and any poison does **not** end up
+here; the only variables are how long it takes and how idle the machine is when it happens. What is
+open is which of the mitigations below is taken, not whether the state is reachable.
 
 Two bounds are in play and only one of them is the gate.
 
@@ -86,8 +142,10 @@ direction already: `docs/data/roadmap.yaml`'s `dead-letter-queue` entry says in 
 
 - **Make the latch loud.** The state is exported as the `NUM_PAUSED_PARTITIONS` gauge and says nothing
   in the log. A gate that has read `true` across many consecutive ticks while nothing retired is a
-  report an operator can act on, it changes no semantics, and it does not need this decision settled.
-  This is the cheapest available improvement and the one worth taking first.
+  report an operator can act on, it changes no semantics, and it needs nothing else settled first.
+  It is the cheapest available improvement and the one worth taking first - and arm 4 is the argument
+  for it: an instance can be 78% idle, look healthy, and be permanently stopped, and today the only
+  thing that would tell an operator is a gauge nobody is alerting on.
 - **Do not** raise the default buffer, add a "selectable" count, or special-case the ordered shard
   head. The arms above show what each of those buys.
 
@@ -101,6 +159,23 @@ to closing on it. **Measured, not reasoned**: the last assertion of
 `isRecordsAwaitingProcessing()` reading true with nothing selectable. The consequence differs (a close
 that waits out its drain timeout, rather than a poller that stays paused), which is why it is recorded
 here rather than folded into the gate question.
+
+**Three adjacent mechanisms ruled out, each with evidence rather than by reading.**
+
+- **A dead poll thread** - astubbs#477's class. Not this: the soak classifies a terminal failure by
+  its own message and reported no finding in any of the four arms - the poller is alive throughout,
+  it is paused.
+- **A lost wakeup from a stale pause cache**
+  (`docs/solutions/performance-issues/paused-poll-wakeup-lost-to-stale-pause-cache-2026-09-01.md`).
+  Not this either, and the discriminator is decisive: `maybeWakeupPoller()` is gated on
+  `!wm.isSufficientlyLoaded()`, so with the gate continuously `true` **no wakeup is ever attempted** -
+  its `Found Poller paused` line appears zero times in every arm. Nothing can lose a wakeup that was
+  never sent.
+- **The eager-sync stall withdrawn by astubbs#478** - "a bound the processor count crosses, not a
+  defect". Do not collapse this note into that one. That symptom **drained** (`inFlight=0`,
+  250,000 consumed) and needed a processor-count cap to appear; this one never drains -
+  `inShards` sat at exactly 98 for 6,201 consecutive evaluations on an uncapped box - and it is
+  reached at 22% CPU utilisation with no cap at all.
 
 Checked and ruled out: `isWorkInFlightMeetingTarget()` and `hasWorkInFlight()` read
 `numberRecordsOutForProcessing`, which counts records actually dispatched to a worker and cannot
