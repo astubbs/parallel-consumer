@@ -194,9 +194,10 @@ class PartitionStateAcknowledgedCommitOffsetTest {
     /**
      * Completes one record and opens a commit window on the partition, which is what a commit cycle does: the offer
      * is what {@code onOffsetCommitSuccess} then measures an acknowledgement against, and
-     * {@code getCommitDataIfDirty} is also what clears {@code stateChangedSinceCommitStart} - without it the clean
-     * mark would be refused for the unrelated reason that state changed during the commit, and every
-     * clean-versus-dirty assertion here would pass whatever the code did.
+     * {@code getCommitDataIfDirty} is also what samples {@code completionCountBeingCommitted} - the count
+     * {@code setClean} goes on to publish as committed. Without it that sample would still be behind the
+     * completion just made, so the partition would read dirty afterwards for the unrelated reason that the commit
+     * covered nothing, and every clean-versus-dirty assertion here would pass whatever the code did.
      *
      * @return the offer made for commit, WHOLE - offset and encoded metadata together
      */
