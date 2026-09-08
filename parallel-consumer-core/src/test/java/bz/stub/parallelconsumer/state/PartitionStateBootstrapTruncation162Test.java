@@ -23,6 +23,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.TreeSet;
@@ -171,7 +172,7 @@ class PartitionStateBootstrapTruncation162Test {
      */
     @ParameterizedTest(name = "{0}")
     @MethodSource("commitShapes")
-    void aCommitPcWroteDecodesBackToTheOffsetItWasCommittedAt(String shapeName, List<Long> offsetsToSucceed) {
+    void aCommitPcWroteDecodesBackToTheOffsetItWasCommittedAt(String shapeName, Collection<Long> offsetsToSucceed) {
         var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST);
         var options = ParallelConsumerOptions.<String, String>builder()
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
