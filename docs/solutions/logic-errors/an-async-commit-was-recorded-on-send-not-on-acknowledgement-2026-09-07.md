@@ -144,9 +144,29 @@ Leaving a partition dirty costs at most one extra commit and cannot under-report
 edge lands on the dirty side: a partition state rebuilt by a rebalance starts with no offer recorded, so
 an acknowledgement addressed to the assignment before it cannot clean it either.
 
-**A failed async commit is one `WARN`.** Nothing was lost and nothing needs an operator tonight - the
-partitions were never marked clean, so they are still dirty and a later request carries the same offsets.
-The astubbs#168 (confluentinc#629) bound applies to it: the offsets are summarised, never interpolated.
+**A failed async commit is one line, and its LEVEL is the classification.** A transient failure is a `WARN`:
+nothing was lost and nothing needs an operator tonight - the partitions were never marked clean, so they are
+still dirty and a later request carries the same offsets. A permanent one is an `ERROR`, because that promise
+is false for it - every later request fails identically, the committed offset stops advancing, and the retries
+will not succeed without a person. Logging that at WARN would be the false alarm's mirror image, and worse:
+the operator is told to wait for something that will not happen.
+
+**The classification is the synchronous path's, not a second one.** `commitDeferringOnRebalance()` catches
+exactly `RebalanceInProgressException` and `CommitFailedException` and lets everything else escape, so the
+async mode reports at ERROR precisely what the sync mode would have let out. `RetriableException` joins those
+two because it is the class `commitAsync` is specified to report transient conditions with, and the sync path
+never sees it. Two commit modes disagreeing about which failures are routine would be worse than either
+answer alone.
+
+**What this does not do is escalate**, and that is deliberate rather than an omission: a permanent failure is
+logged and the offsets stay dirty, but the instance is not failed, because the async mode has no commit budget
+and cannot reach the commit-failure seam (astubbs#317, astubbs#352) whose job that is. Throwing is not
+available either - this runs on the broker-poll thread from a Kafka callback, and killing it strands every
+waiting committer, which is the option `commitDeferringOnRebalance()`'s javadoc already rejects.
+
+The astubbs#168 (confluentinc#629) bound applies to both levels: the offsets are summarised, never
+interpolated, and the test asserts the bound on the ERROR line too, so a level change cannot become the door
+the offset map comes back through.
 
 ## The experiment
 

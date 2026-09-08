@@ -12,6 +12,7 @@ import ch.qos.logback.classic.spi.IThrowableProxy;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetCommitCallback;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.GroupAuthorizationException;
 import org.apache.kafka.common.errors.RebalanceInProgressException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
@@ -97,6 +98,20 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
      */
     private static final int STATEMENT_TEXT_BUDGET = 160;
 
+    /**
+     * The same budget for the <b>permanent-failure ERROR</b>, which says more because it has more to say: that every
+     * later request fails identically, that the committed offset will not advance, and that nobody should wait for it
+     * to fix itself. Measured at 231 characters of statement text plus the summary's {@code "N partitions: "} prefix,
+     * with headroom for a reword.
+     * <p>
+     * <b>Separate from {@link #STATEMENT_TEXT_BUDGET} rather than raising it, so neither line goes slack.</b> One
+     * shared budget wide enough for this statement would stop constraining the WARN at all. Both stay orders of
+     * magnitude below what the assertion actually guards against - {@link OffsetMapCodecManager#DefaultMaxMetadataSize}
+     * <em>per partition</em>, which is 4096 each and is what interpolating the map costs. A level change must not
+     * become the door that comes back through.
+     */
+    private static final int ERROR_STATEMENT_TEXT_BUDGET = 260;
+
     @Test
     void asyncCommitFailureLineNamesEveryPartitionAndOffsetButNotTheMetadata() {
         var consumerMgr = consumerManagerMock();
@@ -159,6 +174,52 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
             assertThat(logs.messagesAt(Level.ERROR, TOPIC)).isEmpty();
             assertThat(logs.messagesAt(Level.WARN, TOPIC)).isEmpty();
             assertThat(logs.messagesAt(Level.DEBUG, FULL_MAP_LINE)).isEmpty();
+        }
+    }
+
+    /**
+     * The other half of the level contract, and the one that keeps the WARN above honest: a failure the next request
+     * cannot fix is an <b>ERROR</b>.
+     * <p>
+     * The WARN's promise is that these offsets are committed when a later request is acknowledged. For a coordinator
+     * hiccup that is true and the operator can go back to sleep. For a permanent failure - the group authorization
+     * revoked, this instance fenced - it is false: every later request fails the same way, the partitions stay dirty
+     * for as long as the process runs, the committed offset never advances, and nothing gets better without a person.
+     * Logging that at WARN with a promise of eventual success is the false alarm's mirror image, and worse, because
+     * the operator is told to wait for something that will not happen.
+     * <p>
+     * <b>The classification is the sync path's, not a new one.</b> {@code commitDeferringOnRebalance()} catches
+     * exactly {@code RebalanceInProgressException} and {@code CommitFailedException} and lets everything else escape,
+     * so this asserts the async mode reports at ERROR precisely what the synchronous mode would have let out. Found by
+     * the Codex review on astubbs/parallel-consumer#470.
+     */
+    @Test
+    void aPermanentAsyncCommitFailureIsAnErrorBecauseNoLaterRequestCanFixIt() {
+        var consumerMgr = consumerManagerMock();
+        var committer = committerFor(consumerMgr);
+        Map<TopicPartition, OffsetAndMetadata> offsets = twoPartitionCommit(largestOffsetMapPcWillWrite());
+
+        try (var logs = LogCapture.of(ConsumerOffsetCommitter.class, Level.DEBUG)) {
+            committer.commitOffsets(offsets, GROUP);
+
+            completeCallbackWith(consumerMgr, offsets, new GroupAuthorizationException("mocked - not retriable"));
+
+            assertWithMessage("a failure no later request can fix must not be reported with the deferral promise")
+                    .that(logs.messagesAt(Level.WARN, TOPIC))
+                    .isEmpty();
+            String failureLine = logs.onlyMessageAt(Level.ERROR, TOPIC);
+            assertWithMessage("the ERROR must say the retries will not succeed on their own, or it is only a louder "
+                    + "version of the WARN")
+                    .that(failureLine).contains("will not succeed without intervention");
+
+            // the astubbs#168 (confluentinc#629) bound is the same on this line as on the WARN - a level change must
+            // not become the door the offset map comes back through
+            assertThat(failureLine).doesNotContain(largestOffsetMapPcWillWrite());
+            assertThat(failureLine).contains(TOPIC + "-1: offset 5, no metadata");
+            assertThat(failureLine.length()).isLessThan(2 * (TOPIC.length() + 64) + ERROR_STATEMENT_TEXT_BUDGET);
+
+            assertThat(throwableOfOnlyEventAt(logs, Level.ERROR))
+                    .isEqualTo(GroupAuthorizationException.class.getName());
         }
     }
 
