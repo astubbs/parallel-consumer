@@ -104,9 +104,12 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   replacement racing in from the controller. Rebalance-shaped.
 - [ ] **astubbs#469** - the two remaining `PartitionState` flags that cross threads, measured and then
   fenced or redesigned. The follow-on astubbs#349 deliberately left.
-- [ ] **astubbs#431** - the rebalance callbacks decline the retry queue's write lock instead of waiting
-  for it. A stall from the confluentinc#857 defect-class sweep; its three prerequisites merged
-  2026-09-07.
+- [ ] **astubbs#481** - the poll thread never touches the retry queue; the controller collects
+  what it leaves. The owner's own PR, ready and green, superseding astubbs#431 (closed 2026-09-08 -
+  correct and proven, but more machinery than the defect needed). Same stall from the
+  confluentinc#857 defect-class sweep: an unbounded fair write-lock wait inside the rebalance
+  callback, spent out of `max.poll.interval.ms`. astubbs#483 (the shard-displacement reachability
+  verdict) stacks on it.
 - [ ] **astubbs#473** - clears the two remaining quarantine entries by fixing what they were about.
   The release guard blocks while `docs/quarantined-tests.md` has any.
 - [ ] **astubbs#477** - a dead broker-poll thread now closes the consumer in the consumer-commit
@@ -237,9 +240,16 @@ commit-response-timeout stall astubbs#471's soak found.
 
 - Whether the six deadlock captures that verified astubbs#29's mechanism ever replay clean **with
   the fix applied** - the owning solutions doc still says "unproven".
-- Whether the shard-displacement orphan window
-  ([`bug-shard-displacement-orphans-the-retry-queue-entry.md`](bug-shard-displacement-orphans-the-retry-queue-entry.md))
-  is reachable in production.
+- ~~Whether the shard-displacement orphan window is reachable in production~~ - **known,
+  2026-09-08, astubbs#483: unreachable**, with a three-arm regression test and an ablation that goes
+  red only when both sweeps are removed. The caveat is the finding: the last leg of the proof is a
+  Kafka property, not this engine's - the consumer's fetch position never goes backwards within a
+  generation - so an in-generation offset replay (a seek, or an offset-reset/truncation replay)
+  reopens the window at once and nothing goes red. astubbs#481's controller purge bounds any such
+  orphan to one control-loop tick, so the cost would be misdirection, not a stall. The sweep for the
+  same shape found two more by-key removals (`ProcessingShard.onSuccess`, the revoke sweep in
+  `ShardManager.removeWorkFromShardFor`), left for astubbs#468 whose identity-`equals` change is
+  what makes conditional removal possible. Not a v6 gate; astubbs#483 stacks on astubbs#481.
 - ~~Whether "rejoin" after producer fencing is expressible in PC's lifecycle~~ - **known,
   2026-09-08, by a read of the astubbs#472/#474/#410 diffs against the engine's ownership rules:**
   it is, and the stack expresses it, with the correction that the question dissolves - PC's
@@ -295,7 +305,8 @@ comes first because nothing else matters until it clears.
      untested, unfixed.
   3. `pr-431-must-pair-its-queue-removal-with-the-shard-removal.md` with
      `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the retry-queue orphan window; master
-     is still shard-first and astubbs#431 is a draft.
+     is still shard-first and astubbs#431 is a draft. *(Since overtaken: astubbs#431 closed as
+     superseded by the owner's astubbs#481, ready and green, which is what tier 1 lists.)*
   4. `bug-unvalidated-batchsize.md` - `batchSize(0)` silently processes nothing; one `validate()`
      bound closes all three shapes (astubbs#311). The cheapest real fix in the set.
   5. `bug-max-failure-history-is-inert.md` - a public option that does nothing; removing it is
