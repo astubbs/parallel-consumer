@@ -2,19 +2,18 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: release-gate -->
-<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: the release facts hold (pom is 0.6.0.0-SNAPSHOT, no v0.6.0.0 tag, no live bare @Disabled, ProgressBarTest gone) and the quarantine guard still blocks - but the registry now carries THREE entries, not the two named here (ProducerManagerTest.aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced joined them), and the 2026-08-20 mirror paragraph is stale: astubbs#155, astubbs#169, astubbs#170 and astubbs#177 are all closed, leaving only astubbs#161 and astubbs#181 awaiting a maintainer decision -->
+<!-- inflight-vetted: 2026-09-08 - applied: the 2026-08-20 mirror paragraph shrunk to the two mirrors still awaiting a maintainer decision, and the quarantine block now points at the registry instead of naming its entries; checked: astubbs#155, astubbs#169, astubbs#170 and astubbs#177 are closed and astubbs#161 and astubbs#181 open (gh, -R astubbs/parallel-consumer), process-candidate-ranking.md still owns the ranking for both, docs/quarantined-tests.md is non-empty but no longer carries the ProducerManagerTest entry the proposal counted (astubbs#466 removed it, which is why this note now enumerates none), pom is 0.6.0.0-SNAPSHOT with no v0.6.0.0 tag and no live bare @Disabled -->
 
 
 **Tracking issue: astubbs#197.** That issue is the linkable handle - from PRs, from mirrors, from upstream
 comments. This file is the detail behind it. Keep them in step: if a blocker is resolved here, tick it
 there.
 
-**Six mirrors carrying the `0.6.0.0` label came out of the 2026-08-20 triage with no engineering
-left in them.** astubbs#155, astubbs#169 and astubbs#170 need their written fixes de-conflicted and
-merged; astubbs#161 and astubbs#181 need a maintainer decision; astubbs#177 needs a comment saying
-what survived its own merged fix. [`process-candidate-ranking.md`](process-candidate-ranking.md) owns
-the ranking and says what each one needs - this file does not repeat it, because a second ordering
-here is how the two drift.
+**Two mirrors carrying the `0.6.0.0` label are still waiting on a maintainer decision** -
+astubbs#161 and astubbs#181. They are what is left of the six the 2026-08-20 triage found with no
+engineering in them; the other four have since closed.
+[`process-candidate-ranking.md`](process-candidate-ranking.md) owns the ranking and says what each
+one needs - this file does not repeat it, because a second ordering here is how the two drift.
 
 Not yet released: the pom is `0.6.0.0-SNAPSHOT`, there is no `v0.6.0.0` tag, and the changelog section
 is written. Release = strip `-SNAPSHOT` and merge to `master`; `publish.yml` runs after CI succeeds,
@@ -23,16 +22,12 @@ deploys via the `maven-central` profile, tags `v<version>` and cuts a GitHub rel
 
 **Still blocked by the quarantine guard.** astubbs#80 did empty the registry when it merged, and this
 block used to stop there - but the registry has not stayed empty.
-[`docs/quarantined-tests.md`](../quarantined-tests.md) carries
-`MultiInstanceRebalanceTest.largeNumberOfInstances`, an unowned entry for a rebalance stall that is
-measured but not explained, and since astubbs#440 also
-`RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`,
-quarantined on a sighting ledger rather than a diagnosis - so that file's rule 5 - a release is blocked
-while the list is non-empty -
-still bites and `release.yml`'s "no release while tests are quarantined" gate does not pass today.
-Read the registry rather than this line: it is the enforced copy, and the gate reads it, not this
-note. The "no disabled tests" gate below is a **separate** one, and it being met says nothing about
-this.
+[`docs/quarantined-tests.md`](../quarantined-tests.md) is not empty today, so that file's rule 5 - a
+release is blocked while the list is non-empty - still bites and `release.yml`'s "no release while
+tests are quarantined" gate does not pass. Which tests, and what each is quarantined on, is the
+registry's to say and deliberately not repeated here: it is the enforced copy, the gate reads it,
+and a list copied into this note is wrong the first time one is re-enabled. The "no disabled tests"
+gate below is a **separate** one, and it being met says nothing about this.
 
 ## Bugs found while triaging the upstream mirrors (2026-08-05)
 
