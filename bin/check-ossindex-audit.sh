@@ -53,6 +53,13 @@
 # what a PR cannot see - an unchanged tree acquiring a new advisory - but it is the second channel,
 # not the first.
 #
+# WHERE THAT IS ENFORCED, since 2026-09-09: in dependency-audit.yml (schedule and dispatch), where
+# exit 2 fails the job. On the PR lane in maven.yml the owner downgraded exit 2 to an advisory step -
+# red in the step list, a warning annotation, a green required check - after a new advisory against
+# an unchanged dependency turned every open PR red at once; the workflow comment records the
+# reasoning it overrides. Exit 1 fails the PR lane as before. This script does not know which lane
+# it is on and must not: it reports the two verdicts, and the caller decides what each costs.
+#
 # The cost is a false positive blocking unrelated work, and it is real: OSS Index produced two false
 # positives and one CVE id with no public record in a single run against this repo
 # (docs/solutions/security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md). The escape hatch is the same one the backlog used -

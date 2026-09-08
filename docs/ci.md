@@ -568,11 +568,19 @@ runner count rather than about this workflow:
   deliberate exception to "there is almost no scheduled build" below; it re-runs no suite the gate
   already covers.) The PR half skips for fork and Dependabot PRs, which receive no Actions secrets
   and would 401 forever.
-  - **Findings fail it.** astubbs/parallel-consumer#281 retired the standing backlog into
-    `excludeVulnerabilityIds` entries in the root pom, each carrying a stated retirement condition,
-    so a finding that reaches the gate is by construction an advisory nobody has looked at.
-    PR-time rather than the schedule alone because a solo maintainer will not read a scheduled
-    alert - the PR gate is the only channel with reliable attention.
+  - **Findings fail the scheduled lane, and are advisory on a PR.** astubbs/parallel-consumer#281
+    retired the standing backlog into `excludeVulnerabilityIds` entries in the root pom, each
+    carrying a stated retirement condition, so a finding that reaches either lane is by
+    construction an advisory nobody has looked at. The scheduled lane still goes red on one. On
+    the PR lane, since 2026-09-09 (owner decision), a finding renders as a red
+    `deps: CVE findings (advisory)` step with a warning annotation while the `scan: repo` check
+    stays green: a new advisory against an unchanged dependency was turning every open PR red at
+    once, and a required context nothing in the PR can fix blocks work rather than protecting it.
+    What is NOT advisory is a scan that cannot be proven to have run - exit 1 still fails the
+    check, because a scan that did not happen is not a pass. The reasoning this overrides, that a
+    solo maintainer reads the PR gate and not a scheduled alert, is kept in
+    `bin/check-ossindex-audit.sh`'s header; the annotation and the red step are what keep the
+    finding visible on the PR without holding the merge.
   - **Two different reds, and they stay distinguishable.** Exit 1: the scan could not be proven to
     have run, so the *check* is broken and nothing was learned about the tree. Exit 2: the scan ran
     and found something, so the *tree* needs triage. Separate headings in the job summary. When both

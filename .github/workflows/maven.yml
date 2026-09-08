@@ -895,13 +895,48 @@ jobs:
 
       # THE STEP THAT CARRIES THE OLD JOB'S NAME, because it is the one that decided red: it renders
       # findings into the run summary, exits 1 when it cannot prove the scan happened, and 2 when the
-      # scan found something. A red here reads in the log the way the red check used to.
+      # scan found something.
+      #
+      # FINDINGS ARE ADVISORY ON A PR; A SCAN THAT CANNOT BE PROVEN TO HAVE RUN STILL FAILS. Owner
+      # decision, 2026-09-09: a new advisory against an unchanged dependency was turning every open
+      # PR red at once (CVE-2026-59296 on micrometer-core landed on astubbs/parallel-consumer#480
+      # and astubbs/parallel-consumer#488 the same hour, neither touched a dependency), and a required context that
+      # goes red for something no PR can fix blocks the release burn-down rather than protecting it.
+      # This OVERRIDES the reasoning bin/check-ossindex-audit.sh's header records under WHY
+      # FINDINGS ARE FATAL - that on a tree whose known debt is excluded with reasons, a finding is
+      # by construction unlooked-at, and the PR gate is the only channel a solo maintainer reliably
+      # reads. That reasoning is kept there, still true, and still enforced where it costs nobody a
+      # merge: the scheduled and dispatched lane in dependency-audit.yml fails on findings exactly
+      # as before. Here the two reds the script distinguishes get the two different treatments they
+      # always demanded: exit 1 (the CHECK is broken) fails this step and the job, because a scan
+      # that did not happen is not degraded into a pass; exit 2 (the TREE has a finding) is handed
+      # to the advisory step below, which renders red in the step list and annotates the run, and
+      # cannot fail the job - the same step-level `continue-on-error` shape the mutation lane uses,
+      # for the same reason: a job-level flag would make a broken scan green too.
       - name: "deps: whole-tree CVE scan"
+        id: cve_scan
         if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
         shell: bash
         run: |
           set -o pipefail
-          bash bin/check-ossindex-audit.sh ossindex-audit.log | tee -a "$GITHUB_STEP_SUMMARY"
+          verdict=0
+          bash bin/check-ossindex-audit.sh ossindex-audit.log | tee -a "$GITHUB_STEP_SUMMARY" || verdict=$?
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          if [ "$verdict" -eq 2 ]; then
+            echo "findings: advisory on a PR - see the next step; the scan itself ran and is green here"
+            exit 0
+          fi
+          exit "$verdict"
+
+      # The advisory half of the verdict above. Red in the step list, a warning annotation on the
+      # run, and nothing the ruleset can see - `continue-on-error` is on the STEP, not the job.
+      - name: "deps: CVE findings (advisory)"
+        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' && steps.cve_scan.outputs.verdict == '2' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "::warning title=OSS Index advisories::the whole-tree CVE scan found advisories nobody has triaged - read the job summary; fix, or add an excludeVulnerabilityIds entry with a reason and a retirement condition. Advisory on a PR; the scheduled lane in dependency-audit.yml still fails on this."
+          exit 2
 
       # Kept so a finding can be triaged from the structured report rather than re-run by hand, and
       # so a failed run can be diagnosed from the log that produced the verdict.
