@@ -22,10 +22,13 @@
 #      docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md
 #      is about.
 #
-# So: dispatch when you have the question. The one experiment with a standing open question is also
-# offered on a schedule below, because a rate that nothing ever samples stays unmeasured - which is
-# how the largeNumberOfInstances failure rate went from a 2026-01 upstream report to "nobody has
-# measured it since".
+# So: dispatch when you have the question. The largeNumberOfInstances rate is also offered on a
+# schedule below, because a rate that nothing ever samples stays unmeasured - which is how it went
+# from a 2026-01 upstream report to "nobody has measured it since". The other two capacity profiles
+# (cooperativeStickyRebalanceShouldNotStall, gentleChaosRebalance) get their own weekly schedule slot
+# for a different reason: they used to gate on every push, 2026-09-07 moved them to measurement-only,
+# and a profile with no sampler at all runs nowhere - AGENTS.md's "a test that never runs is not a
+# passing test, and nothing goes red to tell you".
 #
 # SECURITY (public repo + self-hosted runner): workflow_dispatch and schedule only - both are
 # write-access-gated or repo-owned by construction, so no untrusted fork code reaches the
@@ -61,16 +64,26 @@ on:
           - exp-measure-large-instances-failure-rate
           - exp-sweep-large-instances-scale
           - exp-audit-stall-detector-silence
+          - exp-measure-capacity-profiles-failure-rate
       iterations:
         description: 'Iterations - empty for the script default, otherwise a positive integer'
         required: false
         default: ''
   schedule:
-    # Weekly, Sundays 04:00 UTC. ONLY the largeNumberOfInstances rate: its question is open and
-    # recorded (docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md), and a
-    # rate with no sampler never gets answered. Nothing else is scheduled - an experiment whose
-    # question is settled should be deleted, not run forever.
+    # Weekly, Sundays 04:00 UTC. The largeNumberOfInstances rate: the mechanism is explained
+    # (docs/solutions/test-flakiness/large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md),
+    # but it is a capacity measurement, not a one-off answer, and a rate with no sampler never stays
+    # a trend - see docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md for why it is
+    # scheduled rather than gating.
     - cron: '0 4 * * 0'
+    # Weekly, Sundays 05:00 UTC - the OTHER two capacity profiles (cooperativeStickyRebalanceShouldNotStall,
+    # gentleChaosRebalance). 2026-09-07 moved all three off the required Performance Tests gate onto
+    # @Tag("capacity"); before that they ran (and gated) on every push, so leaving them unscheduled
+    # would mean they run NOWHERE - the "test that never runs" trap AGENTS.md warns about. The "Run
+    # the experiment" step below reads `github.event.schedule` to route each cron slot to its own
+    # default script; an experiment whose question is settled should still be deleted, not run
+    # forever, from both this list and that routing.
+    - cron: '0 5 * * 0'
 
 permissions:
   contents: read
@@ -104,15 +117,18 @@ jobs:
 
       - name: Run the experiment
         env:
-          # Data, never code. A scheduled run has no inputs, so it falls back to the one experiment
-          # the schedule exists for.
-          EXPERIMENT: ${{ inputs.experiment || 'exp-measure-large-instances-failure-rate' }}
+          # Data, never code. A scheduled run has no `inputs.experiment`, so it falls back on
+          # `github.event.schedule` - the cron expression that actually fired, which GitHub Actions
+          # sets on scheduled events - to pick between this workflow's two weekly slots. Anything
+          # that is neither a dispatch input nor one of those two cron strings (there is no third)
+          # falls back to the original default, unchanged.
+          EXPERIMENT: ${{ inputs.experiment || (github.event.schedule == '0 5 * * 0' && 'exp-measure-capacity-profiles-failure-rate') || 'exp-measure-large-instances-failure-rate' }}
           ITERATIONS: ${{ inputs.iterations }}
         run: |
           set -euo pipefail
           case "$EXPERIMENT" in
               exp-measure-large-instances-failure-rate|exp-sweep-large-instances-scale| \
-              exp-audit-stall-detector-silence) ;;
+              exp-audit-stall-detector-silence|exp-measure-capacity-profiles-failure-rate) ;;
               *) echo "Unknown experiment: $EXPERIMENT" >&2; exit 2 ;;
           esac
           # VALIDATE THE COUNT HERE - the script will not do it for you. The runners set `set -u` and

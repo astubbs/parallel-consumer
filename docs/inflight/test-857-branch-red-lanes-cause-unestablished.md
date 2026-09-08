@@ -71,7 +71,8 @@ an ENTRY refresh (before `pollingBroker` is set, preserving the CME fix);
 
   **All three profiles were re-enabled on 2026-09-01** (operator decision) and the lane gates on them;
   `largeNumberOfInstances` has failed once since, with a rebalance stall that the control-loop fix does
-  NOT address - `test-largenumberofinstances-residual-failures-measured-not-explained.md` owns it.
+  NOT address - `../solutions/test-flakiness/large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md`
+  owns it (measured and classified 2026-09-05: the protocol's join phase under churn, not PC).
   What follows described the state while they were held out, and the question of where
   a test whose own documentation says a single run is not a verdict can live given the lane is a
   **required check**, is `handoff/enable-large-number-of-instances`.

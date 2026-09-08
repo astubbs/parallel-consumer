@@ -108,9 +108,14 @@
              gating suites so green means mergeable, but still run by the non-gating CI lane
              (bin/quarantined-test.sh). `lincheck` = scheduler-controlled concurrency tests: seconds per
              class at the committed bounds but superlinear in them, and a model-checking run needs the
-             -Plincheck JVM args, so it is opt-in like chaos. -->
+             -Plincheck JVM args, so it is opt-in like chaos. `capacity` = a measurement whose output is
+             a pass RATE over many runs rather than an outcome, so it may never gate: bin/performance-test.sh
+             excludes it from the REQUIRED lane while the scheduled experiments workflow, which passes an
+             empty exclusion, still runs it (MultiInstanceRebalanceTest#CAPACITY_TAG owns the reasoning).
+             Listed here as well as carrying `performance` so a future capacity profile that forgets the
+             performance tag is still out of the default build. -->
         <included.groups></included.groups>
-        <excluded.groups>performance,chaos,quarantined,lincheck</excluded.groups>
+        <excluded.groups>performance,chaos,quarantined,lincheck,capacity</excluded.groups>
 
         <!-- version numbers -->
         <!-- plugins -->
@@ -1158,10 +1163,14 @@
                          Select them with BOTH -Dincluded.groups=performance AND an -Dexcluded.groups= that
                          does not list performance - which is what bin/performance-test.sh does, and the reason
                          to use it rather than a hand-rolled mvnw line. That script passes
-                         -Dexcluded.groups=quarantined rather than an empty value, because an override REPLACES
-                         the default list and an empty one would drop the quarantine exclusion too, letting a
-                         @Quarantined performance test keep gating the required lane. Use an empty value only
-                         when you deliberately want the quarantined ones as well. The include alone selects
+                         -Dexcluded.groups=quarantined,capacity rather than an empty value, because an override
+                         REPLACES the default list and an empty one would drop the quarantine exclusion too,
+                         letting a @Quarantined performance test keep gating the required lane. `capacity` is
+                         the second half of that pair: MultiInstanceRebalanceTest's capacity profiles are a
+                         measurement whose output is a pass RATE, so they are excluded from this REQUIRED lane
+                         and run by the scheduled experiments workflow instead - which passes an empty
+                         exclusion and so still selects them. Use an empty value only when you deliberately
+                         want the quarantined and capacity ones as well. The include alone selects
                          nothing: exclusion beats inclusion in JUnit
                          Platform and excluded.groups already contains performance, so the run exits BUILD
                          SUCCESS having tested nothing. NOT -Dgroups=performance either: the groups element

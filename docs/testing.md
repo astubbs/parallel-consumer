@@ -426,6 +426,7 @@ answer it.
 | Does that failure rate move with SCALE? | `bin/exp-sweep-large-instances-scale.sh` | **open** - rate rising with scale points at the group coordinator, flat points at PC | anywhere |
 | Does the `NO_PROGRESS` detector MISS real failures? | `bin/exp-audit-stall-detector-silence.sh [n]` | **open, reopened 2026-08-31** - a detector that stays quiet on a real failure is worse than an absent one, because the suite goes green on its silence | anywhere |
 | Did the async stall drain or wedge? | **RETIRED 2026-09-01 - answered** | the backlog drained on all six firings collected; method and discriminator in [`solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md`](solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md) |
+| How often do `cooperativeStickyRebalanceShouldNotStall` and `gentleChaosRebalance` fail? | `bin/exp-measure-capacity-profiles-failure-rate.sh [n]` | **open** - both moved off the required `Performance Tests` gate onto `@Tag("capacity")` 2026-09-07 and had run nowhere since; this is their sampler, on the same weekly cadence as `largeNumberOfInstances` | anywhere |
 | All of the above, unattended, one tally | `bin/exp-batch-857.sh` | a batch of whatever was outstanding when it was written - read its header before trusting its scope | local only |
 
 **"Local only" is enforced, not advisory.** Those two compare this tree against sibling worktrees
@@ -450,10 +451,11 @@ is not a rate, and no lane in this repo aggregates results across runs.
 
 **The single-tree ones can be dispatched instead of run locally.** `.github/workflows/experiments.yml`
 offers each of those as a `workflow_dispatch` choice on the high-CPU runner, which is where the
-expensive ones belong - a ten-iteration batch is a runner-hour, not a desk-hour. The `largeNumberOfInstances` rate also
-runs weekly on a schedule, alone, because its question is open and a rate nothing samples stays
-unmeasured. **Nothing here runs on push and nothing gates**; that workflow's header carries the
-reasoning, including why gating on a rate would need a threshold nobody has the spread to choose.
+expensive ones belong - a ten-iteration batch is a runner-hour, not a desk-hour. The `largeNumberOfInstances`
+rate and the other two capacity profiles' rate each also run weekly on their own schedule slot, because a
+rate nothing samples stays unmeasured. **Nothing here runs on push and nothing gates**; that workflow's
+header carries the reasoning, including why gating on a rate would need a threshold nobody has the
+spread to choose.
 
 **When a question in that table is ANSWERED, the row and the script both go**, and the method moves
 to [`docs/solutions/`](solutions/). [`bin/AGENTS.md`](../bin/AGENTS.md) owns that lifecycle; this
