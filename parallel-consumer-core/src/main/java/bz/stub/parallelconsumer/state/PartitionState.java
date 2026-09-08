@@ -213,7 +213,80 @@ public class PartitionState<K, V> {
      */
     private volatile boolean fencedForRevocation;
 
+    /**
+     * The highest offset the broker has acknowledged a commit for on this partition - what
+     * {@code pc.partition.latest.committed.offset} reads.
+     * <p>
+     * <b>It only ever rises</b>, which {@link #recordCommittedOffset} is what enforces. Under
+     * {@code PERIODIC_CONSUMER_ASYNCHRONOUS} two commits can be in flight at once and their acknowledgements can
+     * arrive in either order, so an answer carrying an offset a later one has already passed reaches here after the
+     * higher one. Recording it would walk the commit watermark, and the gauge, BACKWARDS.
+     * <p>
+     * Package-private getter because this is the only way a test can read it - the gauge is the sole production
+     * reader.
+     */
+    @Getter(PACKAGE)
     private long lastCommittedOffset;
+
+    /**
+     * The offer this partition last made for commit - the {@link OffsetAndMetadata} {@link #getCommitDataIfDirty()}
+     * handed to the committer, held WHOLE.
+     * <p>
+     * <b>Whole, because the offset alone does not identify an offer.</b> The offered offset is
+     * {@link #getOffsetToCommit()}, one above the highest <em>sequentially</em> succeeded offset, while the metadata
+     * is the encoded set of incomplete offsets above it. A record completing above the lowest incomplete one
+     * therefore changes the metadata and leaves the offset exactly where it was, so two requests can be in flight
+     * carrying the same offset and different metadata. Comparing offsets alone, the answer to the older one would
+     * match and mark the partition clean - and the newer request's metadata, the only record that the higher record
+     * is done, would never be re-sent if that request then failed or was dropped, replaying records after a
+     * reassignment that the encoded offset map exists to stop being replayed. Found by the Codex review on
+     * astubbs/parallel-consumer#470, and pinned by
+     * {@code PartitionStateAcknowledgedCommitOffsetTest.anAcknowledgementOfAnOfferWithSupersededMetadataAtTheSameOffsetDoesNotCleanThePartition}.
+     * <p>
+     * Comparing whole is exact rather than merely tighter: {@code Consumer#commitAsync} hands the
+     * {@code OffsetCommitCallback} the very map it was given, and the transactional path calls
+     * {@link #onOffsetCommitSuccess} inline with the map it just collected, so the acknowledgement of an offer
+     * carries that offer's own object. Anything that did not come back identical stays dirty, which costs one extra
+     * commit and cannot under-report - the same edge this whole rule lands on.
+     * <p>
+     * <b>It is the whole of the clean-mark rule.</b> {@link #onOffsetCommitSuccess} records every acknowledgement,
+     * because an acknowledgement is true - the broker really did commit up to the offset it names - but it marks the
+     * partition CLEAN only when what was acknowledged is this offer. Under {@code PERIODIC_CONSUMER_ASYNCHRONOUS} two
+     * commits can be in flight at once, so an answer can arrive for an offer a later one has already passed; marking
+     * clean on that answer is what would leave nothing dirty to re-send the offsets in between if the later request
+     * then failed or was dropped - the very defect
+     * {@code docs/solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md}
+     * removed, re-entered through the door that fix opened. The committer needs to know none of this: the partition
+     * made the offer, so the partition is what can recognise its own answer.
+     * <p>
+     * <b>Which thread writes and reads it.</b> Written in the commit path ({@code getCommitDataIfDirty}, reached from
+     * {@code collectCommitDataForDirtyPartitions}) and read back in {@code onOffsetCommitSuccess}, by the SAME thread
+     * in every commit mode. Under both consumer commit modes that is the broker-poll thread: it sends the request,
+     * and Kafka delivers a commit callback from the {@code poll()} that same thread drives. Under
+     * {@code PERIODIC_TRANSACTIONAL_PRODUCER} it is the control thread, where the commit blocks and the
+     * acknowledgement is recorded inline - uniformly so since astubbs/parallel-consumer#466, which moved that
+     * mode's revocation-time commit off the broker-poll thread and onto the control thread by posting a request
+     * to it. The revocation commit in the CONSUMER commit modes stays inline on the poll thread, which is the
+     * same thread their ordinary commits already run on, so both modes remain self-consistent either way. The one
+     * hand-over is {@code Consumer#close()} flushing a pending callback
+     * on the closing thread, which happens only after the poll loop has finished - a hand-over with a happens-before
+     * edge, not an overlap. So this is a plain field, for the reason {@link #dirty} states for the {@code long}s
+     * here: that flag is the fence, and fencing these too buys nothing it does not already provide. It has the same
+     * lifecycle as {@link #stateChangedSinceCommitStart} - written where the commit window opens, read where it
+     * closes.
+     * <p>
+     * <b>Replaced, not accumulated.</b> Only the latest offer is kept, because only the latest offer may end the
+     * story; every earlier one is by definition superseded. Keeping a set of outstanding offers would have to be
+     * pruned by something, and the downward reset {@code maybeTruncateBelowOrAbove} performs on a bootstrap poll is
+     * exactly the event no pruning rule would see - after which the partition could never match an offer again:
+     * dirty forever, committing nothing.
+     * <p>
+     * A partition state freshly built by a rebalance starts {@code null}, so an acknowledgement for the assignment
+     * before it cannot mark it clean. That is a change for the better - the previous code marked clean
+     * unconditionally - and it costs at most one extra commit.
+     */
+    private OffsetAndMetadata offerLastMadeForCommit;
+
     private Gauge lastCommittedOffsetGauge;
     private Gauge highestSeenOffsetGauge;
     private Gauge highestCompletedOffsetGauge;
@@ -279,10 +352,46 @@ public class PartitionState<K, V> {
         }
     }
 
+    /**
+     * The broker acknowledged a commit for this partition: <b>record the offset always, mark the partition clean only
+     * if this is the answer to what the partition last offered.</b>
+     * <p>
+     * The two halves are separate because an acknowledgement carries two different things. Its offset is TRUE - the
+     * broker really did commit up to it - so it is recorded whether or not a later request has since passed it, and
+     * {@link #recordCommittedOffset} keeps the higher of the two if the answers arrive out of order. What it may not
+     * do, unless it is the answer to the latest offer, is end the story: see {@link #offerLastMadeForCommit},
+     * which owns the rule and the reasoning.
+     * <p>
+     * The clean mark is still subject to the existing protocol - {@link #setClean()} declines when the partition's
+     * state changed again while the commit was in flight.
+     */
     public void onOffsetCommitSuccess(OffsetAndMetadata committed) { //NOSONAR
-        lastCommittedOffset = committed.offset();
-        setClean();
-        uncommittedCompletions.onCommitSuccess();
+        recordCommittedOffset(committed);
+        if (committed.equals(offerLastMadeForCommit)) {
+            setClean();
+            // The ledger is trimmed under the SAME rule, and for the same reason: its snapshot was taken when this
+            // offer was made (getCommitDataIfDirty), so only the answer to that offer may retire what it carried.
+            // In transactional mode - the only mode where the ledger is real - the acknowledgement is inline with
+            // the map just collected, so this branch is always the one taken there.
+            uncommittedCompletions.onCommitSuccess();
+        } else {
+            log.debug("Acknowledged commit for {} is {}, not the {} this partition last offered - the offset is " +
+                            "recorded, but the partition stays dirty until the newer offer is answered",
+                    tp, committed, offerLastMadeForCommit);
+        }
+    }
+
+    /**
+     * Advances {@link #lastCommittedOffset} monotonically - see that field for why it may not move backwards.
+     */
+    private void recordCommittedOffset(OffsetAndMetadata committed) {
+        if (committed.offset() > lastCommittedOffset) {
+            lastCommittedOffset = committed.offset();
+        } else {
+            log.debug("Acknowledged commit for {} carries offset {}, at or below the {} already recorded - keeping " +
+                            "the higher one, as the commit watermark only rises",
+                    tp, committed.offset(), lastCommittedOffset);
+        }
     }
 
     private void setClean() {
@@ -648,7 +757,12 @@ public class PartitionState<K, V> {
             // and retain the dirty state on commit completion.
             stateChangedSinceCommitStart = false;
             uncommittedCompletions.snapshotForCommit(); // the same guard for the ledger: only what this commit carries is trimmed on its success
-            return of(createOffsetAndMetadata());
+            OffsetAndMetadata offered = createOffsetAndMetadata();
+            // remembering the offer WHOLE is what lets onOffsetCommitSuccess recognise the answer to it, and decline
+            // to mark clean on the answer to an older one - the offset alone does not identify an offer, because
+            // completing a record above the lowest incomplete one changes only the metadata. See offerLastMadeForCommit
+            offerLastMadeForCommit = offered;
+            return of(offered);
         }
         return empty();
     }
