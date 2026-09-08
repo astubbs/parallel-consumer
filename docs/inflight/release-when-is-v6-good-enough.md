@@ -109,6 +109,11 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   2026-09-07.
 - [ ] **astubbs#473** - clears the two remaining quarantine entries by fixing what they were about.
   The release guard blocks while `docs/quarantined-tests.md` has any.
+- [ ] **astubbs#477** - a dead broker-poll thread now closes the consumer in the consumer-commit
+  modes, the shipped default among them, so the group rebalances at once instead of after
+  `max.poll.interval.ms`. Promoted from the no-PR triage on 2026-09-08: the fix is one derived
+  predicate and one condition, proven red on every consumer-commit mode and green on the
+  transactional control arm. Retires its inflight note into `docs/solutions/`.
 
 ### Tier 2 - the producer-recovery stack: OUTSIDE v6 by the 2026-09-07 decision, named in the claim
 
@@ -190,11 +195,8 @@ churn rather than a PC defect.
   item"), blocked on progress-tracker instrumentation that does not exist yet. Unattributed.
 - `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on idle runners, so they read as
   starvation rather than a wedge. Not a confirmed defect; not ruled out either.
-- A dead broker-poll thread leaves the consumer open in consumer-commit modes, no LeaveGroup until
-  `max.poll.interval.ms` -
-  [`bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md`](bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md).
-  Diagnosed 2026-09, no PR. **Decide: v6 or 0.6.0.x** - the no-PR triage below argues for looking
-  now, because the shipped default commit mode is exposed.
+- A dead broker-poll thread leaving the consumer open in consumer-commit modes, no LeaveGroup until
+  `max.poll.interval.ms` - **fixed in the queue, astubbs#477, tier 1.**
 
 ## What v6 must say about data loss and duplicates
 
@@ -255,11 +257,10 @@ its subject at any merge.
   [`bug-857-family.md`](bug-857-family.md): two seeds, `PERIODIC_CONSUMER_SYNC`, reproduces every
   time, undiagnosed. Time-box a diagnosis alongside tier 1; if it is not understood when tier 3 is
   done, ship and name it in the release note rather than wait.
-- **Poller death leaves the consumer open in consumer-commit modes** -
-  [`bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md`](bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md).
-  The shipped default commit mode is one of them, so a dead poll thread idles the partition until
-  the broker evicts the member. The proposed fix shape is small; if it is, this joins tier 1.
-  Otherwise 0.6.0.x, named.
+- ~~Poller death leaves the consumer open in consumer-commit modes~~ - **now astubbs#477 in tier 1**
+  (2026-09-08). The fix was as small as the note proposed, and its defect-class sweep - cleanup gated
+  on "am I the role-holder?" where the holder may be dead - found no other instance across the four
+  modules' `close()` paths.
 
 **Owner's decision:**
 
