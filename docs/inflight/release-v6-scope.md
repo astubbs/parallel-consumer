@@ -327,7 +327,7 @@ hypothesis).
   red with a forced collision, green with keys drawn without replacement; the exact assertion is
   kept, and a new core test covers the collision case the old one can no longer reach. The other
   rows of [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) are untouched by this. The
-  automated review found nothing blocking; astubbs#482 is out of draft and merge-ready.
+  automated review found nothing blocking; astubbs#482 squash-merged 2026-09-08.
 - The maturity claim itself: `docs/data/module-maturity.yaml` carries a bare `production-use` next
   to a conditional support posture, and a renderer can lift the bare value without its condition.
   The tag-day checks below carry the recheck.
