@@ -155,8 +155,8 @@ the gap was.
 And it is fixed once, in the value type, rather than once per collection. A token is a workaround a
 future site has to remember to repeat; identity equality makes every value-conditional operation on a
 container correct by default, which is why the token did not survive to the merge. The break it costs
-is recorded in
-[`docs/refactoring.md`](../../refactoring.md)'s breaking-change section for `0.6.0.0`.
+is the `RecordContext` equality change, recorded in the commit message that made it - which is what
+the `0.6.0.0` release notes are generated from.
 
 ## Prevention
 

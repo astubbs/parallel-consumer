@@ -692,9 +692,11 @@ accuses it; the rule that lands with the stacked follow-up accuses only nobody-i
 
 ## Sighting, 2026-09-07 - the `ZOMBIE_MEMBER` arm again, 4% over its bound
 
+<!-- post-merge: checked-begin -->
 `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` failed on the `Chaos Pain Suite 4/4` shard
 of astubbs/parallel-consumer#468, on the equality change, with the same arm as the fourth sighting
 above:
+<!-- post-merge: checked-end -->
 
     [chaos-probe] VIOLATION: ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-1645296212' dwelling in
     PreparingRebalance for 15s (bound 15s) - a member is not answering the rebalance

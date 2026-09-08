@@ -98,60 +98,15 @@ These change the public, user-visible surface, so they still may not be folded i
 patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
 refactors below, which are non-breaking and can land at any point in any line.
 
-- **DONE, landed in astubbs/parallel-consumer#267: `InternalRuntimeException` renamed to
-  `PCInternalRuntimeException`.** A user-visible break - it is what arrives from
-  `getFailureCause()`, and it is the type named in upstream's own report text
-  (`...internal.InternalRuntimeException: Timeout waiting for commit response PT30S`,
-  confluentinc#833). Renamed because the old name reads like a JDK type: in a stack trace or an IDE
-  exception picker that prints simple names, `InternalRuntimeException` could belong to anything, and
-  the `PC` prefix says whose it is at a glance. Recorded here rather than only in the commit, because
-  this section is what the release notes are assembled from.
-  [`docs/inflight/core-exception-hierarchy-cleanup.md`](inflight/core-exception-hierarchy-cleanup.md)
-  owns the rest of the naming work - `InternalException` and the two spellings of the PC prefix are
-  untouched, so a later pass will be a second break unless it is done in this same release.
-- **DONE, landing with astubbs/parallel-consumer#201: an inverted `initialLoadFactor` /
-  `maximumLoadFactor` pair is rejected instead of accepted.**
-  `ParallelConsumerOptions#validate()` now throws `IllegalArgumentException` naming both options and
-  both values. A break only for a configuration that never did what it said - today an initial factor
-  above the maximum is accepted and pinned at the initial value, surfacing at best as an inverted
-  `100/10` in the rate-limited saturation warning, so an application carrying the typo starts and
-  runs; after this it fails at construction. Small blast radius, but "started yesterday, will not
-  start today" is what a `=== Breaking` bullet exists for. Recorded here rather than only in the
-  commit, because this section is what the release notes are assembled from.
-- **DONE, landing with astubbs/parallel-consumer#468: `WorkContainer` equality is identity, and
-  `RecordContext` equality changes with it.** `WorkContainer.equals` was topic, partition and offset
-  only, so two containers for the same record at different epochs compared equal - and every
-  value-conditional operation the JDK offers on a collection of them (`Map.remove(key, value)`,
-  `Map.replace`, `computeIfPresent`'s removal path, `Set.remove`) therefore could not say *which*
-  container it meant, which is the lost-record defect that PR fixes. The `equals`/`hashCode` pair is
-  deleted; `compareTo` still orders by topic, partition and offset and is now deliberately
-  inconsistent with equals, which `Comparable` only recommends and no `SortedSet`/`SortedMap` here
-  relies on (`RetryQueue` sorts and de-duplicates by its own key types).
+**An entry is deleted in the PR that lands it**, because the commit message carries the release-note
+content and this section only lists what is still queued.
 
-  **The user-visible break is `RecordContext`**, whose Lombok `@EqualsAndHashCode` covers the
-  container it wraps: two contexts built from different containers for one record no longer compare
-  equal, so a `Set`, a `Map` key or an `equals` check over record contexts that used to collapse them
-  now keeps both. Narrow in practice - `ConsumerRecord` does not override `equals` either, so two
-  contexts from two different polls were never equal; what changes is two contexts over the same
-  `ConsumerRecord` instance. `WorkContainer` itself is public only in modifier - it is not part of the
-  API a user is expected to hold - and `0.6.0.0` is the breaking release. Recorded here rather than
-  only in the commit, because this section is what the release notes are assembled from.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
   (`public void setCommitInterval`, `private final Duration defaultMessageRetryDelay`,
   `isUsingTransactionalProducer`) **and retire the temporary Kafka-compat work-around flag**
   (`ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck`) - `ParallelConsumerOptions.java`.
-- **DONE, landing with astubbs/parallel-consumer#116: the `Stream` returned by
-  `pollProduceAndStream` / `vertxHttpReqInfoStream` now blocks until the processor closes.** It used
-  to return almost immediately, because the queue-to-`Stream` bridge ended the stream on the first
-  momentarily-empty poll - which is what `Spliterator.tryAdvance` returning `false` means, and it is
-  the confluentinc#912 OOM: results produced afterwards piled up behind a consumer that had already
-  walked away. A caller that collected on the calling thread and read a size got whatever had been
-  produced so far; the same caller now waits for close. **No compatibility path is offered and none
-  should be** - the old shape did not deliver the caller's results, so there is no correct behaviour
-  to preserve. Callers consume on their own thread, as the Vert.x example now shows. Recorded here
-  rather than only in the commit, because this section is what the release notes are assembled from.
 - ~~**Remove the JStream API** (deprecate first)~~ - **WITHDRAWN 2026-09-03, owner's call.** The
   removal was queued while the API was broken in the way above; deprecating something because it does
   not work is a different argument from deprecating something that does. It works now, so it stays,

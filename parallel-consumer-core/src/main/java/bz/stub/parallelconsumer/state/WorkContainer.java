@@ -58,8 +58,9 @@ import static java.util.Optional.of;
  * <p>
  * <b>{@link bz.stub.parallelconsumer.RecordContext} equality changes with this</b>, because its Lombok
  * {@code @EqualsAndHashCode} covers the container it wraps: two contexts built from different containers for the same
- * record no longer compare equal. That is public API - see the {@code 0.6.0.0} breaking-change section of
- * {@code docs/refactoring.md}.
+ * record no longer compare equal. That is public API, and a breaking change in {@code 0.6.0.0}: the record of it is
+ * the commit that made it, on astubbs/parallel-consumer#468, which is where the release notes for that line are
+ * generated from.
  *
  * @author Antony Stubbs
  */
