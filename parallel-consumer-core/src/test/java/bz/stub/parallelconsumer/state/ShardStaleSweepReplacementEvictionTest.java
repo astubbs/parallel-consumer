@@ -52,8 +52,6 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
 
     private WorkContainer<String, String> stale;
 
-    private long currentEpoch;
-
     /**
      * A shard holding one stale container at {@link #CONTESTED_OFFSET}, which is where both sweep arms start.
      * <p>
@@ -81,9 +79,20 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
         // the partition is taken away and handed back, so what the shard is still holding is now stale
         wm.onPartitionsRevoked(UniLists.of(TP));
         wm.onPartitionsAssigned(UniLists.of(TP));
-        currentEpoch = wm.getPm().getEpochOfPartition(TP);
         assertWithMessage("PRECONDITION: the rebalance must actually have made the resident stale")
-                .that(currentEpoch).isGreaterThan(firstEpoch);
+                .that(currentEpoch()).isGreaterThan(firstEpoch);
+    }
+
+    /**
+     * The partition's epoch now, read rather than carried in a field.
+     * <p>
+     * A {@code long} field would be the obvious way to hand it from the fixture to the arm that needs it, and
+     * SpotBugs' {@code AT_NONATOMIC_64BIT_PRIMITIVE} is right to object even here, where everything is on one
+     * thread: the point of the finding is that nothing in the declaration says so. The epoch is a pure read of
+     * state the fixture has already settled, so asking for it again is exact and costs a method call.
+     */
+    private long currentEpoch() {
+        return wm.getPm().getEpochOfPartition(TP);
     }
 
     /**
@@ -108,7 +117,7 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
     void theStaleSweepMustNotEvictAFreshReplacementThatLandedInsideIt() {
         givenAStaleResidentAtTheContestedOffset();
 
-        var fresh = new WorkContainer<>(currentEpoch, record, module);
+        var fresh = new WorkContainer<>(currentEpoch(), record, module);
         var replacementLanded = new AtomicBoolean();
 
         // THE INTERLEAVING: the controller's stale-replacement lands between the sweep's staleness answer and the
@@ -125,7 +134,7 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
                 .that(replacementLanded.get()).isTrue();
         assertWithMessage("PRECONDITION: the replacement must have reached the shard, or the sweep had nothing "
                 + "to race with")
-                .that(fresh.getEpoch()).isEqualTo(currentEpoch);
+                .that(fresh.getEpoch()).isEqualTo(currentEpoch());
 
         // IDENTITY, never equality, in every assertion below - spelled out rather than relying on
         // WorkContainer's equality being identity today. The question here is WHICH OBJECT survived, and it must
