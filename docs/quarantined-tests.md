@@ -82,10 +82,8 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-The entries below are of two opposite kinds, and the checklist is the inventory - not this paragraph.
-`RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`
-and `MultiInstanceRebalanceTest.largeNumberOfInstances` are **unreliable failures**, so both carry
-`flapping = true`: a pass proves nothing and the lane reports it without demanding action.
+The one entry below is an **unreliable failure**, so it carries `flapping = true`: a pass proves
+nothing and the lane reports it without demanding action.
 `MultiInstanceRebalanceTest` was never hidden by the surefire retry astubbs#224 removed, because the
 test did not run in a gating lane until the PR that quarantines it.
 A **deterministic** quarantine is the other kind - left at the annotation's default `flapping = false`,
@@ -101,28 +99,6 @@ re-enable: astubbs#265 deleted the wall-clock assertion that flaked, and astubbs
 deletes the annotation and its entry together.
 (`OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` went
 earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it had itself frozen.)
-
-- [ ] `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed`
-  - times out on its own SETUP GUARD, so a failure proves nothing about the defect it reproduces. The
-  awaited condition is the control thread reaching the mid-loop pause point (offset 25) that saturates
-  the pipeline, not the confluentinc#909 signature assertion the test exists to make. Every recorded
-  failure carries that identical message and sits at the 30s timeout, against passes that complete in
-  about 10s - the shape of a precondition the test cannot force under load rather than a wrong answer.
-  `flapping = true`: it passes most runs, so a pass is report-only.
-
-  Master-state on a recorded ledger rather than on a diagnosis, which rule 1 allows.
-  `node bin/inflight.mjs codecov test RegistrationRaceStaleResidentIT` is that ledger and outlives any
-  CI log: failures land on unrelated branches minutes apart while sibling branches pass in the same
-  window, including branches touching core. It has failed on heads whose only content was a dependency
-  bump and on heads whose only content was documentation, which is what rules out PR-state. The
-  standing prose ledger is
-  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
-
-  Unowned - no fix PR exists, because no diagnosis does. What would produce one: the guard waits for a
-  pause point driven through `PausableInsertShardManager`, so the question is whether the control
-  thread never reaches offset 25 under contention or reaches it after the wait expired. Separate those
-  before touching any timeout - the rule that governs the load-tightness family governs this one too,
-  and a test failing under load may be exposing a real product bug.
 
 - [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is now
   **measured**: the Kafka consumer group protocol under this profile's churn rate, not a PC defect. The
