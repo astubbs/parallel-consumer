@@ -71,13 +71,15 @@ so a control thread blocked in `ConsumerOffsetCommitter#commitAndWait` is releas
 of waiting out `offsetCommitTimeout`. The thread still dies and PC still closes; only the reporting
 improved.
 
-**"PC then closes the whole instance" is true of PC's own state, not of the Kafka consumer.** In the
-consumer-commit modes the close that follows a poller death never reaches `consumer.close()` -
-`maybeCloseConsumer` in `internal/AbstractParallelEoSStreamProcessor.java` is gated on the
-transactional committer - so no LeaveGroup is sent and the member's partitions stay assigned to it
-until `max.poll.interval.ms` expires. That defect and its trace are
-`bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md`; a seam that let the poll
-loop continue would remove it as a side effect, one that terminates the instance would not.
+**"PC then closes the whole instance" now includes the Kafka consumer, in every commit mode - it did
+not until September 2026.** `maybeCloseConsumer` in `internal/AbstractParallelEoSStreamProcessor.java`
+was gated on the transactional committer alone, so a poller death in the consumer-commit modes sent no
+LeaveGroup and the member's partitions stayed assigned to it until `max.poll.interval.ms` expired. It
+has a second arm for a poll thread that ended without closing the consumer:
+`docs/solutions/logic-errors/a-duty-assigned-by-role-is-unassigned-when-the-role-holder-dies-2026-09-08.md`.
+That removes the group-level consequence, and leaves this note's subject untouched - **the poll thread
+still dies, and PC still terminates.** A seam that let the poll loop *continue* is what would change
+that; one that terminates the instance would not.
 
 **The death is wrapped twice** - `void supervise()` in `internal/BrokerPollSystem.java` into
 `PCInternalRuntimeException`, then `failureReason = new RuntimeException` in

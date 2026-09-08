@@ -101,6 +101,30 @@ import static org.hamcrest.number.OrderingComparison.greaterThan;
  * what make a green cell mean anything: they prove the window opened. Run with
  * {@code -Dpc.log.level=info} or the revoke fork's two log lines are filtered out and every cell
  * reports zero declines - which reads exactly like a run in which the race never happened.
+ * <p>
+ * <b>Re-calibrated 2026-09-08 at {@code 6aab3ff5a}</b>, because astubbs/parallel-consumer#466
+ * changed the revoke path after the grid above was taken, so that grid's trees no longer exist.
+ * Same instrument, same one-term control ({@code commitLock.tryLock()} to {@code commitLock.lock()}),
+ * five repetitions per cell: fix + eager 5/5 pass with 6 declines; fix + cooperative 5/5 pass with
+ * 5 declines; pre-fix control + eager 5/5 FAIL with 0 declines and 65 commit-response timeouts. The
+ * verdict is unchanged and now covers the post-astubbs#466 revoke path.
+ * <p>
+ * <b>What that control arm additionally established, and it is the reason to read this paragraph
+ * before matching any future thread dump.</b> The six {@code docs/inflight/bug-857-family.md}
+ * captures identify this defect as the poll thread {@code BLOCKED} on an {@code AtomicBoolean}
+ * monitor. <b>That signature can no longer be produced, deadlock or no deadlock.</b> All 80
+ * diagnoses from the deliberately-restored control read {@code WAITING} on a
+ * {@code ReentrantLock$NonfairSync} held by {@code pc-control} - because astubbs#29 replaced the
+ * monitor with a lock, and a thread waiting on a lock parks rather than blocking. Match a capture
+ * by the METHOD PAIR ({@code tryCommitOffsetsOnRevoke} beneath {@code onPartitionsRevoked}) and the
+ * HOLDER ({@code pc-control} of the same instance), never by thread state or lock type.
+ * <p>
+ * <b>And do not reach for {@code findDeadlockedThreads()} as a cheaper gate.</b> Every control
+ * verdict came back {@code WAITING} rather than {@code DEADLOCK} even with the cycle fully closed:
+ * its other edge is the control thread waiting on {@code commitResponseQueue}, a
+ * {@code LinkedBlockingQueue.poll}, which is a queue wait and appears in no lock graph. The
+ * commit-response timeout is the only thing that breaks this cycle, which is why this probe exists
+ * rather than an assertion on the JVM's deadlock detector.
  */
 @Slf4j
 abstract class Rebalance857CommitSyncDeadlockProbeBase extends BrokerIntegrationTest<String, String> {
