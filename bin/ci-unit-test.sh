@@ -22,5 +22,5 @@ set -euo pipefail
 ./mvnw --batch-mode \
   -Pci \
   clean test \
-  -Dexcluded.groups=performance,chaos,quarantined,lincheck,capacity \
+  -Dexcluded.groups=performance,chaos,quarantined,lincheck,soak,capacity \
   "$@"

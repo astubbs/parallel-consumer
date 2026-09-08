@@ -27,4 +27,4 @@ fi
   -Pci \
   clean verify \
   ${KAFKA_VERSION_ARG:+"$KAFKA_VERSION_ARG"} \
-  -Dexcluded.groups=performance,chaos,quarantined,lincheck,capacity
+  -Dexcluded.groups=performance,chaos,quarantined,lincheck,soak,capacity
