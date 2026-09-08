@@ -13,7 +13,6 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -47,6 +46,14 @@ class MockConsumerSyncCommitMarksCleanOnReturnTest extends MockConsumerTestBase 
     /** How long the attempt count must stand still after success to count as stopped: 5 commit intervals. */
     private static final Duration QUIET_PERIOD = Duration.ofSeconds(1);
 
+    /**
+     * How long each stage may take. Stated here rather than inside the shared helpers in
+     * {@link MockConsumerTestBase}, because a deadline has to clear whatever its own scenario simulates - here
+     * nothing is rejected or withheld at all, so this is plain CI headroom, kept equal to the async scenarios'
+     * so that the one variable between them stays the commit mode.
+     */
+    private static final Duration SCENARIO_TIMEOUT = Duration.ofSeconds(30);
+
     private final AtomicInteger commitAttempts = new AtomicInteger();
 
     @Override
@@ -74,24 +81,21 @@ class MockConsumerSyncCommitMarksCleanOnReturnTest extends MockConsumerTestBase 
 
         startProcessing();
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(processedRecords).hasSize(RECORDS));
+        awaitAllRecordsProcessed(RECORDS, SCENARIO_TIMEOUT);
 
         // the offsets reach the broker, as they do in the async scenarios
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
-            var committed = mockConsumer.committed(Collections.singleton(topicPartition)).get(topicPartition);
-            assertThat(committed).isNotNull();
-            assertThat(committed.offset()).isEqualTo(RECORDS);
-        });
+        awaitBrokerCommittedOffset(RECORDS, SCENARIO_TIMEOUT);
 
-        // ...and then stop being re-committed, which is what says the success marking happened on return
+        // The discriminating assertion, and the reason it is written out here rather than shared with the async
+        // families: they assert this counter CLIMBING past a floor, and this one asserts it STANDING STILL once
+        // every record is committed, which is what says the success marking happened on return. Under the defect
+        // it would climb on every commitInterval forever.
         int afterSuccess = commitAttempts.get();
         Awaitility.await()
                 .pollDelay(QUIET_PERIOD)
                 .atMost(QUIET_PERIOD.plusSeconds(10))
                 .untilAsserted(() -> assertThat(commitAttempts.get()).isEqualTo(afterSuccess));
 
-        assertThat(parallelConsumer.getFailureCause()).isNull();
-        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
+        assertParallelConsumerStillRunningWithNoFailureCause();
     }
 }

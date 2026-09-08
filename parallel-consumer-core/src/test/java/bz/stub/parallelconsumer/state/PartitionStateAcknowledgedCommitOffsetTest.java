@@ -42,6 +42,14 @@ class PartitionStateAcknowledgedCommitOffsetTest {
 
     private static final long SECOND_RECORD = 200L;
 
+    /**
+     * Never completed by the tests that only need two offers. It exists so
+     * {@link #anAcknowledgementOfAnOfferWithSupersededMetadataAtTheSameOffsetDoesNotCleanThePartition()} has a record
+     * ABOVE the lowest incomplete one to complete - the only way to change an offer's metadata without moving its
+     * offset.
+     */
+    private static final long THIRD_RECORD = 300L;
+
     private final ModelUtils mu = new ModelUtils(new PCModuleTestEnv());
 
     private final PartitionState<String, String> state = freshPartition(0);
@@ -53,16 +61,16 @@ class PartitionStateAcknowledgedCommitOffsetTest {
      */
     @Test
     void anOlderAcknowledgementAfterAHigherOfferRecordsTheOffsetAndLeavesThePartitionDirty() {
-        long olderOffer = completeAndOffer(state, FIRST_RECORD);
-        long newerOffer = completeAndOffer(state, SECOND_RECORD);
+        OffsetAndMetadata olderOffer = completeAndOffer(state, FIRST_RECORD);
+        OffsetAndMetadata newerOffer = completeAndOffer(state, SECOND_RECORD);
         assertWithMessage("the second offer must be higher, or this test asserts nothing")
-                .that(newerOffer).isGreaterThan(olderOffer);
+                .that(newerOffer.offset()).isGreaterThan(olderOffer.offset());
 
-        state.onOffsetCommitSuccess(new OffsetAndMetadata(olderOffer));
+        state.onOffsetCommitSuccess(olderOffer);
 
-        assertThat(state.getLastCommittedOffset()).isEqualTo(olderOffer);
+        assertThat(state.getLastCommittedOffset()).isEqualTo(olderOffer.offset());
         assertWithMessage("offer %s is still unanswered, so the partition must stay dirty and be re-committed if "
-                + "that request fails or is dropped", newerOffer)
+                + "that request fails or is dropped", newerOffer.offset())
                 .that(state.isDirty()).isTrue();
     }
 
@@ -72,11 +80,11 @@ class PartitionStateAcknowledgedCommitOffsetTest {
      */
     @Test
     void anAcknowledgementOfTheOfferedOffsetMarksThePartitionClean() {
-        long offered = completeAndOffer(state, FIRST_RECORD);
+        OffsetAndMetadata offered = completeAndOffer(state, FIRST_RECORD);
 
-        state.onOffsetCommitSuccess(new OffsetAndMetadata(offered));
+        state.onOffsetCommitSuccess(offered);
 
-        assertThat(state.getLastCommittedOffset()).isEqualTo(offered);
+        assertThat(state.getLastCommittedOffset()).isEqualTo(offered.offset());
         assertThat(state.isDirty()).isFalse();
     }
 
@@ -87,17 +95,17 @@ class PartitionStateAcknowledgedCommitOffsetTest {
      */
     @Test
     void aLowerAcknowledgementAfterAHigherRecordedOffsetMovesNothingBackwards() {
-        long olderOffer = completeAndOffer(state, FIRST_RECORD);
-        long newerOffer = completeAndOffer(state, SECOND_RECORD);
+        OffsetAndMetadata olderOffer = completeAndOffer(state, FIRST_RECORD);
+        OffsetAndMetadata newerOffer = completeAndOffer(state, SECOND_RECORD);
 
-        state.onOffsetCommitSuccess(new OffsetAndMetadata(newerOffer));
+        state.onOffsetCommitSuccess(newerOffer);
         assertThat(state.isDirty()).isFalse();
 
-        state.onOffsetCommitSuccess(new OffsetAndMetadata(olderOffer));
+        state.onOffsetCommitSuccess(olderOffer);
 
         assertWithMessage("pc.partition.latest.committed.offset reads this field - a lower answer arriving after a "
                 + "higher one must not move it")
-                .that(state.getLastCommittedOffset()).isEqualTo(newerOffer);
+                .that(state.getLastCommittedOffset()).isEqualTo(newerOffer.offset());
         assertWithMessage("the late answer is not the answer to the latest offer, so it cannot clean - but there is "
                 + "nothing left to clean either, and it must not make the partition dirty again")
                 .that(state.isDirty()).isFalse();
@@ -118,21 +126,21 @@ class PartitionStateAcknowledgedCommitOffsetTest {
         PartitionState<String, String> movedOn = state;
         PartitionState<String, String> stoodStill = freshPartition(1);
 
-        long movedOnFirstOffer = completeAndOffer(movedOn, FIRST_RECORD);
-        long stoodStillOffer = completeAndOffer(stoodStill, FIRST_RECORD);
+        OffsetAndMetadata movedOnFirstOffer = completeAndOffer(movedOn, FIRST_RECORD);
+        OffsetAndMetadata stoodStillOffer = completeAndOffer(stoodStill, FIRST_RECORD);
 
         // the second commit round: only one partition completed more work, and the other is re-offered unchanged
         // because it is still dirty
-        long movedOnSecondOffer = completeAndOffer(movedOn, SECOND_RECORD);
-        assertWithMessage("the partition that stood still must be re-offered at the same offset, or this is not the "
-                + "mixed case")
+        OffsetAndMetadata movedOnSecondOffer = completeAndOffer(movedOn, SECOND_RECORD);
+        assertWithMessage("the partition that stood still must be re-offered identically - same offset AND same "
+                + "metadata - or this is not the mixed case")
                 .that(offer(stoodStill)).isEqualTo(stoodStillOffer);
         assertWithMessage("the partition that moved on must be re-offered higher, or this is not the mixed case")
-                .that(movedOnSecondOffer).isGreaterThan(movedOnFirstOffer);
+                .that(movedOnSecondOffer.offset()).isGreaterThan(movedOnFirstOffer.offset());
 
         // one answer, to the first round, carrying both partitions
-        movedOn.onOffsetCommitSuccess(new OffsetAndMetadata(movedOnFirstOffer));
-        stoodStill.onOffsetCommitSuccess(new OffsetAndMetadata(stoodStillOffer));
+        movedOn.onOffsetCommitSuccess(movedOnFirstOffer);
+        stoodStill.onOffsetCommitSuccess(stoodStillOffer);
 
         assertWithMessage("a newer offer for this partition is still unanswered")
                 .that(movedOn.isDirty()).isTrue();
@@ -141,10 +149,46 @@ class PartitionStateAcknowledgedCommitOffsetTest {
                 .that(stoodStill.isDirty()).isFalse();
     }
 
+    /**
+     * The case an offset-only comparison cannot see, and the reason the offer is remembered whole.
+     * <p>
+     * The offered offset is {@code getOffsetHighestSequentialSucceeded() + 1}, so completing a record ABOVE the
+     * lowest incomplete one leaves that offset exactly where it was while changing the encoded incomplete set that
+     * rides with it as metadata. Two requests are then in flight carrying the SAME offset and DIFFERENT metadata.
+     * Comparing offsets alone, the answer to the older one matches and cleans the partition - and the newer
+     * request's metadata, the only record that the higher record is done, is never re-sent if that request then
+     * fails or is dropped. Those records are re-delivered after a reassignment: not lost offsets, but precisely the
+     * replay the encoded offset map exists to prevent.
+     * <p>
+     * Found by the Codex review on astubbs/parallel-consumer#470.
+     */
+    @Test
+    void anAcknowledgementOfAnOfferWithSupersededMetadataAtTheSameOffsetDoesNotCleanThePartition() {
+        state.onSuccess(THIRD_RECORD);
+        OffsetAndMetadata olderOffer = offer(state);
+
+        // completing a record above the lowest incomplete one cannot move the offered offset, only the metadata
+        state.onSuccess(SECOND_RECORD);
+        OffsetAndMetadata newerOffer = offer(state);
+
+        assertWithMessage("the two offers must carry the same offset, or this test is the ordinary superseded case "
+                + "and asserts nothing new")
+                .that(newerOffer.offset()).isEqualTo(olderOffer.offset());
+        assertWithMessage("the two offers must carry different metadata, or there is nothing for an offset-only "
+                + "comparison to miss and this test asserts nothing")
+                .that(newerOffer.metadata()).isNotEqualTo(olderOffer.metadata());
+
+        state.onOffsetCommitSuccess(olderOffer);
+
+        assertWithMessage("the newer offer is still unanswered and is the only thing carrying the completion of "
+                + "record %s - cleaning here would leave nothing dirty to re-send it", THIRD_RECORD)
+                .that(state.isDirty()).isTrue();
+    }
+
     private PartitionState<String, String> freshPartition(int partition) {
         return new PartitionState<>(0, mu.getModule(), new TopicPartition("acknowledged-commit-offset", partition),
-                new HighestOffsetAndIncompletes(Optional.of(SECOND_RECORD),
-                        new TreeSet<>(of(FIRST_RECORD, SECOND_RECORD))));
+                new HighestOffsetAndIncompletes(Optional.of(THIRD_RECORD),
+                        new TreeSet<>(of(FIRST_RECORD, SECOND_RECORD, THIRD_RECORD))));
     }
 
     /**
@@ -154,22 +198,28 @@ class PartitionStateAcknowledgedCommitOffsetTest {
      * mark would be refused for the unrelated reason that state changed during the commit, and every
      * clean-versus-dirty assertion here would pass whatever the code did.
      *
-     * @return the offset offered for commit
+     * @return the offer made for commit, WHOLE - offset and encoded metadata together
      */
-    private static long completeAndOffer(PartitionState<String, String> state, long recordOffset) {
+    private static OffsetAndMetadata completeAndOffer(PartitionState<String, String> state, long recordOffset) {
         state.onSuccess(recordOffset);
         return offer(state);
     }
 
     /**
-     * @return the offset this partition offers for commit, asserted present so a partition that is unexpectedly clean
+     * Returns the offer whole, and every test acknowledges it by handing that same object back. That is what the
+     * real callback does - {@code Consumer#commitAsync} passes the very map it was given to the
+     * {@code OffsetCommitCallback}, and the transactional path calls {@code onOffsetCommitSuccess} inline with the
+     * map it just collected - so reconstructing an {@code OffsetAndMetadata} from the offset alone would test a
+     * request shape that never occurs, and would hide any mismatch in the metadata half of the offer.
+     *
+     * @return the offer this partition makes for commit, asserted present so a partition that is unexpectedly clean
      * reports that rather than an empty {@code Optional}
      */
-    private static long offer(PartitionState<String, String> state) {
+    private static OffsetAndMetadata offer(PartitionState<String, String> state) {
         Optional<OffsetAndMetadata> commitData = state.getCommitDataIfDirty();
         assertWithMessage("the partition must be dirty to offer a commit, or the assertions below are vacuous")
                 .that(commitData.isPresent()).isTrue();
-        return commitData.get().offset();
+        return commitData.get();
     }
 
 }

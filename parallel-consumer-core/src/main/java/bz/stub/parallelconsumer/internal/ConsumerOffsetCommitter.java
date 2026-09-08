@@ -169,7 +169,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * has partly overtaken. Deciding that here would mean tracking, per partition, an offset the partition already
      * knows: {@code PartitionState} hands out the offset it wants committed and can recognise the answer to its own
      * latest offer. So an acknowledgement is passed straight through, whole, and the partition decides whether it
-     * ends the story - {@code PartitionState}'s {@code offsetLastOfferedForCommit} owns that rule. A request that is
+     * ends the story - {@code PartitionState}'s {@code offerLastMadeForCommit} owns that rule. A request that is
      * the newest word on one partition and superseded on another needs no special case here, because nothing here
      * is deciding per request.
      *

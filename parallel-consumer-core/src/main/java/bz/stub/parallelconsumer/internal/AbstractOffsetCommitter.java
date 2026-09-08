@@ -90,7 +90,7 @@ public abstract class AbstractOffsetCommitter<K, V> implements OffsetCommitter {
      * acknowledgement actually arrives. Such a committer can have two requests in flight at once, and needs to know
      * nothing about that: each partition offered the offset, so each partition recognises the answer to its own
      * latest offer and declines to clean on an older one. {@code PartitionState}'s
-     * {@code offsetLastOfferedForCommit} owns that rule.
+     * {@code offerLastMadeForCommit} owns that rule.
      */
     protected void onOffsetCommitSuccess(final Map<TopicPartition, OffsetAndMetadata> committed) {
         wm.onOffsetCommitSuccess(committed);

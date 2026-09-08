@@ -14,7 +14,6 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -54,6 +53,14 @@ abstract class AsyncCommitAcknowledgementTestBase extends MockConsumerTestBase {
 
     /** Commit requests whose acknowledgement is withheld before the mock consumer starts answering. */
     protected static final int UNACKNOWLEDGED_COMMITS = 3;
+
+    /**
+     * How long each stage of the scenario may take. Stated here rather than inside the shared helpers in
+     * {@link MockConsumerTestBase}, because a deadline has to clear the outage its own scenario simulates -
+     * here, {@value #UNACKNOWLEDGED_COMMITS} withheld acknowledgements at a 200ms commit interval, with ample
+     * headroom for CI.
+     */
+    private static final Duration SCENARIO_TIMEOUT = Duration.ofSeconds(30);
 
     private final AtomicInteger commitAttempts = new AtomicInteger();
 
@@ -101,24 +108,18 @@ abstract class AsyncCommitAcknowledgementTestBase extends MockConsumerTestBase {
         startProcessing();
 
         // the backlog drains regardless - an unacknowledged commit must not be fatal
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(processedRecords).hasSize(RECORDS));
+        awaitAllRecordsProcessed(RECORDS, SCENARIO_TIMEOUT);
 
-        // the offsets must still be dirty while the acknowledgements are withheld, so commits keep
-        // being attempted
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        // A discriminating assertion, and the reason it is written out here rather than shared: the offsets
+        // must still be dirty while the acknowledgements are withheld, so commits keep being ATTEMPTED. On the
+        // send-is-success reading this counter stops at exactly one.
+        Awaitility.await().atMost(SCENARIO_TIMEOUT).untilAsserted(() ->
                 assertThat(commitAttempts.get()).isGreaterThan(UNACKNOWLEDGED_COMMITS));
 
         // and the offsets reach the broker in the end - ask the broker side rather than inferring it
         // from the attempt count
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
-            var committed = mockConsumer.committed(Collections.singleton(topicPartition)).get(topicPartition);
-            assertThat(committed).isNotNull();
-            assertThat(committed.offset()).isEqualTo(RECORDS);
-        });
+        awaitBrokerCommittedOffset(RECORDS, SCENARIO_TIMEOUT);
 
-        // the exact property the chaos suite asserts: no instance ends with an unclassified cause
-        assertThat(parallelConsumer.getFailureCause()).isNull();
-        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
+        assertParallelConsumerStillRunningWithNoFailureCause();
     }
 }

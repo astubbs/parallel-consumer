@@ -95,15 +95,33 @@ Deferring the clean-marking is what makes **two async commits able to be in flig
 first send marked the partition clean so there was never a second. An answer can therefore arrive for a
 request a later one has partly overtaken, and the rule that handles it lives entirely in `PartitionState`:
 
-> **`getCommitDataIfDirty` remembers the offset it offers. `onOffsetCommitSuccess` records every
-> acknowledgement, and marks the partition clean only when the offset acknowledged is that offer.**
+> **`getCommitDataIfDirty` remembers the offer it makes, WHOLE. `onOffsetCommitSuccess` records every
+> acknowledgement, and marks the partition clean only when what was acknowledged is that offer.**
 
 Both halves matter, and they are separate because an acknowledgement carries two different things. **The
 offset is always recorded** - the answer is true, the broker committed up to it, and
 `recordCommittedOffset` keeps the higher of the two when answers arrive out of order. **The clean mark
-waits**, because marking a partition clean at an offset a later offer has passed is what would leave
+waits**, because marking a partition clean at an offer a later one has passed is what would leave
 nothing dirty to re-send the offsets in between if that later request then failed or was dropped - this
 defect, re-entered through the door the fix opened.
+
+**Whole, not the offset alone - and this is the correction a review round made to the first version of
+the rule.** The offered offset is one above the highest *sequentially* succeeded offset, while the
+metadata riding with it is the encoded set of incomplete offsets above that. Completing a record above
+the lowest incomplete one therefore changes the metadata and moves the offset **not at all**, so two
+requests can be in flight carrying the same offset and different metadata - which is not an exotic case
+but the ordinary consequence of out-of-order completion, the thing this library exists to do. Compared
+on offsets alone, the answer to the older request matches and cleans the partition, and the newer
+request's metadata - the only record that the higher record is done - is never re-sent if that request
+fails or is dropped. The records are then re-delivered after a reassignment: not lost offsets, but
+exactly the replay the encoded offset map exists to prevent, and a quieter failure than the one this
+write-up is about because the committed offset is correct throughout.
+
+Comparing the whole `OffsetAndMetadata` is exact rather than merely tighter: `Consumer#commitAsync`
+hands the `OffsetCommitCallback` the very map it was given, and the transactional path calls
+`onOffsetCommitSuccess` inline with the map it just collected, so an offer's acknowledgement carries
+that offer's own object. Anything that does not come back identical leaves the partition dirty, which is
+the safe edge the rest of this rule already lands on.
 
 **The committer keeps no record of what it has in flight, and that is the point.** It passes an
 acknowledgement straight through, whole. The partition offered the offset, so the partition is the thing
@@ -118,8 +136,8 @@ own.
 The outcome still differs per partition, and it falls out rather than being implemented. A commit carries
 every dirty partition and only the ones that completed more work move, so a request is routinely the
 newest word on one partition and superseded on another - and in the second round the partition that stood
-still is re-offered at exactly the same offset, so the first round's answer *is* its latest offer and
-cleans it. A whole-request rule leaves that partition waiting for a re-commit of an offset the broker has
+still is re-offered *identically*, same offset and same metadata, because nothing about it changed, so
+the first round's answer **is** its latest offer and cleans it. A whole-request rule leaves that partition waiting for a re-commit of an offset the broker has
 already acknowledged, every cycle, for as long as one partition of an assignment outruns another.
 
 Leaving a partition dirty costs at most one extra commit and cannot under-report, which is why every
