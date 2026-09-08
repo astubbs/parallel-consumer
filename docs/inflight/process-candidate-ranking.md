@@ -92,9 +92,10 @@ saying so. Like the section above, the order is cost of the reply, not importanc
     gate; items 1 and 2 stand.
 11. **Shrink** `bug-stale-sweep-iterator-evicts-fresh-replacement.md` - the remove-by-key defect is
     live; the iterator half was closed by astubbs#336 and the note's middle section contradicts it.
-12. **Shrink** `bug-857-transactional-revoke-wait.md` - the defect is intact; "no open PR addresses
-    it" is false (astubbs#408, draft), the named branch is gone, and both `file:line` citations are
-    wrong.
+12. **Re-premise** `bug-857-transactional-revoke-wait.md` - astubbs#466 landed the day the sweep ran
+    and removed the unbounded spin it describes; what survives is whether the new bound is right
+    against confluentinc#803, and astubbs#408's amendment. Its stale citations are listed in the
+    marker.
 13. **Shrink** `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the defect is intact; "not
     started, no design agreed" is false, astubbs#431 is the open fix and `RetryQueue.remove`'s own
     javadoc names it.
@@ -132,26 +133,28 @@ comes first because nothing else matters until it clears.
   cut while [`docs/quarantined-tests.md`](../quarantined-tests.md) lists anything; read that file,
   not this line.
 - **Verified defects, in the code as written today:**
-  1. `bug-857-transactional-revoke-wait.md` - the unbounded wait inside the revoke callback; a user
-     report with upstream's verified-bug label; fix drafted as astubbs#408.
-  2. `core-revoke-commit-skips-the-work-mailbox-drain.md` - a deterministic exactly-once break on a
-     reachable commit path, with a quarantined red proof and `TransactionalClaim` C9 at REFUTED
-     while the README promises otherwise.
-  3. `bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md` - in the default commit
+  1. `bug-857-transactional-revoke-wait.md` - was the unbounded wait inside the revoke callback,
+     with a user report carrying upstream's verified-bug label. astubbs#466 (merged the day the sweep
+     ran) replaced the spin with a wait bounded by `commitLockAcquisitionTimeout`; whether that bound
+     is right is what is left, and astubbs#408 holds it. The sweep also read
+     `core-revoke-commit-skips-the-work-mailbox-drain.md` as gating - a deterministic exactly-once
+     break with C9 refuted - and the same commit fixed it; the note is gone and the record is in
+     `docs/solutions/logic-errors/`.
+  2. `bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md` - in the default commit
      mode, a dead poll thread holds its partitions for `max.poll.interval.ms`; traced end to end,
      untested, unfixed.
-  4. `pr-431-must-pair-its-queue-removal-with-the-shard-removal.md` with
+  3. `pr-431-must-pair-its-queue-removal-with-the-shard-removal.md` with
      `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the retry-queue orphan window; master
      is still shard-first and astubbs#431 is a draft.
-  5. `bug-unvalidated-batchsize.md` - `batchSize(0)` silently processes nothing; one `validate()`
+  4. `bug-unvalidated-batchsize.md` - `batchSize(0)` silently processes nothing; one `validate()`
      bound closes all three shapes (astubbs#311). The cheapest real fix in the set.
-  6. `bug-max-failure-history-is-inert.md` - a public option that does nothing; removing it is
+  5. `bug-max-failure-history-is-inert.md` - a public option that does nothing; removing it is
      breaking, so it is settled before the major or carried forever.
-  7. `bug-offset-commit-timeout-does-two-jobs.md` - the default makes a retry unreachable; the fix is
+  6. `bug-offset-commit-timeout-does-two-jobs.md` - the default makes a retry unreachable; the fix is
      a design choice among three.
-  8. `bug-162-offset-state-truncation.md` - a WARN operators alert on, firing falsely for every new
+  7. `bug-162-offset-state-truncation.md` - a WARN operators alert on, firing falsely for every new
      group; decision 5 in the section above.
-  9. `bug-unbounded-log-lines.md` - record keys and values printed at WARN on a line that asks to be
+  8. `bug-unbounded-log-lines.md` - record keys and values printed at WARN on a line that asks to be
      pasted into a public issue; cheap to fix.
 - **Contract and compatibility, where a major is the only window:**
   `core-139-public-api-thread-safety-contract.md` (see proposal 19),
