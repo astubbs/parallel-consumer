@@ -218,24 +218,33 @@ box means the v6 action for that line is done, not that the defect is closed:
   violation or dump in any arm, every window proven open. Starvation, confirmed from the load side.
   It proposes a PROPOSED close for the `INSTANCE_STALL` line only, owner-gated; the `ZOMBIE_MEMBER`
   arm never fired, so nothing there moves. Box closes when astubbs#488 merges.
-- [ ] **astubbs#487 (draft)** - **an intake stall under an always-failing key, found by
-  astubbs#471's soak (merged 2026-09-08).** Under KEY ordering with records that throw on every
-  attempt, successes froze inside the first minute of both runs while the failure rate held exactly
-  constant: the instance stopped taking new work at all, and a stalled instance can never reach the
-  commit-response timeout the soak was hunting. Named, untested candidate:
-  `WorkManager#isSufficientlyLoaded` counts records queued BEHIND a blocked shard head while only
-  the failing head is parked, so head-of-line blocking on a few keys reads as "sufficiently loaded"
-  and the poller pauses for good - the silent-stall shape the gate's own comment names against
-  confluentinc#857. Offset-encoding back pressure is eliminated (neither transition logged).
-  astubbs#471's "one run reading the gate's DEBUG line" could not be made as written: the gate's
-  logger sits under a bare package pin in both logging profiles, so the debug flag never reached
-  it. astubbs#487 carries the flag that does, the gate's operands on the soak's progress line, one
-  knob per arm so each changes exactly one term, and the accounting gap pinned as a unit test. Its
-  predictions are written before the runs, including that the UNORDERED control stalls too - which
-  would refute the head-of-line half of the hypothesis while confirming the load-gate half. The arms
-  run once the machine lock frees. confluentinc#833's reporter showed the processed-records counter
-  flat across their window, which is this state, so this may be the better lead than the timeout
-  itself. Box closes when the arms have run and astubbs#487 merges with their outcome.
+- [ ] **astubbs#487 (draft, arms run)** - **the intake stall under an always-failing key, found by
+  astubbs#471's soak, is the load gate, and head-of-line blocking is not why.** Three arms, one
+  term each, predictions written first, every one confirmed. Under KEY ordering with half the keys
+  poisoned, the gate `WorkManager#isSufficientlyLoaded` latched true on the first fetch, under a
+  second in, and never unlatched: every partition paused, successes frozen at the same count
+  astubbs#471 saw after thirty minutes, failures retrying at full worker throughput. UNORDERED
+  stalls identically, which refutes the head-of-line half, and the KEY arm's own arithmetic refutes
+  it harder - one burst over a thousand distinct keys leaves at most one record per key, so nothing
+  was queued behind any head. Raising only the gate's threshold (`messageBufferSize`) flips the
+  outcome: gate false, nothing paused, successes rise - the positive control that says the gate is
+  the latch. What latches it is records that are themselves workable, retried forever, never
+  retiring. Offset-encoding back pressure re-eliminated in all three logs.
+  **There is no gate fix.** The threshold arm exposes the second bound: lifting the intake bound
+  doubles successes and then plateaus while the held population climbs without limit, so a bigger
+  threshold trades a hard stall for an unbounded-memory slow starve, and "count only what is
+  selectable" would let a healthy instance fetch without bound. The property that discriminates is
+  liveness of the shard head, not decidable from shard state. **The fix bounds the failures, not
+  the buffer: astubbs#149's dead-letter queue (confluentinc#310), after v6.** One same-class
+  instance found and pinned by assertion: `drain()` gates on the same over-count. No product code
+  changed. astubbs#487 carries the flag that reaches the gate's DEBUG line, the gate's operands on
+  the soak's progress line, one knob per arm, the accounting gap as a characterisation test, and
+  the working note. confluentinc#833's flat processed-records counter is this state.
+  **For the release note:** a poison-record workload with no retry bound stalls intake for good,
+  silently - the latch is exported only as a paused-partition count and logged nowhere. Owner's
+  call whether the cheap interim, a warning when the gate latches with nothing retiring, is
+  v6-sized; it changes no semantics and is written up as fix shape in the note, not built. Box
+  closes when astubbs#487 merges.
 
 **Resolved or reassigned since this list was written - kept so the release note can say what was ruled out:**
 
