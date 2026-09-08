@@ -461,9 +461,12 @@ public class ShardManager<K, V> {
      * <p>
      * <b>What else would reopen it.</b> A future caller that adds to {@link #retryQueue} without a residency
      * confirmation after the add, or one that removes a container from a shard without removing it from the
-     * queue. {@link ProcessingShard#addWorkContainer} is the second shape and is a KNOWN separate orphan route -
-     * it displaces a stale resident with no queue removal, because the shard has no handle on the queue. That is
-     * its own defect, not this one, and is tracked rather than fixed here.
+     * queue. {@link ProcessingShard#addWorkContainer} is the second shape - it displaces a stale resident with no
+     * queue removal, because the shard has no handle on the queue - and it was <b>proven unreachable</b> on
+     * 2026-09-08: nothing production can do puts a queue-resident container in that branch. The cleared
+     * suspicion, including what would reopen it, is recorded on that branch;
+     * {@code ShardDisplacementOrphanReachabilityTest} is the durable form. It is not a second instance of the
+     * defect this method fixes.
      *
      * @see ProcessingShard#isResident(WorkContainer)
      */

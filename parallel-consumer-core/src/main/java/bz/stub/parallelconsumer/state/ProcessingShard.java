@@ -168,9 +168,24 @@ public class ProcessingShard<K, V> {
             // and RetryQueue.getLowestRetryTime read one entry high until then. Bounded misdirection, not the
             // stall this was first written up as.
             //
-            // The pairing gap is demonstrated; whether production can reach this branch with a queue-resident
-            // container is the open question, and it is what decides whether this is worth a design change.
-            // Both are in docs/inflight/bug-shard-displacement-orphans-the-retry-queue-entry.md.
+            // CLEARED 2026-09-08, and this is why the gap above is left as it is. SUSPECTED: that production
+            // can reach this branch with a queue-resident displaced container, orphaning its entry. It cannot.
+            // A container enters the retry queue only through ShardManager.onFailure, which needs it NOT stale
+            // (couldBeTakenAsWork refuses a stale container, so a stale one is never selected, never fails and
+            // never re-queues) and, since astubbs#437, still resident. The DISCRIMINATOR is what happens next:
+            // only three transitions can then make it stale - the removed-state swap and the putAll in
+            // PartitionStateManager, each immediately followed on the same thread by the sweep that removes it
+            // from BOTH structures, and fenceForRevocation, which sweeps nothing but cannot be followed by a
+            // second container at the same offset, because a duplicate offset needs a re-assignment and that is
+            // the swept path. Bumping the epoch map alone changes no answer - PartitionState's epoch is final
+            // and staleness is only asked through the state object.
+            // WHAT WOULD REOPEN IT, and nothing goes red for any of it: an in-generation replay of an
+            // already-registered offset (a seek - there are none in main today - or an offset-reset/truncation
+            // replay), a topic-scoped shard key, or a second insertion site on workMap. The last leg is a
+            // property of the consumer's fetch position, not of this class, so the pairing gap is one arrival
+            // away rather than absent.
+            // Proof, control arms and ablation matrix: ShardDisplacementOrphanReachabilityTest and
+            // docs/solutions/logic-errors/the-shard-displacement-orphan-is-unreachable-and-the-guard-is-outside-the-class-2026-09-08.md.
             population.onRetired();
             // The displaced container gives back its claim IF it still holds one. It does not when it was
             // already taken as work, and does when it was only ever queued - the compare-and-set tells those

@@ -3,7 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-vetted: 2026-09-07 - `ProcessingShard`s `A real replacement after all` branch is unchanged and the class still holds no `RetryQueue` field - the queue is still only a parameter on `getWorkIfAvailable`. `ShardManager.onSuccess` still calls `retryQueue.remove(wc)` unconditionally before touching a shard, which is the bound the note claims. astubbs#431 is still OPEN, so the `removeStaleWorkContainersFromShard` clause has not gone stale. Production reachability is still unestablished -->
+<!-- inflight-vetted: 2026-09-08 - PROPOSED closed - unreachable: the open question below is now settled and the proof is `docs/solutions/logic-errors/the-shard-displacement-orphan-is-unreachable-and-the-guard-is-outside-the-class-2026-09-08.md`, with `ShardDisplacementOrphanReachabilityTest` (3 arms, ablation matrix run). Checked: `RetryQueue.add`'s one production caller; `couldBeTakenAsWork`s stale refusal; the three staleness transitions and which carry a sweep; no `seek` in main; `ShardKey.KeyOrderedKey`s partition scoping. Impact is `misdirection`, so the state change is the owner's -->
 
 **Found by the defect-class sweep on the re-queue orphan window**, which is fixed and written up in
 [`docs/solutions/runtime-errors/retry-queue-orphan-window-between-the-requeue-check-and-the-add.md`](../solutions/runtime-errors/retry-queue-orphan-window-between-the-requeue-check-and-the-add.md).
@@ -50,12 +50,21 @@ offset, and asserted the queue afterwards: the displacement happened and the que
 The probe was deleted after the run rather than kept - it asserts a defect rather than a contract, so
 it belongs with the fix, not before it.
 
-**Production reachability is NOT established.** The probe plants its stale resident white-box. For
-this to bite in production a *failed, retry-parked* container must still be resident in its shard,
-already stale, when a fresh record arrives at the same offset - i.e. the revoke sweep and both stale
-sweeps must all have missed it in the interval. That is the open question and it decides the urgency:
-demonstrate it end to end before deciding this is worth the fix, because the answer may be that
-nothing can reach the branch with a queue-resident container.
+**Production reachability IS now established, and the answer is UNREACHABLE** (2026-09-08). The
+proof, its control arms and its ablation matrix are in
+[`docs/solutions/logic-errors/the-shard-displacement-orphan-is-unreachable-and-the-guard-is-outside-the-class-2026-09-08.md`](../solutions/logic-errors/the-shard-displacement-orphan-is-unreachable-and-the-guard-is-outside-the-class-2026-09-08.md),
+which **owns this question**; `ShardDisplacementOrphanReachabilityTest` is the durable form. In one
+line: a container can only enter the retry queue while it is *not* stale (`couldBeTakenAsWork`
+refuses a stale one, so it can never be selected, fail, or be re-queued), and the only transitions
+that then make it stale either carry their own paired sweep on the same thread inside the rebalance
+callback, or - the fence - cannot be followed by a second container at the same offset, because a
+duplicate offset needs a re-assignment and that is the swept path.
+
+**The last leg of that argument is not in this engine**, which is why the write-up exists rather than
+a one-line dismissal: it rests on the consumer's fetch position never going backwards within an
+assignment generation. Any in-generation replay of an already-registered offset - a `seek`, an
+offset-reset or truncation replay - makes the displacement branch orphan an entry immediately, and
+nothing goes red for it.
 
 ## What a fix has to answer
 
@@ -65,7 +74,10 @@ The shard cannot remove from a queue it has no handle on, so the fix is a design
   the one that makes the pairing enforceable in the class that owns every departure (`retire`);
 - or return the displaced container to `ShardManager.addWorkContainer` and pair the removal there,
   which keeps the shard ignorant of the queue but adds a second site that has to remember;
-- or accept it and prove it unreachable, recording the discriminator on `addWorkContainer`.
+- or accept it and prove it unreachable, recording the discriminator on `addWorkContainer` -
+  **this is the option taken, 2026-09-08**: the discriminator is on the branch, the proof is in
+  `docs/solutions/`, and the first two options are left here because they are what a *fix* would
+  cost if the last leg of that proof ever stops holding.
 
 Whichever is chosen, the same ordering caution applies as at `ShardManager.onFailure`: a residency or
 membership test *before* the mutation is a check-then-act. See the solutions write-up for the
