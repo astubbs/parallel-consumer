@@ -472,6 +472,13 @@ public class ShardManager<K, V> {
      * resident without removing its queue entry, because the shard has no handle on the queue - a separate,
      * tracked defect whose entry the purge also collects, since a displaced container is resident in no shard
      * by reference identity. Its own note owns the rest.
+     * <p>
+     * <b>And it has nothing to collect there, because that branch was proven UNREACHABLE with a queue-resident
+     * container on 2026-09-08</b> - so the backstop above is a genuine belt-and-braces rather than the thing
+     * standing between that branch and an orphan. The two answers are independent and both worth keeping: the
+     * purge bounds the harm whatever happens, and the proof says the case does not arise. The cleared
+     * suspicion, its discriminator and what would reopen it are recorded on {@code addWorkContainer} itself;
+     * {@code ShardDisplacementOrphanReachabilityTest} is the durable form.
      *
      * @see ProcessingShard#isResident(WorkContainer)
      */

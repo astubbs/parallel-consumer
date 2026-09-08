@@ -329,11 +329,12 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
      * broker-poll thread ends and there is no next poll. The route left is the close sequence, on the
      * <em>control</em> thread: {@code supervise()} surfaces the dead poller, {@code doClose} runs, and
      * {@code maybeCloseConsumer} closes the consumer, whose {@code onLeavePrepare} drives {@code onPartitionsRevoked}
-     * (or {@code onPartitionsLost}) into this sweep before it sends LeaveGroup. That step is gated on
-     * {@code committer instanceof ProducerManager}, so this is a live path only in
-     * {@code PERIODIC_TRANSACTIONAL_PRODUCER} mode; in the default consumer-commit modes nothing closes the consumer
-     * after a poller death and this branch is insurance -
-     * {@code docs/inflight/bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md} owns that gap.
+     * (or {@code onPartitionsLost}) into this sweep before it sends LeaveGroup. <b>That is a live path in every
+     * commit mode</b>, and was not always: the step was gated on {@code committer instanceof ProducerManager}, so
+     * after a poller death the consumer-commit modes closed nothing and this branch was insurance there.
+     * {@code maybeCloseConsumer} now also fires when the poll thread ended without closing the consumer, which is
+     * exactly this scenario - see
+     * {@code docs/solutions/logic-errors/a-duty-assigned-by-role-is-unassigned-when-the-role-holder-dies-2026-09-08.md}.
      * <p>
      * On the live route a throw here is expensive twice over: Kafka's close throws out of {@code onLeavePrepare}
      * before {@code maybeLeaveGroup}, so the member's departure is left to the session timeout, and the {@code for}

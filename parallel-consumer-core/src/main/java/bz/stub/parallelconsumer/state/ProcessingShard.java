@@ -175,9 +175,28 @@ public class ProcessingShard<K, V> {
             // and RetryQueue.getLowestRetryTime read one entry high until then. Bounded misdirection, not the
             // stall this was first written up as.
             //
-            // The pairing gap is demonstrated; whether production can reach this branch with a queue-resident
-            // container is the open question, and it is what decides whether this is worth a design change.
-            // Both are in docs/inflight/bug-shard-displacement-orphans-the-retry-queue-entry.md.
+            // CLEARED 2026-09-08 - the purge above bounds the harm, and this says the case does not arise at
+            // all. SUSPECTED: that production can reach this branch with a queue-resident displaced container.
+            // It cannot, and note the argument turns on RESIDENCE, not on the queue - which is why it is
+            // unaffected by the rebalance callbacks no longer touching the queue.
+            // A container enters the retry queue only through ShardManager.onFailure, which needs it NOT stale
+            // (couldBeTakenAsWork refuses a stale container, so a stale one is never selected, never fails and
+            // never re-queues) and, since astubbs#437, still resident. The DISCRIMINATOR is what happens next:
+            // only three transitions can then make it stale - the removed-state swap and the putAll in
+            // PartitionStateManager, each immediately followed on the same thread by the sweep that takes it
+            // OUT OF ITS SHARD, and fenceForRevocation, which sweeps nothing but cannot be followed by a second
+            // container at the same offset, because a duplicate offset needs a re-assignment and that is the
+            // swept path. A container the sweep has removed is not a resident, so there is nothing here to
+            // displace. Bumping the epoch map alone changes no answer - PartitionState's epoch is final and
+            // staleness is only asked through the state object.
+            // WHAT WOULD REOPEN IT, and nothing goes red for any of it: an in-generation replay of an
+            // already-registered offset (a seek - there are none in main today - or an offset-reset/truncation
+            // replay), a topic-scoped shard key, or a second insertion site on workMap. The last leg is a
+            // property of the consumer's fetch position, not of this class, so the pairing gap is one arrival
+            // away rather than absent - and the purge is what makes that a bounded misdirection rather than a
+            // surprise, which is why both records are kept.
+            // Proof, control arms and ablation matrix: ShardDisplacementOrphanReachabilityTest and
+            // docs/solutions/logic-errors/the-shard-displacement-orphan-is-unreachable-and-the-guard-is-outside-the-class-2026-09-08.md.
             population.onRetired();
             // The displaced container gives back its claim IF it still holds one. It does not when it was
             // already taken as work, and does when it was only ever queued - the compare-and-set tells those
@@ -424,6 +443,11 @@ public class ProcessingShard<K, V> {
                     // It reopens the moment anything puts into a shard off the controller thread, and
                     // nothing would go red if that happened - hence the conditional form anyway: it costs
                     // the same, and it does not rest on a thread-confinement claim nothing checks.
+                    //
+                    // That discriminator is the SAME single-writer fact the displacement branch's own cleared
+                    // suspicion rests on (see addWorkContainer), reached independently from the other side. So
+                    // "anything puts into a shard off the controller thread" reopens both at once, and
+                    // ShardDisplacementOrphanReachabilityTest is the only thing that would notice.
                     log.debug("shard {} there are still stale work container, need to remove container : {}", this, workContainer);
                     WorkContainer<K, V> removed = evictIfStillResident(workContainer.offset(), workContainer);
                     if (removed != null) {
