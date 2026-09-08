@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.offsets;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy;
 import lombok.extern.slf4j.Slf4j;
+import bz.stub.parallelconsumer.state.PartitionState;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -35,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * @author Antony Stubbs
  * @see OffsetBitSet#deserialiseBitSetWrapToIncompletes
  * @see OffsetRunLength#runLengthDecodeToIncompletes
+ * @see PartitionState#claimsOffsetsThePartitionDoesNotHold
  */
 @Slf4j
 class EncoderOutputSurvivesDecodeValidationTest {
@@ -47,12 +49,12 @@ class EncoderOutputSurvivesDecodeValidationTest {
      * Encodes {@code length} offsets from {@link #BASE_OFFSET} where only {@code incompleteIndexes} are incomplete,
      * then hands the bytes back through the production decode path exactly as a rebalance would.
      * <p>
-     * <b>Every shape is decoded twice</b>, once with no plausibility ceiling and once with the tightest honest one -
-     * a partition that ends exactly at the last offset encoded. That second pass is what pins the encoder side of
-     * {@link OffsetRunLength#runLengthDecodeToIncompletes}'s guard: the encoder only ever encodes offsets PC has
-     * polled, so its output always ends on an offset the partition holds, and the guard must therefore never see it
-     * as a claim past the end. Anything that made the encoder write one offset further than it saw would land here
-     * as a false rejection rather than as silence.
+     * <b>Each shape is also measured against the plausibility rule</b>
+     * ({@link PartitionState#claimsOffsetsThePartitionDoesNotHold}), with the tightest honest bound there is: a
+     * partition that ends exactly on the last offset encoded. That is the encoder-side half of the rule - the
+     * encoder only ever encodes offsets PC has polled, so its output always ends on an offset the partition holds,
+     * and the check applied to the first batch must therefore never see it as a claim past the end. Anything that
+     * made the encoder write one offset further than it saw lands here as a false rejection instead of as silence.
      */
     private static void roundTrip(OffsetEncoding encoding, int length, SortedSet<Long> incompletes) throws Exception {
         long highestSucceeded = BASE_OFFSET + length - 1;
@@ -69,19 +71,21 @@ class EncoderOutputSurvivesDecodeValidationTest {
         withMagic.put(encoding.magicByte);
         withMagic.put(body);
 
-        for (long ceiling : new long[]{OffsetMapCodecManager.UNKNOWN_PARTITION_CEILING, highestSucceeded}) {
-            assertThatCode(() -> {
-                var decoded = EncodedOffsetPair.decodeToIncompletes(withMagic.array(), BASE_OFFSET,
-                        InvalidOffsetMetadataHandlingPolicy.FAIL, TP, ceiling);
-                assertThat(decoded.getIncompleteOffsets())
-                        .as("a payload this build wrote must decode back to the offsets it encoded")
-                        .isEqualTo(incompletes);
-            })
-                    .as("FAIL must not reject %s output at length %s against a partition ending at %s - a false "
-                            + "rejection discards a real offset map and replays completed work",
-                            encoding, length, ceiling)
-                    .doesNotThrowAnyException();
-        }
+        assertThatCode(() -> {
+            var decoded = EncodedOffsetPair.decodeToIncompletes(withMagic.array(), BASE_OFFSET,
+                    InvalidOffsetMetadataHandlingPolicy.FAIL, TP);
+            assertThat(decoded.getIncompleteOffsets())
+                    .as("a payload this build wrote must decode back to the offsets it encoded")
+                    .isEqualTo(incompletes);
+            assertThat(PartitionState.claimsOffsetsThePartitionDoesNotHold(
+                    decoded.getHighestSeenOffset().orElse(BASE_OFFSET - 1), highestSucceeded + 1))
+                    .as("%s output at length %s claims nothing beyond the last offset it encoded, so a partition "
+                            + "ending exactly there must not refuse it - a false rejection discards a real offset "
+                            + "map and replays completed work", encoding, length)
+                    .isFalse();
+        })
+                .as("FAIL must not reject %s output at length %s", encoding, length)
+                .doesNotThrowAnyException();
     }
 
     /**

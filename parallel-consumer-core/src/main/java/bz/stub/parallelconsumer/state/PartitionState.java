@@ -6,11 +6,14 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.BrokerPollSystem;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.offsets.CorruptOffsetMetadataException;
+import bz.stub.parallelconsumer.offsets.EncodedOffsetPair;
 import bz.stub.parallelconsumer.offsets.NoEncodingPossibleException;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import io.micrometer.core.instrument.DistributionSummary;
@@ -21,6 +24,7 @@ import lombok.NonNull;
 import lombok.Setter;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -31,6 +35,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.utils.JavaUtils.*;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.DefaultMaxMetadataSize;
 import static java.util.Optional.empty;
 import static java.util.Optional.of;
@@ -228,17 +233,70 @@ public class PartitionState<K, V> {
      */
     private boolean stateChangedSinceCommitStart = false;
 
+    /**
+     * The offset the loaded offset map was committed against - the first offset this partition will be polled from,
+     * and so the state to fall back to if the map turns out to be one we cannot believe.
+     * <p>
+     * Captured at construction because it is only readable then: once records arrive, the frontier moves.
+     *
+     * @see #maybeVerifyLoadedOffsetMapAgainstThePartition
+     */
+    private final long committedOffsetTheMapWasLoadedAgainst;
 
+    /**
+     * Passed as {@link #committedOffsetTheMapWasLoadedAgainst} by any caller that did not load this state from a
+     * committed offset map - in which case there is no claim to corroborate and nothing to check.
+     */
+    public static final long NO_OFFSET_MAP_WAS_LOADED = KAFKA_OFFSET_ABSENCE;
+
+    /**
+     * True while the loaded map claims to have seen offsets that nothing has corroborated yet.
+     * <p>
+     * Cleared the moment the partition either confirms the claim (it holds at least that far) or refutes it. A map
+     * claiming nothing above the committed offset starts out with nothing to check, so this starts false for it.
+     *
+     * @see #maybeVerifyLoadedOffsetMapAgainstThePartition
+     */
+    private boolean loadedOffsetMapClaimIsUncorroborated;
+
+    /**
+     * For state that did not come from a committed offset map - a partition with no commit history, and every test
+     * that builds a state directly. Nothing is claimed, so nothing is checked against the partition.
+     *
+     * @see #PartitionState(long, PCModule, TopicPartition, OffsetMapCodecManager.HighestOffsetAndIncompletes, long)
+     */
     public PartitionState(long newEpoch,
                           PCModule<K, V> pcModule,
                           TopicPartition topicPartition,
                           OffsetMapCodecManager.HighestOffsetAndIncompletes offsetData) {
+        this(newEpoch, pcModule, topicPartition, offsetData, NO_OFFSET_MAP_WAS_LOADED);
+    }
+
+    /**
+     * @param committedOffsetTheMapWasLoadedAgainst the offset {@code offsetData} was decoded against, or
+     *                                              {@link #NO_OFFSET_MAP_WAS_LOADED}. It has to be passed rather than
+     *                                              derived: {@link #getOffsetToCommit()} answers
+     *                                              {@code highestSucceeded + 1} for a map with no incomplete offsets
+     *                                              in it, which is the committed offset only by coincidence and is
+     *                                              wrong by the whole width of the map otherwise - deriving it there
+     *                                              silently switched the check below off for every fully-completed
+     *                                              map
+     * @see #maybeVerifyLoadedOffsetMapAgainstThePartition
+     */
+    public PartitionState(long newEpoch,
+                          PCModule<K, V> pcModule,
+                          TopicPartition topicPartition,
+                          OffsetMapCodecManager.HighestOffsetAndIncompletes offsetData,
+                          long committedOffsetTheMapWasLoadedAgainst) {
         this.module = pcModule;
 
         this.tp = topicPartition;
         this.partitionsAssignmentEpoch = newEpoch;
         this.pcMetrics = module.pcMetrics();
         initStateFromOffsetData(offsetData);
+        this.committedOffsetTheMapWasLoadedAgainst = committedOffsetTheMapWasLoadedAgainst;
+        this.loadedOffsetMapClaimIsUncorroborated = committedOffsetTheMapWasLoadedAgainst != NO_OFFSET_MAP_WAS_LOADED
+                && offsetHighestSeen >= committedOffsetTheMapWasLoadedAgainst;
         initMetrics();
         this.om = new OffsetMapCodecManager<>(pcModule);
     }
@@ -438,6 +496,10 @@ public class PartitionState<K, V> {
             return;
         }
 
+        // BEFORE anything consults the loaded map - truncation reads it, and the loop below asks it about every
+        // record - settle whether the map is one this partition could have produced at all.
+        maybeVerifyLoadedOffsetMapAgainstThePartition(recordsAndEpoch);
+
         //
         maybeTruncateOrPruneTrackedOffsets(recordsAndEpoch);
 
@@ -463,6 +525,95 @@ public class PartitionState<K, V> {
             }
         }
 
+    }
+
+    /**
+     * Settles whether the offset map loaded on assignment describes <em>this</em> partition, using the first batch
+     * that arrives - and treats one that cannot as unreadable metadata, through the same
+     * {@link ParallelConsumerOptions#getInvalidOffsetMetadataPolicy()} that governs every other payload this build
+     * cannot read.
+     *
+     * <p><b>The claim, and why the bytes cannot settle it.</b> A run-length entry of {@link Integer#MAX_VALUE} is
+     * structurally perfect: it moves the highest-seen offset about two billion forward, and
+     * {@link #isRecordPreviouslyCompleted} then reads every real record in that range as already succeeded, so they
+     * are skipped without ever reaching the user's function - silent non-processing, not replay, from metadata
+     * anything sharing the consumer group can write. A long run of completed offsets is also exactly what run-length
+     * encoding is <em>for</em>, so no decoder can tell the two apart: astubbs#207 rejects everything the payload
+     * itself proves wrong, and stops precisely here. The check is encoding-agnostic on purpose - it reads the
+     * decoded claim, so a bitset making the same claim is caught by the same line.
+     *
+     * <p><b>The bound is the partition, and nothing else will do.</b> A ceiling derived from configuration -
+     * concurrency, the in-flight target, a round number - eventually discards a <em>true</em> map and replays
+     * everything it covered, because PC's back-pressure keys off the encoded payload size and a map with one stuck
+     * offset stays three entries wide however far the partition runs ahead of it. The partition's log end offset is
+     * the one bound a legitimate map provably cannot cross: PC only ever encodes offsets it has polled, an offset
+     * the partition does not hold cannot have been polled, and a Kafka log end offset only grows, so a watermark
+     * read now still bounds a map written earlier.
+     *
+     * <p><b>Why here and not at decode.</b> Decoding happens inside the rebalance callback, where the only way to
+     * learn where a partition ends is a blocking {@code ListOffsets} request - a broker round trip on the most
+     * fragile path this project has, which would also fail open exactly when the broker is unhealthy, i.e. when
+     * rebalances are already storming. The fetch that delivers the first batch carries the high watermark anyway
+     * ({@link Consumer#currentLag}, KIP-695), so the answer is already in the process by the time it is needed. The
+     * cost of waiting for it is nil: nothing consults the map until a record arrives to be consulted <em>about</em>,
+     * and this runs before that.
+     *
+     * <p><b>Absence is not evidence.</b> An empty {@code logEndOffsetAtPoll} means nobody has established where the
+     * partition ends - never that it ends here. The batch's own records are then used as a floor, because a record
+     * that arrived certainly exists: a floor can only ever <em>confirm</em> a claim, never refute one, so if it does
+     * not reach the claim we simply look again at the next batch.
+     */
+    private void maybeVerifyLoadedOffsetMapAgainstThePartition(EpochAndRecordsMap<K, V>.RecordsAndEpoch recordsAndEpoch) {
+        if (!loadedOffsetMapClaimIsUncorroborated) {
+            return;
+        }
+
+        OptionalLong logEndOffsetExclusive = recordsAndEpoch.getLogEndOffsetAtPoll();
+        if (!logEndOffsetExclusive.isPresent()) { // Optional#isEmpty is Java 11 - this module compiles against Java 8's API
+            var lastOfBatch = getLast(recordsAndEpoch.getRecords());
+            boolean batchReachesTheClaim = lastOfBatch.isPresent()
+                    && lastOfBatch.get().offset() >= offsetHighestSeen;
+            if (batchReachesTheClaim) {
+                // Records this far up exist, so the map claimed nothing the partition does not hold.
+                loadedOffsetMapClaimIsUncorroborated = false;
+            }
+            return;
+        }
+
+        long highestOffsetThePartitionHolds = logEndOffsetExclusive.getAsLong() - 1;
+        loadedOffsetMapClaimIsUncorroborated = false;
+        if (claimsOffsetsThePartitionDoesNotHold(offsetHighestSeen, logEndOffsetExclusive.getAsLong())) {
+            var problem = msg("the offset map claims to have seen offset {}, but the partition holds nothing above " +
+                            "offset {} - no map this build wrote could name an offset that has never existed",
+                    offsetHighestSeen, highestOffsetThePartitionHolds);
+            // The same handler, and so the same user-visible event, as every other unreadable payload: under IGNORE
+            // it warns with the partition, the base offset and this reason and answers with the state we would have
+            // had if the commit had carried no map at all; under FAIL it throws. Nothing counts the discard - that
+            // is docs/inflight/bug-no-metric-for-discarded-offset-metadata.md, and out of scope here.
+            var withoutTheMap = EncodedOffsetPair.handleUnreadableMetadata(committedOffsetTheMapWasLoadedAgainst,
+                    module.options().getInvalidOffsetMetadataPolicy(),
+                    problem,
+                    () -> new CorruptOffsetMetadataException(problem,
+                            EncodedOffsetPair.describeSource(tp, committedOffsetTheMapWasLoadedAgainst)),
+                    tp);
+            initStateFromOffsetData(withoutTheMap);
+        }
+    }
+
+    /**
+     * The rule, in one expression: an offset map may not name an offset the partition does not hold.
+     * <p>
+     * Public and static so the encoder-side round trip can assert the other direction - that output this build
+     * produced, measured against a partition ending exactly on the last offset it encoded, is never refused. That is
+     * the property which makes this safe to apply at all, and it is asserted rather than argued in
+     * {@code EncoderOutputSurvivesDecodeValidationTest}.
+     *
+     * @param highestSeenOffset     what the decoded map claims to have seen, inclusive
+     * @param logEndOffsetExclusive where the partition ends - the next offset to be written, so the last one it
+     *                              holds is below it
+     */
+    public static boolean claimsOffsetsThePartitionDoesNotHold(long highestSeenOffset, long logEndOffsetExclusive) {
+        return highestSeenOffset > logEndOffsetExclusive - 1;
     }
 
     /**

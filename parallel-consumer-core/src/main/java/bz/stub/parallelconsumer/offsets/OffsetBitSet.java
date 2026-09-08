@@ -56,20 +56,7 @@ public class OffsetBitSet {
         return result.toString();
     }
 
-    /**
-     * @param highestOffsetPartitionCanHold the last offset the partition actually holds, or
-     *                                      {@link OffsetMapCodecManager#UNKNOWN_PARTITION_CEILING} when the caller
-     *                                      could not find out. Same ground truth, and same reasoning, as
-     *                                      {@link OffsetRunLength#runLengthDecodeToIncompletes}, which owns the
-     *                                      explanation. A bitset cannot claim as far as a run length can - the
-     *                                      declared bit count has to be backed by bytes that are present, so the
-     *                                      claim is capped by the payload's own size - but "capped" is not "true",
-     *                                      and a full metadata field still buys tens of thousands of skipped records.
-     */
-    static HighestOffsetAndIncompletes deserialiseBitSetWrapToIncompletes(OffsetEncoding encoding,
-                                                                          long baseOffset,
-                                                                          ByteBuffer wrap,
-                                                                          long highestOffsetPartitionCanHold)
+    static HighestOffsetAndIncompletes deserialiseBitSetWrapToIncompletes(OffsetEncoding encoding, long baseOffset, ByteBuffer wrap)
             throws CorruptOffsetMetadataException {
         wrap.rewind();
         int originalBitsetSize = switch (encoding) {
@@ -91,16 +78,8 @@ public class OffsetBitSet {
                     "bitset declares {} bit(s), needing {} byte(s), but only {} byte(s) follow the length field",
                     originalBitsetSize, bytesNeeded, slice.remaining()));
         }
-        long highestSeenOffset = baseOffset + originalBitsetSize - 1;
-        // Checked before the set is built, for the same reason the run-length guard is checked before its run is
-        // walked: a payload we are about to refuse should not be allowed to allocate first.
-        if (highestOffsetPartitionCanHold != OffsetMapCodecManager.UNKNOWN_PARTITION_CEILING
-                && highestSeenOffset > highestOffsetPartitionCanHold) {
-            throw new CorruptOffsetMetadataException(msg(
-                    "bitset declares {} bit(s), reaching offset {}, but the partition holds nothing above offset {}",
-                    originalBitsetSize, highestSeenOffset, highestOffsetPartitionCanHold));
-        }
         SortedSet<Long> incompletes = deserialiseBitSetToIncompletes(baseOffset, originalBitsetSize, slice);
+        long highestSeenOffset = baseOffset + originalBitsetSize - 1;
         return HighestOffsetAndIncompletes.of(highestSeenOffset, incompletes);
     }
 

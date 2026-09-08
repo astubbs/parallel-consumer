@@ -129,22 +129,6 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
                                                            long baseOffset,
                                                            InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                            TopicPartition tp) {
-        return decodeToIncompletes(input, baseOffset, errorPolicy, tp, OffsetMapCodecManager.UNKNOWN_PARTITION_CEILING);
-    }
-
-    /**
-     * @param highestOffsetPartitionCanHold the last offset the partition actually holds, which is the only thing that
-     *                                      can prove an otherwise well-formed offset map absurd - see
-     *                                      {@link OffsetRunLength#runLengthDecodeToIncompletes}, which owns that
-     *                                      reasoning. {@link OffsetMapCodecManager#UNKNOWN_PARTITION_CEILING} when
-     *                                      the caller could not find out
-     * @see #decodeToIncompletes(byte[], long, InvalidOffsetMetadataHandlingPolicy, TopicPartition)
-     */
-    static HighestOffsetAndIncompletes decodeToIncompletes(byte[] input,
-                                                           long baseOffset,
-                                                           InvalidOffsetMetadataHandlingPolicy errorPolicy,
-                                                           TopicPartition tp,
-                                                           long highestOffsetPartitionCanHold) {
         if (input.length == 0) {
             // Not reachable from production today: decodeCompressedOffsets branches on an empty payload before
             // calling here, because "no metadata committed" is a legitimate state rather than a corrupt one. That
@@ -168,7 +152,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
                     tp);
         }
         return new EncodedOffsetPair(encoding.get(), wrap.slice())
-                .getDecodedIncompletes(baseOffset, errorPolicy, tp, highestOffsetPartitionCanHold);
+                .getDecodedIncompletes(baseOffset, errorPolicy, tp);
     }
 
     /**
@@ -189,8 +173,11 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      * @param toThrow  the typed exception for the strict policy, built lazily so its (longer) advice text costs
      *                 nothing on the IGNORE path
      */
+    // public, not package-private: the plausibility check in PartitionState is the one caller outside this package,
+    // and it must apply the SAME policy through the SAME handler rather than grow a second answer to "this build
+    // cannot believe this payload" - see PartitionState#maybeVerifyLoadedOffsetMapAgainstThePartition.
     @SneakyThrows
-    static HighestOffsetAndIncompletes handleUnreadableMetadata(long baseOffset,
+    public static HighestOffsetAndIncompletes handleUnreadableMetadata(long baseOffset,
                                                                         InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                                         String problem,
                                                                         Supplier<? extends InternalException> toThrow,
@@ -222,7 +209,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      *
      * @param tp may be null when the caller did not know the partition
      */
-    static String describeSource(TopicPartition tp, long baseOffset) {
+    public static String describeSource(TopicPartition tp, long baseOffset) {
         return msg("partition: {}, base offset: {}", tp, baseOffset);
     }
 
@@ -277,11 +264,12 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      *     {@link CorruptOffsetMetadataException}, which is the case that used to return a fabricated offset map
      *     instead of failing.</li>
      * </ol>
-     * A fourth outcome - a payload that decodes cleanly into a wrong-but-plausible map - is covered only as far as
-     * something outside the payload can prove it wrong, because nothing <em>in</em> such a payload does. Today that
-     * is the partition itself: a map naming offsets the partition does not hold is refused, given a caller that
-     * passes {@code highestOffsetPartitionCanHold}. A map that is merely wrong about offsets which do exist remains
-     * indistinguishable from a real one.
+     * A fourth outcome - a payload that decodes cleanly into a wrong-but-plausible map - is not covered <em>here</em>,
+     * and cannot be: nothing in such a payload proves it wrong. Something outside it can, and one thing does:
+     * {@code PartitionState#maybeVerifyLoadedOffsetMapAgainstThePartition} measures the decoded map against the
+     * partition itself at the first batch, and refuses one claiming offsets the partition does not hold - through
+     * {@link #handleUnreadableMetadata}, so it is the same user-visible event as the three above. A map that is
+     * merely wrong about offsets which do exist stays indistinguishable from a real one.
      *
      * @param baseOffset  the committed offset the payload is relative to, and what {@code IGNORE} falls back to
      * @param errorPolicy what to do when this build cannot read the payload
@@ -289,24 +277,10 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      *                    the caller does not know it
      * @return the highest offset seen, and the incomplete offsets below it
      */
-    public HighestOffsetAndIncompletes getDecodedIncompletes(long baseOffset,
-                                                             InvalidOffsetMetadataHandlingPolicy errorPolicy,
-                                                             TopicPartition tp) {
-        return getDecodedIncompletes(baseOffset, errorPolicy, tp, OffsetMapCodecManager.UNKNOWN_PARTITION_CEILING);
-    }
-
-    /**
-     * @param highestOffsetPartitionCanHold the last offset the partition actually holds, or
-     *                                      {@link OffsetMapCodecManager#UNKNOWN_PARTITION_CEILING} when unknown. It
-     *                                      settles the fourth outcome the overload below calls uncoverable: a payload
-     *                                      that decodes cleanly into a map no partition could produce
-     * @see #getDecodedIncompletes(long, InvalidOffsetMetadataHandlingPolicy, TopicPartition)
-     */
     @SneakyThrows
     public HighestOffsetAndIncompletes getDecodedIncompletes(long baseOffset,
                                                              InvalidOffsetMetadataHandlingPolicy errorPolicy,
-                                                             TopicPartition tp,
-                                                             long highestOffsetPartitionCanHold) {
+                                                             TopicPartition tp) {
         switch (encoding) {
             case KafkaStreams:
             case KafkaStreamsV2:
@@ -338,7 +312,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
         // ZstdIOException from a body that is not a zstd frame, neither of which is an OffsetDecodingError, so
         // loadPartitionStateForAssignment's recovery never saw them and they escaped onPartitionsAssigned.
         try {
-            return decodeBody(baseOffset, highestOffsetPartitionCanHold);
+            return decodeBody(baseOffset);
         } catch (CorruptOffsetMetadataException | BufferUnderflowException | IOException e) {
             return handleUnreadableMetadata(baseOffset,
                     errorPolicy,
@@ -360,16 +334,16 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      * every way this can fail is caught in one place and routed through the user's policy, rather than each decoder
      * having to know about it.
      */
-    private HighestOffsetAndIncompletes decodeBody(long baseOffset, long ceiling) throws CorruptOffsetMetadataException, IOException {
+    private HighestOffsetAndIncompletes decodeBody(long baseOffset) throws CorruptOffsetMetadataException, IOException {
         return switch (encoding) {
-            case BitSet -> deserialiseBitSetWrapToIncompletes(encoding, baseOffset, data, ceiling);
-            case BitSetCompressed -> deserialiseBitSetWrapToIncompletes(BitSet, baseOffset, decompressZstd(data), ceiling);
-            case RunLength -> runLengthDecodeToIncompletes(encoding, baseOffset, data, ceiling);
-            case RunLengthCompressed -> runLengthDecodeToIncompletes(RunLength, baseOffset, decompressZstd(data), ceiling);
-            case BitSetV2 -> deserialiseBitSetWrapToIncompletes(encoding, baseOffset, data, ceiling);
-            case BitSetV2Compressed -> deserialiseBitSetWrapToIncompletes(BitSetV2, baseOffset, decompressZstd(data), ceiling);
-            case RunLengthV2 -> runLengthDecodeToIncompletes(encoding, baseOffset, data, ceiling);
-            case RunLengthV2Compressed -> runLengthDecodeToIncompletes(RunLengthV2, baseOffset, decompressZstd(data), ceiling);
+            case BitSet -> deserialiseBitSetWrapToIncompletes(encoding, baseOffset, data);
+            case BitSetCompressed -> deserialiseBitSetWrapToIncompletes(BitSet, baseOffset, decompressZstd(data));
+            case RunLength -> runLengthDecodeToIncompletes(encoding, baseOffset, data);
+            case RunLengthCompressed -> runLengthDecodeToIncompletes(RunLength, baseOffset, decompressZstd(data));
+            case BitSetV2 -> deserialiseBitSetWrapToIncompletes(encoding, baseOffset, data);
+            case BitSetV2Compressed -> deserialiseBitSetWrapToIncompletes(BitSetV2, baseOffset, decompressZstd(data));
+            case RunLengthV2 -> runLengthDecodeToIncompletes(encoding, baseOffset, data);
+            case RunLengthV2Compressed -> runLengthDecodeToIncompletes(RunLengthV2, baseOffset, decompressZstd(data));
             default -> throw new PCInternalRuntimeException(
                     msg("no decoder for {}, and it was not routed to the policy handler", encoding));
         };

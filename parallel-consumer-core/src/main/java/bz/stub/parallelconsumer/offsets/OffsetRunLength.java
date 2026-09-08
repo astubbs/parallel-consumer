@@ -77,42 +77,9 @@ public class OffsetRunLength {
 
 
     /**
-     * Decodes a run-length body into the incomplete offsets it names and the highest offset it claims to have seen.
-     *
-     * <p><b>The plausibility ceiling, and why it is the partition's end offset.</b> Every other check in this method
-     * is one the buffer can settle by itself. A run length cannot be: a long run of completed offsets is precisely
-     * what run-length encoding is <em>for</em>, so nothing in the bytes distinguishes a legitimate one from an absurd
-     * one. Unchecked, a single four-byte entry of {@link Integer#MAX_VALUE} moves the highest-seen offset about two
-     * billion forward, and {@code PartitionState#isRecordPreviouslyCompleted} then treats every real record in that
-     * range as already succeeded - silent non-processing, not replay, from metadata anything sharing the consumer
-     * group can write.
-     *
-     * <p><b>What a legitimate long run looks like, so the guard cannot reject one.</b> One record stuck at the
-     * committed offset while everything above it succeeds is an ordinary shape here, and it is not self-limiting:
-     * PC's back-pressure keys off the encoded <em>payload</em> size, and this payload stays three entries wide however
-     * far the partition runs ahead of the stuck record. So a run of hundreds of millions of completed offsets is real
-     * data, and any ceiling derived from a configured window - concurrency, the in-flight target, a round number -
-     * would eventually discard a true offset map and replay everything in it. That is why this method takes ground
-     * truth instead of a constant: the partition's log end offset is the one bound a legitimate map provably cannot
-     * cross, because PC only ever encodes offsets it has polled, and an offset the partition does not hold cannot
-     * have been polled. Kafka's end offset only ever grows, so a bound read now is still valid for a map written
-     * earlier.
-     *
-     * <p>The ceiling is checked <em>before</em> each run is applied rather than after the decode, so an incomplete
-     * run past the end of the partition is refused rather than walked - the same five-byte payload would otherwise
-     * ask for two billion boxed longs.
-     *
-     * @param baseOffset                   the committed offset the runs are relative to
-     * @param highestOffsetPartitionCanHold the last offset the partition actually holds (its log end offset minus
-     *                                     one), or {@link OffsetMapCodecManager#UNKNOWN_PARTITION_CEILING} when the
-     *                                     caller could not find out - in which case no run is refused on these
-     *                                     grounds, because a guard with no ground truth must not invent one
      * @see #runLengthEncode
      */
-    static HighestOffsetAndIncompletes runLengthDecodeToIncompletes(OffsetEncoding encoding,
-                                                                    final long baseOffset,
-                                                                    final ByteBuffer in,
-                                                                    final long highestOffsetPartitionCanHold)
+    static HighestOffsetAndIncompletes runLengthDecodeToIncompletes(OffsetEncoding encoding, final long baseOffset, final ByteBuffer in)
             throws CorruptOffsetMetadataException {
         in.rewind();
         // asShortBuffer()/asIntBuffer() silently DROP a trailing partial element, so a body of the wrong width decodes
@@ -191,26 +158,6 @@ public class OffsetRunLength {
                 if (runLength.longValue() < 0) {
                     throw new CorruptOffsetMetadataException(msg("negative run length ({}) at offset {}",
                             runLength, currentOffset));
-                }
-                // The partition is the only thing that can prove a run absurd - see this method's javadoc. Expressed
-                // as the room left rather than as (currentOffset + runLength), which would overflow for a payload
-                // built to make it do so. Discarding the map here is logged by
-                // EncodedOffsetPair#handleUnreadableMetadata with the partition, the base offset and this reason;
-                // it is deliberately not counted, which is docs/inflight/bug-no-metric-for-discarded-offset-metadata.md.
-                if (highestOffsetPartitionCanHold != OffsetMapCodecManager.UNKNOWN_PARTITION_CEILING) {
-                    // Arithmetic that cannot wrap, which is not fussiness: the unknown ceiling IS Long.MAX_VALUE, so
-                    // a "currentOffset + runLength" or a "+ 1" on the room left overflows to a negative number and
-                    // rejects EVERY payload, the encoder's own included - and a base offset of -1 (no commit yet)
-                    // reaches this code, so the subtraction is not safe from the other side either. Hence: skip
-                    // entirely when there is no ceiling, then measure the run as a DISTANCE from currentOffset.
-                    long offsetsThePartitionStillHolds = highestOffsetPartitionCanHold - currentOffset;
-                    if (runLength.longValue() > 0 && runLength.longValue() - 1 > offsetsThePartitionStillHolds) {
-                        throw new CorruptOffsetMetadataException(msg(
-                                "{} run of {} offset(s) at offset {} reaches past the end of the partition, which " +
-                                        "holds nothing above offset {} - no offset map this build wrote could name " +
-                                        "an offset that has never existed",
-                                encoding.description(), runLength, currentOffset, highestOffsetPartitionCanHold));
-                    }
                 }
                 if (currentRunLengthIsComplete) {
                     log.trace("Ignoring {} completed offset(s) (offset:{})", runLength, currentOffset);

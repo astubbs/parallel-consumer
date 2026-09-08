@@ -13,15 +13,19 @@ applies_when:
   - The obvious bound is a constant somebody has to choose, and choosing it wrong rejects real data
   - A guard has been parked as "a product call" because nobody could justify the number
   - Deciding whether a check may make a network call, and what it should do when that call fails
+  - A validator wants a fact the process does not have yet, but will have shortly, for free
 related_components:
+  - PartitionState
+  - ConsumerManager
+  - EpochAndRecordsMap
   - OffsetRunLength
-  - OffsetBitSet
-  - OffsetMapCodecManager
   - EncodedOffsetPair
 tags:
   - guard-predicate
   - ground-truth
   - fail-open
+  - lazy-validation
+  - rebalance-path
   - offset-encoding
   - input-validation
   - wire-format
@@ -67,32 +71,54 @@ number.** Three candidate bounds were considered here, and only one is not a gue
   There is no false-positive case to trade off, which is what makes it a correctness bound rather
   than a tuning parameter.
 
-**The cost of ground truth is usually a call somebody was avoiding - price it rather than assume
-it.** The end offset is not free: it is a `ListOffsets` round trip, and the natural place to make it
-is inside the rebalance callback, which in this codebase is the most fragile path there is. What
-made it affordable was scoping: one batched request for the whole assignment, skipped entirely when
-no assigned partition carries metadata, on a rebalance that has already paid for a `JoinGroup`, a
-`SyncGroup` and an `OffsetFetch`. A per-partition or per-decode lookup would not have been.
+**Having found the authority, ask what it costs to consult - and whether the answer is already in
+the building.** The first implementation of this fix bought the end offset with a `ListOffsets`
+request at assignment, batched across the partitions carrying metadata. It worked, and it was
+rejected on review for two reasons worth keeping:
 
-**A guard with no ground truth must stand down, not guess.** When the lookup fails - an unavailable
-leader, a timeout, a consumer implementation that will not answer - the decoders are handed
-"unknown" and refuse nothing. Failing *closed* would mean a broker hiccup discards honest offset
-maps, which is a far more likely event than the corrupt payload the guard exists for; the check
-would then cause more data churn than it prevents. The failure is logged with the partitions it
-covers, so the stand-down is visible rather than assumed.
+- **It put a blocking broker round trip inside the rebalance callback**, which in this codebase is
+  the most fragile path there is - the one whose stalls and deadlocks have consumed more
+  investigation than anything else. A check against corrupt metadata is not worth a new way for a
+  rebalance to hang.
+- **It failed open exactly when the broker was unhealthy.** An unreachable leader means no end
+  offset, which means the guard stands down - so the check was reliably absent in precisely the
+  conditions that make rebalances storm and offset maps get rewritten.
 
-**Check the producing side, and pin it at the boundary.** A decode-side bound is only safe if the
+**The same fact was already arriving for free, slightly later.** Every fetch response carries the
+partition's high watermark, and the consumer exposes it as `Consumer.currentLag` (KIP-695) - no
+request of its own, computed from the last fetch. `position + currentLag` reconstructs the watermark
+exactly when both are read in one breath on the thread that owns the consumer. So the check moved
+off the wire and onto the first batch: the decode accepts the map and *retains what it claims*, and
+the claim is settled before any record is consulted against it. Nothing is lost by waiting, because
+nothing consults the map until a record arrives to be consulted about.
+
+**"Later, for free" beats "now, at a cost" whenever the deadline is not real.** The instinct is to
+validate at the point of parsing, and here that instinct is what forced the wire call: the data
+needed to judge the payload simply is not in the process yet at decode time. Ask when the judgement
+is actually *needed* - the first consult, not the parse - and the cost can disappear.
+
+**A guard with no ground truth must stand down, not guess - and standing down is deferral, not
+acceptance.** `currentLag` is empty until a fetch has happened, and the position read is asked for
+with a zero timeout so it raises rather than sends a request. Every such outcome means *not
+established*, and the check simply looks again at the next batch. The batch's own records serve as a
+floor in the meantime - a record that arrived certainly exists - and a floor can only ever *confirm*
+a claim, never refute one, which is why it is safe to use with no watermark at all. Failing closed
+would discard honest offset maps on a broker hiccup, a far more likely event than the corrupt
+payload the guard exists for.
+
+**Check the producing side, and pin it at the boundary.** A bound like this is only safe if the
 encoder can never write what it rejects. Here it cannot, because the encoder's range top is an
 offset PC actually saw - but the argument is worth a test rather than a paragraph: every encoder
-round-trip case is now decoded twice, once unbounded and once against a partition ending exactly on
-the last offset encoded. Anything that made the encoder run one offset past what it saw surfaces as
-a false rejection instead of as silence.
+round-trip case is measured against the rule with the tightest honest bound there is, a partition
+ending exactly on the last offset encoded. Anything that made the encoder run one offset past what
+it saw surfaces as a false rejection instead of as silence.
 
-**Take the whole defect class while the parameter is in your hand.** The bitset decoder has the same
-shape - a structurally valid length field the format cannot prove absurd - and is merely *less*
-exposed, because its declared bit count has to be backed by bytes that are present, so a full 4KB
-metadata field buys tens of thousands of skipped records rather than two billion. "Bounded" is not
-"true", and the same ceiling now applies there.
+**A check moved to where the meaning lives often covers more than the one it replaced.** The
+decode-side version had to be threaded into each decoder and applied per encoding; the lazy one
+reads the *decoded claim*, so run-length and bitset are covered by the same line, and any encoding
+added later is covered without being told. The bitset case is worth naming because it is easy to
+dismiss: its declared bit count must be backed by bytes that are present, so a full 4KB metadata
+field buys tens of thousands of skipped records rather than two billion. Bounded is not true.
 
 ## Why This Matters
 
@@ -113,6 +139,8 @@ direction, and the only thing traded away is a round trip on a path that already
 - Reviewing a parked bug whose blocker is "we would have to pick a threshold".
 - Deciding what a guard does when the fact it needs is unavailable - name the direction it fails in
   and say why that direction is the cheaper wrong answer.
+- Being tempted to buy a fact with a network call on a latency- or liveness-critical path: ask what
+  already arrives carrying it, and when the answer is first *needed* rather than first available.
 
 ## Related
 

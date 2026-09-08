@@ -17,7 +17,6 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Timer;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.WakeupException;
@@ -26,7 +25,6 @@ import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -71,16 +69,6 @@ public class OffsetMapCodecManager<K, V> {
     public static int DefaultMaxMetadataSize = 4096;
 
     public static final Charset CHARSET_TO_USE = UTF_8;
-
-    /**
-     * Passed as the plausibility ceiling when nobody could establish where the partition ends, and read by the
-     * decoders as "refuse nothing on these grounds".
-     * <p>
-     * A guard with no ground truth must stand down rather than invent one: failing closed here would discard honest
-     * offset maps whenever a broker is slow to answer, which is a far more likely event than the corrupt payload the
-     * ceiling exists for. {@link OffsetRunLength#runLengthDecodeToIncompletes} owns what the ceiling means.
-     */
-    public static final long UNKNOWN_PARTITION_CEILING = Long.MAX_VALUE;
 
     private final PCModule<K, V> module;
 
@@ -214,12 +202,10 @@ public class OffsetMapCodecManager<K, V> {
         }
 
         var partitionStates = new HashMap<TopicPartition, PartitionState<K, V>>();
-        var highestOffsetsHeld = findHighestOffsetsHeld(partitionLastCommittedOffsets);
         partitionLastCommittedOffsets.forEach((tp, offsetAndMeta) -> {
             if (offsetAndMeta != null) {
                 try {
-                    PartitionState<K, V> state = decodePartitionState(tp, offsetAndMeta,
-                            highestOffsetsHeld.getOrDefault(tp, UNKNOWN_PARTITION_CEILING));
+                    PartitionState<K, V> state = decodePartitionState(tp, offsetAndMeta);
                     partitionStates.put(tp, state);
                 } catch (OffsetDecodingError offsetDecodingError) {
                     log.error("Error decoding offsets from assigned partition, dropping offset map (will replay previously completed messages - partition: {}, data: {})",
@@ -240,61 +226,6 @@ public class OffsetMapCodecManager<K, V> {
                 });
 
         return partitionStates;
-    }
-
-    /**
-     * Asks the broker where each partition carrying an offset map actually ends, so a decoded map can be checked
-     * against something it cannot forge.
-     * <p>
-     * This is the ground truth the plausibility ceiling needs, and there is nowhere cheaper to get it: PC holds no
-     * end offset of its own at assignment time, and a constant derived from configuration would eventually discard a
-     * true offset map - {@link OffsetRunLength#runLengthDecodeToIncompletes} carries that argument in full.
-     * <p>
-     * <b>One request, and only when there is something to check.</b> It is batched across the whole assignment and
-     * skipped entirely when no assigned partition has metadata, so it costs one {@code ListOffsets} round trip on a
-     * rebalance that already paid for several - and nothing at all for a group that has never committed a map. The
-     * timeout is the consumer's own {@code default.api.timeout.ms}, the same one governing the
-     * {@link Consumer#committed(Set)} call above it, because it is the same kind of call in the same frame.
-     * <p>
-     * <b>Every failure is swallowed on purpose, loudly.</b> A guard must not be able to turn a readable offset map -
-     * or an entire partition assignment - into a failure: an unavailable leader, a timeout, or a consumer
-     * implementation that does not answer this question all mean "no ground truth", which the decoders read as
-     * "refuse nothing". The warning is the visible half; the invisible half would be a rebalance that dies for the
-     * sake of a check.
-     *
-     * @return the last offset each partition holds, keyed by partition and absent where it could not be established
-     */
-    private Map<TopicPartition, Long> findHighestOffsetsHeld(Map<TopicPartition, OffsetAndMetadata> partitionLastCommittedOffsets) {
-        var partitionsCarryingMetadata = partitionLastCommittedOffsets.entrySet().stream()
-                .filter(entry -> entry.getValue() != null)
-                .filter(entry -> entry.getValue().metadata() != null && !entry.getValue().metadata().isEmpty())
-                .map(Map.Entry::getKey)
-                .collect(Collectors.toSet());
-        if (partitionsCarryingMetadata.isEmpty()) {
-            return Collections.emptyMap();
-        }
-
-        try {
-            var endOffsets = module.consumer().endOffsets(partitionsCarryingMetadata);
-            var highestOffsetsHeld = new HashMap<TopicPartition, Long>();
-            endOffsets.forEach((tp, endOffset) -> {
-                if (endOffset != null) {
-                    // the end offset is the next offset to be WRITTEN, so the last one the partition holds is below it
-                    highestOffsetsHeld.put(tp, endOffset - 1);
-                }
-            });
-            return highestOffsetsHeld;
-        } catch (Exception e) {
-            // The reason goes in the warning; the stack trace goes to debug, because this fires once per rebalance
-            // whenever a consumer will not answer the question - including every MockConsumer that was never told
-            // where its partitions end - and a trace per rebalance is how a warning stops being read.
-            log.warn("Could not read the end offsets of {} while loading their committed offset maps ({}), so those " +
-                            "maps cannot be checked against the offsets the partitions actually hold - decoding them " +
-                            "as they are. An offset map claiming offsets that do not exist would be accepted this time.",
-                    partitionsCarryingMetadata, e.toString());
-            log.debug("End offset lookup failed", e);
-            return Collections.emptyMap();
-        }
     }
 
     /**
@@ -343,11 +274,8 @@ public class OffsetMapCodecManager<K, V> {
      * @param offsetData the committed offset and its free-form metadata field
      * @throws OffsetDecodingError if the metadata is not valid base64
      */
-    private HighestOffsetAndIncompletes decodeOffsetMapForPartition(TopicPartition tp,
-                                                                    OffsetAndMetadata offsetData,
-                                                                    long highestOffsetPartitionCanHold) throws OffsetDecodingError {
-        return deserialiseIncompleteOffsetMapFromBase64(offsetData.offset(), offsetData.metadata(), errorPolicy, tp,
-                highestOffsetPartitionCanHold);
+    private HighestOffsetAndIncompletes decodeOffsetMapForPartition(TopicPartition tp, OffsetAndMetadata offsetData) throws OffsetDecodingError {
+        return deserialiseIncompleteOffsetMapFromBase64(offsetData.offset(), offsetData.metadata(), errorPolicy, tp);
     }
 
     /**
@@ -405,21 +333,6 @@ public class OffsetMapCodecManager<K, V> {
                                                                                        String base64EncodedOffsetPayload,
                                                                                        InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                                                        TopicPartition tp) throws OffsetDecodingError {
-        return deserialiseIncompleteOffsetMapFromBase64(committedOffsetForPartition, base64EncodedOffsetPayload,
-                errorPolicy, tp, UNKNOWN_PARTITION_CEILING);
-    }
-
-    /**
-     * @param highestOffsetPartitionCanHold the last offset the partition holds, against which an otherwise
-     *                                      well-formed map is checked, or {@link #UNKNOWN_PARTITION_CEILING} when
-     *                                      that could not be established
-     * @see #deserialiseIncompleteOffsetMapFromBase64(long, String, InvalidOffsetMetadataHandlingPolicy, TopicPartition)
-     */
-    static HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(long committedOffsetForPartition,
-                                                                                String base64EncodedOffsetPayload,
-                                                                                InvalidOffsetMetadataHandlingPolicy errorPolicy,
-                                                                                TopicPartition tp,
-                                                                                long highestOffsetPartitionCanHold) throws OffsetDecodingError {
         byte[] decodedBytes;
         try {
             decodedBytes = OffsetSimpleSerialisation.decodeBase64(base64EncodedOffsetPayload);
@@ -436,25 +349,17 @@ public class OffsetMapCodecManager<K, V> {
                             EncodedOffsetPair.describeSource(tp, committedOffsetForPartition)),
                     tp);
         }
-        return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes, errorPolicy, tp,
-                highestOffsetPartitionCanHold);
+        return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes, errorPolicy, tp);
     }
 
     PartitionState<K, V> decodePartitionState(TopicPartition tp, OffsetAndMetadata offsetData) throws OffsetDecodingError {
-        return decodePartitionState(tp, offsetData, UNKNOWN_PARTITION_CEILING);
-    }
-
-    /**
-     * @param highestOffsetPartitionCanHold the last offset this partition holds, or {@link #UNKNOWN_PARTITION_CEILING}
-     *                                      when {@link #findHighestOffsetsHeld} could not establish it
-     */
-    PartitionState<K, V> decodePartitionState(TopicPartition tp,
-                                              OffsetAndMetadata offsetData,
-                                              long highestOffsetPartitionCanHold) throws OffsetDecodingError {
-        HighestOffsetAndIncompletes incompletes = decodeOffsetMapForPartition(tp, offsetData, highestOffsetPartitionCanHold);
+        HighestOffsetAndIncompletes incompletes = decodeOffsetMapForPartition(tp, offsetData);
         log.debug("Loaded incomplete offsets from offset payload {}", incompletes);
         long epoch = epochOfPartitionBeingAssigned(tp);
-        return new PartitionState<>(epoch, module, tp, incompletes);
+        // The committed offset travels with the decoded map: PartitionState checks the map's claim against the
+        // partition itself at the first batch, and falls back to this offset when the claim turns out to be one no
+        // partition could have produced - see PartitionState#maybeVerifyLoadedOffsetMapAgainstThePartition.
+        return new PartitionState<>(epoch, module, tp, incompletes, offsetData.offset());
     }
 
     public String makeOffsetMetadataPayload(long baseOffsetForPartition, PartitionState<K, V> state) throws NoEncodingPossibleException {
@@ -560,19 +465,6 @@ public class OffsetMapCodecManager<K, V> {
                                                                byte[] decodedBytes,
                                                                InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                                TopicPartition tp) {
-        return decodeCompressedOffsets(nextExpectedOffset, decodedBytes, errorPolicy, tp, UNKNOWN_PARTITION_CEILING);
-    }
-
-    /**
-     * @param highestOffsetPartitionCanHold the last offset the partition holds, or {@link #UNKNOWN_PARTITION_CEILING}
-     *                                      when that could not be established
-     * @see #decodeCompressedOffsets(long, byte[], InvalidOffsetMetadataHandlingPolicy, TopicPartition)
-     */
-    static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset,
-                                                               byte[] decodedBytes,
-                                                               InvalidOffsetMetadataHandlingPolicy errorPolicy,
-                                                               TopicPartition tp,
-                                                               long highestOffsetPartitionCanHold) {
 
         // if no offset bitmap data
         if (decodedBytes.length == 0) {
@@ -581,8 +473,7 @@ public class OffsetMapCodecManager<K, V> {
             long highestSeenOffsetIsThen = nextExpectedOffset - 1;
             return HighestOffsetAndIncompletes.of(highestSeenOffsetIsThen);
         } else {
-            return EncodedOffsetPair.decodeToIncompletes(decodedBytes, nextExpectedOffset, errorPolicy, tp,
-                    highestOffsetPartitionCanHold);
+            return EncodedOffsetPair.decodeToIncompletes(decodedBytes, nextExpectedOffset, errorPolicy, tp);
         }
     }
 
