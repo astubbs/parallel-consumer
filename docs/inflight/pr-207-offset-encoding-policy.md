@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: config-lie -->
+<!-- inflight-vetted: 2026-09-07 - astubbs#207 is MERGED (2026-09-02) and everything it describes is master: `invalidOffsetMetadataPolicy` defaults to `IGNORE` in `ParallelConsumerOptions`, every unreadable path routes through `EncodedOffsetPair.handleUnreadableMetadata`, and `errorPolicy` is a per-instance parameter rather than a static. The three Left-open items each have their own note and `issue-response-118.md` is still awaiting its pre-release sweep. NOT deleted per the merged-PR rule: the corrupt-body decoder findings and the three Cross-branch context bullets (route through `handleUnreadableMetadata`, no static `errorPolicy`, `IGNORE` resumes at `baseOffset - 1`) are still unowned by any durable doc, and writing them up in `docs/solutions/` is more than this sweep can do safely -->
 <!-- post-merge: checked-begin -->
 
 Non-blocking finding on astubbs#197, fixed on its own branch: `invalidOffsetMetadataPolicy` was

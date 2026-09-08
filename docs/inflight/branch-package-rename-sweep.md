@@ -2,10 +2,17 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: refactor -->
+<!-- inflight-vetted: 2026-09-07 - the sweep has RUN. `git ls-tree` over every open PR head shows `parallel-consumer-core/src/main/java/bz/` on all of them except astubbs#8, which this plan excluded by name, and no `-rename` branch survives on origin. Status header corrected from "planned, not started", and the astubbs#51 section rewritten - that PR is CLOSED, which is the third of the three options it offered. NOT deleted: the Housekeeping step asks for the durable findings to be folded into `branch-package-rename.md` first, and that migration is larger than a vetting sweep should do unreviewed -->
 
 
-**Status: planned, not started.** Two rehearsals are done and green; this is the execution plan for the
-real thing. Written to be picked up by a session with no memory of the rehearsals.
+**Status: DONE, awaiting fold-in.** The header read "planned, not started" until 2026-09-07, which
+its own later sections already contradicted - "The six things that actually blocked branches" and
+"What the real sweep measured" are reports from a sweep that ran. Checked against the tree on
+2026-09-07: every open PR head except astubbs#8 (`features/retry-dlq`, deliberately excluded as too
+old) has `parallel-consumer-core/src/main/java/bz/`, so Phases A through D are through. What is left
+is the Housekeeping step below - fold the durable findings into
+[`branch-package-rename.md`](branch-package-rename.md) and delete this file. Everything below is
+kept as the record of how it went, and is read as past tense.
 
 Read `docs/inflight/branch-package-rename.md` first — it is the project's ledger and records findings
 this plan depends on. Read the `BRINGING AN OPEN BRANCH ACROSS` section in `bin/rename-packages.sh`
@@ -13,40 +20,28 @@ second; it is the per-branch procedure and it is authoritative over any summary 
 
 ---
 
-## HIGH PRIORITY — NEEDS A HUMAN: astubbs#51 is excluded from the sweep
+## Settled: astubbs#51 was excluded from the sweep, and then closed
 
-**astubbs#51 (`features/enable-virtual-threads`) cannot be brought across by this procedure and has
-been dropped from it.** It is the only cross-repository PR of the 38: its head lives on
-`devingryu`'s fork, so `origin/features/enable-virtual-threads` does not exist and step 0 of the
-per-branch recipe is unrunnable. Verified with
-`gh pr list --json number,isCrossRepository` — every other PR in the sweep is `false`.
+**astubbs#51 (`features/enable-virtual-threads`) could not be brought across by this procedure.** It
+was the only cross-repository PR of the 38: its head lived on `devingryu`'s fork, so
+`origin/features/enable-virtual-threads` never existed and step 0 of the per-branch recipe was
+unrunnable. The commit was reachable as `refs/pull/51/head` (`b4d5c2df`) and the rename *could* have
+been performed locally; the problem was the other end, that Phase D fast-forwards each
+`<branch>-rename` into its parent and the parent was a branch in someone else's repository.
 
-The commit is reachable as `refs/pull/51/head` (`b4d5c2df`), so the rename *could* be performed
-locally. That is not the problem. The problem is the other end: **there is nowhere to put the
-result.** Phase D fast-forwards each `<branch>-rename` into its parent and the parent here is a
-branch in someone else's repository. A renamed local branch with no push destination is not a
-delivered result, it is a branch that quietly rots while the tree moves underneath it.
+Of the three options this section set out - push to the contributor's fork, ask them to run the
+procedure, or close it - **the third is what happened**: astubbs#51 is CLOSED and the branch is gone
+from that fork. If the feature is still wanted it re-opens as a fork-owned branch. The virtual-thread
+line continues as astubbs#360 (`feat/virtual-thread-execution-mode`), which is fork-owned and
+renamed.
 
-Whoever picks this up is choosing between:
-
-- **Push to the contributor's fork**, if they enabled maintainer edits. Check with
-  `gh pr view 51 --json maintainerCanModify`. This is the only option that keeps the PR mergeable
-  without the contributor doing anything.
-- **Ask the contributor to run the procedure** on their fork, pointing them at
-  `bin/rename-packages.sh` and the `BRINGING AN OPEN BRANCH ACROSS` block. Correct, and slow, and it
-  is a 2021-era PR whose author may not still be reachable.
-- **Close it**, and re-open the work as a fork-owned branch if the feature is still wanted.
-
-Doing nothing has a cost and a deadline: once the rename lands on master, astubbs#51's diff is
-against paths that no longer exist. Every day it stays open, the eventual merge gets worse — and it
-is the one branch in this operation where the fork cannot fix that unilaterally.
-
-`refs/pull/51/merge` is the wrong ref to use for any of this: it is GitHub's speculative merge with
-the base, not the contributor's work.
+`refs/pull/51/merge` was the wrong ref for any of it: it is GitHub's speculative merge with the base,
+not the contributor's work.
 
 ### Also waiting on a human, lower priority
 
-- **`dups: similarity` is a required check and fails on any renamed branch, as a false positive.**
+- **`dups: similarity` (a step of the `scan: repo` check) fails on any renamed branch, as a false
+  positive.**
   The five near-identical `TestConventionsArchTest.java` files score 89-91% against each other and
   always have — on astubbs#293 they score 89.57-91.04 and the job passes. The same numbers fail on
   astubbs#294 because the check compares against base *by file path*, and after a 234-file rename no

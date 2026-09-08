@@ -37,8 +37,8 @@ it. The test matrix is not an obstacle - all three suites are one `test` job wit
 
 It has to be an allowlist, because several "docs" paths are load-bearing:
 
-- [`docs/quarantined-tests.md`](../quarantined-tests.md) is validated against Java annotations by the
-  `quarantine: audit` check.
+- [`docs/quarantined-tests.md`](../quarantined-tests.md) is validated against Java annotations by
+  `bin/check-quarantine-registry.sh`, in the `repo: hygiene` sweep and the Quarantine Lane.
 - [`docs/todo-index.md`](../todo-index.md) is generated, and `--check` fails when it is stale.
 - `AGENTS.md`, `.github/` and `bin/` are neither code nor docs, and changing them can change what CI
   itself does.

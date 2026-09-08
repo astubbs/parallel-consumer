@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-checked: `docs/inflight/issue-index.md` still carries only nodes plus the one accidental mirror edge (`confluentinc#` in its titles), and nothing consumes edges - `.claude/settings.json` registers no `PreToolUse` hook matching `gh issue view`/`gh pr view`. Decision 3's blocker also stands: `process-adopt-external-harness.md` is still `deferred - after v6`, so the delete-when is unmet by both arms -->
 
 [`issue-index.md`](issue-index.md) put the tracker inside `git grep`'s reach, and stopped at the
 boundary of a single issue. It materialises number, state, title and labels - **nodes**. What it does

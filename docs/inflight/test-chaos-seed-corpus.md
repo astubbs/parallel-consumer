@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - still true: no seed corpus file under docs/features or docs/data, no replay lane, and bug-857-family.md still says "Not one of the five captured seeds has ever been replayed" -->
 
 Chaos seeds are recorded in prose, scattered across the family ledger and its split-out sighting
 files, and nothing replays them. That makes every one a one-off observation whose deciding experiment

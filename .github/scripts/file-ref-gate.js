@@ -268,7 +268,7 @@ function citationsIn(line) {
 
 /**
  * The oracle resolves() reads, built from `git ls-files`. It lives here because BOTH callers need
- * one - the CI job in pr-checklist.yml and bin/check-file-refs.sh - and two hand-copied versions are
+ * one - the CI gate in repo-hygiene.yml and bin/check-file-refs.sh - and two hand-copied versions are
  * how they would come to disagree about what exists, which is the single thing they cannot differ
  * on. Same reasoning that puts formatFailure here rather than at each call site.
  *
@@ -483,7 +483,7 @@ function newFindings(current, base) {
 
 /**
  * The single copy of what an author is told when either rule fires - rendered by both callers, the
- * CI job in pr-checklist.yml and the local bin/check-file-refs.sh, so the two cannot tell different
+ * CI gate in repo-hygiene.yml and the local bin/check-file-refs.sh, so the two cannot tell different
  * stories. Its sibling gate learned that the hard way: hand-written copies of one message disagreed
  * in both directions within hours of the second being written.
  */

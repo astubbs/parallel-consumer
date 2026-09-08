@@ -17,6 +17,7 @@ worktree_path: "/Users/astubbs/github/parallel-consumer/.claude/worktrees/fork-b
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
+<!-- inflight-state: closed - the handoff is spent: the branch it hands on (docs/fork-branch-archaeology, commit 854ee239c, described here as unpushed) landed on master with astubbs#369, and both live items it names - the ref-accounting check and the docs/upstream.md over-claim - are owned by process-fork-branch-archaeology.md, which stays open and was re-vetted the same day. Kept rather than deleted: its "Failed approaches" section is the only record of those shapes, and src/docs/development/upstream-map.yamls branch_accounting entry for `presentation` cites this path. Its two `docs/upstream.md line 344` citations are stale - the entry is at line 363 today - and are left as written rather than rewritten into a dated artifact -->
 
 ## Objective
 

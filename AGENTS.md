@@ -75,6 +75,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/building.md`](docs/building.md) | A build failed in a way that reads like a broken repository: the fresh-clone recipe, why the Truth assertion classes are generated rather than committed, and which invocations skip the generator |
 | [`docs/logging.md`](docs/logging.md) | Changing a logback file, adding a log stream, or wondering why a logging change had no effect - the two test profiles and how to prove which one loaded |
 | [`docs/inflight-tool.md`](docs/inflight-tool.md) | Querying the repo across every ref - worked examples for `bin/inflight.mjs`, and why each working-tree answer is wrong |
+| [`docs/grooming.md`](docs/grooming.md) | Running a vetting sweep of `docs/inflight/` - when, how it is split between agents, the dispatch prompt, and where PROPOSED markers and the release gating list are consolidated |
 | [`docs/testing.md`](docs/testing.md) | Writing or debugging tests: suite split, **why a run prints nothing and the flag that fixes it**, the ambient probe autopsy, the quarantine lane, the chaos suite, shared test utilities |
 | [`docs/ci.md`](docs/ci.md) | CI is red, or you are changing a workflow: what each workflow does, the self-hosted lanes, how to fetch a failed job's log |
 | [`docs/investigating.md`](docs/investigating.md) | Past the prior-art checks and into diagnosis: control arms, instrumentation traps, reporting rates |
@@ -152,7 +153,7 @@ config key, a quoted literal; a long quotation is brittle the other way, breakin
 the grep before you commit the citation.
 
 **The path half is now enforced: `bin/check-file-refs.sh` fails a cited path that does not exist**,
-across the whole tree, and the `PR Checklist` workflow runs the same module - so deleting a file
+across the whole tree, and the `repo: hygiene` gate runs the same module - so deleting a file
 also fails the PR that leaves citations behind. The anchor half is still yours: a gate can only tell
 you the file is there, never that your quoted string is still in it.
 
@@ -418,7 +419,7 @@ Unit tests are surefire (`src/test/java/`); integration tests are failsafe and n
 
 **In a PR the changelog is never added to.** No new entries, and no `== Unreleased` section - a
 shipped section is finished, and the in-flight section belongs to the release-time generator. There
-is no window in which a PR contributes an entry, and **the `PR Checklist` gate does not enforce
+is no window in which a PR contributes an entry, and **the `repo: hygiene` gate does not enforce
 this** - it checks citations, so it will happily pass an entry the policy forbids.
 
 **The one edit a PR may make is correcting a factual error in text already there** (astubbs#198 is
@@ -536,7 +537,7 @@ Nothing lints commit messages, so all of this is on you.
 - **Open PRs from the template and complete its checklist honestly.**
   `.github/PULL_REQUEST_TEMPLATE.md` is NOT auto-applied when a PR is created non-interactively
   (e.g. `gh pr create -R astubbs/parallel-consumer --body-file`), so base the body on it and resolve
-  every box: check it `[x]`, or mark it `N/A - <reason>`. The `PR Checklist` gate fails a
+  every box: check it `[x]`, or mark it `N/A - <reason>`. The `repo: hygiene` gate fails a
   human-authored PR when the checklist is missing entirely *or* any box is left unchecked without an
   `N/A`, so dropping the template is not a bypass. Only real bot authors are exempt.
 - **Ask for the automated review when the PR is ready - it does not run on push.** Two routes, and
@@ -584,6 +585,11 @@ between two of *your own* commands. Work only under `.claude/worktrees/<name>`, 
 none does. Commit with `git -C <worktree> commit ...` spelled as a **literal path, not a variable**:
 the pre-commit hook reads the command before the shell expands it, and refuses a `-C "$W"` rather
 than gating a tree the command never named (`.claude/hooks/pre-commit-gate.sh` owns the why).
+**Name the tree on EVERY commit, not just the first** - a bare `git commit` resolves against the
+session root, which is some *other* worktree. Do not lean on having `cd`-ed there earlier: the
+shell's working directory is **not reliably** carried between commands (it survives some and not
+others, and when it resets you are in a different worktree, not an error). A leading literal
+`cd <worktree> &&` on the commit itself works as well as `-C`.
 
 **Reaching for `git checkout <branch>` is the tell that you are in the wrong directory** - and it is
 how the rule gets broken silently. Git refuses to check out a branch another worktree already holds,

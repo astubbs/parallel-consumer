@@ -96,6 +96,14 @@ contained.
 This is a convenience, not the record. `CHANGELOG.adoc` and the commit log remain the source of
 truth, and a missing label never makes a release wrong - it makes it harder to audit.
 
+## Groom the notes before you decide what the release waits on
+
+Run the vetting sweep in [`docs/grooming.md`](grooming.md) first. The release is gated on the bugs
+that are already open, and `docs/inflight/` is where those are recorded - a note nobody has re-read
+since it was written is as likely to describe a fixed defect as a live one. The sweep's last output
+is the gating list, in `docs/inflight/process-candidate-ranking.md`; that is what the "is it ready?"
+question is answered from.
+
 ## Post the drafted issue responses before you freeze the section
 
 `docs/inflight/issue-response-<NNN>.md` files accumulate as PRs land - each one written by whoever
@@ -150,7 +158,7 @@ it - and a human should re-apply it before freezing:
   PRs from one sequence. The file is in the issue-reference gate's `EXEMPT_PATHS` for this reason -
   everywhere else, [`docs/issue-references.md`](issue-references.md) applies.
 
-## The `PR Checklist` changelog gate is a different, narrower check
+## The `repo: hygiene` changelog gate is a different, narrower check
 
 `.github/scripts/changelog-ref-gate.js` fails a human PR that adds a `CHANGELOG.adoc` bullet under
 `Breaking`, `Improvements`, `Fixes` or `Examples` without an explicit `/issues/NN` link. **Do not

@@ -2,7 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: crash -->
-
+<!-- inflight-vetted: 2026-09-07 - the behaviour the note describes is unchanged at HEAD: `ProducerManager#commitOffsets` still catches `ProducerFencedException` from `sendOffsetsToTransaction` and rethrows it wrapped in `PCInternalRuntimeException`, which still ends the instance, and astubbs#225 is still OPEN. One rung of the dated 2026-09-03 stack header has since moved - astubbs#426 is MERGED and `producerConfig` is on `ParallelConsumerOptions` - while astubbs#410 and astubbs#420 are still OPEN, which is why the plan document and `ProducerFactory` still do not resolve on master -->
 
 ## In flight as a stack of three PRs (2026-09-03)
 

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: process -->
+<!-- inflight-vetted: 2026-09-07 - re-read the code behind every item: `bin/lib/docs-shape.mjs` still picks `index.baseline` unconditionally and `[...cluster.liveRefs].sort()[0]` otherwise, and still groups with the imported `inflightGroupOf`; `unreadableRefs` is read only by `formatRank` in `bin/lib/views.mjs` (and `rank.mjs`), not by `formatFind` or `formatStranded`; and `docs show` still resolves its path with `args.filter(...)[0]` in `bin/lib/docs-commands.mjs`. The `candidate` relation is still absent and `parseRegister`'s indentation assumption still unenforced -->
 
 What is still open about `bin/inflight.mjs rank` once it has landed. The design and the alternatives
 are in `docs/plans/2026-09-03-002-feat-inflight-rank-backlog-view-plan.md`; the reasoning behind each

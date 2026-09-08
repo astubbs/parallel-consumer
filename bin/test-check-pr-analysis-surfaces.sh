@@ -134,5 +134,69 @@ else
 fi
 rm -rf "$d4"
 
+echo
+echo "=== the unreadable-surface listing must keep up with the workflow's job names ==="
+
+# The `SURFACES THIS SCRIPT CANNOT READ` listing filters check runs by name, and a check run's name
+# IS a job's `name:`. So that regex is a hand-maintained copy of names owned by
+# .github/workflows/maven.yml, and its failure mode is silent: rename, fold or un-fold a job and the
+# row simply stops appearing - nothing goes red, and a reader cannot tell "no summary to read" from
+# "we stopped looking". It has happened three times now: `racerd` outlived the job that became
+# `static: infer`; astubbs#457 folded PIT into `scan: repo` and dropped the `Mutation` alternative;
+# astubbs#463 un-folded PIT into its own job and the alternative was needed again.
+#
+# So this arm does not restate that list of names - restating it in a second place is the same
+# hand-maintenance one file further on. It READS each name out of the workflow, keyed by the job id,
+# and asserts the subject's pattern still matches it. Rename the job and this goes red with nobody
+# editing the test; delete the job and the extraction fails loudly rather than passing over nothing.
+#
+# It is a static assertion where every arm above is end-to-end, for one reason: the filtering happens
+# inside `gh --jq`, so a `gh` faked on PATH would have to reimplement jq to exercise it, and a fake
+# that knows the pattern would be testing itself. The invariant the line encodes is testable without
+# the plumbing; the plumbing is one `gh api` call.
+#
+# Only maven.yml jobs are in the table, because only their `name:` is the check-run name verbatim.
+# The regex's other two alternatives are not maven.yml jobs, and neither matches any check run on a
+# PR head today: the quarantine lane's job is named `tests` (`Quarantine Lane` is the WORKFLOW name,
+# which the check-runs API does not return), and `deps: whole-tree CVE scan` is a `schedule`-only job
+# since the CVE fold. Left alone here rather than asserted - deciding their fate is not this test's.
+workflow="$(cd "$(dirname "$0")/.." && pwd)/.github/workflows/maven.yml"
+
+# The subject's own pattern, read from the subject. Extracted rather than copied for the same reason
+# the names are: a copy is a third place to maintain.
+pattern="$(sed -n 's/.*select(.name | test("\([^"]*\)")).*/\1/p' "$subject")"
+if [ -z "$pattern" ]; then
+    printf 'FAIL: could not find the check-name pattern in %s - has the surface-3 line changed shape?\n' "$subject"
+    fail=$((fail + 1))
+fi
+
+# `  <job>:` opens a job, `    name: "..."` names it, and the next `  <job>:` ends it.
+job_name() {
+    awk -v key="  $1:" '
+        $0 == key { in_job = 1; next }
+        in_job && /^  [A-Za-z0-9_-]+:$/ { exit }
+        in_job && /^    name: / { sub(/^    name: /, ""); gsub(/^"|"$/, ""); print; exit }
+    ' "$workflow"
+}
+
+for job in scan mutation static; do
+    name="$(job_name "$job")"
+    if [ -z "$name" ]; then
+        printf 'FAIL: no job `%s` with a `name:` in %s - the job was renamed or removed, so decide\n' "$job" "$workflow"
+        printf '      whether its surface still needs listing rather than deleting this line\n'
+        fail=$((fail + 1))
+        continue
+    fi
+    if [ -n "$pattern" ] && grep -qE "$pattern" <<< "$name"; then
+        printf 'ok:   `%s` ("%s") is still matched by the listing pattern\n' "$job" "$name"
+        pass=$((pass + 1))
+    else
+        printf 'FAIL: the `%s` job is named "%s" in %s, which the listing pattern "%s" does NOT\n' \
+            "$job" "$name" "$workflow" "$pattern"
+        printf '      match - its job summary has silently dropped out of check-pr-analysis-surfaces\n'
+        fail=$((fail + 1))
+    fi
+done
+
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

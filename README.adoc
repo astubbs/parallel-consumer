@@ -1084,10 +1084,12 @@ The distinction between the two lists below is deliberate, because it is what th
 
 *Verified against a real broker:* an open transaction is invisible at `read_committed` while a `read_uncommitted` reader sees it; a `read_committed` consumer is blocked at the first still-open transaction rather than filtering around it; an aborted or timed-out transaction never becomes visible; a crash before commit leaves neither the results nor the source offset, and the replay commits them together with each result present exactly once; and if one `send` in a `pollAndProduceMany` result set fails terminally - for example a record over `max.request.size` - none of that result set becomes visible.
 
-*Verified in-process, against the lock and options machinery with a mocked producer:* all parallel workers share one bulk transaction; no record is produced whose source offset is excluded from the transaction being committed; processing is blocked for the duration of the commit lock; and the commit interval default changes when transactional mode is selected.
+*Verified in-process, against the lock and options machinery with a mocked producer:* all parallel workers share one bulk transaction; no record is produced whose source offset is excluded from the transaction being committed -- *on the periodic commit path, but see the exception below*; processing is blocked for the duration of the commit lock; and the commit interval default changes when transactional mode is selected.
 These are real proofs of PC's own logic, but no broker takes part in them - so read them as statements about what PC does, not about what a cluster observed.
 
 Each claim in both lists has a negative control that was observed to fail: the mechanism it guards was deliberately broken and the test went red for the stated reason.
+
+NOTE: One documented exception to the two revoke-path guarantees above: a revocation asks the control thread to drain and commit and waits for it, bounded by `commitLockAcquisitionTimeout`. If that wait expires unserved, the revocation declines and the rebalance is at-least-once for the revoked partitions, logged at WARN naming them. Every case the proofs and the broker-level rebalance check exercise is served.
 
 The terminally-failed-send case above used to leave a *partial* result set visible to a `read_committed` consumer, silently, because a producer callback threw and pre-empted the Kafka client's own transition of the transaction into an abortable state.
 It was found by these tests and fixed; the test that found it is now the regression test.

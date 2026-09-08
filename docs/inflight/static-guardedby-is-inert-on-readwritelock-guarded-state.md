@@ -3,6 +3,7 @@
 <!-- inflight-type: register -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - the annotation limitation this register exists for is unchanged: `error_prone_annotations` is still `provided` in the root pom, main code still carries only two `@GuardedBy`, and neither `RetryQueue` nor `ProducerManager` can be annotated. Two follow-on claims corrected against the tree - `removeAll`'s fix is now a guard on the caller's list rather than a deletion, and `config/infer-known-findings.txt` no longer holds any `RetryQueue` identity, `RetryQueueIterator` included -->
 
 `@GuardedBy` is now writable in main code - `error_prone_annotations` is declared at `provided`
 scope in the root pom, and Error Prone's check fires at ERROR on a plain monitor. **On a
@@ -51,13 +52,15 @@ defect.
 ## The live one is FIXED; what remains is the annotation limitation
 
 `removeAll`'s off-lock `unique.isEmpty()` fast path is gone, and `size()`/`isEmpty()` now take the
-read lock. Deleted rather than moved inside the lock: the loop is already idempotent per key, so the
-guard only ever saved one uncontended lock acquisition on an empty queue while costing a JMM
-violation on a work-selection path.
+read lock. Deleting the fast path outright was the *first* fix and its cost argument was wrong; the
+shipped version guards on `toRemove.isEmpty()` instead - the caller's own freshly built list, shared
+with no other thread - and `removeAll`'s own comment carries the corrected reasoning about how often
+that lock is actually taken. Read it there rather than here.
 
-Three identities retired from `config/infer-known-findings.txt` - `RetryQueue.size`, `.isEmpty`,
-`.removeAll`. The four `RetryQueueIterator` entries remain: they are the separate `closed` field
-defect, named in `docs/refactoring.md`.
+`config/infer-known-findings.txt` now carries no `RetryQueue` identities at all: the three this fix
+retired (`size`, `isEmpty`, `removeAll`) and the four `RetryQueueIterator` ones have both gone. The
+separate `closed`-field defect those four described is still named in `docs/refactoring.md`, so it is
+tracked without a ratchet entry.
 
 **What is NOT claimed, then or now:** that the stale entry reached duplicate delivery.
 `getNumberOfFailedWorkReadyToBeRetried` counts work "ready to be retried but not inflight yet", so

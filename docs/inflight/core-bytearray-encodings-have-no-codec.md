@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: refactor -->
+<!-- inflight-vetted: 2026-09-07 - both constants are still in `OffsetEncoding` (`L` and the compressed pair), `OffsetSimultaneousEncoder` still carries the commented-out encoder with its `there does not seem to be an advantage over` javadoc, `EncodedOffsetPair#getDecodedIncompletes` still routes both to `handleUnreadableMetadata`, and `decodeBody` still has no arm for either. The wire-format decision is still untaken -->
 <!-- post-merge: checked-begin -->
 
 Two `OffsetEncoding` constants reserve magic bytes that nothing can produce and nothing can read.

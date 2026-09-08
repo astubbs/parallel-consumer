@@ -2,7 +2,7 @@
 
 How to fix a reference that no longer resolves, in a document whose claims are fixed. AGENTS.md
 carries the rule that produces durable citations in the first place - cite a greppable anchor, never
-a `file:line`, a form the repo already relies on in `.github/workflows/pr-checklist.yml`, whose
+a `file:line`, a form the repo already relies on in `.github/workflows/repo-hygiene.yml`, whose
 todo-index entries are "keyed by marker TEXT, not line number". This is what to do about the ones
 written before that rule, and about targets that have since moved, been renamed or been deleted
 outright.
@@ -61,8 +61,8 @@ An anchor nobody ran is a `file:line` with extra steps.
 
 ## The path is checked; the anchor is not
 
-**`bin/check-file-refs.sh` fails a cited repo path that does not exist**, and the `PR Checklist`
-workflow runs the same module - `.github/scripts/file-ref-gate.js`, unit tested by its self-test, so
+**`bin/check-file-refs.sh` fails a cited repo path that does not exist**, and the `repo: hygiene`
+gate runs the same module - `.github/scripts/file-ref-gate.js`, unit tested by its self-test, so
 the local and CI answers cannot drift. It replaces the sentence that used to close the section
 above: "nothing in CI checks any of this, so the only thing standing between a reader and a
 confidently wrong pointer is the author having run it." That was true, and it cost what it looks

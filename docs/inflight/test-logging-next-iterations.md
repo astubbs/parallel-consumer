@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - still true: none of the three has landed - no CyclicBufferAppender anywhere in the tree, logback-silos.xml still carries errors.log/warnings.log with no forced-vs-unforced split (PCRetriableException.isPresentIn is still only reached from the two processing-path sites), and astubbs#333 is still OPEN -->
 
 The siloed streams landed on 2026-08-28 as a first cut ([`docs/logging.md`](../logging.md) owns the
 why). Three things it deliberately did not do, each of which has a specific trigger rather than a

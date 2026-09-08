@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - re-read against the tree and the action: `report.js` in astubbs/duplicate-code-cross-check still only `console.log`s a rejected review comment with no summary-comment fallback, and `maven.yml` still runs `dups: clones` (pinned v1.1.1) as a step inside `scan: repo` -->
 
 <!-- post-merge: checked-begin -->
 `dups: clones` found a real clone on astubbs#267, failed the build for it, and **could not post it**.
@@ -32,7 +33,8 @@ was **eight days older** than the clone it was supposed to describe.
 
 ## Why nobody noticed
 
-A red `dups: clones` with no comment is indistinguishable, at a glance, from the other red ticks a
+A red `dups: clones` (since the `scan: repo` fold, a red step inside that check) with no comment is
+indistinguishable, at a glance, from the other red ticks a
 long-running PR accumulates. The finding is one line inside a job log nobody has a reason to open,
 because the tool's contract is that it comments.
 

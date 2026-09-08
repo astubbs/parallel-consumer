@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-vetted: 2026-09-07 - all four mechanisms re-confirmed in the tree: the `for (var wc : workContainerBatch)` catch loop still calls `onUserFunctionFailure` on every container, `DEFAULT_STATIC_RETRY_DELAY` is still a flat `Duration.ofSeconds(1)`, `makeBatches` still partitions the shard scan in offset order, `runUserFunctionInternal` still declares `intermediateResults` and returns it empty, and `git grep TerminalFailureReaction origin/master` still matches only docs. astubbs#189 is OPEN with no comments, so the reporter is still unanswered. Removed the delete-when section per docs/inflight/AGENTS.md; none of its three conditions is met -->
 
 
 Mirror of [confluentinc issue #887](https://github.com/confluentinc/parallel-consumer/issues/887).
@@ -107,8 +108,3 @@ Nothing above is a promise about dates. Do not claim the manifest is close; only
 - **`confluentinc#915` batch construction strategy.** It changes what a batch contains on first
   construction; bisection and the manifest change what it contains on retry, and bisection has to
   respect shard boundaries. The two collide at ordering. Jitter touches neither.
-
-## Delete when
-
-The jitter go/no-go is recorded, its rung has shipped or been declined, and astubbs#189 carries the
-answer to the reporter.

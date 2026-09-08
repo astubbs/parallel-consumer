@@ -43,8 +43,8 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * <p>
  * And the SEND path as a detection site, which is the other half: a terminally failed send poisons the open
  * transaction without invalidating the producer, and nothing aborted it before close. See
- * {@link PoisonedTransactionCondition}, and {@code docs/inflight/bug-wedged-after-poisoned-transaction.md} for the
- * wedge these cases close.
+ * {@link PoisonedTransactionCondition}, and {@code docs/inflight/bug-poisoned-transaction-not-aborted-while-running.md}
+ * for the wedge these cases close - the note that described it was folded into that one on 2026-09-08.
  */
 @Timeout(30)
 class ProducerManagerDetectionTest {

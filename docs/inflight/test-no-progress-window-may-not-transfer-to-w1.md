@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - still true and still unsettled: the calibration asymmetry is unchanged in the tree (ProgressProbe.NO_PROGRESS_WINDOW is still 30s and TAIL_SLACK still 500, AbstractRevokeUnderWorkScenario still calls withNoProgressWindow(Duration.ofSeconds(60)), ChaosChurnStormIT still takes the default), and no replay with -Dchaos.diagnoseStallRecovery has been recorded against any seed in the table. bin/inflight.mjs codecov test churnStormMeetsSlosAndBalancesLedger shows 10 recent passes, which does not refute a one-in-twenty rate and the tool warns the page is bounded -->
 
 Two chaos detectors have now been found asserting a timing bound that the scenario's own disturbances
 legitimately cross - `CLASS2_STALL` (demoted to an observation) and `REBALANCE_DWELL` (disarmed in
@@ -21,6 +22,7 @@ for it either:
 | Torture soak 2026-08-29, cycle 51 (`bin/torture-overnight.sh`) | `fleet consumed count stuck at 97386/100000 for 30s (bound 30s)` | **`87978223167568`** |
 | Torture soak 2026-08-29, cycle 166 | `fleet consumed count stuck at 97297/100000 for 30s (bound 30s)` | **`106062481479157`** |
 | PR lane, hosted runner, 2026-09-02 - astubbs/parallel-consumer#414 at `810a8b3ac` (a workflow-only branch: no Java differs from master) | `fleet consumed count stuck at 95209/100000 for 30s (bound 30s)` | **`2512758007437016849`** <!-- post-merge: checked - a PR number and a sha are durable; the row reads the same after the merge --> |
+| PR lane, hosted runner, 2026-09-07 - astubbs/parallel-consumer#459 at `ebd5e9a82` (changes only the instance-stall detector; the fleet-level path is untouched, and the same test passed on the branch's previous head an hour earlier and on a dozen other branches that hour - `bin/inflight.mjs codecov test churnStormMeetsSlosAndBalancesLedger`) | `fleet consumed count stuck at 97614/100000 for 30s (bound 30s)`, 50s into the run, [job 101613435463](https://github.com/astubbs/parallel-consumer/actions/runs/34079778694/job/101613435463) | **`8637977624689145046`** |
 <!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; named here as the instrument that produced these runs, not as a file in this tree -->
 
 **The soak gives this line its first RATE, and its first control arm.** `NO_PROGRESS` killed

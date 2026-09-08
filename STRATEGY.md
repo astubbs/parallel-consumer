@@ -216,12 +216,45 @@ throws from `onCompletion`, which pre-empted Kafka's own `maybeTransitionToError
 transaction un-abortable. Both affected claims - C7 `PRODUCE_MANY_ALL_OR_NONE` and C2
 `ALL_OR_NONE_PER_SOURCE_OFFSET` - were `REFUTED` and now read `PROVED`.
 
-**So the headline is defensible: exactly-once, massively parallel, optionally key-ordered.** Every
-documented guarantee in the register is proved or attributed, and none is refuted - twelve `PROVED`
-with observed controls, one `KAFKA_GUARANTEE` that is Kafka's to keep, and one `COVERED_NO_CONTROL`
-(the commit-lock timeout failing fast) which is **attributed to an existing test rather than
-re-proved**. That last one is the difference between "defensible" and "unqualified", and it is why
-this section does not say the latter.
+**The headline is defensible, and it now carries a stated exception.** Most documented guarantees in
+the register read `PROVED` with observed controls; one is a `KAFKA_GUARANTEE` that is Kafka's to keep,
+one is `COVERED_NO_CONTROL` (the commit-lock timeout failing fast) and is **attributed to an existing
+test rather than re-proved**. Two read `REFUTED` for four days in September 2026 - C9
+`NO_PRODUCE_WITHOUT_ITS_OFFSET` and C4 `OFFSET_AND_RECORDS_ATOMIC`, both on the revoke path and both by
+the same run - and read `PROVED` again once the revoke path was fixed, each with its RED and its GREEN
+observed. The register itself is the tally, not this paragraph; `TransactionalClaim` is where the
+statuses live and a count written here would be wrong the first time one moves.
+
+**C14 `RESULTS_EXACTLY_ONCE_UNDER_FAILURE` stayed `PROVED` throughout, and that was a decision rather
+than an oversight.** The route from the omitted offset to a duplicated result was sound - redelivery,
+re-produce, duplicate - but no duplicate was observed while the defect was open, and C14's own record
+is explicit that its RED and its GREEN were each seen rather than argued. Refuting it on reasoning
+would have made it the register's first argued status and broken the observed-versus-argued
+distinction that is the whole reason the register is worth more than prose. The broker-level rebalance
+reproduction that would have settled it was then run, on the fix branch, in both directions:
+`RebalanceEoSDeadlockTest` reads the output topic with a `read_committed` consumer after the revoked
+partitions return and fails on a repeated result, and against the old code it found three to five
+duplicated results in about a hundred and ten, five runs out of five, before reading zero five times
+out of five with the fix. It stays as the guard.
+
+**The one that was refuted, stated plainly rather than qualified away.** *"The system must prevent
+records from being produced to the brokers whose source consumer record offsets has not been included
+in this transaction"* held on the control-loop commit path, with the observed control that proved it,
+and did **not** hold on the revoke path: the revoke-time commit took the commit lock but never drained
+the work mailbox, and draining is the only thing that marks a partition dirty, so it could publish a
+transaction containing a record whose source offset it omitted - the output committed, the input not,
+and the next owner reprocessing it. Deterministic (red 5/5, no broker, no load), older than the work
+that found it, and published as refuted for four days rather than softened. The fix is a
+thread-ownership decision at a seam this project had patched four times and never restructured: in
+transactional mode the revoke callback now hands its commit to the control thread, whose sequence
+drains first, and waits - and the decline that was first proposed as the fix was itself refuted by
+experiment before any code was written, because a revoke that commits nothing leaves the output in the
+open transaction for the next commit to publish anyway
+(`docs/solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md`).
+
+This is what the register is for. It was written to fire against us, it has now done so twice - once
+on claims that were fixed, once on a claim that is open - and the value of that is lost the moment
+the finding is softened instead of published.
 
 **This is the first pass, not the finished job.** The suite covers the guarantees that are
 *documented* today; a chaos scenario for exactly-once under churn is deliberately deferred, and the

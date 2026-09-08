@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - still true and current (its last section is dated today): the diagnosis it records has landed in the tree - InstanceStallDetector now emits the non-gating INSTANCE_BUSY_IN_USER_CODE observation and reserves the violation for nobody-in-user-code, reads -Dchaos.instanceStallDumpAfterSeconds defaulting to the bound, and InstanceStallProbeIT.takesOneThreadDumpPerFiringInTheDefaultConfiguration pins the count. ChaosChurnStormIT still sets CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS and still never sets useCooperativeAssignor, so the opening argument holds; all three cited sibling notes still resolve. The torture-harness anchors are covered by the file-refs N/A comments already in the note -->
 
 **Commit mode: `PERIODIC_CONSUMER_ASYNCHRONOUS`** (`ChaosChurnStormIT`, verified in source). This is
 why the file exists separately, and it is the most important fact in it:
@@ -622,11 +623,27 @@ CI firing on record fits: instance 42, 14 and 0 were live members with work out 
 
 **What is still open, 2026-09-07.**
 
-- **The detector cannot tell workers-busy from workers-idle, and that is the gap to close.** A
-  member holding work with every worker running user code is saturated, not stalled; one holding
-  work with a free worker is PC's problem. The pool's active count, or the `-PC-<id>` worker
-  threads' states, is the discriminator - the dump reads it by hand today. Until it does, an
-  `INSTANCE_STALL` red on this scenario is not evidence of a PC defect.
+- **The detector could not tell workers-busy from workers-idle - closed the same day.** A member
+  holding work with any worker running user code is working, not stalled: one long function
+  freezes the count, and PC's backpressure counts records rather than workers, so a free worker
+  beside a busy one proves nothing. Only a member holding work with NO worker in user code has
+  results with nobody, and that is PC's. `ProgressProbe` now reads the `-PC-<id>` worker threads'
+  own stacks (a worker between tasks sits in `ThreadPoolExecutor.getTask`) and asks before it
+  counts: a working member re-arms the clock on every sample and is reported past the bound as a
+  non-gating `INSTANCE_BUSY_IN_USER_CODE` observation; the `INSTANCE_STALL` violation is reserved
+  for nobody-in-user-code. The first cut accused a member with any idle worker, and the seed
+  `1630088991107806597` replay shows why that is wrong: its instance 5 was dumped with eight
+  workers in the dwell, two parked between tasks, one incomplete offset, and its count frozen -
+  a working member with spare hands and nothing to hand them, which that rule would have accused
+  at the bound. (The commit that made the change cited nine-of-ten threads instead; that was a
+  miscount in the summarising script, and every dump in both replays shows ten. The correction
+  stands on instance 5.) `InstanceStallProbeIT` pins both halves and the count. So an `INSTANCE_STALL` red is
+  once again a claim about PC - and every sighting recorded above predates the rule, so read them
+  as busy members. One has been replayed under it: seed `6077035105695` drew its long tail - 198
+  diagnostic samples, the same count as the CLASSIFIED run, instance 0 frozen for six and a half
+  minutes with up to 88 records out - the run the old rule failed as a wedge. Under the rule it
+  stayed green, dumped instances 0, 10 and 12 at 20s with all ten workers in the dwell, and
+  reported instance 0 once as `INSTANCE_BUSY_IN_USER_CODE` past the bound.
 - **Whether the amplification is a product concern.** At-least-once plus eager rebalances plus
   records longer than the rebalance period multiplies load by design; PC already skips stale work at
   dispatch. The cooperative-sticky assignor is the standard answer, and the control arm below
@@ -705,4 +722,79 @@ the engine; which detector fired on those two was not checked.
 A first version of this entry, written before astubbs/parallel-consumer#435's classification reached this
 branch, read the frozen partitions as the runner-load stagnation shape. That was an inference from the
 autopsy peaks, not from the detector, and it is withdrawn here: the detector was the zombie-member arm.
+<!-- post-merge: checked-end -->
+
+## Sighting, 2026-09-07 - the `ZOMBIE_MEMBER` arm again, 4% over its bound
+
+<!-- post-merge: checked-begin -->
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` failed on the `Chaos Pain Suite 4/4` shard
+of astubbs/parallel-consumer#468, on the equality change, with the same arm as the fourth sighting
+above:
+<!-- post-merge: checked-end -->
+
+    [chaos-probe] VIOLATION: ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-1645296212' dwelling in
+    PreparingRebalance for 15s (bound 15s) - a member is not answering the rebalance
+    (protocol-unresponsive)
+    [chaos-probe] peaks: maxRebalanceDwell=15632ms maxDrainDuration=11664ms
+                         maxLagStagnation=50717ms maxInstanceStall=0ms
+
+**Replay seed `1053013618367208111`** (`CHAOS W1 churn storm: seed=1053013618367208111`).
+
+**Recorded, not diagnosed, and the branch is a weak suspect on a stated mechanism rather than on
+"looks unrelated".** That PR's commit deletes `WorkContainer.equals`/`hashCode` so equality becomes
+identity. Nothing on the rebalance path consults either: the shard's conditional removal is
+`Map.remove(key, value)` whose semantics are unchanged from the `Residency` token the same branch
+carried through a green run of this suite one commit earlier, and the only other collection of
+containers in the engine (`ExternalEngine.holdingDispatchPermit`) was already identity-keyed. The
+one behaviour that does move is the per-scan `slowWork` `HashSet`'s de-duplication, which feeds a
+rate-limited warning and nothing else.
+
+`maxInstanceStall=0ms` also separates this from the line diagnosed above: no member was stalled
+holding work. It is the rebalance dwell alone, over its bound by 632ms of 15000 - the tail shape the
+`ci-disabled-jobs-and-runner-load.md` confound predicts, not a wedge.
+
+## Sighting, 2026-09-08 - the outer wait again, with nothing gating and the Class 2 observation firing all over the topic
+
+<!-- post-merge: checked-begin -->
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` errored after 345.8s on the `Chaos Pain
+Suite 4/4` shard of astubbs/parallel-consumer#471, at head `33906f782`. The failure is the outer
+Awaitility wait, not a detector:
+
+    failure: ConditionTimeoutException: Condition with alias 'all messages consumed under churn'
+    didn't complete within 5 minutes
+    [chaos-probe] peaks: maxRebalanceDwell=4499ms maxDrainDuration=13543ms
+                         maxLagStagnation=150030ms maxInstanceStall=0ms
+
+**Replay seed `984595272001816748`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=984595272001816748
+
+Job: <https://github.com/astubbs/parallel-consumer/actions/runs/34178467617/job/101912551516>.
+
+**Same signature as the 2026-09-03 sighting - and this one is not weak evidence.** That entry says
+outright that its cancelled job makes the timeout unattributable. This job ran to completion on a
+normal PR shard, so the five-minute wait genuinely expired with the fleet still short of its records.
+
+**No gating detector fired.** What fired is `CLASS2_STALL/LAG_STAGNATION`, fifty-one times, over
+twenty-three distinct partitions of the run's one topic - the observation that stopped gating on
+2026-08-25 because it cannot separate a busy fleet from a wedged one. `maxInstanceStall=0ms`
+separates this from the worker-saturation line diagnosed above on 2026-09-07: no member was accused,
+because no member was frozen while holding work. So the two instruments this file has spent a month
+calibrating both read clean, and the run still failed.
+
+**That combination is exactly the per-shard gap this file already names**, and the observation's own
+text names it too: watermarks stagnant across most of the topic while every instance keeps completing
+is covered by nothing that gates - `test-per-shard-liveness-has-no-gate.md` owns the question. This
+is the first seed on the line that pairs a clean per-instance reading with a real outer-wait failure,
+which makes it the better replay target than the ones captured for the saturation line: replay it with
+`-Dchaos.diagnoseStallRecovery=true` and the per-instance telemetry, and if the fleet is completing
+throughout while the aggregate never reaches the count, the gap is demonstrated rather than argued.
+
+**Recorded, not diagnosed, and the branch is argued against on a mechanism.** The merge that produced
+this head changes documentation plus one javadoc block in `CommitResponseTimeoutSoakIT`. The branch as
+a whole (`git diff origin/master...33906f782`) touches no main code at all: its Java is that one new
+scenario, which carries the `soak` tag and is excluded from the integration lane by this branch's own
+pom and wrapper fix, plus one unit test in `QuarantinedAnnotationContractTest`. Nothing it carries is
+loaded by the chaos lane, so it cannot reach `ChaosChurnStormIT`.
 <!-- post-merge: checked-end -->
