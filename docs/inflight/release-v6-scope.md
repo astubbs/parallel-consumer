@@ -240,11 +240,20 @@ box means the v6 action for that line is done, not that the defect is closed:
   changed. astubbs#487 carries the flag that reaches the gate's DEBUG line, the gate's operands on
   the soak's progress line, one knob per arm, the accounting gap as a characterisation test, and
   the working note. confluentinc#833's flat processed-records counter is this state.
-  **For the release note:** a poison-record workload with no retry bound stalls intake for good,
-  silently - the latch is exported only as a paused-partition count and logged nowhere. Owner's
-  call whether the cheap interim, a warning when the gate latches with nothing retiring, is
-  v6-sized; it changes no semantics and is written up as fix shape in the note, not built. Box
-  closes when astubbs#487 merges.
+  **For the release note, and it is stronger than "a poison-record workload":** the stall does not
+  need a high failure rate. Under retry-forever the held poison population only grows; each poison
+  record occupies a worker for the function's duration once per retry delay, so workers saturate
+  once the population reaches about `maxConcurrency` times the retry delay over the function
+  duration - at that run's defaults, on the order of a hundred and forty records over the life of
+  the instance - and only then can the unparked count climb past the gate's threshold and latch it.
+  So any long-lived instance with no user-side terminal handling and any poison at all gets there
+  eventually, silently, and for good: the latch is exported only as a paused-partition count and
+  logged nowhere. That is the best explanation yet for confluentinc#809 and confluentinc#833's flat
+  processed-records counters, and a question the fork can put to those reporters. The
+  low-rate arm that turns this arithmetic into a measurement is queued on the same agent
+  (2026-09-08, reviewer feedback). Owner's calls: whether to ask those reporters, and whether the
+  cheap interim - a warning when the gate latches with nothing retiring, no semantic change - is
+  v6-sized. Box closes when astubbs#487 merges.
 
 **Resolved or reassigned since this list was written - kept so the release note can say what was ruled out:**
 
