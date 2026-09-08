@@ -1,68 +1,55 @@
-# astubbs#177 / astubbs#175: `Timeout waiting for commit response` - never reproduced, and nobody owns it
+# astubbs#175: `Timeout waiting for commit response` - never reproduced, and nobody owns it
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: the astubbs#175 half stands - still OPEN, still unreproduced, and a grep of `docs/plans/` and `docs/solutions/` still finds nothing targeting it. Two things are stale. (1) astubbs#177 itself was CLOSED as completed on 2026-09-01 alongside astubbs#399, with no closing comment naming either candidate mechanism - the outcome this notes "Do not" section forbids, so the note now describes a closed issue in its own title. (2) Candidate 3 is closed: astubbs#29 and astubbs#57 are both MERGED, and `PCMetrics.removeQuietly` now catches every exception from `meterRegistry.remove` under a stated never-throws teardown contract, so "neither has merged, so master still carries the exposure" is false. Shrink to astubbs#175 plus the astubbs#204 discriminator -->
+<!-- inflight-vetted: 2026-09-08 - applied: shrunk to the astubbs#175 half; candidate 3 closed against the tree, and the astubbs#177 closure cross-referenced to the note that owns attribution rather than restated; checked: astubbs#175 is still OPEN and still unreproduced, a grep of `docs/plans/` and `docs/solutions/` still finds nothing targeting it, astubbs#29 and astubbs#57 are MERGED, and `PCMetrics.removeQuietly` now catches every exception from `meterRegistry.remove` under a stated never-throws teardown contract -->
 
 **This file exists because the work had no home.** `bug-857-mirror-attributions-unconfirmed.md`
 correctly says the honest options are "reproduce and diagnose, or close on their own merits" - but it
 owns the *attribution* question, not the investigation, so "reproduce and diagnose" has sat as a
-sentence nobody could pick up. Two field reports have now been open for months with no reproduction
-attempt: a grep of `docs/plans/` and `docs/solutions/` finds nothing targeting either. The only
+sentence nobody could pick up. The field report has been open for months with no reproduction
+attempt: a grep of `docs/plans/` and `docs/solutions/` finds nothing targeting it. The only
 adjacent record is `unforceable-trigger-commit-lock-timeout-2026-08-07.md`, which is a *test* flake
-on the same lock and unrelated to the reporters' scenario.
+on the same lock and unrelated to the reporter's scenario.
 
-## The two reports
+**The filename carries astubbs#177 for history only.** That issue was closed on 2026-09-01 without
+the reproduction or the closing comment this note asked for;
+[`bug-857-mirror-attributions-unconfirmed.md`](bug-857-mirror-attributions-unconfirmed.md) owns that
+outcome and records it once. Renaming this file would break every citation of it, so the name stays
+and the subject is astubbs#175.
 
-- **astubbs/parallel-consumer#177** (confluentinc/parallel-consumer#833) - PC runs for a while, then
-  exits with `InternalRuntimeException: Timeout waiting for commit response PT30S`, with **~50% of
-  records failing across 1000 keys**.
-- **astubbs/parallel-consumer#175** (confluentinc/parallel-consumer#809) - the same exception,
-  sporadically, in production on GKE. 22 comments upstream; reported still present on the newest
-  version at the time.
+## The report
 
-## Why they are not closed, in one paragraph
+**astubbs/parallel-consumer#175** (confluentinc/parallel-consumer#809) - `InternalRuntimeException:
+Timeout waiting for commit response PT30S`, sporadically, in production on GKE. 22 comments upstream;
+reported still present on the newest version at the time.
 
-Both were attributed to astubbs/parallel-consumer#100 - an unhandled `RebalanceInProgressException`
+## Why it is not closed, in one paragraph
+
+It was attributed to astubbs/parallel-consumer#100 - an unhandled `RebalanceInProgressException`
 killed the broker-poll thread, and that thread is the only producer of commit responses, so every
 waiter then times out. The story fits. It is not the only story that fits: `maybeDoCommit()` is
 called **only** from the poll loop, so ANY reason that loop stops servicing the queue produces the
 identical symptom. **A dead poller and a wedged-but-alive poller are indistinguishable from
 outside**, and astubbs#100 only fixed the dead one.
 
-## A THIRD candidate arrived 2026-08-19 - and it is not a fix for these reports
-
-<!-- post-merge: checked -->
-astubbs#29 hardened metrics teardown, which had been able to kill the broker-poll thread: meter
-de-registration runs inside `onPartitionsRevoked`, on the poll thread inside `poll()`, and the meter
-registry is usually the USER'S, so an exception from third-party code escaped the rebalance callback
-and took out the only producer of commit responses. Every later commit then blocks until it times
-out - **the exact symptom these two reports describe**.
-
-**This does not close either report, and must not be recorded as doing so.** The mechanism requires a
-user-supplied `MeterRegistry` that throws on `remove`; PC's default when none is configured is an
-empty `CompositeMeterRegistry`, a no-op that cannot throw. Nothing in either report says the reporter
-configured metrics at all, let alone a registry that failed. Attributing on "the mechanism fits"
-is precisely the error corrected on astubbs/parallel-consumer#44, which sat attributed to
-<!-- post-merge: checked -->
-astubbs/parallel-consumer#29 for months in a commit mode where that fix cannot run.
-
-So the candidate list is now three, all producing one trace:
+## The candidate list, and where each stands
 
 1. **Poller died** from an unhandled `RebalanceInProgressException` - astubbs#100, landed.
-2. **Poller wedged but alive** - uncharacterised, and still nobody's.
-<!-- post-merge: checked -->
-3. **Poller died from a throwing metrics registry** - found on astubbs#29 and landing on
-   astubbs#57, which owns `PCMetrics`; **neither has merged**, so master still carries the exposure.
-   Only reachable by a
-   user who configured one.
-
-**The useful part is that candidate 3 is self-identifying from now on.** With astubbs#204's change,
-a poller death releases the waiter carrying the poller's own exception - so if this was ever the
-cause, a future occurrence names the metrics failure in the cause chain rather than presenting as a
-bare PT30S timeout. Combined with the fix, that means this candidate should now either disappear or
-announce itself.
+2. **Poller wedged but alive** - uncharacterised, and still nobody's. This is the open one.
+3. **Poller died from a throwing metrics registry** - **closed.** Meter de-registration runs inside
+   `onPartitionsRevoked`, on the poll thread inside `poll()`, and the meter registry is usually the
+   USER'S, so an exception from third-party code escaped the rebalance callback and took out the only
+   producer of commit responses - the exact symptom this report describes. astubbs#29 and astubbs#57
+   have both merged, and `PCMetrics.removeQuietly` now swallows everything `meterRegistry.remove`
+   throws under a stated never-throws teardown contract, so master no longer carries the exposure.
+   It was never a fix for this report in any case: the mechanism needs a user-supplied
+   `MeterRegistry` that throws, and nothing in the report says the reporter configured metrics at
+   all. Attributing on "the mechanism fits" is precisely the error corrected on
+   astubbs/parallel-consumer#44, which sat attributed to
+   <!-- post-merge: checked -->
+   astubbs/parallel-consumer#29 for months in a commit mode where that fix cannot run.
 
 ## What would discriminate, and why it is easier now than it was
 
@@ -73,12 +60,14 @@ exception as the cause. So on current master the two cases have finally separate
 - timeout arrives with **no** poller exception, PT30S elapsed -> the poller is **wedged but alive**,
   which is a defect nobody has characterised
 
-That is the whole experiment. It cannot retro-diagnose the original reports, but it means a
+That is the whole experiment. It cannot retro-diagnose the original report, but it means a
 reproduction on current code answers the question immediately rather than needing thread dumps.
 
 ## A concrete reproduction to try, because "reproduce it" is not a plan
 
-The astubbs#177 reporter's shape is unusually specific and looks buildable:
+The shape below comes from the now-closed astubbs#177 report, not from astubbs#175, and it is kept
+because it is unusually specific and looks buildable - it is the cheapest route to the wedged-poller
+question either report poses:
 
 - **1000 keys**, so `KEY` ordering with a wide key space
 - **~50% of records failing**, which is the part no existing test does - a user function that fails
@@ -98,7 +87,8 @@ whether an instance is wedged while it happens. **Do not start a parallel harnes
 ## Do not
 
 - Do not attach a closing keyword from any PR on present evidence - see
-  `bug-857-mirror-attributions-unconfirmed.md`, which owns that rule.
+  `bug-857-mirror-attributions-unconfirmed.md`, which owns that rule and records what it cost when it
+  was ignored.
 - Do not treat a release shipping as confirmation.
 - Do not close as unreproducible without *having tried*, and without naming both candidate mechanisms
   in the closing comment.

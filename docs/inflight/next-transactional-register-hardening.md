@@ -76,7 +76,7 @@ open branch.
 `BrokerIntegrationTest.closeRegisteredTestClients` catches `Exception` per closeable and logs a
 warning. `register()` takes PC instances, not just Kafka clients.
 
-The wedge recorded in `bug-wedged-after-poisoned-transaction.md` has exactly one visible symptom: the
+The wedge recorded in [`bug-poisoned-transaction-not-aborted-while-running.md`](bug-poisoned-transaction-not-aborted-while-running.md) has exactly one visible symptom: the
 instance "dies only at close". That signal is now routed to `log.warn` for every subclass. The
 tolerance is genuinely needed for the two arms that deliberately break a producer - it should not be
 the default for the ~29 classes that will start using `register()`.

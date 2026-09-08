@@ -3,41 +3,36 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: data-loss -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-vetted: 2026-09-07 - PROPOSED shrink: the primary defect is live and the code says so - `removeStaleWorkContainersFromShard` still removes by KEY, so a fresh container the controller put at that offset since `next()` returned is what leaves. But the mechanism sentence and the secondary-harm block are both stale. The sweep no longer calls `iterator.remove()`; since astubbs#336 (3e668a448) it calls `removeWorkAtOffset(entry.getKey())` and accounts for the object actually evicted, so the "counter one high, permanently, `drain()` never reaches `transitionToClosing()`" claim in the astubbs#373 block is closed - as the notes own final paragraph already says, contradicting its own middle. Shrink to the lost-record half and drop the counter half -->
+<!-- inflight-vetted: 2026-09-08 - applied: shrunk to the lost-record half; the mechanism sentence now names the code as it stands and the astubbs#373 counter/stall block is removed as closed by astubbs#336 (3e668a448), which the note's own last paragraph already contradicted; checked: `ProcessingShard.removeStaleWorkContainersFromShard` walks `workMap.entrySet()` and calls `removeWorkAtOffset(entry.getKey())`, accounting for the object actually evicted, and its comment names this note as the owner of what is left -->
 
-`ProcessingShard.removeStaleWorkContainersFromShard` walks `entries` with an entry-set iterator and
-calls `iterator.remove()` on each stale occupant. **`ConcurrentSkipListMap`'s iterator removes by
-key, unconditionally** - it is not a remove-if-still-mapped-to-this-value - so whatever is at that
-offset when `remove()` lands is what leaves the shard, not necessarily what `next()` returned.
+`ProcessingShard.removeStaleWorkContainersFromShard` walks `workMap.entrySet()` and, for each stale
+occupant, calls `removeWorkAtOffset(entry.getKey())`. **That removes by key** - it is not a
+remove-if-still-mapped-to-this-value - so whatever is at that offset when the removal lands is what
+leaves the shard, not necessarily what the iterator returned.
 
 The two sides genuinely run on different threads: the sweep is reached from
 `PartitionStateManager.onPartitionsRemoved` / `onPartitionsAssigned`, i.e. inside the rebalance
 callback on the **broker-poll** thread, while the racing writer - `addWorkContainer`'s
 stale-replacement branch - runs on the **controller**.
 
-    poller     : entry = iterator.next()            -> (100, staleWc); isWorkContainerStale -> true
-    controller : addWorkContainer(freshWc)          -> entries.put(100, freshWc), accounting settled
-    poller     : iterator.remove()                  -> evicts freshWc, by key
-    poller     : uncount(entry.getValue())          -> releases staleWc, which holds nothing
+    poller     : entry = next()                      -> (100, staleWc); isWorkContainerStale -> true
+    controller : addWorkContainer(freshWc)           -> workMap.put(100, freshWc), accounting settled
+    poller     : removeWorkAtOffset(100)             -> evicts freshWc, by key
 
-**The primary harm is the lost record**, not the counter: `freshWc` is gone from the shard while
-`PartitionState` still carries its offset as incomplete, so nothing selects it again until the
-partition is re-polled. That is the same fresh-replacement-at-the-same-offset class as
+**The harm is the lost record.** `freshWc` is gone from the shard while `PartitionState` still
+carries its offset as incomplete, so nothing selects it again until the partition is re-polled. That
+is the same fresh-replacement-at-the-same-offset class as
 [`docs/solutions/logic-errors/stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md`](../solutions/logic-errors/stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md),
 reached from the other side.
 
-<!-- post-merge: checked-begin -->
-**The secondary harm changed direction on astubbs#373, which is why this is written down now.**
-Before that PR the branch decremented unconditionally and the replacement branch incremented not at
-all, so this interleave left the shard counter one *low* - and the floor-at-zero clamp resynced it
-whenever the shard drained. astubbs#373 deleted the clamp and made the replacement branch count its
-fresh entry, so the same interleave now leaves the counter one *high*, permanently, for a container
-that is no longer resident. High is the worse direction: `ShardManager.workIsWaitingToBeProcessed()`
-stays true, so `AbstractParallelEoSStreamProcessor.drain()` never reaches `transitionToClosing()`.
-<!-- post-merge: checked-end -->
+**The accounting half is closed and is not this note's subject.** The sweep no longer calls
+`iterator.remove()`: since astubbs#336 (`3e668a448`) it removes through the map's own return value,
+so the population retirement and the claim release both follow the object that actually left, and the
+caller is handed that object rather than the one the sweep inspected. What is left open is the
+eviction of the fresh record itself.
 
 **Why it was not fixed there.** There is no identity-keyed removal on the map to reach for.
-`entries.remove(key, value)` and `entrySet().remove(entry)` both compare with `equals`, and
+`workMap.remove(key, value)` and `entrySet().remove(entry)` both compare with `equals`, and
 `WorkContainer.equals` is topic/partition/offset only - so the fresh container compares *equal* to
 the stale one it replaced, which is the same reason `ProcessingShard.includeInSelection` compares
 with `!=`. A get-then-remove guarded by reference identity is still a check-then-act. Closing this
@@ -48,16 +43,10 @@ redesign rather than a review edit - the same call that produced astubbs#373 its
 **Decision needed:** whether the sweep should hold the shard against concurrent replacement, or
 whether `addWorkContainer` should refuse to replace an occupant the sweep has already claimed.
 Either way it wants a deterministic white-box test first: take the entry-set iterator, call
-`next()`, run `addWorkContainer` for a fresh container at that offset, then call `iterator.remove()`
-and assert both what is resident and that `getCountOfWorkAwaitingSelection()` agrees with the units
-actually held.
+`next()`, run `addWorkContainer` for a fresh container at that offset, then let the sweep remove by
+key and assert which container is resident afterwards.
 
 Adjacent and NOT this: the inline stale eviction that removed a container from its shard while
 leaving its retry-queue entry behind - an unpaired removal between two structures, same
 neighbourhood, different defect. It is fixed and its note retired; the trace is at
 `git show a80f2bbd1:docs/inflight/bug-retry-queue-orphaned-by-inline-stale-removal.md`.
-
-The sweep described above now accounts for what the map actually gave up rather than for the entry
-it inspected - the population retirement and the claim release both follow the evicted object, and
-the caller is handed it - so what is left open here is the eviction of the fresh record itself,
-not the accounting around it.
