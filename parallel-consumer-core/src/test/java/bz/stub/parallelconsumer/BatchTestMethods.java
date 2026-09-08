@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
 import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
@@ -13,15 +14,19 @@ import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import me.tongfei.progressbar.ProgressBar;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import pl.tlinkowski.unij.api.UniLists;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
@@ -136,6 +141,24 @@ public abstract class BatchTestMethods<POLL_RETURN> {
     }
 
 
+    /**
+     * Asserts the EXACT number of batches the records arrive in, which only holds while every record sits on its
+     * own shard - hence {@link KafkaTestUtils#sendRecordsWithDistinctKeys(int)} below rather than
+     * {@link KafkaTestUtils#sendRecords(int)}.
+     * <p>
+     * {@code sendRecords} draws its keys with replacement. Under {@link ProcessingOrder#KEY} two records drawn onto
+     * one key share a shard, a shard yields at most one record per work-retrieval round, and the same five records
+     * then arrive in four batches instead of three - against an {@code expectedNumOfBatches} computed from the
+     * record count alone. It is not a timing failure and no re-run makes it less likely: it is decided entirely by
+     * a draw the test never inspects. Keeping the exact-count assertion therefore means removing the randomness
+     * from the input, not loosening the assertion.
+     * <p>
+     * The KEY-ordering behaviour this can no longer exercise - records on one key never sharing a batch - is
+     * covered by {@link #keyOrderNeverBatchesTwoRecordsOfOneKey()}.
+     * <p>
+     * Measured and written up in
+     * {@code docs/solutions/test-flakiness/a-randomised-key-draw-decided-a-batch-count-the-test-computed-from-the-record-count-2026-09-08.md}.
+     */
     @SneakyThrows
     public void simpleBatchTest(ParallelConsumerOptions.ProcessingOrder order) {
         int batchSizeSetting = 2;
@@ -145,7 +168,7 @@ public abstract class BatchTestMethods<POLL_RETURN> {
 
         setupParallelConsumer(batchSizeSetting, ParallelConsumerOptions.DEFAULT_MAX_CONCURRENCY, order);
 
-        var recs = getKtu().sendRecords(numRecsExpected);
+        var recs = getKtu().sendRecordsWithDistinctKeys(numRecsExpected);
         List<PollContext<String, String>> batchesReceived = new CopyOnWriteArrayList<>();
 
         //
@@ -175,6 +198,66 @@ public abstract class BatchTestMethods<POLL_RETURN> {
     }
 
     public abstract void simpleBatchTestPoll(List<PollContext<String, String>> batchesReceived);
+
+    /**
+     * Two records that share a key never share a batch under {@link ProcessingOrder#KEY} - whatever the batch size.
+     * <p>
+     * A shard is per key and an order-restricted shard hands out at most one record per work-retrieval round
+     * ({@code ProcessingShard.getWorkIfAvailable}, grep {@code isOrderRestricted}), so three records on one key
+     * need three batches to themselves and the run takes at least four batches to deliver five records at a batch
+     * size of two. That is correct behaviour and it is why {@code ceil(records / batchSize)} is not a valid
+     * expectation for an input whose key distribution the test does not control - see {@link #simpleBatchTest}.
+     * <p>
+     * <b>Core only, deliberately.</b> The batching and shard arithmetic under test is the core engine's and is
+     * identical whichever module drives it; what the wrapper modules add is their own poll signature, which
+     * {@link #simpleBatchTest} already covers in each of them.
+     */
+    @SneakyThrows
+    public void keyOrderNeverBatchesTwoRecordsOfOneKey() {
+        final int batchSizeSetting = 2;
+        final String collidingKey = "one-key-three-records";
+        final List<String> keys = UniLists.of(collidingKey, collidingKey, collidingKey, "second-key", "third-key");
+
+        setupParallelConsumer(batchSizeSetting, ParallelConsumerOptions.DEFAULT_MAX_CONCURRENCY, KEY);
+        getPC().setTimeBetweenCommits(ofSeconds(1));
+
+        var recs = getKtu().sendRecordsWithKeys(keys);
+        List<PollContext<String, String>> batchesReceived = new CopyOnWriteArrayList<>();
+
+        //
+        simpleBatchTestPoll(batchesReceived);
+
+        // wait on the RECORDS, not on a batch count - the batch count is what this test is measuring
+        waitAtMost(defaultTimeout).alias("every record delivered")
+                .failFast(() -> getPC().isClosedOrFailed())
+                .untilAsserted(() -> assertThat(batchesReceived.stream().mapToLong(PollContext::size).sum())
+                        .isEqualTo(keys.size()));
+
+        assertThat(batchesReceived)
+                .as("batch size")
+                .allSatisfy(receivedBatchEntry -> assertThat(receivedBatchEntry).hasSizeLessThanOrEqualTo(batchSizeSetting))
+                .as("all messages processed")
+                .flatExtracting(PollContext::getConsumerRecordsFlattened).hasSameElementsAs(recs);
+
+        for (var batch : batchesReceived) {
+            var keysInBatch = batch.getConsumerRecordsFlattened().stream()
+                    .map(ConsumerRecord::key)
+                    .collect(Collectors.toList());
+            assertThat(keysInBatch)
+                    .as("no batch may hold two records of one key under KEY ordering - batch %s", keysInBatch)
+                    .doesNotHaveDuplicates();
+        }
+
+        assertThat(batchesReceived)
+                .as("%s records on one key need %s batches to themselves, so ceil(%s / %s) cannot be the expectation",
+                        3, 3, keys.size(), batchSizeSetting)
+                .hasSizeGreaterThanOrEqualTo(3);
+
+        assertThat(getPC().isClosedOrFailed()).isFalse();
+
+        baseTest.awaitForCommit(keys.size());
+        getPC().closeDrainFirst();
+    }
 
     @SneakyThrows
     public void batchFailureTest(ParallelConsumerOptions.ProcessingOrder order) {
