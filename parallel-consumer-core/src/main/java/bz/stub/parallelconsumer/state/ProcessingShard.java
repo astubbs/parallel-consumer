@@ -154,9 +154,10 @@ public class ProcessingShard<K, V> {
             //
             // KNOWN GAP, not fixed here: a container leaving a shard has to be taken out of the retry queue
             // too, and this branch cannot do it - the shard holds no reference to the RetryQueue, which is
-            // passed in per-call to getWorkIfAvailable and nowhere else (on astubbs/parallel-consumer#431's
-            // branch also to removeStaleWorkContainersFromShard, so that clause goes stale when it lands). A
-            // displaced container that was parked for retry therefore leaves its queue entry behind.
+            // passed in per-call to getWorkIfAvailable and nowhere else. A displaced container that was parked
+            // for retry therefore leaves its queue entry behind, and ShardManager.purgeDepartedRetryEntries()
+            // is what collects it: residency is reference identity, so a displaced container is resident in no
+            // shard from the moment its replacement takes its offset.
             //
             // THAT ENTRY IS NOT PERMANENT, and an earlier version of this comment said it was. RetryQueue keys
             // by topic, partition and offset alone (WorkContainerKey.of), never by container identity, and
@@ -368,11 +369,12 @@ public class ProcessingShard<K, V> {
 
                 if (isWorkContainerStale(workContainer)) {
                     // last-resort sweep, for a container that went stale without either epoch-change sweep having
-                    // reached it - it still has to be retired and released like every other departure, and taken
-                    // out of the retry queue like ShardManager.removeStaleContainers() does. Leaving the queue
-                    // entry behind orphans it forever: nothing else removes an entry whose container is no longer
-                    // in any shard, and the workable figure the load gate reads subtracts a parked-for-retry
-                    // count that would then include a record the population no longer does.
+                    // reached it - it still has to be retired and released like every other departure. The queue
+                    // removal below is on the CONTROLLER thread (this whole method is), so it may wait for the
+                    // write lock, and it is kept because it costs one already-uncontended acquisition to retire
+                    // the pair in one step. It is no longer the only thing standing between this container and a
+                    // permanent orphan: ShardManager.purgeDepartedRetryEntries() collects an entry whose
+                    // container is resident in no shard, on the pass after this one.
                     log.debug("shard {} there are still stale work container, need to remove container : {}", this, workContainer);
                     WorkContainer<K, V> removed = removeWorkAtOffset(workContainer.offset());
                     if (removed != null) {
