@@ -845,8 +845,10 @@ The refutation above stands and is not weakened by this: the retry-queue write l
 mechanism behind this test's residual failures. What has changed is only that the lock defect itself
 is fixed, by a different design from the one measured here - the poll thread no longer touches the
 retry queue at all, rather than declining its lock. astubbs/parallel-consumer#431 is superseded, so a
-reader following that number from the prediction above will find an open, dead PR; the write-up
-carrying both designs is
+reader following that number from the prediction above will find a CLOSED PR. Its
+`RetryQueueRebalancePathTest` - which the 2026-09-07 stamp calls a false positive "because it lives on
+astubbs#431" - now exists on master under the same name, so that signal resolves for a different
+reason than the stamp gives. The write-up carrying both designs is
 [`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
 
 **Nothing here should be re-run against the new fix expecting a different answer.** The control arm

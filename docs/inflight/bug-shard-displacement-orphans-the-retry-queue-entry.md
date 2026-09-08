@@ -91,9 +91,11 @@ That does not close the note, and the difference is worth keeping straight:
   from a queue it holds no reference to, and the three design options below are still the options.
   What has changed is the cost of doing nothing, which was already "bounded misdirection" and is now
   a tick of it.
-- **The clause about astubbs/parallel-consumer#431's branch is dead.** That PR is superseded, not
-  merged; `removeStaleWorkContainersFromShard` never took the queue, and no rebalance-path code
-  touches the queue at all now. Both designs:
+- **The clause about astubbs/parallel-consumer#431's branch is dead, and so is the vet marker's
+  reading of it.** That PR is CLOSED as superseded, never merged; `removeStaleWorkContainersFromShard`
+  never took the queue, and no rebalance-path code touches the queue at all now. The 2026-09-07 stamp
+  above says the clause "has not gone stale" *because* that PR was open - true on its date, and the
+  reason it is corrected here rather than edited there. Both designs:
   [`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
 
 **Production reachability is still not established**, which is the open question this note names and

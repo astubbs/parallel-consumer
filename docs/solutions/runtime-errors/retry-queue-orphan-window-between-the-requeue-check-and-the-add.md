@@ -213,8 +213,9 @@ to the queue. Demonstrated during this work's defect-class sweep; tracked in
 Everything above is left as written; this section says which of its claims have stopped describing
 the code, and why the reasoning still holds.
 
-**astubbs/parallel-consumer#431 is superseded, not merged.** The paragraphs above describe what it
-"must add" and what happens "when astubbs#431 lands with the paired removal"; neither will happen.
+**astubbs/parallel-consumer#431 is CLOSED as superseded, never merged.** The paragraphs above describe
+what it "must add" and what happens "when astubbs#431 lands with the paired removal"; neither will
+ever happen, and the arms they promise to invert stay exactly as written.
 The design that shipped for that defect takes the poll thread off the retry queue entirely rather
 than teaching it to decline - both designs, and why the first was correct and still lost, are in
 [`retry-queue-write-lock-on-the-rebalance-path.md`](retry-queue-write-lock-on-the-rebalance-path.md).
