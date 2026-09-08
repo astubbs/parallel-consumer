@@ -31,9 +31,9 @@ independent candidate - it is candidate 3's downstream stage, and closing that s
 safe against a bootstrap reset without tying the snapshot and the bound to one state generation:
 `bootstrapPhase` has exactly one write site, on the first line of
 `PartitionState.maybeTruncateBelowOrAbove`, reached from `maybeRegisterNewPollBatchAsWork` *before*
-its `addNewIncompleteRecord` loop; `dirty` can only be set by `onSuccess`, which needs an offset
-registered by that loop; and reassignment always builds a fresh instance rather than reopening the
-old one. The reset window and the dirty-encode window are therefore temporally disjoint on any given
+its `addNewIncompleteRecord` loop; a partition can only become dirty through `onSuccess`, which needs
+an offset registered by that loop; and reassignment always builds a fresh instance rather than
+reopening the old one. The reset window and the dirty-encode window are therefore temporally disjoint on any given
 instance. The full dossiers - each candidate's call paths, harms, control arms and the refutation
 argument in four steps - are at
 `git show f318e9434:docs/inflight/bug-torn-read-family.md`.

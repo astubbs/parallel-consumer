@@ -117,7 +117,8 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * by head-of-line blocking, it has stopped.
  * <p>
  * <b>And a stalled instance cannot reach the exception being hunted.</b> Only
- * {@code PartitionState#onSuccess} calls {@code setDirty} - {@code onFailure} in the same file is an
+ * {@code PartitionState#onSuccess} calls {@code recordCompletion} ({@code setDirty}, before dirty
+ * became derived) - {@code onFailure} in the same file is an
  * explicit no-op - and the control loop gates on {@code shouldTryCommitNow} =
  * {@code isTimeToCommitNow() && wm.isDirty() && !isRebalanceInProgress.get()}. With no success
  * anywhere, nothing is dirty, no commit request is enqueued, and

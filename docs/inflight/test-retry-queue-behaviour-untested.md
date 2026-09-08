@@ -32,3 +32,21 @@ as *records retried late or never*, not as an exception), and the counters it fe
 A wrong answer here is quiet.
 
 Surfaced while reviewing astubbs/parallel-consumer#31; nothing left here is that PR's doing.
+
+## Update 2026-09-08 - two sentences above name a mechanism that has since gone
+
+The two surviving bullets are unchanged and still open; this corrects only the reasons given for the
+other two being closed, because both named code that no longer exists.
+
+- The opening paragraph credits `RetryQueueRequeueWindowTest` with covering "the ordering
+  `removeWorkFromShardFor` depends on". That method no longer touches the retry queue at all - it
+  runs on the broker-poll thread inside a rebalance callback, and the queue's write lock is unbounded
+  and fair, so it removes from the shards only. There is no ordering left for a test to depend on.
+- "The shard/queue consistency gap after a stale removal is gone with the defect behind it" is still
+  true, and now doubly so: `ShardManager.purgeDepartedRetryEntries()` collects, once per control-loop
+  pass on the controller thread, any retry-queue entry whose container is resident in no shard. The
+  inline sweep's paired `retryQueue.remove` is kept, but it is no longer the only thing standing
+  between a departed container and a permanent orphan.
+
+`RetryQueueRebalancePathTest` is the class that asserts both. The design, and the one it superseded:
+[`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
