@@ -19,6 +19,17 @@ where a thread dump caught the poll thread BLOCKED on the `commitCommand` monito
 on a laptop opened the window zero times - on the eager scenario as well as the cooperative one. The
 chaos suite finds this defect by luck; the probe finds it by construction.
 
+**Stronger reason, 2026-09-08, and it does not depend on whether the window opens: those six seeds
+could never have answered the question they were recorded for.** Each capture asks whether the poll
+thread is still found BLOCKED on that monitor. astubbs#29 replaced the monitor with a
+`ReentrantLock`, and a thread waiting on a lock parks rather than blocking - so with the deadlock
+*deliberately restored* at `6aab3ff5a`, all 80 poll-thread diagnoses read `WAITING` on a
+`ReentrantLock$NonfairSync` and not one read BLOCKED. Match a capture by the method pair
+(`tryCommitOffsetsOnRevoke` under `onPartitionsRevoked`) and the holder (`pc-control`), never by
+thread state or lock type. [`bug-857-family.md`](bug-857-family.md)'s `## 2026-09-08` section owns
+the grid; the seed `2867310537409227917` named below was replayed on the fix arm the same day and
+came back **void** - green with zero declines, so the window never opened.
+
 ## Two settings that silently destroy the experiment
 
 - **Do not pass `-Pci`.** `surefire.forkCount` is 1 by default and `1C` under that profile, and

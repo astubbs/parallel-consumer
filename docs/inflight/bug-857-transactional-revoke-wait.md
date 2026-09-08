@@ -2,7 +2,8 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
-<!-- inflight-vetted: 2026-09-08 - applied: re-premised on astubbs#466, which removed the unbounded spin; the open question is now the bound itself, held by astubbs#408, and the four stale citations are repaired (the "no open PR" claim, the dead `fix/bound-revoke-transaction-wait` branch, the renamed fencing note, and the two file:line citations); checked: `AbstractParallelEoSStreamProcessor.commitOnRevokeViaTheControlThread` is what `onPartitionsRevoked` reaches in transactional mode and its wait is `getCommitLockAcquisitionTimeout()`, the `while (isTransactionCommittingInProgress()) sleep` spin is gone from the source, astubbs#408 is OPEN as a draft on `fix/803-bound-transactional-revoke-wait`, and `fix/bound-revoke-transaction-wait` no longer exists on origin -->
+<!-- post-merge: checked - a dated vetting record, past tense against 2026-09-08, naming no branch whose deletion falsifies it -->
+<!-- inflight-vetted: 2026-09-08 - applied: re-premised on astubbs#466, which removed the unbounded spin; the open question is now the bound itself, held by astubbs#408, and the four stale citations are repaired (the "no open PR" claim, the dead `fix/bound-revoke-transaction-wait` branch, the renamed fencing note, and the two file:line citations); checked: `AbstractParallelEoSStreamProcessor.commitOnRevokeViaTheControlThread` is what `onPartitionsRevoked` reaches in transactional mode and its wait is `getCommitLockAcquisitionTimeout()`, the `while (isTransactionCommittingInProgress()) sleep` spin is gone from the source, astubbs#408 was the open draft holding it on that date, and `fix/bound-revoke-transaction-wait` no longer existed on origin -->
 
 **Commit mode: `PERIODIC_TRANSACTIONAL_PRODUCER` only.** This is the discriminator - the defect below
 <!-- post-merge: checked -->
@@ -19,14 +20,16 @@ the control thread runs its ordinary lock-flush-drain-commit-fence sequence, and
 **bounded by `commitLockAcquisitionTimeout`**. A commit already in flight queues behind rather than
 being waited on or declined, and on timeout the commit is declined at WARN.
 
+<!-- post-merge: checked-begin - names astubbs#408 (a PR reference, permanent and resolvable) and
+     states the measurement as a thing that happened, with no claim about any branch's existence or
+     any PR's open/draft state -->
 **So the open question is the bound, not the absence of one.** The five-minute default is the same
 bound the inline commit's own write-lock acquisition already had - no regression - but
 confluentinc#803's complaint is precisely that such a bound burns `max.poll.interval.ms`, and a
-callback that overruns it evicts the member. That question is astubbs#408's
-(`fix/803-bound-transactional-revoke-wait`, open as a draft), along with its
-`RebalanceEoSDeadlockTest` amendment, which accepts "declined" as resolved - the delegated commit
-satisfies the unamended assertion that committed offsets advance inside the callback. Whichever of
-the two lands second resolves the collision on this one method.
+callback that overruns it evicts the member. astubbs#408 measured exactly that overrun and left the
+bound alone: see "The measurement, and what it does not settle" below. The collision on
+`tryCommitOffsetsOnRevoke` is resolved - astubbs#466 landed first and astubbs#408 took its design.
+<!-- post-merge: checked-end -->
 
 Two different locks are both called "commit lock", which is part of why this was conflated: the
 `commitCommand` monitor guarding consumer commit execution, and the producer transaction lock behind
@@ -126,7 +129,43 @@ still matters - a maintainer confirmed the report rather than merely triaging it
 make this issue unique. It was re-triaged off
 <!-- post-merge: checked -->
 astubbs#29 and onto this block on 2026-08-18. Its `pr-available` label was removed at the time
-because no open PR addressed it; astubbs#408 now does.
+<!-- post-merge: checked - a dated fact plus a PR citation, both permanent -->
+because no open PR addressed it; astubbs#408 was opened against it afterwards.
+
+## The measurement, and what it does not settle
+
+<!-- post-merge: checked-begin - every sentence is a measurement or a decision recorded in the past
+     tense against a PR number, which stays resolvable after that PR closes and its branch is deleted -->
+`Revoke857TransactionalWaitProbeIT.revokeMustNotWaitOnATransactionPastTheMaxPollInterval` is the
+instrument, built on astubbs#408 to make the overrun observable. Against astubbs#466's delegated
+commit it reports **19.2s of callback time out of a 20s in-flight dwell, against a 10s
+`max.poll.interval.ms` budget, 5/5** - so the callback still holds the poll thread for as long as the
+transaction runs, and a transaction longer than `max.poll.interval.ms` still evicts the member. That
+is confluentinc#803's complaint, reproduced against the current design.
+
+**What astubbs#466 did fix, and the probe confirms:** the callback is no longer *starved across
+successive* transactions. The spin the confluentinc#548 code used measured **79s of callback time
+from the same 20s dwell**, because a 1s commit interval let the control thread re-take the lock as
+fast as it dropped it. Bounded delegation removes that multiplication; it does not remove the wait.
+
+**What is not settled, and is deliberately not decided here.** Bounding the delegated wait needs a
+value, and PC cannot read the consumer's own `max.poll.interval.ms` - so the bound needs either a new
+option or a derivation, and the timeout fallback astubbs#466 already has (decline at WARN, with the
+deferred-duplicate cost named) is what it would fall back to. That is a design choice with a
+user-visible option surface, and it belongs to the owner rather than to a reconciliation pass.
+
+**Declining unconditionally is NOT the answer, and this is the trap worth not re-deriving.**
+astubbs#408 originally declined the revoke commit on the poll thread. astubbs#466 refuted that by
+experiment: a revoke that commits nothing leaves its produced output in the open transaction for the
+*next* commit to publish without the matching offset - the same duplicate through a different door.
+Declining is the deadline fallback, logged at WARN, never the fix. Two arms in `ProducerManagerTest`
+carry that result.
+
+**Held for the owner's call, on astubbs#408's branch:** the three `ProducerManager` revocation lock
+helpers, their unit tests, and the `DeclineCountingProducerManager` instrument. They count a decline
+the transactional path no longer makes, and they are the seam a bounded-wait-with-decline design
+would use.
+<!-- post-merge: checked-end -->
 
 ## The constraint any further bound has to respect
 

@@ -3,7 +3,7 @@
 <!-- inflight-type: register -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: stall -->
-<!-- inflight-vetted: 2026-09-08 - applied: retyped as a register, which is what it describes itself as; the revoke-path deadlock's mechanism section retired per this file's own criterion now that astubbs#29 has merged, the reproducer section replaced with what the rewritten test and its new sibling probe establish, and the fifth item's `withDiagnostic` claim corrected; checked: astubbs#29 is MERGED with its fix in `AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke` (`commitLock.tryLock()`), `Rebalance857CommitSyncDeadlockProbeIT` exists, `RebalanceEoSDeadlockTest`'s javadoc documents its transactional mode as deliberate (it guards confluentinc#541), `MultiInstanceRebalanceTest` passes a `describeFleet(allPCRunners)` supplier to `withDiagnostic`, and astubbs#119 plus the fourth and fifth items are still open -->
+<!-- inflight-vetted: 2026-09-08 - applied: retyped as a register, which is what it describes itself as; the revoke-path deadlock's mechanism section retired per this file's own criterion now that astubbs#29 has merged, the reproducer section replaced with what the rewritten test and its new sibling probe establish, and the fifth item's `withDiagnostic` claim corrected; checked: astubbs#29 is MERGED with its fix in `AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke` (`commitLock.tryLock()`), `Rebalance857CommitSyncDeadlockProbeIT` exists, `RebalanceEoSDeadlockTest`'s javadoc documents its transactional mode as deliberate (it guards confluentinc#541), `MultiInstanceRebalanceTest` passes a `describeFleet(allPCRunners)` supplier to `withDiagnostic`, and astubbs#119 plus the fourth and fifth items are still open. Re-vetted later the same day after the capture replays: PROPOSED closed for the revoke-path deadlock LINE only (not the register, and not astubbs#119) - its verification is now measured at `6aab3ff5a` by a one-term control arm on `Rebalance857CommitSyncDeadlockProbeIT`, and its instrument gates on every PR; checked `commitLock.tryLock()` and `commitOnRevokeViaTheControlThread` live in `AbstractParallelEoSStreamProcessor`, and `PollThreadStallDiagnosis` on the timeout path in `ConsumerOffsetCommitter`. Applied in the same pass: the six capture sections' closing "not replayed / still Unproven" claims, each of which was false in two directions -->
 <!-- post-merge: checked-begin - every astubbs#29 mention below states what its fix DOES (the AB-BA pair it replaces, the modes its cycle can close in, what its reproducer cannot settle), not that it is open; the three state claims that were here have been rewritten -->
 
 
@@ -76,6 +76,9 @@ timeouts; the fix failed none, and logged the contended-decline line throughout*
 open and the fix refused it. Method, the two settings that silently void the experiment, and the
 harness are in
 [`test-857-deadlock-ab-soak-harness.md`](test-857-deadlock-ab-soak-harness.md).
+**Re-run 2026-09-08 at `6aab3ff5a`**, because astubbs#466 changed the revoke path after that A/B was
+taken: fix 5/5 on both assignors with declines logged, one-term control 5/5 failing. The same run
+retires the six captures' replay question - see this file's 2026-09-08 section.
 
 **REPLAYING CAPTURED SEEDS DOES NOT REPRODUCE THIS DEADLOCK - stop trying.** Replayed locally, on both
 assignor arms, the captured seeds opened the window ZERO times. The chaos suite finds this defect by
@@ -1733,6 +1736,14 @@ reading whether the poll thread is still found `BLOCKED` on the same monitor, is
 would let astubbs#29 land on evidence rather than on argument. **Recorded as one observation, not a
 rate:** the seed has not been replayed, and nothing here says how often the cycle closes.
 
+**Replayed with the fix, 2026-09-08 - CLEAN, and the question this paragraph asks is retired.** Seed
+`7728704565782280867`, `ChaosRevokeUnderWorkKeyOrderIT`, at `6aab3ff5a`: passes, zero probe
+violations, `inFlight=0`, `consumed=251128`. The revoke fork ran 183 times (182 uncontended, 1
+decline), so the path executed and met contention once - unlike the 2026-08-31 replay, which logged
+no declines at all. **But a clean replay was never able to answer the question above**, and the
+control arm in this file's 2026-09-08 section is what proves that: with the deadlock deliberately
+restored, no dump reads `BLOCKED` on that monitor either.
+
 ## 2026-08-26, second capture: the same BLOCKED-on-monitor discriminator, on the COOPERATIVE arm
 
 **The section above closed with "Recorded as one observation, not a rate". This is a second
@@ -1802,6 +1813,16 @@ the only thing separating the truncated download from the complete one was `unzi
 [`docs/ci.md`](../ci.md) needs its own completeness check: test the archive before believing a grep
 that came back quiet.
 
+**Replayed with the fix, 2026-09-08 - green, and VOID for the same reason as the 2026-08-31
+cooperative replay.** Seed `2867310537409227917`, `ChaosRevokeUnderWorkCooperativeIT`, at
+`6aab3ff5a`: passes, zero violations, `consumed=250415`. But the revoke fork logged **54 uncontended
+acquisitions and 0 declines** - the window never opened, so the fix's contended branch did not
+execute and the green says nothing about it. This is the exact false negative the instrumentation
+hole was closed to make visible, working as intended: the absence is now *reported* rather than
+inferred. The cooperative arm's coverage is settled instead by the control-armed probe in this
+file's 2026-09-08 section, which forces the window open and runs the cooperative assignor
+explicitly.
+
 ## 2026-08-26, `NO_PROGRESS` on the branch that fixes the shard counter - a NEGATIVE result
 
 <!-- post-merge: checked-begin -->
@@ -1867,6 +1888,11 @@ happen rather than when somebody decides the rate matters.
 `AbstractParallelEoSStreamProcessor` line; the cycle is between the poll thread and `pc-control`
 over `commitCommand`. Neither seed here nor in the two captures above has been replayed.
 
+**Replayed with the fix, 2026-09-08 - NOT this seed, and deliberately so.** The two captures above
+were replayed clean; this one was not, because the replay cannot answer the question the captures
+ask - see this file's 2026-09-08 section, where a deliberately-restored deadlock produces no
+`BLOCKED`-on-monitor dump either. Spending a run here would buy a third uninformative green.
+
 <!-- post-merge: checked-end -->
 
 ## 2026-08-26, fourth capture: the discriminator fires on TWO PRs' chaos jobs minutes apart
@@ -1930,6 +1956,12 @@ no denominator - other chaos jobs in the same window were green. What this adds 
 not rare enough to need a hunt to see, and that the verification the first 2026-08-26 section asks
 for (replay a captured seed with astubbs#29's `tryLock()` applied, and read whether the poll thread <!-- post-merge: checked -->
 is still found `BLOCKED` on the same monitor) now has four seeds to choose from.
+
+**Replayed with the fix, 2026-09-08 - the verification named here has been done, by a control arm
+rather than by choosing one of these seeds.** The parenthesised experiment is retired: a
+deliberately-restored deadlock at `6aab3ff5a` produces no `BLOCKED`-on-monitor dump, so no seed
+could ever have answered it. This file's 2026-09-08 section carries the grid and the replacement
+fingerprint to match captures by.
 
 ## 2026-08-26, fifth capture: the DRAIN arm, and the first capture whose frames were re-resolved
 
@@ -1999,6 +2031,11 @@ still records its verification status as Unproven, and this capture does not cha
 Reading the replay line nearest the top of a chaos log picks the wrong seed. The failsafe artifact
 (`chaos-suite-reports-<n>`) names the failing class in one line - `failures="1"` is an attribute of
 the `testsuite` element - which is the route [`docs/ci.md`](../ci.md) already prescribes.
+
+**Replayed with the fix, 2026-09-08 - not this seed, and the sentence above is now wrong about what
+would settle it.** "Five seeds now exist for the verification" assumed a seed could answer it; it
+cannot, at any head carrying astubbs#29. The verification was done on the deterministic probe with a
+one-term control instead - this file's 2026-09-08 section.
 
 ## 2026-08-27: the `ZOMBIE_MEMBER` arm on the branch that rewrites the shard accounting - and why it is still not that branch
 
@@ -2225,6 +2262,13 @@ found `BLOCKED` on the same monitor. None has been replayed, and
 still records its verification status as Unproven. **A seventh capture of this signature is worth
 less than one replay of any of the six**, and this entry exists only because the seed would
 otherwise expire with the log.
+
+**Replayed with the fix, 2026-09-08 - and the bolded claim above is now the wrong trade.** A replay
+of any of the six is worth nothing either: the signature they share cannot be produced at any head
+carrying astubbs#29, deadlock or no deadlock. What settled it was one control arm on the
+deterministic probe, and the "still records its verification status as Unproven" sentence above is
+stale in the bargain - that write-up's verification moved on 2026-08-31 and moved again on
+2026-09-08. Both are in this file's 2026-09-08 section.
 
 ## 2026-09-02, `INSTANCE_STALL` fires a second time - and the first seed replay in this file comes back clean
 
@@ -2487,6 +2531,75 @@ change directly.
 among them. Enumerate the `INSTANCE_STALL/NO_WORK_COMPLETED` sightings on this class with
 `grep -n 'INSTANCE_STALL/NO_WORK_COMPLETED' docs/inflight/bug-857-family.md` rather than trusting a
 count written here.
+
+## 2026-09-08: the six captures are answered - by a control arm, not by a replay, and the question they asked is unanswerable
+
+**Every one of the six `BLOCKED`-on-monitor captures above closes by asking for the same experiment:
+replay this seed with astubbs#29's `tryLock()` applied, and read whether the poll thread is still
+found `BLOCKED` on the same monitor. That question cannot be answered by any run at any head
+carrying astubbs#29 - not because the deadlock is fixed, but because the signature it names can no
+longer be produced.** The monitor was an `AtomicBoolean`; a `ReentrantLock` replaced it; a thread
+waiting on a `ReentrantLock` parks rather than blocking. So the answer is "no BLOCKED frame" whether
+the cycle is closed or wide open, and six clean replays would have carried no information at all.
+
+**This is a measurement, not a reading of the code.** The deadlock was deliberately restored at
+`6aab3ff5a` - master plus everything through astubbs#466 - by the single term
+`commitLock.tryLock()` -> `commitLock.lock()`, and `Rebalance857CommitSyncDeadlockProbeIT` run
+against it. All five repetitions failed, producing **80** poll-thread diagnoses. Every one of them
+read `WAITING`, on `java.util.concurrent.locks.ReentrantLock$NonfairSync`, held by `pc-control`,
+through `tryCommitOffsetsOnRevoke` under `onPartitionsRevoked`. Not one read `BLOCKED`; not one
+named an `AtomicBoolean`. A fully present deadlock produces none of the captures' signature.
+
+**So match a future capture by the METHOD PAIR and the HOLDER, never by the thread state or the lock
+type.** `tryCommitOffsetsOnRevoke` (or `commitOffsetsThatAreReady`) beneath `onPartitionsRevoked`,
+with the lock held by the same instance's own `pc-control`, is the durable fingerprint. The fifth
+capture already warned that line numbers drift and the sixth proved it; this is the same lesson one
+level up - the *thread state* drifts too, and it drifted the moment the fix landed.
+
+**What the fix arm shows, on the same instrument and the same head:** eager 5/5 pass with 6
+revoke-path declines, cooperative 5/5 pass with 5 declines, zero commit-response timeouts in either.
+The declines are what make a green cell mean anything - they prove the window opened. This is the
+2026-08-31 A/B re-run at a head that A/B could not cover, because astubbs#466 changed the revoke
+path afterwards.
+[`../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md)
+**owns the full grid and is now the current verification status**; its "Unproven" section is
+explicitly superseded and kept only as the record of astubbs#29-as-draft.
+
+**Two further facts worth not rediscovering.** The JVM's own `findDeadlockedThreads()` does **not**
+see this cycle even with the deadlock fully present - every control verdict was `WAITING`, never
+`DEADLOCK` - because the other edge is the control thread waiting on `commitResponseQueue`, a
+`LinkedBlockingQueue.poll`, which is a queue wait and not a lock. And the discriminator that took all
+six captures, `PollThreadStallDiagnosis`, is main code on the commit-response timeout path: it is
+present in every run by construction, so a replay can never fail to be instrumented.
+
+**Two of the six seeds were replayed anyway, as falsification attempts, and they are the weaker
+half of this section.** Both at `6aab3ff5a`, with the always-on diagnostic and
+`-Dchaos.diagnoseStallRecovery=true`:
+
+| seed | scenario / arm | outcome | revoke fork | reading |
+|---|---|---|---|---|
+| `7728704565782280867` | `ChaosRevokeUnderWorkKeyOrderIT`, eager | pass, 0 violations, `inFlight=0` | 182 uncontended, **1 decline** | window opened once and the fix declined - the only seeded run in this family that has ever shown that |
+| `2867310537409227917` | `ChaosRevokeUnderWorkCooperativeIT`, cooperative | pass, 0 violations | 54 uncontended, **0 declines** | **VOID** - the window never opened, so the green is uninformative, exactly as on 2026-08-31 |
+
+The remaining four seeds were deliberately not run: a third green would buy nothing, and the control
+arm above is what carries the result. **The second row is the point of the pair** - one of two
+replays was void, which is the base rate this method has, and the only reason it is visible is the
+INFO-level logging of both branches of the revoke fork.
+
+**This file's standing "stop replaying seeds" paragraph is upheld and now has a second reason.** The
+head of this file already says a chaos seed drives the conductor's schedule and not the poll-versus-
+control interleaving, after the 2026-08-31 control-armed replay came back VOID
+([`test-857-revoke-under-work-sightings.md`](test-857-revoke-under-work-sightings.md)). The reason
+added here is stronger, because it does not depend on whether the window opens: even a *reproducing*
+replay could not print the signature the six captures ask about.
+
+**PROPOSED for closure: the revoke-path commit deadlock line.** Its mechanism section is already
+retired, its write-up is verified at today's head with a control arm, and its instrument gates on
+every PR. Nothing here proposes closing astubbs#119 - the "Does astubbs#119 close" section above
+still binds, and this register still holds open items that reproduce on trees carrying this fix.
+Owner-gated: this is a `stall` register, so an owner makes the call. The proposal is recorded in
+this file's `inflight-vetted` marker, which is where
+[`AGENTS.md`](AGENTS.md) -> "Vetting a note" says a proposal goes.
 
 ## Delete when
 

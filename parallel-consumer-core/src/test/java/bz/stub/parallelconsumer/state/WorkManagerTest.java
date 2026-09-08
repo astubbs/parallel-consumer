@@ -931,9 +931,18 @@ public class WorkManagerTest {
      * The load gate reads the conservation figure, so it has to agree with the shards' real contents rather than
      * with a counter that describes them - including in the revoke-a-parked-retry sequence that leaves the old
      * available-work counter high.
+     * <p>
+     * <b>It also pins the DIRECTION of the one-tick skew the revoke now leaves, which is the part that decides
+     * whether the change is safe.</b> A rebalance callback removes from the shards and leaves the retry-queue
+     * entry for {@code ShardManager.purgeDepartedRetryEntries()} to collect on the controller thread. Between
+     * the two, {@code inShards} has dropped and {@code parkedForRetry} has not, so {@code workable}
+     * ({@code inShards - parkedForRetry}) reads one LOW - it goes NEGATIVE here, from zero. Low is the safe
+     * direction and the only one worth asserting: {@code isSufficientlyLoaded()} is {@code workable > threshold},
+     * so a low figure fetches sooner. A HIGH reading would pause the poller with nothing to process, which is
+     * the confluentinc#857-family stall shape.
      */
     @Test
-    void theLoadGateAgreesWithTheShardsAfterARevocation() {
+    void theLoadGateReadsLowNotHighForTheTickAfterARevocation() {
         setupUnordered();
         registerSomeWork();
 
@@ -950,10 +959,22 @@ public class WorkManagerTest {
 
         assertConservationHolds("after revoking a partition holding a parked retry");
         assertThat(wm.getNumberOfWorkableRecordsInSystem())
-                .as("nothing is held any more, so the poller must not be told the pipeline is loaded")
+                .as("for this one tick the departed container's queue entry is still counted as parked while "
+                        + "the shards no longer hold it, so the figure reads LOW - which fetches sooner, never "
+                        + "the stall direction")
+                .isEqualTo(-1);
+        assertThat(wm.isSufficientlyLoaded())
+                .as("an empty system is never sufficiently loaded, and reading low cannot make it so")
+                .isFalse();
+
+        var ignoredWork = wm.getWorkIfAvailable(10);
+
+        assertThat(wm.getNumberOfWorkableRecordsInSystem())
+                .as("one controller pass collects the departed entry, and the figure settles at zero - the tick "
+                        + "is the whole of the skew's life")
                 .isZero();
         assertThat(wm.isSufficientlyLoaded())
-                .as("an empty system is never sufficiently loaded")
+                .as("still not loaded, now for the settled reason rather than the skewed one")
                 .isFalse();
     }
 

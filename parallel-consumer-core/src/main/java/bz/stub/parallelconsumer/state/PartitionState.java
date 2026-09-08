@@ -29,6 +29,7 @@ import org.apache.kafka.common.TopicPartition;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.utils.JavaUtils.*;
@@ -118,29 +119,95 @@ public class PartitionState<K, V> {
     private boolean bootstrapPhase = true;
 
     /**
-     * Cache view of the state of the partition. Is set dirty when the incomplete state of any offset changes. Is set
-     * clean after a successful commit of the state.
+     * How many records this partition has completed, ever. Monotone, and the <b>only</b> thing a completing
+     * thread touches to say the partition's state has moved on - see {@link #recordCompletion()}.
      * <p>
-     * {@code volatile} because it crosses threads with no other fence: written on the control thread
-     * ({@code onSuccess} via the mailbox), read on the broker-poll thread by the commit path's
-     * dirty-partition collection in the default {@code PERIODIC_CONSUMER_ASYNCHRONOUS} mode. As a plain
-     * field, jcstress measured the reader observing {@code dirty} set while {@code offsetHighestSucceeded}
-     * was still stale at ~1.4e-7 per sample even with the real surrounding {@code ConcurrentSkipListMap}
-     * accesses on both sides - a burnt commit cycle, which on a partition that then goes idle holds the
-     * committed offset back until the next rebalance. With only this flag volatile the anomaly was 0 in
-     * 4.29e9 samples with the outcome declared FORBIDDEN: the release store on the write publishes the
-     * preceding plain writes, and the acquire load on the read observes them. The {@code long}s stay
-     * plain deliberately - fencing them too buys nothing the flag does not already provide, at extra
-     * cost on every read. Evidence, re-runnable: the {@code jcstress-poc/} module
-     * (astubbs/parallel-consumer#348), whose {@code CommitPathVisibilityProbes} models this exact pair -
-     * the arm carrying that FORBIDDEN outcome is
-     * {@code CommitPathVisibilityProbes.VolatileDirtyPublishesPlainSucceeded}. What a probe's zero and its
-     * rate are each worth, with these figures in its results table:
+     * <b>It is a version stamp, not a quantity.</b> Nothing reads the number for its own sake; the only
+     * use of it anywhere is its inequality with {@link #completionCountCommitted}, which is
+     * {@link #isDirtyAt(long)}.
+     * <p>
+     * With {@link #completionCountCommitted} it replaces the pair of booleans this class carried until
+     * astubbs/parallel-consumer#469 - a {@code volatile boolean dirty} and a plain
+     * {@code stateChangedSinceCommitStart} that <b>both</b> threads wrote. "Is this partition dirty" is now
+     * a comparison of two values rather than a flag somebody clears, which is what removes the defect: there
+     * is no check-then-act left in the clean-marking step, and no write either thread can lose to the other.
+     * <p>
+     * <b>Why not simply make the second boolean {@code volatile} too</b> - the obvious step, and the one the
+     * inflight note recorded as next: measured, it moves nothing. jcstress ran the shipped two-flag window at
+     * 142,177 anomalies in 91,295,031 raced pairs (1.6e-3) and the same window with the second flag
+     * {@code volatile} at 148,418 in 94,683,660 (1.6e-3) - statistically indistinguishable, because only one
+     * of the three mechanisms breaking the invariant is a visibility effect. The other two, a check-then-act
+     * in the clean-marking step and a lost update between the two writers, fire at interleaving rates on
+     * sequentially consistent hardware and no modifier addresses either. The protocol below measured 0 in
+     * 121,707,028 samples, declared FORBIDDEN. The three arms are
+     * {@code CommitWindowLostUpdateProbes.PlainStateChangedFlagAcrossTheCommitWindow},
+     * {@code .VolatileStateChangedFlagAcrossTheCommitWindow} and {@code .GenerationCountedCommitWindow} in the
+     * re-runnable {@code jcstress-poc/} module; re-run the middle one before proposing the modifier again.
+     * <p>
+     * <b>The release/acquire edge astubbs/parallel-consumer#349 measured is preserved, not discarded.</b> That
+     * PR fenced the old {@code dirty} flag because the commit path could observe it set while
+     * {@link #offsetHighestSucceeded} and {@link #incompleteOffsets} were still stale - a burnt commit cycle
+     * which, on a partition that then goes idle, holds the committed offset back until the next rebalance. The
+     * {@code incrementAndGet} here is a strictly stronger release than that volatile store was, and
+     * {@link #completionCount}{@code .get()} on the reader is the paired acquire, so the plain
+     * {@code long}s written before it are published exactly as they were. They stay plain for the same reason
+     * that PR gave: fencing them buys nothing the edge already provides, at a cost on every read. What a
+     * probe's zero and its rate are each worth:
      * docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md.
      */
-    @Setter(PRIVATE)
-    @Getter(PACKAGE)
-    private volatile boolean dirty;
+    private final AtomicLong completionCount = new AtomicLong();
+
+    /**
+     * The value of {@link #completionCount} that the last <em>successful</em> commit covered - the partition is
+     * clean exactly while the two agree.
+     * <p>
+     * {@code volatile} because the committer thread publishes it and the control thread reads it through
+     * {@link #isDirty()} on the commit gate. Written only by the committer thread, and only ever forward: the
+     * value is {@link #completionCountBeingCommitted}, sampled at commit start by the same thread, and commit
+     * cycles run sequentially on it.
+     */
+    private volatile long completionCountCommitted;
+
+    /**
+     * The {@link #completionCount} the in-flight commit cycle collected at, held between
+     * {@link #getCommitDataIfDirty()} and {@link #onOffsetCommitSuccess(OffsetAndMetadata)}. It is one half of
+     * the commit window's pair; {@link #offerLastMadeForCommit} is the other, written on the same statement
+     * sequence and read back on the same acknowledgement.
+     * <p>
+     * <b>Collecting is exclusive, but since astubbs/parallel-consumer#470 the acknowledgement is not part of
+     * that unit.</b> {@code AbstractOffsetCommitter#retrieveOffsetsAndCommit} still runs collect and commit
+     * sequentially behind an exclusive committer (the commit-request queue in the consumer modes,
+     * {@code commitLock} in {@code PERIODIC_TRANSACTIONAL_PRODUCER}), so no two cycles overwrite this field at
+     * once. What that PR changed is when the success is recorded under
+     * {@code PERIODIC_CONSUMER_ASYNCHRONOUS}: the broker answers through an {@code OffsetCommitCallback}, so a
+     * later cycle can collect - and overwrite this field, and the offer beside it - while an earlier
+     * request is still outstanding.
+     * <p>
+     * <b>That is safe because only the LATEST offer may end the story.</b>
+     * {@link #onOffsetCommitSuccess(OffsetAndMetadata)} calls {@link #setClean()} only when the acknowledged
+     * {@link OffsetAndMetadata} equals {@link #offerLastMadeForCommit}, and both fields are written by one
+     * invocation of {@link #getCommitDataIfDirty()} - so the count published as committed is always the one
+     * sampled by the very cycle whose offer was answered. An answer to a superseded offer records its offset
+     * and publishes no count at all, leaving the partition dirty until the newer offer is answered, which is
+     * exactly the edge astubbs/parallel-consumer#470 wanted and the one this counter already lands on.
+     * <p>
+     * <b>But WHICH thread runs it varies with the commit mode, so no named thread is correct and
+     * {@code @ThreadConfined(<a thread>)} would be a lie.</b> It is the broker-poll thread under both consumer
+     * modes and the control thread under {@code PERIODIC_TRANSACTIONAL_PRODUCER}, with
+     * {@code Consumer#close()} flushing a pending callback as the one hand-over -
+     * {@link #offerLastMadeForCommit} owns that model in full, including what astubbs/parallel-consumer#466
+     * made uniform, and is written and read on exactly the same two statements as this field. Naming a thread
+     * that only some modes use is what the engine {@code AGENTS.md} means by checking the premise before
+     * declaring confinement, so this is {@code volatile}, at one store per commit cycle rather than per
+     * record. SpotBugs' {@code AT_NONATOMIC_64BIT_PRIMITIVE} names the plain form; that is a true positive
+     * here, not one of the ones this repo carries on purpose.
+     * <p>
+     * <b>Sampled BEFORE the offsets are captured, deliberately.</b> A completion landing between the sample
+     * and the capture is then committed <em>and</em> still counted as uncovered, which costs one extra commit
+     * cycle. Sampling after would mark it covered when it was not, which loses it. The pessimistic direction
+     * is the safe one, and it is the same pessimism the old flag's javadoc already described.
+     */
+    private volatile long completionCountBeingCommitted;
 
     /**
      * The highest seen offset for a partition.
@@ -173,12 +240,33 @@ public class PartitionState<K, V> {
      * Default (missing elements) is true - more messages can be processed.
      * <p>
      * AKA high watermark (which is a deprecated description).
+     * <p>
+     * {@code volatile} because it crosses threads with no other fence, in the opposite direction to
+     * {@link #completionCount}: written on the <b>broker-poll</b> thread inside the commit path's encode
+     * ({@link #tryToEncodeOffsets()}, reached only from {@link #getCommitDataIfDirty()}), and read on the
+     * <b>control</b> thread by {@code WorkContainer.couldBeTakenAsWork} through
+     * {@code PartitionStateManager#isAllowedMoreRecords}. Nothing on the reader's path is an acquire load
+     * the writer later releases, so the commit-count fence below does not cover this pair - that was
+     * astubbs/parallel-consumer#349's finding when it fenced the dirty flag and deliberately left this
+     * field alone for want of a measurement.
+     * <p>
+     * The measurement exists now. As a plain field, with the real surrounding
+     * {@link ConcurrentSkipListMap} accesses modelled on both sides, jcstress observed the reader taking
+     * a stale view at 9.2e-6 per raced pair; with the neighbours stripped, 4.7e-4 - so the map touch one
+     * statement earlier suppresses the window fiftyfold and does not close it. With the flag
+     * {@code volatile} the anomalous outcome was 0 in 201,927,188 samples, declared FORBIDDEN. The arm
+     * carrying that outcome is {@code BackPressureFlagVisibilityProbes.VolatileBackPressureFlagPublishesEncode}
+     * in the
+     * re-runnable {@code jcstress-poc/} module. What a probe's zero is worth, and what these arms do
+     * <em>not</em> show (the harm here is unbounded staleness, and "never" is not an outcome a bounded
+     * run can observe):
+     * docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md.
      *
      * @see OffsetMapCodecManager#DefaultMaxMetadataSize
      */
     @Getter(PACKAGE)
     @Setter(PRIVATE)
-    private boolean allowedMoreRecords = true;
+    private volatile boolean allowedMoreRecords = true;
 
     /**
      * The Epoch of the generation of partition assignment, for fencing off invalid work.
@@ -270,10 +358,19 @@ public class PartitionState<K, V> {
      * same thread their ordinary commits already run on, so both modes remain self-consistent either way. The one
      * hand-over is {@code Consumer#close()} flushing a pending callback
      * on the closing thread, which happens only after the poll loop has finished - a hand-over with a happens-before
-     * edge, not an overlap. So this is a plain field, for the reason {@link #dirty} states for the {@code long}s
-     * here: that flag is the fence, and fencing these too buys nothing it does not already provide. It has the same
-     * lifecycle as {@link #stateChangedSinceCommitStart} - written where the commit window opens, read where it
-     * closes.
+     * edge, not an overlap. So this is a plain field, for the reason {@link #completionCount} states for the
+     * {@code long}s here: that counter's {@code incrementAndGet} is the fence, and fencing these too buys nothing it
+     * does not already provide.
+     * <p>
+     * <b>It is one half of the commit window's pair.</b> The other is {@link #completionCountBeingCommitted}, and
+     * the two share one lifecycle exactly - both written by {@link #getCommitDataIfDirty()} where the window opens,
+     * both read by {@link #onOffsetCommitSuccess(OffsetAndMetadata)} where it closes, by the same thread per commit
+     * mode. That pairing is what makes the two rules compose: this field decides <em>whether</em> the answer ends
+     * the story, and the count decides <em>how much</em> it ends - {@link #setClean()} publishes the count sampled
+     * by the very cycle that made this offer, so a completion that landed inside the window is not covered by it
+     * and the partition stays dirty. (The old {@code stateChangedSinceCommitStart} flag this paragraph named until
+     * astubbs/parallel-consumer#469 was the count's predecessor; it no longer exists, and the pair is the two
+     * fields above.)
      * <p>
      * <b>Replaced, not accumulated.</b> Only the latest offer is kept, because only the latest offer may end the
      * story; every earlier one is by definition superseded. Keeping a set of outstanding offers would have to be
@@ -299,23 +396,12 @@ public class PartitionState<K, V> {
     private final OffsetMapCodecManager<K, V> om;
 
     /**
-     * Additional flag to prevent overwriting dirty state that was updated during commit execution window - so that any
-     * subsequent offsets completed while commit is being performed could mark state as dirty and retain the dirty state
-     * on commit completion. In tight race condition - it may be set just before offset is completed and included in
-     * commit data collection - so it is a little bit pessimistic - that may cause an additional unnecessary commit on
-     * next commit cycle - but it is highly unlikely as throughput has to be high for this to occur - but with high
-     * throughput there will be other offsets ready to commit anyway.
-     */
-    private boolean stateChangedSinceCommitStart = false;
-
-    /**
      * The completed-but-uncommitted ledger (R13, KTD5): what {@link #onSuccess(long)} would otherwise drop, kept until
      * the commit carrying it succeeds, so an aborted transaction's work can be put back. The retaining kind in
      * transactional commit mode, the no-op kind otherwise - chosen once here rather than tested per completion. Its
      * own class carries its monitor and its thread-safety invariant.
      */
     private final UncommittedCompletions<K, V> uncommittedCompletions;
-
 
     public PartitionState(long newEpoch,
                           PCModule<K, V> pcModule,
@@ -362,8 +448,11 @@ public class PartitionState<K, V> {
      * do, unless it is the answer to the latest offer, is end the story: see {@link #offerLastMadeForCommit},
      * which owns the rule and the reasoning.
      * <p>
-     * The clean mark is still subject to the existing protocol - {@link #setClean()} declines when the partition's
-     * state changed again while the commit was in flight.
+     * The clean mark is still subject to the existing protocol, and the two rules compose rather than overlap: this
+     * method decides <em>whether</em> the answer ends the story, and {@link #setClean()} decides <em>how much</em> of
+     * it it ends. It publishes {@link #completionCountBeingCommitted}, the {@link #completionCount} sampled by the
+     * cycle that made this offer, so a completion landing anywhere inside the commit window - including inside
+     * {@code setClean()} itself - is not covered by it and leaves the partition dirty.
      */
     public void onOffsetCommitSuccess(OffsetAndMetadata committed) { //NOSONAR
         recordCommittedOffset(committed);
@@ -392,15 +481,75 @@ public class PartitionState<K, V> {
         }
     }
 
+    /**
+     * Marks clean everything <em>this</em> commit cycle collected, and nothing else.
+     * <p>
+     * It publishes a value decided at commit start rather than reading anything, so a completion landing
+     * anywhere inside the commit window - including inside this method, which is where the old two-flag
+     * protocol lost it - leaves {@link #completionCount} ahead of what was published and the partition
+     * dirty. {@link #onCommitWindowClosing()} is where that interleaving is driven from in a test.
+     */
     private void setClean() {
-        if (!stateChangedSinceCommitStart) {
-            setDirty(false);
-        }
+        onCommitWindowClosing();
+        completionCountCommitted = completionCountBeingCommitted;
     }
 
-    private void setDirty() {
-        stateChangedSinceCommitStart = true;
-        setDirty(true);
+    /**
+     * The instruction at which the old protocol's check-then-act sat: after the clean-marking step has decided
+     * what it will publish and before it publishes it.
+     * <p>
+     * A no-op in production, and overridable so a test can land a completion at exactly this point rather than
+     * race for it - the same shape as the {@code RacingSeamWorkManager} doubles, and the reason it is here at
+     * all is that master offered no override point between that read and that write, so the window could not
+     * be driven deterministically. {@code PartitionStateCommitWindowSeamTest} owns it, and drives both this
+     * protocol and a replica of the one it replaced through it.
+     */
+    // visible for testing
+    protected void onCommitWindowClosing() {
+        // no-op in production
+    }
+
+    /**
+     * Records that a completion landed, so this partition's state has moved on. The only write a completing
+     * thread makes to the commit protocol, and it only ever goes forward.
+     * <p>
+     * It was called {@code setDirty()} until astubbs/parallel-consumer#469, which is a misnomer once dirty
+     * is derived rather than stored: there is no flag to set, and what the completing thread does is stamp a
+     * new version on the partition. Whether that leaves it dirty is {@link #isDirty()}'s answer, not this
+     * method's.
+     */
+    private void recordCompletion() {
+        // The new count is deliberately not used: this is a VERSION STAMP, not a quantity. No reader anywhere
+        // wants the number for its own sake - only its inequality with completionCountCommitted, which is
+        // isDirtyAt(long)'s question and is asked on the committer thread, not here. Named rather than left as
+        // a bare call so the discard reads as the decision it is.
+        long ignoredNewCompletionCount = completionCount.incrementAndGet();
+    }
+
+    /**
+     * Is this partition dirty? <b>Dirty means a completion has landed that no acknowledged commit has
+     * covered.</b>
+     * <p>
+     * Derived, never stored - there is no flag for the two threads to disagree about. Read on the control
+     * thread by the commit gate ({@code AbstractParallelEoSStreamProcessor}'s
+     * {@code isTimeToCommitNow() && wm.isDirty()}) and on the committer thread by
+     * {@link #getCommitDataIfDirty()}. The {@link #completionCount} load is the acquire that pairs with a
+     * completing thread's {@code incrementAndGet}.
+     */
+    boolean isDirty() {
+        return isDirtyAt(completionCount.get());
+    }
+
+    /**
+     * The single definition of dirty, taking the {@link #completionCount} sample to test as a parameter, so
+     * that a caller which must also <em>keep</em> the value it tested tests and keeps the same one.
+     * {@link #getCommitDataIfDirty()} is that caller; {@link #isDirty()} simply passes a fresh load.
+     *
+     * @param sampledCompletionCount one read of {@link #completionCount}
+     * @return true if that sample is ahead of what the last acknowledged commit covered
+     */
+    private boolean isDirtyAt(long sampledCompletionCount) {
+        return sampledCompletionCount != completionCountCommitted;
     }
 
     // todo rename isRecordComplete()
@@ -450,7 +599,7 @@ public class PartitionState<K, V> {
 
         updateHighestSucceededOffsetSoFar(offset);
 
-        setDirty();
+        recordCompletion();
     }
 
     /**
@@ -509,7 +658,9 @@ public class PartitionState<K, V> {
         // next pass, and both registrations tolerate a repeat (the incomplete set is a put, the shard keeps its
         // resident), so replaying an entry twice costs nothing
         uncommittedCompletions.forget(discarded.keySet());
-        setDirty();
+        // was setDirty() until astubbs/parallel-consumer#469 made dirty derived rather than stored: the replay has
+        // moved this partition's state on, so it stamps a new version and isDirty() derives the rest
+        recordCompletion();
         log.debug("Restored {} completed-but-uncommitted record(s) to processing for {} after an aborted transaction; commit frontier is now {}",
                 discarded.size(), tp, getOffsetToCommit());
         return discarded.size();
@@ -600,14 +751,15 @@ public class PartitionState<K, V> {
      * {@code offsetHighestSucceeded}, which {@link #onSuccess(long)} read-modify-writes and which
      * {@link #getOffsetHighestSequentialSucceeded()} returns <em>directly</em> whenever
      * {@code incompleteOffsets} is empty - so a stale read of it is an offset committed to the broker, not
-     * only bookkeeping. The {@code dirty} field's own javadoc records jcstress measuring that exact
-     * staleness (the reader seeing {@code dirty} set while {@code offsetHighestSucceeded} was still stale),
-     * and what closes it is the release/acquire pair that field's {@code volatile} provides - nothing on
-     * this method.
+     * only bookkeeping. {@link #completionCount}'s own javadoc records jcstress measuring that exact
+     * staleness (the reader seeing the partition dirty while {@code offsetHighestSucceeded} was still
+     * stale), and what closes it is the release/acquire pair that counter provides - the {@code volatile}
+     * on the old {@code dirty} flag until astubbs/parallel-consumer#469, its {@code incrementAndGet} since,
+     * which is strictly stronger. Nothing on this method.
      * <p>
      * <b>What would reopen this, and what would catch it (2026-09-05).</b> A second writer of either
      * {@code long} - the direct-pull engine selecting from worker threads, or a completion path moved off
-     * the control thread - reopens it, and the {@code volatile} on {@code dirty} does not cover a
+     * the control thread - reopens it, and the release edge on {@link #completionCount} does not cover a
      * write/write pair. <b>Nothing in this repository would catch that today.</b> The
      * {@code jcstress-poc} module's {@code SeenSucceededOrderingProbes} owns the question, and that module
      * is absent from the root {@code pom.xml}'s {@code <modules>} list, so no reactor build reaches it; no
@@ -753,11 +905,25 @@ public class PartitionState<K, V> {
         return false;
     }
 
+    /**
+     * Collects this partition's commit data, if it has any that is not already committed, and opens the commit
+     * window by remembering two things about this cycle: how far it got ({@link #completionCountBeingCommitted}),
+     * so {@link #onOffsetCommitSuccess(OffsetAndMetadata)} can mark exactly that much clean, and the offer it is
+     * making WHOLE ({@link #offerLastMadeForCommit}), so that method can tell this cycle's answer from the answer
+     * to a superseded one.
+     * <p>
+     * The count is sampled once, before the offsets are captured - {@link #completionCountBeingCommitted} says
+     * why that direction and not the other. The offer is stored after they are captured, because it <em>is</em>
+     * what was captured.
+     */
     public Optional<OffsetAndMetadata> getCommitDataIfDirty() {
-        if (isDirty()) {
-            // setting the flag so that any subsequent offset completed while commit is being performed could mark state as dirty
-            // and retain the dirty state on commit completion.
-            stateChangedSinceCommitStart = false;
+        // Loaded ONCE, then tested and stashed - this cycle must stash the very count it tested, not a
+        // second load. A completion landing between two loads would be published as covered while its
+        // offset need not be in the metadata this cycle goes on to encode, which is the burnt commit
+        // cycle astubbs/parallel-consumer#469 closes.
+        long collectedAt = completionCount.get();
+        if (isDirtyAt(collectedAt)) {
+            completionCountBeingCommitted = collectedAt;
             uncommittedCompletions.snapshotForCommit(); // the same guard for the ledger: only what this commit carries is trimmed on its success
             OffsetAndMetadata offered = createOffsetAndMetadata();
             // remembering the offer WHOLE is what lets onOffsetCommitSuccess recognise the answer to it, and decline

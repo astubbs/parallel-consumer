@@ -133,8 +133,9 @@ count means no new record is being taken as work at all: the instance has stoppe
 
 **A stalled instance cannot reach the exception being hunted:**
 
-- only `PartitionState#onSuccess` calls `setDirty`; `onFailure` in the same file is an explicit
-  no-op, so a failing record never marks its partition dirty;
+- only `PartitionState#onSuccess` calls `recordCompletion` (`setDirty`, before dirty became derived);
+  `onFailure` in the same file is an explicit no-op, so a failing record never marks its partition
+  dirty;
 - the control loop gates on `shouldTryCommitNow` in `AbstractParallelEoSStreamProcessor` -
   `isTimeToCommitNow() && wm.isDirty() && !isRebalanceInProgress.get()`;
 - so with no success anywhere, nothing is dirty, no commit request is enqueued, and

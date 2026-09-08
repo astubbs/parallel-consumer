@@ -383,6 +383,56 @@ public class KafkaTestUtils {
     }
 
     /**
+     * Sends {@code quantity} records whose keys are all DISTINCT - drawn from {@link #getDefaultKeys()} without
+     * replacement, so no two records can land on the same shard.
+     * <p>
+     * <b>Reach for this instead of {@link #sendRecords(int)} whenever the assertion depends on how the records are
+     * DISTRIBUTED rather than on the records themselves.</b> {@code sendRecords} draws keys WITH replacement, so
+     * a run can put two or more records on one key. Under {@link
+     * bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder#KEY} those records share a shard, and a
+     * shard yields at most one record per work-retrieval round - so the same five records reach the user function
+     * in a different number of batches depending on a draw the test never sees. That is what made
+     * {@code BatchTestMethods.simpleBatchTest} fail across three modules at roughly one run in a thousand.
+     *
+     * @throws IllegalArgumentException if there are not enough keys to go round - the caller is asking for
+     *                                  something this cannot deliver, and silently repeating a key is exactly the
+     *                                  failure this method exists to remove
+     */
+    public List<ConsumerRecord<String, String>> sendRecordsWithDistinctKeys(final int quantity) {
+        var consumerRecords = generateRecordsWithDistinctKeys(quantity);
+        send(consumerSpy, consumerRecords);
+        return consumerRecords;
+    }
+
+    /**
+     * @see #sendRecordsWithDistinctKeys(int)
+     */
+    public List<ConsumerRecord<String, String>> generateRecordsWithDistinctKeys(final int quantity) {
+        if (quantity > defaultKeys.size()) {
+            throw new IllegalArgumentException("Cannot draw " + quantity + " distinct keys from a pool of " + defaultKeys.size());
+        }
+        var keyPool = new ArrayList<>(defaultKeys);
+        var records = new ArrayList<ConsumerRecord<String, String>>(quantity);
+        for (int i = 0; i < quantity; i++) {
+            records.add(makeRecord(0, removeRandomKey(keyPool).toString(), "0," + i));
+        }
+        return records;
+    }
+
+    /**
+     * Sends one record per given key, in the order given - for a test that needs a SPECIFIC shard distribution
+     * (a deliberate key collision, say) and so must state it rather than draw for it.
+     */
+    public List<ConsumerRecord<String, String>> sendRecordsWithKeys(final List<String> keys) {
+        var records = new ArrayList<ConsumerRecord<String, String>>(keys.size());
+        for (int i = 0; i < keys.size(); i++) {
+            records.add(makeRecord(0, keys.get(i), "0," + i));
+        }
+        send(consumerSpy, records);
+        return records;
+    }
+
+    /**
      * Checks that the ordering of the results is the same as the ordering of the input records.
      * <p>
      * <b>Only valid where a record cannot be REDELIVERED</b> - one instance, a {@code MockConsumer}, no

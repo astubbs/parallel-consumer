@@ -49,9 +49,20 @@ import static org.awaitility.Awaitility.await;
  * label - one of a couple of dozen that do, not the only one.
  * <p>
  * Built as an instrument to make the overrun observable before any bound was designed - on the defect
- * arm, against the unfixed code, it was <b>expected to fail</b>. The fix has since landed on this
- * branch, so it is now the <b>regression test</b> for it: both arms are expected to pass, and the
- * defect arm going red again means the callback has started waiting on the transaction lock once more.
+ * arm, against the unfixed code, it was <b>expected to fail</b>.
+ * <p>
+ * <b>IT IS RED TODAY, AND THAT IS THE CURRENT STATE OF THE DEFECT, NOT A BROKEN INSTRUMENT.</b> Read
+ * the 2026-09-08 calibration entry below before touching it. astubbs/parallel-consumer#466 moved the
+ * transactional revocation commit off the poll thread and bounded the callback's wait by
+ * {@code commitLockAcquisitionTimeout} - five minutes by default - which is exactly the bound
+ * confluentinc#803 complains about, because it can exceed {@code max.poll.interval.ms}. This probe
+ * measures that overrun and fails on it. Choosing the bound needs an option or a derivation that PC
+ * cannot read off the consumer, so it is an open design decision, recorded in
+ * {@code docs/inflight/bug-857-transactional-revoke-wait.md}.
+ * <p>
+ * <b>Do not make it green by loosening it.</b> The two honest ways out are bounding the delegated
+ * wait under {@code max.poll.interval.ms}, or the owner deciding the five-minute bound is acceptable
+ * and this probe being retired with that decision written down.
  * <p>
  * <b>A green run is only meaningful alongside a nonzero {@link DwellingProducerManager#revocationDeclines()}</b> - the
  * class javadoc of {@link DeclineCountingProducerManager} says why.
@@ -136,7 +147,23 @@ import static org.awaitility.Awaitility.await;
  *       at 2001/4110/5416ms. Proof the instrument could go green at all; it said nothing about the code.</li>
  * </ul>
  *
- * <p><b>2026-09-01, AFTER the fix</b> (the revoke path declines the commit lock instead of waiting):
+ * <p><b>2026-09-08, AFTER reconciling onto astubbs/parallel-consumer#466's design</b> - the current
+ * state, and the one to read first:
+ * <ul>
+ *   <li><b>defect arm</b> (default {@value #DEFAULT_DWELL_MS}ms) - <b>5/5 fail</b>,
+ *       {@code VERDICT=POLL_INTERVAL_BREACHED}, callback <b>19,159-19,247ms</b> against the 10,000ms
+ *       {@code max.poll.interval.ms} budget. CI run 34183175418, job 101926366010.</li>
+ *   <li><b>What changed against 2026-09-01's 79,394ms, and it is the useful half of this result:</b>
+ *       the callback no longer waits <i>more</i> than the dwell it is racing. Bounded delegation
+ *       removed the starvation across <i>successive</i> transactions - the waiter used to lose the
+ *       lock to the next 1s-interval commit as fast as it was released. What is left is one
+ *       transaction's worth of wait, which is still unbounded in the only sense that matters to
+ *       confluentinc#803: it is bounded by the transaction, not by the poll interval.</li>
+ * </ul>
+ *
+ * <p><b>2026-09-01, AFTER the superseded poll-thread decline</b> (the design astubbs/parallel-consumer#466
+ * later refuted by experiment - a revoke that commits nothing defers a duplicate rather than
+ * preventing one; kept because the numbers are still the measurement of what declining costs):
  * <ul>
  *   <li><b>defect arm</b> - <b>5/5 pass</b>. Revoke callback <b>6ms</b>, down from 79,394ms; 3 dwells entered,
  *       <b>2 revocations declined</b>, 605 records processed. The decline count is the part that matters: it

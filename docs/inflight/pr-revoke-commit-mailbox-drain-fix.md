@@ -10,13 +10,16 @@ this note holds only what is still open once the PR is up.
 
 ## Open at the PR
 
-- **Collision with astubbs/parallel-consumer#408 on `tryCommitOffsetsOnRevoke`.** Under this fix the
-  poll thread never takes the producer transaction lock in transactional mode, so astubbs#408's
-  contended-decline branch has no seam in that mode; what astubbs#408 still owns is the size of the bounded
-  wait (`commitLockAcquisitionTimeout`, the same five-minute default the inline path had) and its
-  `RebalanceEoSDeadlockTest` amendment. Whichever lands second resolves it;
-  [`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md) carries the detail
-  from astubbs#408's side.
+<!-- post-merge: checked-begin - the collision is settled, so this reads as the record of how it was
+     settled: past tense, citing two PR numbers, with the live question handed to the note that owns it -->
+- **Collision with astubbs/parallel-consumer#408 on `tryCommitOffsetsOnRevoke` - RESOLVED.** This fix
+  landed first, so astubbs/parallel-consumer#408 reconciled onto it: the poll thread never takes the
+  producer transaction lock in transactional mode, so that PR's contended-decline design had no seam
+  left in that mode and it took this one instead. What survives is the question of the bound's SIZE
+  (`commitLockAcquisitionTimeout`, the same five-minute default the inline path had), which is not
+  this note's - [`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md) owns
+  it, along with the measurement showing the callback still overruns `max.poll.interval.ms`.
+<!-- post-merge: checked-end -->
 - **The produce-side fence check is covered at broker level only.** The unit harness drives the raw
   user function and never reaches `ParallelEoSStreamProcessor#acquireProduceLockRefusingRevokedWork`,
   so the refusal path (a worker getting the produce lock after the served commit) has no unit arm;

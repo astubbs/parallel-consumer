@@ -80,6 +80,8 @@ runner's `/tmp` persists across dispatches, so the treatment artifact's tally br
 "3 failures in 60" - all 60 rows, both arms - until the per-run `ref=` column in the tally script
 separated them.)
 
+*Citation note, 2026-09-08: astubbs#431 has since closed as superseded by astubbs#481, which fixes the same lock defect by a different design - the poll thread no longer touches the retry queue at all, rather than declining its lock - so `RetryQueueRebalancePathTest` now exists on master under that PR. The refutation above stands unchanged: a second design for the same defect does not make the mechanism more likely, and nothing here should be re-run against it expecting a different answer. Both designs: [`../runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).*
+
 **Candidate 2: "poll once more before closing" (2026-09-05).** Once the mechanism above was named,
 the obvious fix was a discharge poll in `doClose()` plus a `ConsumerManager` one-attempt allowance to
 let it fire. Measured result: **2/60, the same rate as every pre-fix tree** (2/30 control, 1/30 with

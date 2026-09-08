@@ -144,9 +144,14 @@ public class RetryQueue {
      * returning true if the element was present.
      * <p>
      * {@link ControllerThreadOnly} states the contract and names its check: the broker-poll thread must not reach
-     * this method, because a rebalance callback that waits here waits inside {@code poll()}. There is no declining
-     * alternative on this class yet - the sweeps that need one are the subject of
-     * astubbs/parallel-consumer#431, which adds a {@code tryLock()}-based path and routes those callers onto it.
+     * this method, because a rebalance callback that waits here waits inside {@code poll()}.
+     * <p>
+     * <b>There is no declining alternative on this class, deliberately.</b> The rebalance callbacks do not ask
+     * this queue for anything at all - they remove from the shards, and
+     * {@link ShardManager#purgeDepartedRetryEntries()} collects whatever entries that leaves, on the controller
+     * thread where waiting is allowed. A {@code tryRemove} was the superseded astubbs/parallel-consumer#431
+     * design; the write-up that carries both is
+     * {@code docs/solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md}.
      *
      * @param workContainer the container to remove
      * @return true if the element was present
@@ -169,12 +174,17 @@ public class RetryQueue {
     /**
      * Remove all specified work containers from the set. Method follows Set.removeAll() behaviour, returning true if
      * the set was modified.
+     * <p>
+     * The parameter is wildcarded rather than generic because the body only ever asks a container for its
+     * topic, partition and offset ({@code WorkContainerKey.of}), which needs no type arguments - and
+     * {@link ShardManager#purgeDepartedRetryEntries()} collects {@code WorkContainer<?, ?>} out of this queue's
+     * own iterator, which no {@code <K, V>} signature can accept without an unchecked cast.
      *
      * @param toRemove collection of work containers to remove
      * @return true if the set was modified
      */
     @ControllerThreadOnly
-    public <K, V> boolean removeAll(List<WorkContainer<K, V>> toRemove) {
+    public boolean removeAll(Collection<? extends WorkContainer<?, ?>> toRemove) {
         // GUARD ON THE CALLER'S OWN LIST, never on `unique`. The original fast path read
         // `unique.isEmpty()` with no lock held while writers mutate it under the write lock, so the
         // JMM permitted a stale `true` and this method could return false having removed nothing -

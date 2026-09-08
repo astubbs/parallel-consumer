@@ -4,16 +4,17 @@
 <!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
 
-<!-- post-merge: checked-begin - a dated account of where the widening was and why it was dropped; it
-     reads the same once the branch has landed -->
+<!-- post-merge: checked-begin - a dated account naming the two PRs rather than either branch, so it
+     stays resolvable once both have merged and their branches are gone -->
 **Status, 2026-09-08.** The widening this note describes - fan-out through PC-owned implementations of
-an interface-typed field, timed acquires denied, `root => via => target` keys - lived on
-`fix/803-bound-transactional-revoke-wait` and was **dropped when that branch merged master**:
-astubbs#465 had rewritten the rule around method references and a declared contract, with
-`root => target` keys and many more exemptions, and the two shapes do not merge inside a merge commit.
+an interface-typed field, timed acquires denied, `root => via => target` keys - was written for
+astubbs/parallel-consumer#408 and **dropped when that work merged master**: astubbs#465 had rewritten
+the rule around method references and a declared contract, with `root => target` keys and many more
+exemptions, and the two shapes do not merge inside a merge commit.
 Master's rule still resolves the declared member (`resolveMember()`), so the blind spot below is
 **still open on master**; the fix is to re-apply the fan-out on top of astubbs#465's rule, as its own
 change. The three pre-existing reaches the widening surfaced are recorded below and are still real.
+<!-- post-merge: checked-end -->
 
 `ArchitectureTest.rebalanceCallbacksMustNotBlock` walks the call graph from every rebalance callback
 looking for blocking calls. Its walk resolved `call.getTarget().resolveMember()`, which yields the
