@@ -82,10 +82,10 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   sent. Silent loss on the shipped default commit mode. Closes the
   [`bug-async-commit-marked-successful-before-broker-ack.md`](bug-async-commit-marked-successful-before-broker-ack.md)
   note; serves astubbs#248.
-- [ ] **astubbs#466** - the revoke-path commit drains the work mailbox first. In transactional mode a
-  rebalance could publish a transaction whose offsets omitted records it contained - duplicates on
-  the next owner. Fixes what astubbs#436 diagnosed and quarantined; **its merge is what clears the
-  last quarantine entry**, which the release guard blocks on.
+- [x] **astubbs#466** - merged 2026-09-08. The revoke-path commit drains the work mailbox first; in
+  transactional mode a rebalance could publish a transaction whose offsets omitted records it
+  contained. Its proof left quarantine with it. Its commit body says it **collides with astubbs#408
+  on `tryCommitOffsetsOnRevoke`**, so astubbs#408 now carries that resolution.
 - [ ] **astubbs#468** - the stale sweep removes only the container it inspected, never a fresh
   replacement racing in from the controller. Rebalance-shaped.
 - [ ] **astubbs#469** - the two remaining `PartitionState` flags that cross threads, measured and then
@@ -93,8 +93,8 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
 - [ ] **astubbs#431** - the rebalance callbacks decline the retry queue's write lock instead of waiting
   for it. A stall from the confluentinc#857 defect-class sweep; its three prerequisites merged
   2026-09-07.
-- [ ] **astubbs#473** - clears the other two quarantine entries by fixing what they were about. Merge
-  after astubbs#466 so the registry empties in one direction.
+- [ ] **astubbs#473** - clears the two remaining quarantine entries by fixing what they were about.
+  The release guard blocks while `docs/quarantined-tests.md` has any.
 
 ### Tier 2 - the producer-recovery stack, bottom-up, in this order
 
@@ -114,7 +114,8 @@ Each rung was re-cut on 2026-09-07 so it can be reviewed against pieces already 
 - [ ] **astubbs#408** - a revocation declines the transaction lock instead of waiting on it. Closes
   astubbs#44 (confluentinc#803). **The one PR in the queue with real reds** - checklist, hygiene,
   the macOS shell lane and the heavy integration shard - so it needs work, not just a merge. Its
-  design question was settled by stacking on astubbs#410.
+  design question was settled by stacking on astubbs#410, and it must now resolve the
+  `tryCommitOffsetsOnRevoke` collision with the merged astubbs#466.
 - **astubbs#420** - derive the `transactional.id`, the enforced factory, config redaction. Producer
   ownership polish stacked above recovery. **Proposed: after v6.** It fixes no open defect.
 
@@ -172,9 +173,9 @@ churn rather than a PC defect.
 
 ## What v6 must say about data loss and duplicates
 
-- **Fixed in the queue:** the async-commit acknowledgement (astubbs#470); the revoke-path
-  transaction omitting offsets (astubbs#466); the poisoned-transaction wedge (astubbs#434).
-- **Fixed on master:** the torn-read family
+- **Fixed in the queue:** the async-commit acknowledgement (astubbs#470); the poisoned-transaction
+  wedge (astubbs#434).
+- **Fixed on master:** the revoke-path transaction omitting offsets (astubbs#466); the torn-read family
   ([`bug-torn-read-family.md`](bug-torn-read-family.md) - astubbs#337, astubbs#344, astubbs#345,
   astubbs#346, astubbs#349); a terminally failed send publishing half a result set (astubbs#261);
   the produce-lock double release (astubbs#257); `InvalidPidMappingException` looping
