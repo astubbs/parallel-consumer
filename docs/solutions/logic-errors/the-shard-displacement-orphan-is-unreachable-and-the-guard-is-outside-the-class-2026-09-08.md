@@ -66,6 +66,16 @@ statement about the container that actually leaves.
 can hit a different occupant than the one inspected; an *insertion* keyed by offset cannot, because
 there is only one inserting thread.
 
+**The same single-writer fact is now recorded on master from the other direction**, and finding it
+twice independently is the strongest thing this leg has. astubbs#468 merged making `WorkContainer`
+equality reference identity and every shard removal a compare-and-remove
+(`ProcessingShard.evictIfStillResident`), and it clears the same suspicion at
+`getWorkIfAvailable`'s last-resort sweep with the same discriminator: `addWorkContainer` is the only
+writer of `workMap` outside tests and runs on the controller, which is also that scan's thread. **So
+the two cleared suspicions share a single reopening condition** - anything that puts into a shard
+off the controller thread - and neither has a gate. That is the coincidence worth knowing: a change
+nobody would think of as touching either one invalidates both at once.
+
 **L2 - a queue entry implies non-stale-and-resident when it was made.** `RetryQueue.add` has exactly
 one production caller: `ShardManager.onFailure`. Its only caller is `WorkManager.onFailureResult`,
 behind the live `checkIfWorkIsStale(wc)` re-validation astubbs#346 added - and since astubbs#437,
@@ -183,11 +193,12 @@ structures; the question is whether it can fail at all.
 | `partition.onPartitionsRemoved(sm)` alone | green - `removeStaleContainers()` covers it | green |
 | both | **red** | **red**, at `the revocation must have taken the container out of its shard`, `expected: null but was: WorkContainer(tp:myTopic-0:o:0:k:key-0)` |
 
-**Re-run after merging astubbs#481**, because that PR changes what those sweeps do - they now remove
-from the shards only - and an ablation measured against the old shape would be evidence about code
-that no longer exists. Same result, same assertion: either alone green, both red. That is the
-expected outcome and it is stated because the alternative was not obvious in advance - the arm
-asserts residence, which is the half astubbs#481 leaves untouched.
+**Re-run after merging astubbs#481, and again after astubbs#468 landed on master**, because both
+change what those sweeps do - astubbs#481 makes them shard-only, astubbs#468 makes each removal a
+compare-and-remove on the container the sweep inspected - and an ablation measured against a shape
+that no longer exists is evidence about nothing. Same result all three times, same assertion: either
+sweep alone green, both red. That is the expected outcome and it is stated because it was not
+obvious in advance - the arm asserts residence, which is the half both PRs leave untouched.
 
 Same magnitude, different position: neither sweep alone is what makes the arm green, and removing
 both flips exactly the one assertion the argument turns on. An arm that could not be made to fail

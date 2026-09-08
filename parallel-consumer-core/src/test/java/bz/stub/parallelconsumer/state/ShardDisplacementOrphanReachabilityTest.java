@@ -46,7 +46,10 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *     {@code get} and the {@code put}, and a removal makes the {@code put} return null. So the staleness read
  *     is about the container that is actually displaced. This is the one leg astubbs#468's defect class does
  *     NOT reach here: a by-key removal can hit a different occupant, but a by-key <em>insertion</em> cannot,
- *     because there is only one inserting thread.</li>
+ *     because there is only one inserting thread. <b>The same single-writer fact is recorded independently on
+ *     {@code getWorkIfAvailable}'s last-resort sweep</b>, whose own cleared suspicion names the identical
+ *     discriminator - so both clearances reopen together the moment anything puts into a shard off the
+ *     controller thread, and this class is the only thing that would notice.</li>
  * <li><b>A queue entry implies non-stale-and-resident when it was made.</b> {@code RetryQueue.add} has exactly
  *     one production caller, {@link ShardManager#onFailure}, reached only from {@code WorkManager.onFailureResult}
  *     behind its live {@code checkIfWorkIsStale} check - and since astubbs#437 followed by a residency
