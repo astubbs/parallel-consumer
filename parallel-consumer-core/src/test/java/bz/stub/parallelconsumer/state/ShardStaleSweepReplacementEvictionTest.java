@@ -221,8 +221,13 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
                 + "coordinate-derived hashCode, which is half of the same defect")
                 .that(stale.hashCode()).isEqualTo(System.identityHashCode(stale));
         assertThat(fresh.hashCode()).isEqualTo(System.identityHashCode(fresh));
-        assertWithMessage("and so the two hash to different buckets, instead of colliding by construction")
-                .that(stale.hashCode()).isNotEqualTo(fresh.hashCode());
+        // DELIBERATELY NOT ASSERTED: that the two hash codes differ. It reads like the point of the two
+        // assertions above and is strictly weaker than them - a coordinate-derived hashCode makes these two
+        // containers collide BY CONSTRUCTION, and it fails the identity-hash assertions first, so the tripwire
+        // is already whole. What the inequality adds is only the empirical claim that these two identity hashes
+        // happened to differ, which is not a contract: identity hash codes are stable per object but not unique
+        // across objects, so the assertion carries a rare unretriable failure for no coverage. This suite has no
+        // rerun by design.
 
         // FORM 1: the JDK's compare-and-remove, asked about the stale container after the replacement landed. It
         // must DECLINE - this is the exact call the sweep makes, and the one that used to destroy the record.
@@ -247,8 +252,20 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
         // identity equality it declines.
         var byIdentityInTheFunction = new ConcurrentSkipListMap<Long, WorkContainer<String, String>>();
         byIdentityInTheFunction.put(CONTESTED_OFFSET, stale);
+        // THE REMAPPING FUNCTION RUNS MORE THAN ONCE HERE, and that is the declining gate made visible rather
+        // than an artefact to work around. The first pass is handed `stale`, plants `fresh`, and returns null to
+        // ask for a removal; `doRemove(key, stale)` re-reads the node, finds `fresh`, and its `equals` gate
+        // declines - so it removes nothing, returns null, and `computeIfPresent` loops. The second pass is
+        // handed `fresh`, plants `fresh` over itself and returns it, which commits and ends the loop. Under the
+        // old coordinate equality the gate PASSED on the first pass and the replacement was destroyed there.
+        // The count is deliberately not asserted: it is a property of this JDK's ConcurrentSkipListMap, and an
+        // implementation that reached the same declining gate without looping would be just as correct.
         byIdentityInTheFunction.computeIfPresent(CONTESTED_OFFSET, (offset, resident) -> {
-            byIdentityInTheFunction.put(offset, fresh);
+            var displaced = byIdentityInTheFunction.put(offset, fresh);
+            assertWithMessage("the replacement has to land ON the occupant this pass is deciding about - if the "
+                    + "put displaced anything else, the interleaving this form reproduces did not happen on this "
+                    + "pass and the assertion after the loop would be measuring nothing")
+                    .that(displaced).isSameInstanceAs(resident);
             return resident == stale ? null : resident;
         });
         assertWithMessage("computeIfPresent commits through doRemove(key, v), which re-reads the value and gates "
