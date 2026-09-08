@@ -1241,7 +1241,7 @@ entries:
   - id: bug-546-bootstrap-truncation-warning
     group: rebalance-stability
     summary: The "Truncating state" warning on assignment - three defects behind one string; one fixed upstream, one refuted here, one live
-    fork: {branches: [fix/162-offset-reset-replay-branch], prs: [], fork_issue: 162, status: in-progress}
+    fork: {branches: [fix/162-offset-reset-replay-branch], prs: [484], fork_issue: 162, status: pr-open}
     upstream: {repo: confluentinc/parallel-consumer, issues: [546], prs: [563], related: [489, 545], status: open, last_checked: 2026-08-20}
     adoc_anchor: null
     notes: >
