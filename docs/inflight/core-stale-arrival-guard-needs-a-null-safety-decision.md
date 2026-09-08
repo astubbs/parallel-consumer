@@ -94,7 +94,13 @@ a RESIDENT at its offset, and while every revoke sweep removed the resident and,
 the empty shard with it, every add was an insertion into nothing. A sweep that DECLINES leaves the
 resident in place, so the next add takes the branch.
 
-**The sighting was on astubbs/parallel-consumer#431's branch, which is still open**, and the
+<!-- Correction 2026-09-08: astubbs/parallel-consumer#431 is CLOSED as superseded - the defect it
+     addressed was fixed by taking the poll thread off the retry queue entirely rather than by a declining
+     sweep (`ShardManager.purgeDepartedRetryEntries`), so no declining sweep is coming and the reach below
+     stays unavailable on master. The datum itself is UNAFFECTED and is why this paragraph stands: it is
+     about this note's question, not that PR's outcome. See
+     ../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md -->
+**The sighting was on astubbs/parallel-consumer#431's branch, which was open at the time**, and the
 declining sweep is what that PR adds - so the reach is not yet available on `master`, and
 `ShardManagerLincheckTest` was re-measured green here without the fixture change. Recorded now rather
 than when that PR lands, because the datum is about this note's question and does not depend on its
