@@ -44,15 +44,17 @@ branch `docs/v6-scope-decisions`, merged into astubbs#475) and confirmed the bar
   astubbs#446; it can land before the tag and take pressure off sooner. The announcement is what
   lets the first release be a bug release without being the only thing anyone sees.
 
-**The mental hurdle, named so it stops steering.** The owner's instinct is that the first fork
-release has to be impressive. The record says otherwise: the delta since 0.5.3.3 is the largest
-this codebase has ever shipped in one version - the confluentinc#857 commit deadlock, the torn-read
+**Why a stability release is the right first release.** The scope question carried an unstated
+assumption: that the first release of a revived fork must be a feature release to justify the
+attention it gets. The record does not support that. The change set since 0.5.3.3 is the largest
+this codebase has shipped in one version: the confluentinc#857 commit-path deadlock, the torn-read
 family, the metrics leak, offset accuracy on assignment, the async-commit acknowledgement, the
 package rename, MDC propagation, the log-noise fixes, and the chaos and Lincheck lanes that guard
-them. A second release gets a smaller launch, but the roadmap announcement is what people read for
-"what is coming", and that is decoupled from the tag. Perfect is what has kept this release from
-shipping since the 26 August date passed; the previous version of this note said the failure mode
-was never shipping, and that is the failure mode that occurred.
+each of them. For the users this project serves, that is the release that matters. What people
+learn about the direction of the project comes from the roadmap announcement, which is decoupled
+from the tag, so the release does not need to carry it. The cost of the alternative is already on
+record: the 26 August target passed with nothing shipped, and the previous version of this note had
+named "never shipping" as the failure mode to avoid.
 
 <!-- post-merge: checked-begin - the paragraph names astubbs#475 as the PR that merged and removed the note, which stays true after it lands -->
 **Prior art this supersedes, and what it still gets right.** A merge-order note from 2026-08-08,
