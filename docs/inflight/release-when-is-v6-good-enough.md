@@ -167,8 +167,8 @@ churn rather than a PC defect.
 - A dead broker-poll thread leaves the consumer open in consumer-commit modes, no LeaveGroup until
   `max.poll.interval.ms` -
   [`bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md`](bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md).
-  Diagnosed 2026-09, no PR. **Decide: v6 or 0.6.0.x.** Proposed: 0.6.0.x, since the instance does
-  recover once the broker evicts it.
+  Diagnosed 2026-09, no PR. **Decide: v6 or 0.6.0.x** - the no-PR triage below argues for looking
+  now, because the shipped default commit mode is exposed.
 
 ## What v6 must say about data loss and duplicates
 
@@ -206,6 +206,51 @@ churn rather than a PC defect.
 - The maturity claim itself: `docs/data/module-maturity.yaml` carries a bare `production-use` next
   to a conditional support posture, and a renderer can lift the bare value without its condition.
   The tag-day checks below carry the recheck.
+
+## Open defects with no PR - each one's disposition against the bar
+
+"Gate on open bugs" only works if every open bug has a disposition, so this is every `bug-` note on
+master that no queue PR addresses (`ls docs/inflight/bug-*.md` is the list; the impact tag on each
+is the sort key). Re-derive it before the tag rather than trusting it: a note can gain a PR or lose
+its subject at any merge.
+
+**Look at before the tag - these contradict the release claim if left silent:**
+
+- **The eager-mode stall that reproduces with the fixes applied** - the "fourth open item" in
+  [`bug-857-family.md`](bug-857-family.md): two seeds, `PERIODIC_CONSUMER_SYNC`, reproduces every
+  time, undiagnosed. Time-box a diagnosis alongside tier 1; if it is not understood when tier 3 is
+  done, ship and name it in the release note rather than wait.
+- **Poller death leaves the consumer open in consumer-commit modes** -
+  [`bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md`](bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md).
+  The shipped default commit mode is one of them, so a dead poll thread idles the partition until
+  the broker evicts the member. The proposed fix shape is small; if it is, this joins tier 1.
+  Otherwise 0.6.0.x, named.
+
+**Owner's decision:**
+
+- **Run-length plausibility ceiling** -
+  [`bug-run-length-plausibility-ceiling.md`](bug-run-length-plausibility-ceiling.md). A readable but
+  absurd run length marks a vast range complete and PC silently skips it. Data-loss class, reachable
+  only through a corrupt or foreign payload, which is why astubbs#207 did not cover it. A decode-side
+  ceiling is small; either it ships in v6 or the release note names it.
+
+**0.6.0.x - open, real, not a gate for a bug release:**
+
+- Config lies: `maxFailureHistory` is read nowhere; `offsetCommitTimeout` bounds two different
+  waits; `batchSize` is unvalidated (astubbs#311, already deferred with its sibling).
+- Blind spots: the racy and uncalled pause API; no metric for a discarded offset map under the
+  default `IGNORE` policy; the worker future swallowing framework exceptions.
+- Misdirection: the plain-`int` out-for-processing counter; the module's processor reference
+  overwritten before the owner guard; the rest of the unbounded-log-lines class; the two 857 mirror
+  attributions never verified against the reporter's environment.
+- The shutdown teardown race; the test-only `close()` shadowing; and
+  [`bug-shared-collections-across-the-poll-boundary.md`](bug-shared-collections-across-the-poll-boundary.md),
+  which is mostly stale - the metrics set and the shared empty set it names are both fixed on master
+  and the note needs shrinking to whatever remains.
+
+**Not a bug note, but a signal:** the `simpleBatchTest` flake across the Reactor, Mutiny and Vert.x
+modules has the most sightings in [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) and
+no diagnosis. The same batch test failing the same way in three modules is not noise. Not a gate.
 
 ## Tag-day artefact checks - are the things we publish true on the day we cut?
 
