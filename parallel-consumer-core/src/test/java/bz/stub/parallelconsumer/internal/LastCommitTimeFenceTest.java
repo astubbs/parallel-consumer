@@ -13,8 +13,8 @@ import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * {@code AbstractParallelEoSStreamProcessor.lastCommitTime} is volatile, and this is the tripwire that keeps it
- * so - the same shape and the same reasoning as {@code PartitionStateDirtyFlagFenceTest}, which pins
- * {@code PartitionState.dirty}.
+ * so - the same shape and the same reasoning as {@code PartitionStateCrossThreadFieldFenceTest}, which pins
+ * the modifiers on {@code PartitionState}'s cross-thread fields.
  * <p>
  * <b>Why a modifier needs a test at all.</b> It is exactly the kind of thing an unrelated refactor drops
  * silently: nothing goes red, the field still compiles, and the edge is gone. Here the loss is quieter still,

@@ -529,4 +529,13 @@ contended" and "the revoke path never ran" were indistinguishable - and the decl
 what does not arrive when the window stays shut. Both branches of that fork now log at INFO, so a
 future replay can show whether the window opened instead of inferring it from an absence.
 
+**That hole-closing paid off on 2026-09-08, and the answer was the unwelcome one.** Two of the
+family's six `BLOCKED`-on-monitor capture seeds were replayed at `6aab3ff5a`; both passed, and the
+INFO logging showed one of the two had **zero declines** - void by the same standard as this section,
+now visible rather than inferred. One void in two is the base rate this method has.
+[`bug-857-family.md`](bug-857-family.md)'s `## 2026-09-08` section owns the table, and the finding
+that supersedes the whole approach: the signature those captures ask about cannot be produced at any
+head carrying astubbs#29, so the seeds were never able to answer the question. The verification came
+from a one-term control arm on `Rebalance857CommitSyncDeadlockProbeIT` instead.
+
 <!-- post-merge: checked-end -->
