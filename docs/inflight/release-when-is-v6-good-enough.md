@@ -265,9 +265,17 @@ commit-response-timeout stall astubbs#471's soak found.
   open question - whether recovery should decline the write lock while a rebalance is in progress,
   which astubbs#410 does not check and the measurement meant to settle was not taken. Bounded, and
   review-sized; it does not change the tier 2 decision.
-- Which of the flakes in [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) are
-  load-shaped and which are real - the three module `simpleBatchTest` failures have the most
-  sightings and no diagnosis.
+- ~~Which of the flakes in `test-untracked-ci-flakes.md` are load-shaped and which are real - the
+  three module `simpleBatchTest` failures have the most sightings and no diagnosis~~ - **known,
+  2026-09-08, astubbs#482: neither a flake nor a defect.** The test computed its expected batch
+  count from the record count while drawing keys with replacement; under KEY ordering a shard
+  yields one record per retrieval round, so a three-way key collision deterministically forces a
+  fourth batch - the `2+1+1+1` shape every sighting carried, at about the rate the sightings
+  showed, and only on the KEY parameter, which a contention reading could never explain. Reproduced
+  red with a forced collision, green with keys drawn without replacement; the exact assertion is
+  kept, and a new core test covers the collision case the old one can no longer reach. The other
+  rows of [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) are untouched by this. The
+  automated review found nothing blocking; astubbs#482 is out of draft and merge-ready.
 - The maturity claim itself: `docs/data/module-maturity.yaml` carries a bare `production-use` next
   to a conditional support posture, and a renderer can lift the bare value without its condition.
   The tag-day checks below carry the recheck.
@@ -382,9 +390,9 @@ its subject at any merge.
   which is mostly stale - the metrics set and the shared empty set it names are both fixed on master
   and the note needs shrinking to whatever remains.
 
-**Not a bug note, but a signal:** the `simpleBatchTest` flake across the Reactor, Mutiny and Vert.x
-modules has the most sightings in [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) and
-no diagnosis. The same batch test failing the same way in three modules is not noise. Not a gate.
+**Not a bug note, but a signal - settled:** the `simpleBatchTest` failures across the Reactor,
+Mutiny and Vert.x modules were the test's own randomised key draw, not the batcher (astubbs#482,
+see the known-unknowns section). The register's most-sighted row is retired.
 
 ## Tag-day artefact checks - are the things we publish true on the day we cut?
 
