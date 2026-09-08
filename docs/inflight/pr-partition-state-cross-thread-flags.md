@@ -36,12 +36,25 @@ javadocs **own** that split and the rule behind it (a member may be hoisted only
 access to the arm's measured field); what is here is only the warning that the remaining duplication
 is deliberate, so re-read those javadocs before removing any more of it.
 
-## OPEN, and it weakens a headline number: the protocol arm's FORBIDDEN zero is not yet worth much
+## RULED: the protocol arm's FORBIDDEN zero is vacuous, and stays that way by decision
 
 Found by Codex on astubbs/parallel-consumer#469 and **confirmed from the recorded run**, not merely
 accepted. `CommitWindowLostUpdateProbes.GenerationCountedCommitWindow` reports 0 anomalies with the
-outcome FORBIDDEN - but the forbidden corner looks **unreachable by construction**, which would make
-the zero vacuous rather than evidence.
+outcome FORBIDDEN - but the forbidden corner is **unreachable by construction**, which makes the zero
+vacuous rather than evidence.
+
+**The maintainer's ruling on astubbs/parallel-consumer#469: document the weakness, do not build the
+negative control that would remove it.** The arm keeps its FORBIDDEN outcome and keeps running; what
+changes is that nobody may read its green as proof. That is a deliberate choice about what the arm is
+for, not an item waiting to be picked up, and the arm's own javadoc now says so at the place a reader
+has open when they run it.
+
+**Where this survives this note's deletion**:
+[`docs/inflight/test-jcstress-probe-module-open-items.md`](test-jcstress-probe-module-open-items.md)
+carries it as a line item, and
+`jcstress-poc/src/main/java/bz/stub/parallelconsumer/jcstress/CommitWindowLostUpdateProbes.java` -
+`GenerationCountedCommitWindow`'s javadoc - **owns** the full statement. What follows here is the
+reviewer-facing evidence for the ruling while astubbs/parallel-consumer#469 is open.
 
 The evidence is the outcome sets the run actually produced:
 
@@ -61,12 +74,20 @@ plain arm measures a completion racing an open window, the protocol arm measures
 but the forbidden corner stays unreachable for the same release/acquire reason - which is really a
 statement that the protocol is correct, not that the probe could tell if it were not. Showing the
 probe has power needs a **deliberately broken** protocol variant as a negative control, the way
-`PartitionStateCommitWindowSeamTest` keeps a control arm that asserts the old defect. That is a
-design decision about what the arm should establish, so it is recorded here rather than guessed at.
+`PartitionStateCommitWindowSeamTest` keeps a control arm that asserts the old defect.
 
-Until it is settled, cite the protocol arm's zero as *"no anomaly observed"* and not as
-*"the protocol was measured to close the window"*; the arms that carry the weight of this PR's
-argument are the plain/volatile pair, whose 1.6e-3-vs-1.6e-3 result is unaffected by any of this.
+That control was **not built**, on the ruling above. The cost of building it was not the reason -
+the reason is that it is a second, differently-shaped experiment about the probe rather than about
+the field, and astubbs/parallel-consumer#469 is a fix for the field. Recording the weakness where a
+reader meets it is what that PR does instead, and the risk it accepts is a live one: the arm goes on
+printing a confident zero that nothing in the run distinguishes from a tested-and-held zero. That is
+the same hazard `test-jcstress-probe-module-open-items.md` records under "Nothing enforces reading
+the positive control" - one level further in, since here the actors do race and it is the *outcome*
+that is out of reach rather than the run.
+
+Cite the protocol arm's zero as *"no anomaly observed"* and never as *"the protocol was measured to
+close the window"*; the arms that carry the weight of astubbs/parallel-consumer#469's argument are
+the plain/volatile pair, whose 1.6e-3-vs-1.6e-3 result is unaffected by any of this.
 
 ## The vocabulary astubbs#469 leaves behind
 

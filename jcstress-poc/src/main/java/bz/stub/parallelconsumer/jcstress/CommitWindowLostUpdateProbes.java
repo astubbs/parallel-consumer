@@ -99,7 +99,12 @@ import static org.openjdk.jcstress.annotations.Expect.FORBIDDEN;
  * what astubbs/parallel-consumer#349 did to {@code dirty} and what the note recorded as the obvious next
  * step, moves the anomaly by nothing at all. That is the measurement that rejects "one more volatile" as
  * the fix, and it is why this field got a protocol instead. The protocol arm is FORBIDDEN at 0 in
- * 121,707,028 samples.
+ * 121,707,028 samples - <b>and that zero is not evidence the protocol is correct</b>, because its
+ * forbidden corner is unreachable by construction.
+ * {@link GenerationCountedCommitWindow} <b>owns</b> that caveat: why the corner cannot be entered, what
+ * the arm does show, and why no negative control was built. Read it before quoting the zero anywhere.
+ * The headline above stands on its own - it is the plain-versus-volatile pair, which the caveat does not
+ * touch.
  * <p>
  * Those figures were measured before {@link CommitWindowState} hoisted the shared scaffolding out of the
  * arms. The re-run after that refactor confirmed the <b>outcome kinds</b> are unchanged - both flag arms
@@ -324,24 +329,40 @@ public class CommitWindowLostUpdateProbes {
      * distribution: 79.92% of pairs end "dirty, not covered" - the pessimistic direction, one extra commit
      * cycle - and 20.08% "clean, covered". Nothing lands in the lossy corner.
      * <p>
-     * <b>READ THIS BEFORE QUOTING THAT ZERO - the forbidden corner may be unreachable by construction,
-     * which would make it vacuous.</b> Unlike the two flag arms above, this arm is <b>not seeded dirty</b>:
-     * both counters start at zero, so the poll actor enters the commit window only when it has already
-     * observed the completion. If it samples 0 it skips the window; if it samples 1, that {@link AtomicLong}
-     * acquire also publishes the map removal and the offset write that preceded the release, so the commit
-     * necessarily covers the completion. Neither path can land in "clean over an uncovered completion".
+     * <b>READ THIS BEFORE QUOTING THAT ZERO - the forbidden corner is unreachable by construction, so this
+     * arm running green is not evidence that the protocol is correct.</b> Unlike the two flag arms above,
+     * this arm is <b>not seeded dirty</b>: both counters start at zero, so the poll actor enters the commit
+     * window only when it has already observed the completion. If it samples zero it skips the window
+     * entirely; if it samples the increment, that {@link AtomicLong} acquire also publishes the map removal
+     * and the offset write that preceded the release, so the commit necessarily covers the completion.
+     * Neither path can reach "clean over an uncovered completion", and <b>neither path depends on the
+     * protocol below it being right</b> - break the protocol and the corner stays just as unreachable. The
+     * zero therefore reports that the corner was never entered, not that it was entered and held.
      * <p>
-     * The recorded run corroborates it: the two flag arms each reached <b>all four</b> outcomes, while this
-     * arm reached only two - it never even produced "covered and still dirty". So the arms are not comparing
-     * like with like, and this one is measuring something narrower than the plain arm is.
+     * <b>What this arm does show, and what the flag arms show that it cannot.</b> In the recorded run of
+     * 2026-09-07 above, the two flag arms each reached all four outcomes, including "covered and still
+     * dirty". This arm reached only two - "dirty, not covered" and "clean, covered" - and never produced
+     * "covered and still dirty" at all, which is the signature of a window that only ever opens over a
+     * completion it has already observed. So the arm shows that the protocol admits no lost update
+     * <i>along the interleavings it reaches</i>, and that those interleavings split between the pessimistic
+     * outcome and the covered one; it says nothing about the interleaving its FORBIDDEN outcome names. The
+     * arms are not comparing like with like, and this one measures something narrower than the plain arm.
      * <p>
-     * <b>Seeding it dirty is not the fix on its own</b> - the corner stays unreachable for the same
-     * release/acquire reason, which states that the protocol is correct rather than showing the probe could
-     * detect it being wrong. Demonstrating power needs a deliberately broken protocol variant as a negative
-     * control, the way {@code PartitionStateCommitWindowSeamTest} keeps a control arm asserting the old
-     * defect. Raised by a Codex review on astubbs/parallel-consumer#469 and open there; until it is settled,
-     * read this zero as "no anomaly observed", not as "the window was measured shut". The pair the PR's
-     * argument actually rests on is plain-versus-volatile above, which none of this affects.
+     * <b>Seeding this arm dirty is not the fix</b>, which is why it has not been done. Seeding makes the
+     * window open reliably, but the corner stays unreachable for the same release/acquire reason: any
+     * sample that observes the increment also observes everything published before it. That is a
+     * restatement of the protocol being correct, not a demonstration that the probe could detect it being
+     * wrong.
+     * <p>
+     * <b>A real power check would need a deliberately broken negative control</b> - a protocol variant with
+     * the defect put back, which this arm would then have to catch, the way
+     * {@code PartitionStateCommitWindowSeamTest} keeps a control arm asserting the old defect and stays
+     * runnable after the fix removed it. Raised by a Codex review on astubbs/parallel-consumer#469, where
+     * the maintainer ruled that the control would <b>not</b> be built and the weakness would be recorded
+     * instead. So this is a standing limitation of this arm, not an open item somebody is about to close:
+     * cite it as "no anomaly observed", never as "the window was measured shut", and do not let a future
+     * green run here be read as the protocol having been verified. The pair the argument for the shipped
+     * fix actually rests on is the plain-versus-volatile comparison above, which none of this affects.
      */
     @JCStressTest
     @Description("Fixed: monotone completion count, and the count the commit covered - no flag to clear")
