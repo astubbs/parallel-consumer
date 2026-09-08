@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - all three branches (`origin/docs/uber-stall-experiment-results`, `origin/experiment/stall-uber-fix`, `origin/experiment/stall-uber-nofix`) still exist, so the deletion this note asks for has not happened; the solutions write-up it hands the result to is on master -->
 
 
 `docs/uber-stall-experiment-results`, with the `experiment/stall-uber-fix` / `stall-uber-nofix` arms:

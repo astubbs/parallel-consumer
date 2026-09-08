@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - still true, and the hypothesis is now confirmed with one correction: AmbientProbeExtension.buildAutopsy reads probeOf(context), which is the extension's OWN ProgressProbe.ambientObserver(kcu, ...) started in beforeEach - a different INSTANCE of the same class, not a different class, from the fleet probe ChaosScenarioBase builds. So a fleet NO_PROGRESS violation can never reach the autopsy list, and the "(none crossed the chaos-calibrated bounds - see peaks/frozen detail below)" gloss is still printed verbatim. The delete-when condition is NOT met -->
 
 `AGENTS.md` tells every agent to **read the `=== AMBIENT PROBE AUTOPSY ===` block before diagnosing
 a broker integration test failure by hand**. On at least one chaos arm that instruction returns the

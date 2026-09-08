@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: process -->
+<!-- inflight-vetted: 2026-09-07 - checked each of the eight against the tree and none has been built: no shared zero-tests-selected helper in bin/lib (chaos-test.sh and ci-integration-test.sh still each carry their own), check-inflight-tags.sh still validates only tags and never the filename prefix, no required-status-check reconciler in bin/, nothing consults worktree-status.sh before a Maven run, check-pr-ready.sh still prints no commit subjects, and docs/merge-checklist.md has no split no-loss proof; candidate 4 is the only one partly covered - .claude/hooks/check-branch-behind-its-own-remote.sh fetches at SessionStart but guards merge/rebase, not cutting from a stale local base -->
 
 A long session produced more lessons than were worth acting on at once. The two cheapest landed with
 this note; the rest are recorded so the analysis is not re-derived. **Ranked by enforceable ×

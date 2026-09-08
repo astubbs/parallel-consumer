@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: reliability -->
+<!-- inflight-vetted: 2026-09-07 - the ordering exposure is unchanged: `AbstractParallelEoSStreamProcessor.doClose()` still runs `deregisterMeters()` and `pcMetrics.close()` in a `finally` that executes whether or not the poll thread was joined, and the `brokerPollSubsystem.closeAndWait()` call site still catches `Exception` and only warns ("the consumer may not be closed..."), so a timeout still falls through to that `finally`. astubbs#57 is MERGED and its defensive fix is present but metrics-only - `PCMetrics.track()` undoes a late registration under `metersLock` and its javadoc names this exact unjoined-poll-thread path. Nothing has addressed the sequencing decision -->
 
 `AbstractParallelEoSStreamProcessor.doClose()` runs subsystem and metrics teardown in a `finally`
 that executes **even when the broker-poll thread was never joined**:

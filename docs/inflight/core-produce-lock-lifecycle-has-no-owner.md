@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - re-read all four classes: `ProducerManager` still owns `producerTransactionLock` and issues via `beginProducing`/`finishProducing`, `ParallelEoSStreamProcessor#processAndProduceResults` still acquires in two branches, `PollContextInternal#setProducingLock`/`takeProducingLock` still store and guard, `cleanUpContext` still releases, and `ProducingLock` is still a wrapper over the shared ReadLock rather than a token - no owner, so the note is unchanged -->
 
 The invariant is one sentence: **exactly one produce lock per `PollContextInternal`, released exactly
 once, at `cleanUpContext`.** No class owns it. The lifecycle runs:

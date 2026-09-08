@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-state: closed - the owed edit has been made. `gh api repos/astubbs/parallel-consumer/rules/branches/master` on 2026-09-07 lists `scan: repo` and `static: analysis` as required and none of the ten removal-list contexts, which is exactly the condition this note's own last paragraph sets for having nothing left that is true and unowned elsewhere. Kept rather than deleted because docs/ci.md cites it from three places and a later reader arriving from one of them needs to land on the answer; those three passages still say the removals are "currently owed" and are now stale -->
 
 Standalone jobs were deleted because `repo: hygiene` already ran every gate they ran, via
 `bin/check-all.sh --with-tests`'s glob, on every PR: `Copyright header check` (the whole of

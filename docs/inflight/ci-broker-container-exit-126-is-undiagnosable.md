@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - re-read `BrokerIntegrationTest.java`: the shared container still starts in an unguarded static initialiser calling `kafkaContainer.start()`, and `followKafkaLogs()` is `@BeforeAll` and DEBUG-gated so it cannot run when the class initialiser throws; no `docker logs` or `if: failure()` capture step exists in `maven.yml`, so item 1 is untouched -->
 
 <!-- post-merge: checked-begin -->
 The GitHub-hosted `Integration Tests` gate goes red with the whole suite erroring, for a reason that
