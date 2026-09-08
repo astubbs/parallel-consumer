@@ -33,6 +33,21 @@ SUMMARY="$ROOT/target/performance-throughput.txt"
 # and `set -e` would otherwise exit before it is printed. The maven status is preserved and
 # re-raised at the end, so the lane still fails when the suite fails.
 #
+# WHY `capacity` IS EXCLUDED TOO. The three capacity profiles in MultiInstanceRebalanceTest measure
+# how much churn the stack survives; their legitimate output is a pass RATE over many runs, and
+# largeNumberOfInstances' residual was measured (2026-09-05) as the Kafka consumer group protocol
+# under this profile's churn rate - 4 in 60 on the Linux runner, 0 in 22 on an M2 desktop, no
+# coordinator request ever slow. A REQUIRED check that fails one run in fifteen for a reason no
+# change to PC can move blocks merges while saying nothing about the change being merged. So they run
+# in the scheduled `experiments` workflow instead, where a rate is what gets reported; the experiment
+# runners pass an empty `-Dexcluded.groups=` and so still select them. What keeps those code paths
+# gated is scriptedChurnRoundsCompleteWithoutStall, the deterministic correctness twin, which carries
+# neither tag. Decision and options: docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md
+#
+# THIS LANE STILL MEASURES: VeryLargeMessageVolumeTest, LargeVolumeInMemoryTests, LoadTest and
+# MultiInstanceHighVolumeTest remain @Tag("performance") without the capacity tag. Check the
+# NOT MEASURED / NONE FOUND report below rather than the tick - a lane that selects nothing passes.
+#
 # WHY `-Dexcluded.groups=quarantined` RATHER THAN EMPTY. An override REPLACES the pom's default list
 # (see pom.xml, `excluded.groups`), so the empty value this used to pass excluded NOTHING - which was
 # correct for `performance` (the whole point of this lane is to run it) and silently wrong for
@@ -48,7 +63,7 @@ rc=0
   clean verify \
   -DskipUTs=true \
   -Dincluded.groups=performance \
-  -Dexcluded.groups=quarantined \
+  -Dexcluded.groups=quarantined,capacity \
   "$@" 2>&1 | tee "$LOG" || rc=${PIPESTATUS[0]}
 
 mkdir -p "$(dirname "$SUMMARY")"

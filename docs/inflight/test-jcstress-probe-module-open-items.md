@@ -4,6 +4,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - still true, none of the items resolved so the delete-when condition is NOT met: jcstress-poc still declares no parent and is still absent from the root pom module list (so it is still outside the dependency and SpotBugs lanes), its pom still carries READ THE CALIBRATION BEFORE BELIEVING ANY ZERO as prose with no count assertion, no probe class imports anything from bz.stub.parallelconsumer so nothing detects correspondence drift, PartitionState.dirty is still the one field made volatile, and all four cited notes plus the dated plan doc still resolve -->
 
 `jcstress-poc/` landed in astubbs#348. A review pass over it raised the findings below and that PR
 closed none of them. Its measurements live in
@@ -79,6 +80,42 @@ nothing, a compiler flag in a profile CI never activates, a mutation control who
 for an unrelated reason). Until that exists, this is prose asking for discipline.
 <!-- post-merge: checked-end -->
 
+<!-- post-merge: checked-begin -->
+## A FORBIDDEN outcome can be unreachable by construction, and one arm's is
+
+One level in from the section above. There, the whole run is vacuous because the actors never raced,
+and the calibration arm is what tells you. Here the actors do race, the calibration arm fires, every
+other arm reports normally - and the forbidden *outcome* is still out of reach, so nothing about the
+run looks wrong to anyone reading it.
+
+`CommitWindowLostUpdateProbes.GenerationCountedCommitWindow` reports its FORBIDDEN outcome at zero,
+and that zero is vacuous. Both counters start at zero, so the poll actor enters the commit window
+only once it has already observed the completion, and the `AtomicLong` acquire that lets it in also
+publishes everything the release wrote before it - so the corner stays unreachable whether or not the
+protocol under it is correct. Raised by a Codex review on astubbs#469 and confirmed from that PR's
+recorded run rather than accepted on the argument: the two flag arms reached all four outcomes, the
+protocol arm only two, never producing "covered and still dirty".
+
+**astubbs#469 ruled to record this rather than remove it, so it is closed by decision and not by a
+change.** Seeding the arm dirty is not a fix - the corner stays unreachable for the same
+release/acquire reason - so removing the weakness needs a deliberately broken protocol variant as a
+negative control, the way `PartitionStateCommitWindowSeamTest` keeps a control arm asserting the old
+defect. Nobody is expected to come back and build it, and the arm keeps its FORBIDDEN outcome.
+
+`GenerationCountedCommitWindow`'s javadoc **owns** the full statement - why the corner cannot be
+entered, what the arm does show instead, and the ruling - so this item is a pointer and goes when
+this note goes. What is recorded here is the generalisation, which outlives the one arm: **a green
+FORBIDDEN tick is worth nothing unless some arm demonstrates the outcome is reachable at all.** Every
+other FORBIDDEN arm in this module earns its zero from a paired arm of the same state shape that
+fires - `CommitPathVisibilityProbes` and `SeenSucceededOrderingProbes` (`1, 0` against a plain arm
+that reaches it), `BackPressureFlagVisibilityProbes` (`false, false` against a plain and a reduced
+arm), differing from their comparator by a modifier and nothing else. `CalibrationProbes`' word-tearing
+outcome has no pair, but asserts a platform guarantee rather than a fix. The protocol arm is the only
+one whose fixed version has a **different state shape** from its comparator, which is exactly why the
+paired-arm licence does not extend to it - and that difference is what to check when a probe is added.
+Nothing in the build asks the question.
+<!-- post-merge: checked-end -->
+
 ## Nothing detects correspondence drift, or even compiles the module
 
 No probe imports a `bz.stub.parallelconsumer` class (the module's only dependency is
@@ -144,8 +181,9 @@ number about code that no longer matches it and no reader can see the difference
   other. What remains under the same defect class is deliberately not counted here: regenerate it
   with `./mvnw -o spotbugs:spotbugs -pl :parallel-consumer-core` and read the report.
   [`docs/refactoring.md`](../refactoring.md)'s `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` entry owns the
-  recorded list - and `bug-allowed-more-records-crosses-threads-unfenced.md` records that the entry
-  is currently missing the `PartitionState` fields, so read the report, not just the entry. The
+  recorded list; it was missing every `PartitionState` field until astubbs#469 corrected it and
+  replaced the list with the reproduce command, which is why this line says read the report and not
+  just the entry. The
   tension survives for whatever that leaves, and so does the
   `core-control-thread-contract-debts.md` caution that fixing piecemeal may conflict with the
   shared-nothing rework.

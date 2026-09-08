@@ -38,6 +38,11 @@ const cacheDir = () => process.env.PC_INFLIGHT_CACHE_DIR
 const POLICY = {
     'prs.json': { maxAgeMs: 24 * 60 * 60 * 1000, cacheEmpty: true },
     'pr-branch.json': { maxAgeMs: 6 * 60 * 60 * 1000, cacheEmpty: false },
+    // Every issue and pull-request NUMBER with its state, for `vet`'s "everything this note cites
+    // is settled" signal. A day, like `prs.json`: a number that closes today reads as open until
+    // tomorrow, which under-reports staleness rather than inventing it. Empty is not cached - a
+    // repository with no numbers at all is a failed listing, not an answer.
+    'numbers.json': { maxAgeMs: 24 * 60 * 60 * 1000, cacheEmpty: false },
     // Codecov's recorded test history. Ten minutes because a burst of `inflight codecov` queries in
     // one session should cost one fetch, while a CI run finishing mid-session still shows up. Empty
     // is not cached: an empty corpus would read as "no flakes recorded" - a false negative in the

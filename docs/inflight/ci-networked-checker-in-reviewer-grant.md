@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: security -->
+<!-- inflight-vetted: 2026-09-07 - re-read all three halves: `bin/check-quarantine-owners.sh` still runs `preview_git fetch --quiet --depth=1 --no-tags "$ORIGIN_URL"`, `Bash(bin/check-*.sh:*)` is still in the allowlist of BOTH `claude.yml` and `claude-code-review-dispatch.yml`, and `bin/AGENTS.md` records no disclosed exception for it - so none of the three delete-when conditions is met and the leaned-for rename has not happened -->
 
 
 `bin/AGENTS.md` states the rule for the two granted prefixes: **do not give that prefix to a script

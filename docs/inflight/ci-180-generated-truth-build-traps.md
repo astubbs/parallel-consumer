@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-read the poms: `parallel-consumer-core/pom.xml` still sets `cleanTargetDir` to false and `truth-generator-maven-plugin.version` is still 0.1.1, so the decided two-step fix has not shipped; the two guard-rails it credits are both still there (`reactorModuleConvergence`'s actionable message in the root pom, `-am` in `bin/build.sh`'s usage), and `preparationGoals` of `clean install` still handles only the release half of the test-jar coupling -->
 
 [astubbs#180](https://github.com/astubbs/parallel-consumer/issues/180) /
 [confluentinc#861](https://github.com/confluentinc/parallel-consumer/issues/861) -

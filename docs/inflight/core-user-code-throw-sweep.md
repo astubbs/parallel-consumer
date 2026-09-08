@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - both open items still stand: `PCMetrics` still calls into the user MeterRegistry under `metersLock` (see core-pcmetrics-lock-held-across-registry-calls.md), and the recovery question is still unanswered. The asymmetry it asks to preserve is intact in the tree - the vert.x `send.onFailure` handler logs a throwing `onUserFunctionFailure` and routes a throwing `addToMailbox` to `failFatallyOnUnmailboxableRecord`, which exists in core, `ExternalEngine` and vert.x -->
 
 **The defect class, not the PR.** It started as a `ConcurrentModificationException` from concurrent
 listener registration and became a class: PC invokes user-supplied code - a rebalance listener, a

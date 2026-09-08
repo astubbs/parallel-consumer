@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: refactor -->
+<!-- inflight-vetted: 2026-09-07 - re-checked: `bin/lib/source-patterns.mjs` still carries exactly the two rules it shipped with (`new-shell-script`, `sigpipe-into-grep-q`), and the one named candidate `bin/check-shell-hazards.sh` is still a shell rule table with its own `hazard-ok-file` opt-out - the fold has not been attempted, and the survey's does-not-fold list is unchanged -->
 
 `bin/lib/source-patterns.mjs` exists so a rule is a row rather than a script. The obvious next question
 is which of the remaining `bin/check-*.sh` are really just pattern matchers. Surveyed 2026-09-01, and

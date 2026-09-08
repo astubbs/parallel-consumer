@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - still true: MultiInstanceHighVolumeTest still declares GATING_CEILING = ofSeconds(60) and still gates on "all N within T" rather than on progress, and the throughput check in maven.yml is still non-blocking - its "Fail on throughput regression" step is guarded by `if: always() && false && ...`. The cited slf4j solution write-up still resolves. Nothing here is retired -->
 
 `MultiInstanceHighVolumeTest` asserts **3,000,000 records within a 60-second `GATING_CEILING`**. On
 GitHub-hosted runners the same test, on the same code, in the same lane, has been observed at:

@@ -203,97 +203,44 @@ class ArchitectureTest {
     /**
      * Known violations, each an open defect rather than an accepted design.
      *
+     * <p><b>It is EMPTY, and that is the point: this rule now passes on merit.</b> Do not read the emptiness as
+     * "the mechanism was removed" - the set is kept, and so is the keying below, because an exemption is how a
+     * newly-found reach gets recorded as a defect on the books rather than deleted from the report. Adding one
+     * back needs a named owner and a tracking note, exactly as the eighteen deleted here had.
+     *
      * <p><b>Keyed on {@code root => target}, not on the root alone.</b> A root-keyed exemption silences
      * that callback for EVERY blocking call, so accepting one known defect would hide the next,
      * unrelated one - a gate that goes quiet exactly where it has already found something is worse
-     * than one that never looked. The pair form exempts the one reach that is tracked and leaves the
-     * callback under inspection for everything else.
+     * than one that never looked. That is not a hypothetical here: the root-keyed form was concealing a second,
+     * unrelated violation inside the method it exempted, and only re-keying surfaced it.
      *
-     * <p>{@code onPartitionsRevoked}'s {@code while (isTransactionCommittingInProgress())
-     * Thread.sleep(100)} is unbounded and transactional-mode only. It arrived as confluentinc#548's
-     * fix and is now the defect behind astubbs/parallel-consumer#44 - which holds upstream's
-     * {@code verified bug} label - one of a couple of dozen that carry it. Tracked in
-     * {@code docs/inflight/bug-857-transactional-revoke-wait.md};
-     * remove this entry when that lands.
+     * <p><b>What was here, and what emptied it.</b> Eighteen keys, all one defect: every rebalance callback
+     * reached {@code RetryQueue.remove} - by direct call through {@code ShardManager.removeWorkFromShardFor} on
+     * the revoke and lost paths, and by METHOD REFERENCE ({@code .map(retryQueue::remove)}) through
+     * {@code ShardManager.removeStaleContainers} on all three - and so reached its unbounded, FAIR
+     * {@code WriteLock.lock()}. They are gone because the callbacks no longer touch that queue at all: they
+     * remove from the shards, and {@code ShardManager.purgeDepartedRetryEntries()} collects what that leaves,
+     * on the controller thread. Deleting the entries with the reaches still in place reports 24 violations (18
+     * keys; the {@code @ControllerThreadOnly} half fires once per route), which is how the emptiness was
+     * measured rather than assumed. The superseded alternative was astubbs/parallel-consumer#431, which routed
+     * those callers onto a declining {@code tryRemove}; the write-up carrying both designs is
+     * {@code docs/solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md}.
      *
-     * <p><b>The twelve entries below are debt this rule's own widening MADE VISIBLE, not debt it created.</b>
-     * The reaches were always there; the walk could not see them, so the list read as complete while three
-     * callbacks sat on an unbounded write-lock acquire - which is the exact false green
-     * {@link #rebalanceCallbacksMustNotBlock()} exists to prevent. Every one of them is owned by
-     * astubbs/parallel-consumer#431 and is deleted by it. Recording them here rather than shipping the rule
-     * green is deliberate: a gate that arrives green has measured nothing, and an exemption with a named owner
-     * is a defect on the books, which a reach nobody can see is not.
+     * <p><b>One entry was retired earlier, and what replaced it is a bounded wait this list does not
+     * name - deliberately.</b> {@code onPartitionsRevoked}'s {@code while (isTransactionCommittingInProgress())
+     * Thread.sleep(100)} spin - confluentinc#548's fix, unbounded, transactional-mode only, the defect
+     * behind astubbs/parallel-consumer#44 - is gone: in transactional mode the callback now hands its
+     * commit to the control thread and waits on a {@code CompletableFuture} with a deadline
+     * ({@code commitOnRevokeViaTheControlThread}, which carries the reasoning). That is
+     * {@code CompletableFuture.get(long, TimeUnit)}, and {@link #BLOCKING_CALLS} names the untimed
+     * {@code get()} and {@code join()} but not the timed form. Keep it that way, or add the timed form
+     * together with a {@code root => target} exemption for that one reach: the wait is safe there
+     * because a transactional commit needs nothing from the poll thread, which is the opposite of the
+     * edge both known deadlocks ran along, and it is bounded by the same timeout the inline commit's
+     * own lock acquisition had.
      */
-    private static final Set<String> KNOWN_BLOCKING_VIOLATIONS = new HashSet<>(Arrays.asList(
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.lang.Thread.sleep(long)",
-            // The RetryQueue write lock on the revoke/lost path. Pre-existing on master, surfaced by the
-            // astubbs/parallel-consumer#29 defect-class sweep once the deny list learned about
-            // ReentrantReadWriteLock. Owner: docs/inflight/bug-retry-queue-write-lock-on-the-rebalance-path.md
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsLost"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsLost"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsLost"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+    private static final Set<String> KNOWN_BLOCKING_VIOLATIONS = new HashSet<>();
 
-            // ---- Debt this commit MADE VISIBLE rather than introduced. Twelve entries, all one defect. ----
-            // The widened walk and the @ControllerThreadOnly check each report reaches that were always there
-            // and that the old rule could not see. Owner for every entry below:
-            // astubbs/parallel-consumer#431, which routes these sweeps onto a declining tryLock() path - when
-            // it lands, all twelve go with it, together with the six WriteLock entries above.
-
-            // 1. The METHOD REFERENCE the old walk could not follow: ShardManager.removeStaleContainers does
-            // `.map(retryQueue::remove)`, so all three callbacks reach the write lock through it. The revoke and
-            // lost roots collide with the six pre-existing keys above and are already covered; the ASSIGNED
-            // roots are new here, because nothing had ever reported a reach on that callback at all.
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsAssigned"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsAssigned"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsAssigned"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-
-            // 2. The DECLARED contract: every rebalance callback reaches RetryQueue.remove, which is
-            // @ControllerThreadOnly - by direct call through ShardManager.removeWorkFromShardFor on the revoke
-            // and lost paths, and by method reference through ShardManager.removeStaleContainers on all three.
-            // Keyed on the annotated method rather than on the JDK lock, so these are separate keys from the
-            // three above even where the root is the same - which is the point: the two halves of the rule
-            // answer different questions and neither one silences the other.
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsAssigned"
-                    + "(java.util.Collection) => bz.stub.parallelconsumer.state.RetryQueue"
-                    + ".remove(bz.stub.parallelconsumer.state.WorkContainer)",
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked"
-                    + "(java.util.Collection) => bz.stub.parallelconsumer.state.RetryQueue"
-                    + ".remove(bz.stub.parallelconsumer.state.WorkContainer)",
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsLost"
-                    + "(java.util.Collection) => bz.stub.parallelconsumer.state.RetryQueue"
-                    + ".remove(bz.stub.parallelconsumer.state.WorkContainer)",
-            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsAssigned"
-                    + "(java.util.Collection) => bz.stub.parallelconsumer.state.RetryQueue"
-                    + ".remove(bz.stub.parallelconsumer.state.WorkContainer)",
-            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsRevoked"
-                    + "(java.util.Collection) => bz.stub.parallelconsumer.state.RetryQueue"
-                    + ".remove(bz.stub.parallelconsumer.state.WorkContainer)",
-            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsLost"
-                    + "(java.util.Collection) => bz.stub.parallelconsumer.state.RetryQueue"
-                    + ".remove(bz.stub.parallelconsumer.state.WorkContainer)",
-            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsAssigned"
-                    + "(java.util.Collection) => bz.stub.parallelconsumer.state.RetryQueue"
-                    + ".remove(bz.stub.parallelconsumer.state.WorkContainer)",
-            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsRevoked"
-                    + "(java.util.Collection) => bz.stub.parallelconsumer.state.RetryQueue"
-                    + ".remove(bz.stub.parallelconsumer.state.WorkContainer)",
-            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsLost"
-                    + "(java.util.Collection) => bz.stub.parallelconsumer.state.RetryQueue"
-                    + ".remove(bz.stub.parallelconsumer.state.WorkContainer)"
-    ));
 
     private static DescribedPredicate<JavaMethod> areRebalanceCallbacks() {
         return new DescribedPredicate<>("are Kafka rebalance callbacks") {

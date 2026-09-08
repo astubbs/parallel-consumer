@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-08 - applied: Blocker 2 rewritten per the accepted proposal - the `setProcessingShards` question is discharged and the group is now a ratchet-with-a-reason, not a decision to take first; `Done when` and the section headings follow. Blocker 1 and the MONITORENTER gap left as they were; checked: no `@ThreadSafe` in main code (only `@ThreadConfined`, on `RetryQueue` and `AbstractParallelEoSStreamProcessor`), `bin/infer-test.sh` still passes no `--disable-issue-type`, the engine `AGENTS.md` still owns the settled annotation verdicts, and `static-archunit-main-code-rules.md` still does not name the MONITORENTER blind spot. CORRECTION to the proposal: `setProcessingShards` DOES still exist - it is Lombok-generated and `ShardMapIsNeverReplacedArchTest` asserts its existence so its own rules cannot silently match nothing - so the rewrite says the seam is settled, not that it is gone -->
 
 The infer lane (`bin/infer-test.sh`, register: [`static-infer-findings.md`](static-infer-findings.md))
 runs RacerD, pulse and starvation over core main code and gates on an identity ratchet. Every one of
@@ -14,14 +15,14 @@ Every annotation in that jar has now been applied and measured against the lane 
 about from Infer's documentation. **The settled verdicts moved to
 `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`, "Which of Infer's
 annotations this repo uses", which owns them.** This note owns only what is still open: the one
-annotation that would move the lane most, and the two things blocking it.
+annotation that would move the lane most, and what blocks it.
 
 **The ratchet is the evidence, and it fails both ways.** `config/infer-known-findings.txt` reports an
 identity that stopped firing as loudly as one that started, so an annotation that changes RacerD's
 verdict shows up as a retirement (honest, if the code says so) or a new finding (a real find, or a
 wrong declaration). An annotation that changes nothing is a comment the analyser happens to parse.
 
-## The open question: `@ThreadSafe`, and the two things blocking it
+## The open question: `@ThreadSafe`, and what blocks it
 
 RacerD only reports on code it believes is *meant* to be thread-safe, and it infers that from lock
 use - so a class that shares state without locks can be **silent** rather than clean. `@ThreadSafe`
@@ -43,13 +44,23 @@ which no ratchet can usefully hold. Infer's `--disable-issue-type INTERFACE_NOT_
 lever, and turning it on is a change to a hosted CI lane's checker set with its own review surface -
 that is the first step for whoever picks this up, not an aside.
 
-**Blocker 2 - the largest single group is an artefact of a test-only seam.** With
-`INTERFACE_NOT_THREAD_SAFE` set aside, the remaining `THREAD_SAFETY_VIOLATION`s fall into about a
-dozen groups keyed on one field each, and the biggest is every non-private `ShardManager` method
-reading `processingShards` "racing with the write in `setProcessingShards`". That setter is
-package-private and exists for tests; `ShardMapIsNeverReplacedArchTest` already forbids production
-callers of it, and RacerD cannot see an ArchUnit rule. So the group is real about the seam and wrong
-about the code, and adopting the annotation means answering what to do about the setter first.
+**Blocker 2 was the `setProcessingShards` seam, and it is now a known false positive rather than an
+open question.** With `INTERFACE_NOT_THREAD_SAFE` set aside, the remaining `THREAD_SAFETY_VIOLATION`s
+fall into groups keyed on one field each, and the largest at the time of the measurement was every
+non-private `ShardManager` method reading `processingShards` "racing with the write in
+`setProcessingShards`". The setter is still there - Lombok `@Setter(AccessLevel.PACKAGE)`, called
+only by tests - but its disposition is settled rather than pending:
+`ShardMapIsNeverReplacedArchTest` now shuts **both** doors to a replacement (a production caller of
+the setter, and a direct assignment to the field outside the constructor), pins the field and setter
+names against a rule that would otherwise match nothing and pass, and its class javadoc states the
+invariant outright - the reference is installed once, at construction, and never replaced while the
+consumer is running.
+
+So the answer to "what to do about the setter" is: nothing. It stays, the invariant is machine-checked
+from both sides, and RacerD still cannot see an ArchUnit rule - which makes the group a finding that
+goes into the ratchet **with that reason written next to it**, not a code change to make first. What
+is genuinely unknown is which group is largest once this one is accounted for; the grouping above was
+measured before those rules existed, and only a re-run of the reproduce line says.
 
 **What the triage found in the rest**, which is the part worth not re-deriving:
 
@@ -84,9 +95,10 @@ the entry was deliberately left for whoever touches it next rather than written 
 
 ## Done when
 
-`INTERFACE_NOT_THREAD_SAFE` is either disabled on the lane or shown to be tolerable, the
-`setProcessingShards` question is answered, and `@ThreadSafe` is on at least one shared class with
-every finding it raises either fixed or in the ratchet with a reason. The remaining annotations
+`INTERFACE_NOT_THREAD_SAFE` is either disabled on the lane or shown to be tolerable, and
+`@ThreadSafe` is on at least one shared class with every finding it raises either fixed or in the
+ratchet with a reason - the `processingShards` group among them, carrying the ArchUnit rules as its
+reason. The remaining annotations
 (`@Initializer`, `@Functional`, `@SynchronizedCollection`) only become writable at that point, and
 the engine's `AGENTS.md` already says so.
 
@@ -94,3 +106,11 @@ The `Nullsafe` family is deliberately not here: it is a different checker mode, 
 `NULLPTR_DEREFERENCE` group in the ratchet is the same question
 [`core-stale-arrival-guard-needs-a-null-safety-decision.md`](core-stale-arrival-guard-needs-a-null-safety-decision.md)
 has open. It belongs with that decision, not this one.
+
+## Update 2026-09-08 - the sequencing note above is spent
+
+astubbs/parallel-consumer#431 is superseded rather than merged, and the method-reference blind spot
+it is credited with closing was actually closed by astubbs/parallel-consumer#465, which landed
+separately. `KNOWN_BLOCKING_VIOLATIONS` is now empty, on merit. So the file this section was avoiding
+a conflict in - `static-archunit-main-code-rules.md` - is free to take the `MONITORENTER` entry
+whenever `@Lockless` is picked up; nothing is rewriting it any more.

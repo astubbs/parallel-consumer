@@ -219,30 +219,38 @@ transaction un-abortable. Both affected claims - C7 `PRODUCE_MANY_ALL_OR_NONE` a
 **The headline is defensible, and it now carries a stated exception.** Most documented guarantees in
 the register read `PROVED` with observed controls; one is a `KAFKA_GUARANTEE` that is Kafka's to keep,
 one is `COVERED_NO_CONTROL` (the commit-lock timeout failing fast) and is **attributed to an existing
-test rather than re-proved**, and two now read `REFUTED` - C9 `NO_PRODUCE_WITHOUT_ITS_OFFSET` and C4
-`OFFSET_AND_RECORDS_ATOMIC`, both on the revoke path and both by the same run. The register itself is
-the tally, not this paragraph; `TransactionalClaim` is where the statuses live and a count written
-here would be wrong the first time one moves.
+test rather than re-proved**. Two read `REFUTED` for four days in September 2026 - C9
+`NO_PRODUCE_WITHOUT_ITS_OFFSET` and C4 `OFFSET_AND_RECORDS_ATOMIC`, both on the revoke path and both by
+the same run - and read `PROVED` again once the revoke path was fixed, each with its RED and its GREEN
+observed. The register itself is the tally, not this paragraph; `TransactionalClaim` is where the
+statuses live and a count written here would be wrong the first time one moves.
 
-**C14 `RESULTS_EXACTLY_ONCE_UNDER_FAILURE` is deliberately still `PROVED`, and that is a decision
-rather than an oversight.** The route from the omitted offset to a duplicated result is sound -
-redelivery, re-produce, duplicate - but no duplicate was observed, and C14's own record is explicit
-that its RED and its GREEN were each seen rather than argued. Refuting it on reasoning would make it
-the register's first argued status and break the observed-versus-argued distinction that is the whole
-reason the register is worth more than prose. What would settle it is written on the claim: a
-broker-level rebalance reproduction showing a duplicated result.
+**C14 `RESULTS_EXACTLY_ONCE_UNDER_FAILURE` stayed `PROVED` throughout, and that was a decision rather
+than an oversight.** The route from the omitted offset to a duplicated result was sound - redelivery,
+re-produce, duplicate - but no duplicate was observed while the defect was open, and C14's own record
+is explicit that its RED and its GREEN were each seen rather than argued. Refuting it on reasoning
+would have made it the register's first argued status and broken the observed-versus-argued
+distinction that is the whole reason the register is worth more than prose. The broker-level rebalance
+reproduction that would have settled it was then run, on the fix branch, in both directions:
+`RebalanceEoSDeadlockTest` reads the output topic with a `read_committed` consumer after the revoked
+partitions return and fails on a repeated result, and against the old code it found three to five
+duplicated results in about a hundred and ten, five runs out of five, before reading zero five times
+out of five with the fix. It stays as the guard.
 
-**The refuted one, stated plainly rather than qualified away.** *"The system must prevent records
-from being produced to the brokers whose source consumer record offsets has not been included in this
-transaction"* holds on the control-loop commit path, with the observed control that proved it. It
-does **not** hold on the revoke path: `tryCommitOffsetsOnRevoke` takes the commit lock but never
-drains the work mailbox, and draining is the only thing that marks a partition dirty, so a
-revoke-time commit can publish a transaction containing a record whose source offset it omits - the
-output committed, the input not, and the next owner reprocessing it. Exactly-once degrades to
-at-least-once on that path. It is deterministic (red 5/5, no broker, no load), it predates the work
-that found it, and it is quarantined with a control arm rather than fixed, because the fix is a
-thread-ownership decision at a seam this project has patched four times and never restructured
-(`docs/inflight/core-revoke-commit-skips-the-work-mailbox-drain.md`).
+**The one that was refuted, stated plainly rather than qualified away.** *"The system must prevent
+records from being produced to the brokers whose source consumer record offsets has not been included
+in this transaction"* held on the control-loop commit path, with the observed control that proved it,
+and did **not** hold on the revoke path: the revoke-time commit took the commit lock but never drained
+the work mailbox, and draining is the only thing that marks a partition dirty, so it could publish a
+transaction containing a record whose source offset it omitted - the output committed, the input not,
+and the next owner reprocessing it. Deterministic (red 5/5, no broker, no load), older than the work
+that found it, and published as refuted for four days rather than softened. The fix is a
+thread-ownership decision at a seam this project had patched four times and never restructured: in
+transactional mode the revoke callback now hands its commit to the control thread, whose sequence
+drains first, and waits - and the decline that was first proposed as the fix was itself refuted by
+experiment before any code was written, because a revoke that commits nothing leaves the output in the
+open transaction for the next commit to publish anyway
+(`docs/solutions/logic-errors/the-revoke-path-commit-did-not-drain-the-mailbox-2026-09-07.md`).
 
 This is what the register is for. It was written to fire against us, it has now done so twice - once
 on claims that were fixed, once on a claim that is open - and the value of that is lost the moment

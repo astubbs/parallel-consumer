@@ -75,7 +75,6 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ConsumerOffsetCommitter.java`**
 
-- todo keep work in limbo until async response is received?
 - TODO(refactor): a user-facing failure wants a PC-named type, not "internal runtime" -
 - TODO(refactor): a user-facing failure wants a PC-named type - see
 
@@ -187,10 +186,6 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/MultiInstanceHighVolumeTest.java`**
 
 - todo multi commit mode, multi partition count, multi instance count? 2,3,10,100? more instances than partitions, more partitions than instances
-
-**`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/MultiInstanceRebalanceTest.java`**
-
-- TODO(refactor): settle the residual-failure attribution — see
 
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/MultiTopicTest.java`**
 

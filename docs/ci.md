@@ -105,8 +105,8 @@ document. This section is the detail behind it.
   [`docs/solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md`](solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md)
   for the class.
 - **The PR-body gates** - formerly the `PR Checklist` job in `pr-checklist.yml`, now the tail of
-  `repo: hygiene` in `repo-hygiene.yml` (folded 2026-09-07; the old context is a removal owed to the
-  ruleset, see below): the template checklist (rule in AGENTS.md, PR Discipline), the
+  `repo: hygiene` in `repo-hygiene.yml` (folded 2026-09-07; the old context has since been removed
+  from the ruleset, see below): the template checklist (rule in AGENTS.md, PR Discipline), the
   changelog-citation gate (`changelog-ref-gate.js`, see [`docs/releasing.md`](releasing.md)), the
   issue-reference gate (`issue-ref-gate.js`, see [`docs/issue-references.md`](issue-references.md)),
   the file-reference gate (`file-ref-gate.js`, see [`docs/citations.md`](citations.md)), which fails
@@ -196,10 +196,10 @@ document. This section is the detail behind it.
   **is in the required list** as of the live check on 2026-09-07 -
   `gh api repos/astubbs/parallel-consumer/rules/branches/master` enumerates every required context
   by name. The four contexts retired into it that day - `Copyright header check`,
-  `quarantine: audit`, `docs data: audit`, `PR Checklist` - are the removals currently owed to the
-  ruleset;
-  [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md) owns
-  that edit. Confirm against the live ruleset rather than assuming this paragraph is current.
+  `quarantine: audit`, `docs data: audit`, `PR Checklist` - were removed from the ruleset in turn;
+  the 2026-09-07 vetting sweep confirmed none of them is still required.
+  [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md) records
+  that edit, closed. Confirm against the live ruleset rather than assuming this paragraph is current.
   - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
     exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
     (retiring them needs someone else to act, on no timetable we control) and *temporary* (the
@@ -1100,13 +1100,17 @@ skipped rather than handed an empty `files:`, because empty is what re-opens the
 `build` job collects the two halves into separate outputs, since one half per flag is the split these
 gates compare.
 
-**It is not proven, and it could not be proven before merging.** The comparison exists only on the
-server, and only once both sides have re-uploaded under real file lists, so the first clean per-flag
-comparison after master has run the `build` job is the evidence. Inside that window a PR is still
-compared against a base assembled the old way, so **a red per-flag gate there is the old defect being
-measured, not a regression**. Tracked in
+**It could not be proven before merging, and it has since been proven on the server.** The
+comparison exists only there, and only once both sides have re-uploaded under real file lists, so the
+first clean per-flag comparison after master has run the `build` job was the evidence - and it
+arrived: master's own two flags now report different figures rather than the identical one that told
+us both held the same data, and astubbs#475, a pull request with no `.java` in its diff, showed
+`codecov/project/unit` and `codecov/project/integration` both green. Inside the window before that a
+PR was still compared against a base assembled the old way, so **a red per-flag gate there was the
+old defect being measured, not a regression**; a PR whose merge-base still predates the change can
+land inside the tail of it. The record is
 [`docs/inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md`](inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md),
-which owns the outstanding proof and the condition for closing it.
+now closed, which carries the measurements and the files-count tell below.
 
 **A second, independent cause reads the same from the check list**: a master run cancelled before it
 uploaded, which leaves Codecov with no report for that base commit and every PR comparing against
@@ -1231,3 +1235,15 @@ it, so the lane reports nothing at all and looks merely quiet.
 **Beware: `performance` names two unrelated things.** It is the *test suite*
 (`bin/performance-test.sh`, the required **Performance Tests** check, on every PR from `maven.yml`,
 `ubuntu-latest`). It is **not** a runner label - the only self-hosted label is `highcpu`.
+
+**Not every `@Tag("performance")` test runs in that required check.** Since 2026-09-07 a test may
+also carry `@Tag("capacity")`, which `bin/performance-test.sh` excludes
+(`-Dexcluded.groups=quarantined,capacity`) while the experiment runners, passing an empty exclusion,
+still select it. That is for tests whose output is a pass **rate** over many runs rather than an
+outcome - `MultiInstanceRebalanceTest`'s three churn profiles - and it exists because a required
+check that fails one run in fifteen for a reason no change to PC can move blocks merges while saying
+nothing about the change being merged. `MultiInstanceRebalanceTest#CAPACITY_TAG` and
+[`docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md`](inflight/test-largenumberofinstances-cannot-gate-a-merge.md)
+own the reasoning. **A lane that selects nothing passes**, so when either side of that split changes,
+read what the lane actually ran - `bin/performance-test.sh`'s own `NOT MEASURED` / `NONE FOUND`
+report is there for exactly this.

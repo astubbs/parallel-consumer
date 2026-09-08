@@ -209,6 +209,46 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         }
     }
 
+    /**
+     * The step between a revocation commit's drain and its commit, on the control thread inside the producer
+     * write lock: from here on nothing may start or produce for these partitions, so that the offsets about to be
+     * committed are the last word this instance has on them. {@link PartitionState#fenceForRevocation} owns the
+     * reasoning; truncation ({@link #onPartitionsRevoked}) follows on the poll thread once the commit has returned.
+     * <p>
+     * <b>A fence belongs to one assignment generation, which is why the caller passes epochs and not partitions.</b>
+     * The pass that serves a revocation can run after the revocation's waiter gave up: the poll thread then
+     * truncates, and the partition can come back to this instance under a new epoch with a fresh state before the
+     * late pass reaches this point. Fencing whatever state occupies the key at that moment would fence the NEW
+     * generation, silently, until the next rebalance - the independent cross-model review of the fix found it. So a
+     * partition is fenced only while its live epoch still equals the one the request was posted with; a state that
+     * is missing (a failed assignment, astubbs#451) or already removed is left alone, the removed one because it is
+     * the shared {@link RemovedPartitionState} singleton and already reads as stale.
+     *
+     * @param partitionEpochsAtRequest the revoked partitions, each with the assignment epoch it had when the revocation
+     *                                 was posted
+     */
+    public void fenceForRevocation(Map<TopicPartition, Long> partitionEpochsAtRequest) {
+        // A loop, not a forEach lambda: Infer keys its findings on Class.method, and a lambda added here renumbers
+        // the synthetic lambda$... names of every method after it - which renamed a known finding in
+        // onOffsetCommitSuccess and read as a new one to the ratchet.
+        for (Map.Entry<TopicPartition, Long> entry : partitionEpochsAtRequest.entrySet()) {
+            TopicPartition partition = entry.getKey();
+            Long epochAtRequest = entry.getValue();
+            var state = getPartitionState(partition);
+            if (state == null || state.isRemoved()) {
+                log.debug("No state to fence for {} - never assigned, its assignment failed, or already truncated", partition);
+                continue;
+            }
+            Long liveEpoch = getEpochOfPartition(partition);
+            if (!Objects.equals(liveEpoch, epochAtRequest)) {
+                log.info("Not fencing {}: it was revoked at epoch {} but is now assigned at epoch {}, so the fence " +
+                        "belongs to a generation that has already been truncated", partition, epochAtRequest, liveEpoch);
+                continue;
+            }
+            state.fenceForRevocation();
+        }
+    }
+
     void onPartitionsRemoved(final Collection<TopicPartition> partitions) {
         incrementPartitionAssignmentEpoch(partitions);
         resetOffsetMapAndRemoveWork(partitions);
@@ -238,8 +278,9 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
      * Records that a commit succeeded, for each partition that was committed.
      * <p>
      * Per partition, this delegates to {@link PartitionState#onOffsetCommitSuccess}, which stores the newly committed
-     * offset as the partition's last committed offset and marks the partition clean (unless its state changed again
-     * while the commit was in flight, in which case it stays dirty and will be committed again).
+     * offset as the partition's last committed offset and marks the partition clean - unless the acknowledgement is
+     * to an offer a later one has passed, or its state changed again while the commit was in flight, in either of
+     * which cases it stays dirty and will be committed again.
      * <p>
      * <b>No offsets are discarded here.</b> Earlier versions of this javadoc described truncating tracked offsets below
      * the committed offset once a commit landed. That does not happen, and cannot: {@link PartitionState} tracks only
