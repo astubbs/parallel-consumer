@@ -4,7 +4,6 @@ package bz.stub.parallelconsumer.offsets;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
@@ -13,9 +12,6 @@ import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.clients.consumer.MockConsumer;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
@@ -26,7 +22,6 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.OptionalLong;
-import java.util.function.UnaryOperator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -71,8 +66,6 @@ class ImplausibleOffsetMapOnFirstBatchTest {
 
     static final int RECORDS_IN_BATCH = (int) (LAST_RECORD_OF_BATCH - FIRST_RECORD_OF_BATCH + 1);
 
-    MockConsumer<String, String> mockConsumer;
-
     /**
      * Base64 of a {@link OffsetEncoding#RunLengthV2} payload with the given runs, the first of which is a run of
      * <em>incomplete</em> offsets (the decoder starts there, because the committed offset is the lowest incomplete
@@ -111,27 +104,17 @@ class ImplausibleOffsetMapOnFirstBatchTest {
         return runLengthV2Metadata(1, (int) (highestSeenOffset - COMMITTED_OFFSET));
     }
 
+    /**
+     * A module whose consumer has {@code metadata} committed against {@link #TP}, as a previous owner of the consumer
+     * group would have left it - {@link OffsetCodecTestUtils} owns the setup, shared with
+     * {@link ForeignOffsetMetadataOnAssignmentTest}.
+     */
     private PCModuleTestEnv moduleWithCommittedMetadata(String metadata) {
-        return moduleWithCommittedMetadata(metadata, UnaryOperator.identity());
+        return OffsetCodecTestUtils.moduleWithCommittedMetadata(TP, COMMITTED_OFFSET, metadata);
     }
 
     private PCModuleTestEnv moduleWithCommittedMetadata(String metadata, InvalidOffsetMetadataHandlingPolicy policy) {
-        return moduleWithCommittedMetadata(metadata, builder -> builder.invalidOffsetMetadataPolicy(policy));
-    }
-
-    /**
-     * Builds a module whose consumer has {@code metadata} committed against {@link #TP}, as a previous owner of the
-     * consumer group would have left it.
-     */
-    private PCModuleTestEnv moduleWithCommittedMetadata(String metadata,
-                                                        UnaryOperator<ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String>> configure) {
-        mockConsumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
-        mockConsumer.assign(UniLists.of(TP));
-        mockConsumer.commitSync(UniMaps.of(TP, new OffsetAndMetadata(COMMITTED_OFFSET, metadata)));
-
-        var options = configure.apply(ParallelConsumerOptions.<String, String>builder()
-                .consumer(mockConsumer)).build();
-        return new PCModuleTestEnv(options);
+        return OffsetCodecTestUtils.moduleWithCommittedMetadata(TP, COMMITTED_OFFSET, metadata, policy);
     }
 
     private static List<ConsumerRecord<String, String>> batchOfRecords(long fromInclusive, long toInclusive) {
