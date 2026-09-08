@@ -296,6 +296,12 @@ itself. Local M2 Mac, JDK 17, load average recorded per arm; predictions written
 | clean master | - | PASS | **5/5 pass**, 35.4s (load 5.1-7.1) |
 | sabotaged | 20s sleep in `doClose()` | FAIL on the close bound | **5/5 fail**, `expected to be less than: 10.0 but was 20.009590667` (load 13.0) |
 
+**`ClosingMemberRebalanceIT`'s own javadoc owns this test's calibration, and says the same thing from
+2026-09-07** - its `Proven red` block records the identical sabotage shape against the tree of that
+day. The rows above are an independent re-run on a later master, kept here because what this register
+needs is whether the PC-side story still holds *now*; read the javadoc for what the test is
+calibrated to detect, and do not take the agreement between the two for one result cited twice.
+
 **The sabotage arm is why the clean arm counts.** Every property this test asserts already holds on
 master, so a green alone says nothing about whether the test can see the failure - the trap
 astubbs#485 recorded when one replay in two turned out to be VOID because its window never opened.
