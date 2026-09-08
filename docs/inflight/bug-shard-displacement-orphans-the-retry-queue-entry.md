@@ -73,3 +73,27 @@ add-then-confirm shape that closes rather than narrows.
 **`ProcessingShard.retire`'s javadoc is where the pairing invariant is stated**, and it currently
 covers only the population and the selection claim - if the queue becomes the shard's business, that
 javadoc is the place the third half goes.
+
+## Update 2026-09-08 - the entry is now collected, and the fix question narrows
+
+`ShardManager.purgeDepartedRetryEntries()` collects every retry-queue entry whose container is
+resident in no shard, once per control-loop pass, on the controller thread. **A displaced container
+is resident in no shard from the moment its replacement takes its offset** - residency is reference
+identity - so the surviving entry this note is about is now collected on the next pass rather than
+waiting on the replacement's own terminal event.
+
+That does not close the note, and the difference is worth keeping straight:
+
+- **The FIGURE this note names as the actual harm is now bounded by one control-loop tick** rather
+  than by the replacement's lifecycle. That is a strictly smaller window, on the same misdirection.
+- **The pairing gap itself is unchanged.** `ProcessingShard.addWorkContainer` still cannot remove
+  from a queue it holds no reference to, and the three design options below are still the options.
+  What has changed is the cost of doing nothing, which was already "bounded misdirection" and is now
+  a tick of it.
+- **The clause about astubbs/parallel-consumer#431's branch is dead.** That PR is superseded, not
+  merged; `removeStaleWorkContainersFromShard` never took the queue, and no rebalance-path code
+  touches the queue at all now. Both designs:
+  [`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
+
+**Production reachability is still not established**, which is the open question this note names and
+the purge does not answer.

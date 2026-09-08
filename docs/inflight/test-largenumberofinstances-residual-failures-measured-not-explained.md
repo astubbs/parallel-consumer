@@ -837,3 +837,17 @@ loggers on `kafka.coordinator.log.level`; `bin/exp-measure-large-instances-failu
 them; the `ref=` tally column; the fleet diagnostic with thread capture. And an analyser that measured
 LeaveGroup/JoinGroup latency and, by measuring only those, nearly missed that neither was the problem -
 the phase duration is what to read, from the clustering of LeaveGroup responses.
+
+## Update 2026-09-08 - the refuted candidate's fix shipped, under a different number
+
+The refutation above stands and is not weakened by this: the retry-queue write lock is still not the
+mechanism behind this test's residual failures. What has changed is only that the lock defect itself
+is fixed, by a different design from the one measured here - the poll thread no longer touches the
+retry queue at all, rather than declining its lock. astubbs/parallel-consumer#431 is superseded, so a
+reader following that number from the prediction above will find an open, dead PR; the write-up
+carrying both designs is
+[`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
+
+**Nothing here should be re-run against the new fix expecting a different answer.** The control arm
+had the power to show an effect and showed none; a second design for the same defect does not make
+the mechanism more likely.

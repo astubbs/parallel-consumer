@@ -94,3 +94,11 @@ The `Nullsafe` family is deliberately not here: it is a different checker mode, 
 `NULLPTR_DEREFERENCE` group in the ratchet is the same question
 [`core-stale-arrival-guard-needs-a-null-safety-decision.md`](core-stale-arrival-guard-needs-a-null-safety-decision.md)
 has open. It belongs with that decision, not this one.
+
+## Update 2026-09-08 - the sequencing note above is spent
+
+astubbs/parallel-consumer#431 is superseded rather than merged, and the method-reference blind spot
+it is credited with closing was actually closed by astubbs/parallel-consumer#465, which landed
+separately. `KNOWN_BLOCKING_VIOLATIONS` is now empty, on merit. So the file this section was avoiding
+a conflict in - `static-archunit-main-code-rules.md` - is free to take the `MONITORENTER` entry
+whenever `@Lockless` is picked up; nothing is rewriting it any more.

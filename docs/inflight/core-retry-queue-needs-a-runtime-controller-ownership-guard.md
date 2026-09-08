@@ -84,3 +84,18 @@ that is already taking a lock.
   rule stated in a comment.
 - `docs/inflight/static-archunit-main-code-rules.md`, "the rule now enforces a contract the CODEBASE declares"
   - what the static half does and what it measured.
+
+## Update 2026-09-08 - the precedent named above is superseded, and the static half is now green
+
+The design questions are unchanged; one citation in them is not. The precedent for "decline rather
+than throw" was astubbs/parallel-consumer#431, which is superseded rather than merged - the design
+that shipped removes the question instead of answering it, by taking the poll thread off the retry
+queue altogether (`ShardManager.purgeDepartedRetryEntries()` collects on the controller thread).
+Both designs:
+[`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
+
+**That makes this note MORE load-bearing, not less.** The purge's safety argument rests on the retry
+queue having exactly one writer - the controller - because it removes by topic/partition/offset and
+so cannot say which container it meant. Today that is a `@ControllerThreadOnly` marker plus an
+ArchUnit rule that sees rebalance callbacks only. The runtime guard this note is about is what would
+catch every other caller.

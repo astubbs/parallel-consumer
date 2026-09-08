@@ -33,3 +33,23 @@ A wrong answer here is quiet.
 
 Surfaced while reviewing astubbs/parallel-consumer#31; the orphan is pre-existing and independent of
 that PR.
+
+## Update 2026-09-08 - two of the four items are now covered, beside the dated text above
+
+The list above is left as written; what follows says which parts of it have stopped being true, and
+by what.
+
+- **"Shard/queue consistency after a stale removal"** is covered from a different direction than the
+  one this note expected. `ShardManager.removeStaleContainers` no longer cleans the queue at all - it
+  runs inside a rebalance callback on the broker-poll thread, and the queue's write lock is unbounded
+  and fair - so consistency is now maintained by `ShardManager.purgeDepartedRetryEntries()` on the
+  controller thread, which collects any entry whose container is resident in no shard. The asymmetry
+  the bullet describes is therefore gone by removal rather than by symmetry, and
+  `RetryQueueRebalancePathTest` is what asserts it. The design and both alternatives:
+  [`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
+- **"Behaviour under revoke"** is covered by that same test class, and the `if (Objects.nonNull(...))`
+  the bullet quotes no longer guards a queue removal.
+- **`add` is last-write-wins** and **the two-map invariant** are still uncovered by anything this
+  note would recognise, except that `RetryQueueTest` and `RetryQueueLincheckTest` arrived in the
+  meantime and cover the `removeAll` contract and the concurrent interleavings respectively. Read
+  those before writing anything new here.
