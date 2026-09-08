@@ -188,8 +188,13 @@ churn rather than a PC defect.
   which replaced the unbounded spin with a wait bounded by `commitLockAcquisitionTimeout`, so what
   astubbs#408 (tier 2) still owns is declining instead of waiting, and whether that bound is right.
   The exception the claim names should say "bounded, not yet declined", not "unbounded".
-- An eager-mode (`PERIODIC_CONSUMER_SYNC`) stall that reproduces on trees carrying astubbs#29's fix
-  (the family note's "fourth open item"). Unattributed.
+- ~~An eager-mode (`PERIODIC_CONSUMER_SYNC`) stall that reproduces on trees carrying astubbs#29's
+  fix (the family note's "fourth open item")~~ - **withdrawn 2026-09-08, astubbs#478.** Four replays
+  of the recorded seed on today's master all drained completely with zero loss; the "stall" was the
+  Class 2 timing bound, whose crossing flips with the processor count at a fixed seed and tree. The
+  grid the item was opened on was also never a one-term A/B. What survives from this line is the
+  per-shard liveness gap, already tracked and deferred with a stated bar - a blind spot to name,
+  not a bug to fix before cutting.
 - A rebalance stall in async unordered mode from `MultiInstanceRebalanceTest` (the "fifth open
   item"), blocked on progress-tracker instrumentation that does not exist yet. Unattributed.
 - `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on idle runners, so they read as
@@ -224,7 +229,7 @@ churn rather than a PC defect.
 own branch; `gh pr list -R astubbs/parallel-consumer` shows the PRs as they open.** Code-shaped
 questions run in parallel; the replay-shaped ones (chaos and soak) run one at a time, because
 several replay agents on one machine produce exactly the starvation artefacts they are meant to
-rule out. Order of the replay queue: the eager-mode stall (running), then the six deadlock captures
+rule out. Order of the replay queue: the eager-mode stall (done - withdrawn, astubbs#478), then the six deadlock captures
 with the fix applied, then the async-unordered rebalance stall with its progress-tracker
 instrumentation, then the `INSTANCE_STALL`/`ZOMBIE_MEMBER` idle-versus-loaded replay, then the
 commit-response-timeout stall astubbs#471's soak found.
@@ -235,9 +240,21 @@ commit-response-timeout stall astubbs#471's soak found.
 - Whether the shard-displacement orphan window
   ([`bug-shard-displacement-orphans-the-retry-queue-entry.md`](bug-shard-displacement-orphans-the-retry-queue-entry.md))
   is reachable in production.
-- Whether "rejoin" after producer fencing is expressible in PC's lifecycle - flagged in
-  [`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md) as needing
-  investigation; astubbs#410 is the answer under review.
+- ~~Whether "rejoin" after producer fencing is expressible in PC's lifecycle~~ - **known,
+  2026-09-08, by a read of the astubbs#472/#474/#410 diffs against the engine's ownership rules:**
+  it is, and the stack expresses it, with the correction that the question dissolves - PC's
+  instance never leaves the group (no file in the stack touches the consumer, the poll system or
+  the subscription), so "rejoin" reduces to aborting the open transaction under the write lock,
+  building and adopting a replacement producer on the control thread, and restoring the
+  completed-but-uncommitted records for replay, drain-then-replay inside the same lock. All five
+  broker invalidation conditions are covered on both the commit and produce paths; the
+  `@GuardedBy` ledger, thread confinement and the produce/commit lock pair are respected and
+  asserted. What the stack does not answer is astubbs#420's territory (the derived
+  `transactional.id`, redaction), one wire-level test nobody wrote (a fence induced by real
+  consumer-generation loss; both ITs use a rogue producer under the same id), and the plan's one
+  open question - whether recovery should decline the write lock while a rebalance is in progress,
+  which astubbs#410 does not check and the measurement meant to settle was not taken. Bounded, and
+  review-sized; it does not change the tier 2 decision.
 - Which of the flakes in [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) are
   load-shaped and which are real - the three module `simpleBatchTest` failures have the most
   sightings and no diagnosis.
@@ -324,10 +341,8 @@ its subject at any merge.
 
 **Look at before the tag - these contradict the release claim if left silent:**
 
-- **The eager-mode stall that reproduces with the fixes applied** - the "fourth open item" in
-  [`bug-857-family.md`](bug-857-family.md): two seeds, `PERIODIC_CONSUMER_SYNC`, reproduces every
-  time, undiagnosed. Time-box a diagnosis alongside tier 1; if it is not understood when tier 3 is
-  done, ship and name it in the release note rather than wait.
+- ~~The eager-mode stall that reproduces with the fixes applied~~ - **withdrawn, astubbs#478**
+  (2026-09-08): not a defect, a timing bound crossing on processor count. Nothing to ship or name.
 - ~~Poller death leaves the consumer open in consumer-commit modes~~ - **now astubbs#477 in tier 1**
   (2026-09-08). The fix was as small as the note proposed, and its defect-class sweep - cleanup gated
   on "am I the role-holder?" where the holder may be dead - found no other instance across the four
