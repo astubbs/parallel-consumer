@@ -241,19 +241,25 @@ box means the v6 action for that line is done, not that the defect is closed:
   the soak's progress line, one knob per arm, the accounting gap as a characterisation test, and
   the working note. confluentinc#833's flat processed-records counter is this state.
   **For the release note, and it is stronger than "a poison-record workload":** the stall does not
-  need a high failure rate. Under retry-forever the held poison population only grows; each poison
-  record occupies a worker for the function's duration once per retry delay, so workers saturate
-  once the population reaches about `maxConcurrency` times the retry delay over the function
-  duration - at that run's defaults, on the order of a hundred and forty records over the life of
-  the instance - and only then can the unparked count climb past the gate's threshold and latch it.
-  So any long-lived instance with no user-side terminal handling and any poison at all gets there
+  need a high failure rate, and it does not need saturated workers either. The gate reads
+  `inShards - parkedForRetry`, and the parked term is throughput times retry delay, not a
+  population property - it sat at the same value across a thirty-fold change in population. So the
+  unparked count is the poison population minus what the retry service is holding in back-off, and
+  it crosses the gate's threshold as soon as the population outgrows that. A fourth arm at a low
+  poison rate, prediction first, latched the gate at under a hundred held records about a minute
+  in, with three of fourteen workers busy: the instance stopped fetching while mostly idle and
+  looking healthy, successes flowed for minutes and then froze for the rest of the run. A slower
+  retry service latches sooner, since fewer records are parked and more read as workable. So any
+  long-lived instance with no user-side terminal handling and any poison at all gets there
   eventually, silently, and for good: the latch is exported only as a paused-partition count and
-  logged nowhere. That is the best explanation yet for confluentinc#809 and confluentinc#833's flat
-  processed-records counters, and a question the fork can put to those reporters. The
-  low-rate arm that turns this arithmetic into a measurement is queued on the same agent
-  (2026-09-08, reviewer feedback). Owner's calls: whether to ask those reporters, and whether the
-  cheap interim - a warning when the gate latches with nothing retiring, no semantic change - is
-  v6-sized. Box closes when astubbs#487 merges.
+  logged nowhere, and no poller wakeup is ever attempted because the wakeup is itself gated on the
+  same reading. That is the best explanation yet for confluentinc#809 and confluentinc#833's flat
+  processed-records counters. A draft question for those reporters is in the session scratchpad,
+  unposted. One thing the arms did not explain, flagged as the next arm: the observed retry cadence
+  is about three times the configured delay, and the latch point is a function of it. Owner's
+  calls: whether to ask those reporters, and whether the cheap interim - a warning when the gate
+  latches with nothing retiring, no semantic change - is v6-sized. Box closes when astubbs#487
+  merges.
 
 **Resolved or reassigned since this list was written - kept so the release note can say what was ruled out:**
 
