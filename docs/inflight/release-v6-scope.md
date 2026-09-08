@@ -176,8 +176,8 @@ recorded in the sweep's list below, and the call is still the owner's.
 Named so nobody re-argues them in: the producer-recovery stack in tier 2 (by the 2026-09-07
 decision, unless reopened); astubbs#352 (commit-failure seam - a feature, even though
 confluentinc#833's reporter patched the library for it), astubbs#226 (health check), astubbs#306
-(offset density), astubbs#360 (virtual threads), astubbs#471 and astubbs#405 (soak and torture
-harnesses - test infrastructure, unless a run finds a data-loss defect), astubbs#479 (the
+(offset density), astubbs#360 (virtual threads), astubbs#405 (the torture harness - test
+infrastructure; astubbs#471's soak has merged and its finding is in the confluentinc#857 list), astubbs#479 (the
 God-class decomposition plan and the five classes below it - a refactor track whose own notes say
 which open PRs must merge before each cut, so it follows the release rather than gating it), and
 every Streams, proxy, perf, rate-limiting and dashboard stack.
@@ -214,6 +214,18 @@ churn rather than a PC defect.
   item"), blocked on progress-tracker instrumentation that does not exist yet. Unattributed.
 - `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on idle runners, so they read as
   starvation rather than a wedge. Not a confirmed defect; not ruled out either.
+- **An intake stall under an always-failing key, found by astubbs#471's soak (merged 2026-09-08).**
+  Under KEY ordering with records that throw on every attempt, successes froze inside the first
+  minute of both runs while the failure rate held exactly constant: the instance stopped taking new
+  work at all, and a stalled instance can never reach the commit-response timeout the soak was
+  hunting. Named, untested candidate: `WorkManager#isSufficientlyLoaded` counts records queued
+  BEHIND a blocked shard head while only the failing head is parked, so head-of-line blocking on a
+  few keys reads as "sufficiently loaded" and the poller pauses for good - the silent-stall shape
+  the gate's own comment names against confluentinc#857. Offset-encoding back pressure is
+  eliminated (neither transition logged). One run reading the gate's DEBUG line settles it; that is
+  the last item of the replay queue. confluentinc#833's reporter showed the processed-records
+  counter flat across their window, which is this state, so this may be the better lead than the
+  timeout itself.
 - A dead broker-poll thread leaving the consumer open in consumer-commit modes, no LeaveGroup until
   `max.poll.interval.ms` - **fixed in the queue, astubbs#477, tier 1.**
 
@@ -243,8 +255,10 @@ churn rather than a PC defect.
   having truncated nothing. Misdirection operators may alert on; cheap once decided, and it wants
   the owner's call on message and level. Name it in the release note; not a data risk.
 - **Never reproduced:** the commit-response timeout (confluentinc#809, confluentinc#833). astubbs#471
-  is the first experiment that hunts it, and its first runs found a stall. Not a v6 gate; the
-  release note says the symptom's known causes are fixed and the reports were never reproduced.
+  (merged) is the first experiment that hunts it; its first runs could not reach the timeout because
+  the instance stalled first - see the intake-stall item in the confluentinc#857 list above, which
+  is now the live lead. Not a v6 gate in itself; the release note says the symptom's known causes
+  are fixed and the reports were never reproduced.
 
 ## Known unknowns the release note should not paper over
 
@@ -255,8 +269,9 @@ several replay agents on one machine produce exactly the starvation artefacts th
 rule out. Order of the replay queue: the eager-mode stall (done - withdrawn, astubbs#478), the six deadlock
 captures with the fix applied (done - proven by control arm, astubbs#485), then the async-unordered
 rebalance stall with its progress-tracker instrumentation (running), then the
-`INSTANCE_STALL`/`ZOMBIE_MEMBER` idle-versus-loaded replay, then the commit-response-timeout stall
-astubbs#471's soak found.
+`INSTANCE_STALL`/`ZOMBIE_MEMBER` idle-versus-loaded replay, then the intake stall astubbs#471's
+soak found (read the gate's DEBUG line under that workload; one run settles the load-gate
+hypothesis).
 
 
 - ~~Whether the six deadlock captures that verified astubbs#29's mechanism ever replay clean with
