@@ -537,11 +537,13 @@ cosmetic - see the last bullet.*
   comparison" analysis-only code once the encoding choice is settled.
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
   missing `max-uncommitted < Short.MAX` bound.
-- **astubbs#480 deepens the consumer dependency the split above would remove**: decode-on-assignment
-  now also calls `consumer.endOffsets(...)` (`findHighestOffsetsHeld`) - a blocking ListOffsets
-  round trip inside the rebalance callback, batched and failing open - to bound every run and
-  bitset by the partition's log end offset. When the split happens, the ground-truth lookup moves
-  out with the decode side, so the codec proper never holds a `Consumer` or talks to a broker.
+- **astubbs#480 leaves the codec's consumer dependency where it was.** Its first revision bounded
+  every decoded run and bitset by a blocking `consumer.endOffsets(...)` round trip inside the
+  rebalance callback; the rework moved the check off the wire entirely. The codec now only passes
+  the committed offset into `PartitionState`, which settles the loaded map's claim lazily at its
+  first poll batch against a watermark `ConsumerManager` reconstructs without blocking
+  (`position` plus `currentLag`, on the thread that owns the consumer). So the split above does not
+  inherit a ground-truth lookup: the plausibility check already lives outside the codec.
 
 - **The cached-and-shared instance is still only safe by the schedule, not by construction.**
   Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition
