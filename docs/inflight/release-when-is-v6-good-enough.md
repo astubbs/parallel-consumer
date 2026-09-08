@@ -112,6 +112,10 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   verdict) stacks on it.
 - [ ] **astubbs#473** - clears the two remaining quarantine entries by fixing what they were about.
   The release guard blocks while `docs/quarantined-tests.md` has any.
+- [ ] **astubbs#480** - an offset map whose run or bitset extends past the partition's log end
+  offset is an unreadable payload, not a completed range. Silent skip of real records on a corrupt
+  or foreign payload; proven red through the real assignment path, green with the guard, mutation
+  lane green on the bound. Promoted from the owner's-decision list on 2026-09-08.
 - [ ] **astubbs#477** - a dead broker-poll thread now closes the consumer in the consumer-commit
   modes, the shipped default among them, so the group rebalances at once instead of after
   `max.poll.interval.ms`. Promoted from the no-PR triage on 2026-09-08: the fix is one derived
@@ -367,13 +371,16 @@ its subject at any merge.
   on "am I the role-holder?" where the holder may be dead - found no other instance across the four
   modules' `close()` paths.
 
-**Owner's decision:**
+**Owner's decision - taken 2026-09-08: in v6, as astubbs#480 (tier 1).**
 
-- **Run-length plausibility ceiling** -
-  [`bug-run-length-plausibility-ceiling.md`](bug-run-length-plausibility-ceiling.md). A readable but
-  absurd run length marks a vast range complete and PC silently skips it. Data-loss class, reachable
-  only through a corrupt or foreign payload, which is why astubbs#207 did not cover it. A decode-side
-  ceiling is small; either it ships in v6 or the release note names it.
+- ~~Run-length plausibility ceiling~~ - a readable but absurd run length marked a vast range complete
+  and PC silently skipped it; data-loss class, reachable only through a corrupt or foreign payload,
+  which is why astubbs#207 did not cover it. astubbs#480 bounds every decoded run and bitset by the
+  partition's log end offset - the one bound that cannot reject a real map, since PC only encodes
+  offsets it polled - routed through `invalidOffsetMetadataPolicy` with no parallel policy, failing
+  open with a warn if the broker will not answer. The same defect class was found and fixed in the
+  bitset decoder; the simple serialisation has no declared count and is clean. The inflight note is
+  retired into `docs/solutions/`.
 
 **0.6.0.x - open, real, not a gate for a bug release:**
 
