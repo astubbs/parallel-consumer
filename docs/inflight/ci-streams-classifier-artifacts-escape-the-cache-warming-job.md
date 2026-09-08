@@ -1,89 +1,69 @@
-# The streams module's `sources`/`test-sources` artifacts are not pre-warmed, so every run of it fetches from Central live
+# The streams module's `sources` jars are warmed HERE, and nowhere else yet
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 
+`parallel-consumer-streams` (astubbs#255) fetches Kafka's `sources` and `test-sources` classifier
+jars through `dependency:unpack` `<artifactItems>`, which `dependency:go-offline` does not resolve -
+so they were fetched live from Maven Central inside `generate-sources` on every lane, in exactly the
+phase where the region-dependent read timeout in
+[`docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md`](../solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md)
+bites. It presented as Unit **and** Integration red at `unpack (unpack-kafka-streams-sources)` with
+zero tests run, so the lane called "Unit Tests" named a subsystem that never reached compilation.
+
 <!-- post-merge: checked-begin -->
-`parallel-consumer-streams` (astubbs#255). First seen as a red Unit lane on the task-lifecycle rung,
-astubbs/parallel-consumer#394, which had **nothing to do with the tests** on it. Seen again, with the
-same signature, on the error-surfacing rung stacked above it, astubbs/parallel-consumer#395 - two
-independent branches, which is what makes it master-state rather than one PR's problem.
+**Fixed by astubbs/parallel-consumer#379**, which added the `Warm the Kafka sources jars the streams
+module unpacks` step to `prepare-deps` in `.github/workflows/maven.yml` - so wherever that step is
+present, this is closed. **That step's own comment is the durable owner** of why go-offline
+misses an artifactItem, why the warm names coordinates rather than building the module, and what the
+two guards are for; this note does not restate it.
 <!-- post-merge: checked-end -->
 
-## What it looks like
+## What the sightings established, for any branch still exposed
 
-The Unit lane goes red with the streams module `FAILURE` and every other module `SUCCESS`, at
-`maven-dependency-plugin:unpack (unpack-kafka-streams-sources)`:
+<!-- post-merge: checked-begin -->
+The defect was observed on two independent rungs of this stack -
+astubbs/parallel-consumer#394 and astubbs/parallel-consumer#395 - which is what made it master-state
+rather than one PR's problem. Three findings from those sightings outlive the fix, because they
+describe what an *unwarmed* branch is still living with:
 
-```
-Could not transfer artifact org.apache.kafka:kafka-streams:jar:sources:3.9.2
-from/to central (https://repo1.maven.org/maven2/): Read timed out
-```
+- **It is every lane that builds this module, not one lane occasionally.** Unit and Integration went
+  red together on the same run, because they share the runner's route to Central.
+- **It is per-run, not per-branch, so a re-run is a coin flip and not a fix.** The referenced
+  write-up's "re-running does not reliably help" proved to be exactly the right strength: two
+  consecutive runs reproduced the identical failure at the same execution on the same artifact, and a
+  third then passed every lane. A green run is luck, and says nothing about the next one.
+- **It has nothing to do with the diff, and a control arm settles that rather than arguing it.** A
+  **markdown-only commit** - no Java, no pom, no workflow - reproduced the failure on both lanes
+  immediately after a green run. There is no reading of that in which the change under review is
+  implicated.
 
-**No test ran.** The module dies in `generate-sources`, so a reader looking for a failing test finds
-none, and the lane's name says "Unit Tests". That is the misdirection: the signal names the wrong
-subsystem.
+If you are on an unwarmed branch looking at a red Unit lane on this module and wondering what you
+broke: the answer is the paragraph above, and the fix is to merge astubbs/parallel-consumer#379
+forward rather than to re-run.
+<!-- post-merge: checked-end -->
 
-## Why the cache-warming job does not cover it
+## What is still open
 
-`prepare-deps` in `.github/workflows/maven.yml` warms the cache with `dependency:go-offline`, which
-resolves the **declared dependency graph**. This module additionally fetches artifacts by explicit
-`artifactItems` in two `dependency:unpack` executions - Apache Kafka's `sources` and `test-sources`
-classifiers - and those are not part of that graph. So they are downloaded live from Maven Central on
-every run of this module, in exactly the phase where the region-dependent timeout class already
-documented in
-[`docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md`](../solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md)
-bites.
+<!-- post-merge: checked-begin -->
+**Every branch carrying `parallel-consumer-streams` without that step still has the unwarmed
+workflow**, and stays exposed until it merges astubbs/parallel-consumer#379 forward. The candidates
+are
+`for r in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin); do git cat-file -e "$r:parallel-consumer-streams/pom.xml" 2>/dev/null && echo "$r"; done`,
+minus those that already contain the step - `git grep -l 'Warm the Kafka sources jars' <ref> --
+.github/workflows/maven.yml`.
 
-That write-up's own conclusion is the relevant one: **re-running does not reliably help**, because the
-runner is often reassigned to the same region, and the fix that worked was pre-warming so nothing is
-fetched from Central during the build. This module is the one place that was left outside the fix.
+**A branch carrying the pre-fix copy of this file collides add/add on this path** when it merges
+astubbs/parallel-consumer#379 forward: **take the version that names the step**, not the one that
+calls the fix a candidate. The two rungs that hit it, `feats/ks-streams-task-lifecycle` and
+`feats/ks-streams-error-surfacing`, resolved it that way and are no longer exposed; the instruction
+stands for any rung above them that has not yet merged forward.
+<!-- post-merge: checked-end -->
 
-**That prediction has now been tested, and "not reliably" is exactly the right strength - read it as
-written rather than as "never".** On the error-surfacing rung it fired on two consecutive runs: the
-second reproduced the identical failure at the same execution on the same artifact, and took the
-**Integration lane down with the Unit lane** on the same run. A third run then passed every lane. So:
-
-- **The exposure is not "one lane occasionally"** - it is *every lane that builds this module*, and
-  they fail together, because they share the runner's route to Central.
-- **It is per-run, not per-branch.** A run either has the problem or does not, so a re-run is a coin
-  flip rather than a fix, and a green run is luck that says nothing about the next one.
-- **A green lane is therefore not evidence this is closed.** It is closed when the unpack executions
-  stop reaching Central at all - see *Delete when* below.
-
-**And it has nothing to do with the diff, which a control arm now settles rather than argues.** The
-run after the green one carried a **markdown-only commit** - no Java, no pom, no workflow - and
-reproduced the identical failure on both lanes. There is no reading of that in which the change under
-review is implicated. If you are looking at a red Unit lane on this module and wondering what you
-broke, this paragraph is the answer.
-
-## Candidate fix
-
-Add the classifier artifacts to what `prepare-deps` pulls, so the warm cache actually contains
-everything a build needs. `dependency:go-offline` will not do it on its own; the honest options are
-running the module's `generate-sources` phase in the warming job, or a `dependency:get` per artifact
-item. Whichever is chosen, the check that it worked is that the streams module's `unpack` executions
-log a cache hit rather than a `Downloading from central` line.
-
-## Until it is fixed, what a blocked PR should do
-
-**Read the log before concluding anything.** The lane is named "Unit Tests" and no test ran, so the
-first job is to recognise it: the module dies at `unpack-kafka-streams-sources`, every other module
-succeeds, and the message names Central and the `sources` classifier.
-
-Then **say in the PR that the red lane is this, name this note, and put the module's own local lane
-up as the evidence the code is healthy** - the whole `test` phase and the integration lane, counts
-read out of the report directories. A local run has the artifacts in `~/.m2` already, which is why it
-never reproduces there, and why "green locally" is a real signal about the code and none at all about
-this.
-
-**Re-running is legitimate here and is not a retry-into-green** - it is not a flaky test being
-papered over, it is an artifact download that either reached Central or did not, and no test outcome
-is being hidden. What it is not is a fix: it is a coin flip, it can take several attempts, and the
-green it eventually produces is not evidence the problem is gone. So re-run if you need the lane, and
-**do not let the green talk you out of leaving the record behind**.
+**`test-kafka-compat` is the one job whose Kafka version falls outside the warm.** It is `if: false`
+today; re-enabling it re-opens this for that lane only.
 
 ## Delete when
 
-A streams-module CI run shows the unpack executions resolving from the warmed cache rather than
-downloading from Central.
+No open branch builds the streams module without that step - at which point nothing here is both
+true and unowned by the workflow comment.

@@ -55,6 +55,64 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: Download all dependencies
         run: ./mvnw --batch-mode -Pci dependency:go-offline -DincludeScope=test -U
+      # The plugin-resolves-for-itself class, reached from a new direction: here the plugin doing its
+      # own resolving is maven-dependency-plugin. `parallel-consumer-streams` unpacks Kafka's
+      # `sources` and `test-sources` CLASSIFIER jars through two `dependency:unpack` executions that
+      # name them as <artifactItems>, and go-offline resolves the DECLARED dependency graph - an
+      # artifactItem is not in it, and neither jar is declared anywhere else. So both stay cold, and
+      # every lane that builds this module fetches them from Central inside generate-sources, on the
+      # CDN route lottery in
+      # docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md: an
+      # exactly-240s read timeout, and re-running does not reliably help because the runner is often
+      # reassigned to the same region. Seen on astubbs/parallel-consumer#394 and
+      # astubbs/parallel-consumer#395 - Unit AND Integration both red at
+      # `unpack (unpack-kafka-streams-sources)` with ZERO tests run, so the lane called "Unit Tests"
+      # names a subsystem that never got as far as compiling.
+      #
+      # Warmed by COORDINATE rather than by building the module. Building it warms the jars too, and
+      # is what the Connect spike branch does (`-pl parallel-consumer-connect -am -DskipTests
+      # package`) - but it costs a full build of core inside this job, and that branch records why it
+      # cannot be shortened to a cheap phase-only walk: the module's test-scope resolution wants
+      # core's tests-classifier jar, which does not exist until core reaches `package`. Two jars are
+      # the whole gap here and `kafka.version` is a real root-pom property, so naming them is both
+      # cheaper and no more prone to rot.
+      #
+      # Verified locally against an empty local repository: the two `get`s fetch exactly the two jars
+      # the assertions name, after which `-pl parallel-consumer-streams -am generate-test-sources`
+      # runs OFFLINE from a cleaned target and both unpack executions succeed - so what this warms is
+      # sufficient for the artifactItems resolve, not merely adjacent to it.
+      #
+      # `kafka.version` is the default every live lane builds at. The one job that overrides it,
+      # `test-kafka-compat`, is `if: false`; re-enabling it puts its Kafka version back outside this
+      # warm. (astubbs#255)
+      - name: Warm the Kafka sources jars the streams module unpacks
+        run: |
+          set -euo pipefail
+          evaluate() {
+            ./mvnw -q --batch-mode -N \
+              -Dexpression="$1" -DforceStdout \
+              org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate 2>/dev/null | tail -1
+          }
+          # A renamed property makes help:evaluate print "null object or invalid expression", which
+          # dependency:get would happily turn into a warm of the wrong coordinate - and warming
+          # nothing is indistinguishable from a cache hit until it fails a job downstream. Require a
+          # version-shaped answer rather than merely a non-empty one.
+          require_version() {
+            case "$2" in
+              [0-9]*) : ;;
+              *) echo "::error::$1 did not resolve to a version from the root pom (got '$2') - the Kafka sources cache warm would be a silent no-op"; exit 1 ;;
+            esac
+          }
+          kafka_version=$(evaluate kafka.version)
+          require_version kafka.version "$kafka_version"
+          for classifier in sources test-sources; do
+            ./mvnw --batch-mode -ntp \
+              org.apache.maven.plugins:maven-dependency-plugin:3.11.0:get \
+              -Dartifact="org.apache.kafka:kafka-streams:${kafka_version}:jar:${classifier}"
+            # Assert the jar is on disk: the exit code says the goal ran, only the file says the
+            # cache this job exists to populate actually got populated.
+            test -s ~/.m2/repository/org/apache/kafka/kafka-streams/"${kafka_version}"/kafka-streams-"${kafka_version}"-"${classifier}".jar
+          done
       - name: Save Maven cache (rotating key)
         if: success()
         uses: actions/cache/save@v4
