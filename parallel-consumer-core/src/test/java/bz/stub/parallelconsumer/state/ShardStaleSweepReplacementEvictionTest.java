@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.state;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
 
@@ -41,6 +42,61 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
 
     private static final long CONTESTED_OFFSET = 100L;
 
+    private RecordPopulation population;
+
+    private PartitionStateManager<String, String> seam;
+
+    private ProcessingShard<String, String> shard;
+
+    private ConsumerRecord<String, String> record;
+
+    private WorkContainer<String, String> stale;
+
+    private long currentEpoch;
+
+    /**
+     * A shard holding one stale container at {@link #CONTESTED_OFFSET}, which is where both sweep arms start.
+     * <p>
+     * <b>Deliberately called from each test rather than run as a {@code @BeforeEach}</b>: the third test in this
+     * class needs none of it, and a fixture that builds itself for a test that does not use it reads as though it
+     * matters there.
+     * <p>
+     * <b>The seam is spied in BOTH arms, and that strengthens the control rather than contaminating it.</b> Only
+     * the defect arm arms it with {@link ShardSeamTestBase#onNextStalenessCheck}, so after this hoist the single
+     * term that differs between the two sweeps is whether a replacement lands inside one - which is what "same
+     * magnitude, different position" claims and what the control is for. An unspied control would leave the
+     * collaborator as a second difference, and a reader could not tell which of the two produced the outcome.
+     */
+    private void givenAStaleResidentAtTheContestedOffset() {
+        population = new RecordPopulation();
+        seam = spy(wm.getPm());
+        record = recordAt(CONTESTED_OFFSET);
+        shard = shardWith(seam, population, record);
+
+        wm.onPartitionsAssigned(UniLists.of(TP));
+        long firstEpoch = wm.getPm().getEpochOfPartition(TP);
+        stale = new WorkContainer<>(firstEpoch, record, module);
+        shard.addWorkContainer(stale);
+
+        // the partition is taken away and handed back, so what the shard is still holding is now stale
+        wm.onPartitionsRevoked(UniLists.of(TP));
+        wm.onPartitionsAssigned(UniLists.of(TP));
+        currentEpoch = wm.getPm().getEpochOfPartition(TP);
+        assertWithMessage("PRECONDITION: the rebalance must actually have made the resident stale")
+                .that(currentEpoch).isGreaterThan(firstEpoch);
+    }
+
+    /**
+     * The one assertion that is identical in both arms, and it is identical because it is about neither of them:
+     * the accounting half of this defect is already closed, and it must not be traded back for the eviction half
+     * whichever way the sweep goes. The counts either arm expects DO differ, and stay written out where they are.
+     */
+    private void assertTheCountersAgreeWithWhatIsHeld() {
+        assertWithMessage("the counter agrees with the units actually held - the accounting half of this defect "
+                + "is already closed and must not be traded back for the eviction half")
+                .that(shard.getCountOfWorkAwaitingSelection()).isEqualTo(shard.countSelectionClaimedByScan());
+    }
+
     /**
      * The sweep must remove the container it inspected, and only that one.
      * <p>
@@ -50,24 +106,9 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
      */
     @Test
     void theStaleSweepMustNotEvictAFreshReplacementThatLandedInsideIt() {
-        var population = new RecordPopulation();
-        var seam = spy(wm.getPm());
-        var record = recordAt(CONTESTED_OFFSET);
-        var shard = shardWith(seam, population, record);
+        givenAStaleResidentAtTheContestedOffset();
 
-        wm.onPartitionsAssigned(UniLists.of(TP));
-        long firstEpoch = wm.getPm().getEpochOfPartition(TP);
-        var stale = new WorkContainer<>(firstEpoch, record, module);
-        shard.addWorkContainer(stale);
-
-        // the partition is taken away and handed back, so what the shard is still holding is now stale
-        wm.onPartitionsRevoked(UniLists.of(TP));
-        wm.onPartitionsAssigned(UniLists.of(TP));
-        long laterEpoch = wm.getPm().getEpochOfPartition(TP);
-        assertWithMessage("PRECONDITION: the rebalance must actually have made the resident stale")
-                .that(laterEpoch).isGreaterThan(firstEpoch);
-
-        var fresh = new WorkContainer<>(laterEpoch, record, module);
+        var fresh = new WorkContainer<>(currentEpoch, record, module);
         var replacementLanded = new AtomicBoolean();
 
         // THE INTERLEAVING: the controller's stale-replacement lands between the sweep's staleness answer and the
@@ -84,7 +125,7 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
                 .that(replacementLanded.get()).isTrue();
         assertWithMessage("PRECONDITION: the replacement must have reached the shard, or the sweep had nothing "
                 + "to race with")
-                .that(fresh.getEpoch()).isEqualTo(laterEpoch);
+                .that(fresh.getEpoch()).isEqualTo(currentEpoch);
 
         // IDENTITY, never equality, in every assertion below - spelled out rather than relying on
         // WorkContainer's equality being identity today. The question here is WHICH OBJECT survived, and it must
@@ -104,9 +145,7 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
                 .that(swept).isEmpty();
 
         assertThat(shard.getCountOfWorkTracked()).isEqualTo(1L);
-        assertWithMessage("the counter agrees with the units actually held - the accounting half of this defect "
-                + "is already closed and must not be traded back for the eviction half")
-                .that(shard.getCountOfWorkAwaitingSelection()).isEqualTo(shard.countSelectionClaimedByScan());
+        assertTheCountersAgreeWithWhatIsHeld();
         assertThat(shard.getCountOfWorkAwaitingSelection()).isEqualTo(1L);
         assertWithMessage("one admission survives, because one container is still held")
                 .that(population.getInSystem()).isEqualTo(1L);
@@ -122,27 +161,16 @@ class ShardStaleSweepReplacementEvictionTest extends ShardSeamTestBase {
      */
     @Test
     void aSweepWithNothingRacingItRemovesTheStaleContainerAndOnlyThat() {
-        var population = new RecordPopulation();
-        var record = recordAt(CONTESTED_OFFSET);
-        var shard = shardWith(wm.getPm(), population, record);
+        givenAStaleResidentAtTheContestedOffset();
 
-        wm.onPartitionsAssigned(UniLists.of(TP));
-        long firstEpoch = wm.getPm().getEpochOfPartition(TP);
-        var stale = new WorkContainer<>(firstEpoch, record, module);
-        shard.addWorkContainer(stale);
-
-        wm.onPartitionsRevoked(UniLists.of(TP));
-        wm.onPartitionsAssigned(UniLists.of(TP));
-        assertWithMessage("PRECONDITION: the rebalance must actually have made the resident stale")
-                .that(wm.getPm().getEpochOfPartition(TP)).isGreaterThan(firstEpoch);
-
+        // NOTHING is armed on the seam here, and that absence is the whole of what this arm varies.
         var swept = shard.removeStaleWorkContainersFromShard();
 
         assertThat(swept).hasSize(1);
         assertThat(swept.get(0)).isSameInstanceAs(stale);
         assertThat(shard.getWorkContainerAtOffset(CONTESTED_OFFSET)).isEmpty();
         assertThat(shard.getCountOfWorkTracked()).isEqualTo(0L);
-        assertThat(shard.getCountOfWorkAwaitingSelection()).isEqualTo(shard.countSelectionClaimedByScan());
+        assertTheCountersAgreeWithWhatIsHeld();
         assertThat(population.getInSystem()).isEqualTo(0L);
     }
 
