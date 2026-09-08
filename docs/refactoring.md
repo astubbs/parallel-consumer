@@ -459,8 +459,13 @@ cosmetic - see the last bullet.*
     `noWakeups`, `erroneousWakups`, `correctPollWakeups` counters.
   - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` - primitive written in one thread may not
     be visible to another. **Re-derive the membership, do not trust a list here**:
-    `./mvnw -o spotbugs:spotbugs -pl :parallel-consumer-core` and read
-    `parallel-consumer-core/target/spotbugsXml.xml` for that bug type. **No membership is written
+    `./mvnw --batch-mode -Pci test-compile spotbugs:spotbugs spotbugs:check -Dspotbugs.failOnError=false`
+    and read `parallel-consumer-core/target/spotbugsXml.xml` for that bug type. **Run it exactly as
+    written - it is the `static: spotbugs` step's own command.** `spotbugs:spotbugs` on its own
+    analyses whatever bytecode happens to be under `target/` already: nothing on a clean checkout,
+    stale classes after an edit - and `test-compile` is what puts `target/test-classes` there, which
+    the `includeTests` setting needs. Narrowing with `-pl` and no `-am` reintroduces the missing
+    artefact trap [`docs/building.md`](building.md) owns. **No membership is written
     here, deliberately** - an enumeration would be one more list to maintain, and the paragraph
     below is the record of what that cost last time.
     <!-- file-refs: N/A - the report path above is build output, written by the command on the line before it and absent from a clean checkout -->

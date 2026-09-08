@@ -36,6 +36,38 @@ javadocs **own** that split and the rule behind it (a member may be hoisted only
 access to the arm's measured field); what is here is only the warning that the remaining duplication
 is deliberate, so re-read those javadocs before removing any more of it.
 
+## OPEN, and it weakens a headline number: the protocol arm's FORBIDDEN zero is not yet worth much
+
+Found by Codex on astubbs/parallel-consumer#469 and **confirmed from the recorded run**, not merely
+accepted. `CommitWindowLostUpdateProbes.GenerationCountedCommitWindow` reports 0 anomalies with the
+outcome FORBIDDEN - but the forbidden corner looks **unreachable by construction**, which would make
+the zero vacuous rather than evidence.
+
+The evidence is the outcome sets the run actually produced:
+
+- the two flag arms each reached **all four** outcomes, including `true, true`;
+- the protocol arm reached **two** - `false, true` and `true, false` - and never `true, true`.
+
+The mechanism: the flag arms are **seeded dirty** (`dirty` and `stateChangedSinceCommitStart` are both
+`true` at construction), so the poll actor always enters the commit window and the completion can land
+*inside* it. The protocol arm starts **clean**, both counters at zero, so the poll actor enters the
+window only if it has already observed the completion. If it samples 0 it skips the window entirely;
+if it samples 1, that same `AtomicLong` acquire publishes the map removal and offset write that
+preceded the release, so the commit necessarily covers the completion. Neither path can land in
+"clean over an uncovered completion". **The arms are therefore not comparing like with like** - the
+plain arm measures a completion racing an open window, the protocol arm measures something narrower.
+
+**Do not just seed the protocol arm dirty and call it fixed.** That makes the window open reliably,
+but the forbidden corner stays unreachable for the same release/acquire reason - which is really a
+statement that the protocol is correct, not that the probe could tell if it were not. Showing the
+probe has power needs a **deliberately broken** protocol variant as a negative control, the way
+`PartitionStateCommitWindowSeamTest` keeps a control arm that asserts the old defect. That is a
+design decision about what the arm should establish, so it is recorded here rather than guessed at.
+
+Until it is settled, cite the protocol arm's zero as *"no anomaly observed"* and not as
+*"the protocol was measured to close the window"*; the arms that carry the weight of this PR's
+argument are the plain/volatile pair, whose 1.6e-3-vs-1.6e-3 result is unaffected by any of this.
+
 ## The vocabulary astubbs#469 leaves behind
 
 Dirty is **derived**, so nothing sets or clears it, and the names say so:

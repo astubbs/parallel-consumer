@@ -323,6 +323,25 @@ public class CommitWindowLostUpdateProbes {
      * <b>Result, 2026-09-07: 0 anomalies in 121,707,028 samples, outcome FORBIDDEN.</b> Note the
      * distribution: 79.92% of pairs end "dirty, not covered" - the pessimistic direction, one extra commit
      * cycle - and 20.08% "clean, covered". Nothing lands in the lossy corner.
+     * <p>
+     * <b>READ THIS BEFORE QUOTING THAT ZERO - the forbidden corner may be unreachable by construction,
+     * which would make it vacuous.</b> Unlike the two flag arms above, this arm is <b>not seeded dirty</b>:
+     * both counters start at zero, so the poll actor enters the commit window only when it has already
+     * observed the completion. If it samples 0 it skips the window; if it samples 1, that {@link AtomicLong}
+     * acquire also publishes the map removal and the offset write that preceded the release, so the commit
+     * necessarily covers the completion. Neither path can land in "clean over an uncovered completion".
+     * <p>
+     * The recorded run corroborates it: the two flag arms each reached <b>all four</b> outcomes, while this
+     * arm reached only two - it never even produced "covered and still dirty". So the arms are not comparing
+     * like with like, and this one is measuring something narrower than the plain arm is.
+     * <p>
+     * <b>Seeding it dirty is not the fix on its own</b> - the corner stays unreachable for the same
+     * release/acquire reason, which states that the protocol is correct rather than showing the probe could
+     * detect it being wrong. Demonstrating power needs a deliberately broken protocol variant as a negative
+     * control, the way {@code PartitionStateCommitWindowSeamTest} keeps a control arm asserting the old
+     * defect. Raised by a Codex review on astubbs/parallel-consumer#469 and open there; until it is settled,
+     * read this zero as "no anomaly observed", not as "the window was measured shut". The pair the PR's
+     * argument actually rests on is plain-versus-volatile above, which none of this affects.
      */
     @JCStressTest
     @Description("Fixed: monotone completion count, and the count the commit covered - no flag to clear")
