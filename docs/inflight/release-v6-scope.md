@@ -220,7 +220,7 @@ churn rather than a PC defect.
   freeze is real and fleet-wide but it recovers, no work is stranded, and no instance stays wedged;
   what reads as red is the detector's no-progress window closing inside a real protocol freeze. The
   PC half - that PC holds nothing during it - was re-verified with a one-term control arm on
-  `ClosingMemberRebalanceIT` after astubbs#451, #466 and #468 moved the revoke and close seam. Not a
+  `ClosingMemberRebalanceIT` after astubbs#451, astubbs#466 and astubbs#468 moved the revoke and close seam. Not a
   defect; the release note need not name it.
 - `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on idle runners, so they read as
   starvation rather than a wedge. Not a confirmed defect; not ruled out either.
