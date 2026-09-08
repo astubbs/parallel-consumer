@@ -60,7 +60,7 @@ astubbs/parallel-consumer#29 carried.
 ## What gates v6, as the sweep read it
 
 Moved on 2026-09-08 into
-[`release-when-is-v6-good-enough.md`](release-when-is-v6-good-enough.md), under "What the
+[`release-v6-scope.md`](release-v6-scope.md), under "What the
 astubbs#476 vetting sweep read as gating", so the release has one note to burn down. The list there
 is the sweep's reading with each agent's stated confidence, reconciled against the burn-down's own
 tiers; this file keeps the ranking of everything else.

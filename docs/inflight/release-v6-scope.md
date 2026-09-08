@@ -1,12 +1,13 @@
-# When do we ship v6? Decided: a bug release, overdue - and the burn-down to cut it
+# v6 (0.6.0.0) release scope and burn-down
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: release-gate -->
 
 **Deliberately its own file, not a section inside
 [`release-0.6.0.0.md`](release-0.6.0.0.md).** A section is invisible until someone opens that file;
-a note gets its own line in the session-start index. This question needs to be *met*, not looked up
-- so it is filed where an agent trips over it.
+a note gets its own line in the session-start index. The scope decision needs to be *met*, not
+looked up - so it is filed where an agent trips over it. Named `release-when-is-v6-good-enough.md`
+until 2026-09-08, when it stopped being a question.
 
 [`release-0.6.0.0.md`](release-0.6.0.0.md) is the content and the breaking-change record, and
 answers "is it ready?". **This one asks "is it enough?"** - and, since 2026-09-08, it also carries

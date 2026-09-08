@@ -56,7 +56,7 @@ while it is open, not in the root README.
 ## The answer to post, then close
 
 astubbs#161 is not on the 0.6.0.0 tag-day checks in
-[`release-when-is-v6-good-enough.md`](release-when-is-v6-good-enough.md); its `0.6.0.0` label groups it with the other
+[`release-v6-scope.md`](release-v6-scope.md); its `0.6.0.0` label groups it with the other
 question mirrors to answer around the release. Post this and close, keeping the existing labels:
 
 > Good question, and the answer changed after you filed this.
