@@ -197,7 +197,7 @@ that cannot occur in that mode. Mode is the discriminator:
 **Record the commit mode with every future sighting.** It is one line and it is what makes a sighting
 decidable.
 
-## A fourth open item: an eager stall the astubbs#29 fix does not close
+## A fourth open item: an eager stall the astubbs#29 fix does not close - WITHDRAWN 2026-09-08
 
 Added 2026-08-18, from the first seed replays (`test-857-revoke-under-work-sightings.md` holds the
 grid and the confounds). Mode-compatibility was the best evidence this file had for attributing the
@@ -215,6 +215,78 @@ partition committed-frozen for 100s of the *quiet* phase against ~40s of legitim
 **The mode table above still stands** - it says which defect *can* explain a sighting, and the
 replay changes nothing about the code paths. What the replay establishes is that "can" was doing
 work it could not support: mode-compatibility narrows the candidates and never attributes.
+
+### CORRECTED 2026-09-08: the symptom is a timing bound that flips on a CPU knob, and the grid that opened this item was not a one-term A/B
+
+**Neither half of this item survives, and the two halves fail for unrelated reasons.** The evidence
+was `test-857-revoke-under-work-sightings.md`'s replay grid - two recorded seeds reproducing
+`CLASS2_STALL/LAG_STAGNATION` six of six on "the arm carrying the fix". That file owns the grid and
+carries the detail; what is here is what the finding means for this item.
+
+**1. The crossing tracks available PROCESSORS, with the code and the seed held constant.** Seed
+`4709156528562690268` - the grid's seed B, and the one seed of the two that no recovery diagnostic
+had ever been run against - replayed on `745b1f6a5` (master plus everything through astubbs#466),
+`ChaosRevokeUnderWorkIT`, `-Dchaos.diagnoseStallRecovery=true`, one term changed between the arms:
+
+| processors | Class 2 observations | peak lag stagnation | quiet-phase drain | outcome |
+|---|---|---|---|---|
+| 12 (the box's own count) | none | 134.5s, under the 150s bound | 102.7s | PASS, `inFlight=0`, every key |
+| 12, repeated | none | 125.2s | 90.4s | PASS, `inFlight=0`, every key |
+| 8 (`-XX:ActiveProcessorCount=8`) | eight | crossed | 133.5s | PASS, `inFlight=0`, every key |
+| 8, repeated | two | crossed | 106.7s | PASS, `inFlight=0`, every key |
+
+Same tree, same seed, same test sources, byte-identical invocation apart from `JAVA_TOOL_OPTIONS`.
+Two of two at eight processors, none of two at twelve: the processor count alone decides whether
+this item's symptom appears at all - and all four arms drained completely with no loss. **The peak
+is only a measurement in the runs that did NOT fire**: `recordLagStagnation` re-arms the partition
+it fires on, so a crossing run's peak is the bound plus sampler cadence and carries no severity,
+which is the same arithmetic the 2026-08-25 entry below records about the ~154s constant. The two
+12-processor peaks are real, and they sit fifteen to twenty-five seconds under. That is the sharpest instance this family has of
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md),
+and it means "reproduces every time" was a statement about the box the replays ran on. **The grid's
+own confound list already named that box's `-XX:ActiveProcessorCount=8` and dismissed it** - *"the
+controls passing under the same cap argue it does not manufacture the stall"* - which is the reading
+these two runs reverse.
+
+**2. The grid's two arms differed by more than astubbs#29's lock change.** `ConsumerManager.poll`
+refreshes the pause cache at ENTRY and again at exit on the grid's DEFECT arm (plain master,
+`438b09d9b`); on its FIXED arm (astubbs#29's branch, `b8a335b05`) the entry call is absent and only
+the exit refresh remains. Exit-only is the shape
+[`paused-poll-wakeup-lost-to-stale-pause-cache-2026-09-01.md`](../solutions/performance-issues/paused-poll-wakeup-lost-to-stale-pause-cache-2026-09-01.md)
+owns, and its fix `d2690c57f` landed two weeks after the grid ran - `git merge-base --is-ancestor
+d2690c57f b8a335b05` is false. So the grid measured astubbs#29's lock change *plus* a second,
+unrelated, since-fixed difference in the very subsystem that governs how fast a backlog is
+re-fetched.
+
+**That second term was then tested, and it is NOT sufficient to produce this item's symptom - a
+refuted prediction, recorded because it was the more interesting one.** The prediction was that
+restoring exit-only refresh would push the 12-processor arm over the bound. Reverting `d2690c57f`'s
+entry call on today's tree and replaying seed B at 12 processors gave a peak of 125.2s and a 90.4s
+drain - *lower* than the unpatched arm's 134.5s and 102.7s - with no observations. The negative
+control is what makes that readable: with the entry call removed,
+`ConsumerManagerPauseCacheTest#pausedPartitionCacheIsFreshDuringThePollItDescribes` fails and with it
+restored it passes, so the patch really did restore the defect. The 4-10x collapse that solution doc
+measured was in `PERIODIC_TRANSACTIONAL_PRODUCER`; it does not reach this eager
+`PERIODIC_CONSUMER_SYNC` recovery at this shape. **Finding 2 therefore names an uncontrolled second
+term in the grid's arms - which is enough to stop the grid being evidence of anything about
+astubbs#29 - without explaining the grid's fixed-worse-than-defect asymmetry. That asymmetry is
+still unexplained, and finding 1 is what makes it uninteresting.**
+
+**What this does NOT establish.** Non-reproduction is the weak direction and this is a handful of
+runs on one laptop, where the grid ran on a 32-core box capped to 8; a chaos seed fixes the
+conductor's schedule and never the poll-versus-control interleaving, which is why the deadlock itself
+was settled on a deterministic probe rather than by replay. What IS established is that this item's
+symptom is produced by the machine, and that the tree it was attributed on differed from its control
+in a second place. Neither leaves a defect for this item to be about.
+
+**Consequence: this is not a fourth open defect, and the "still open" count above does not need it.**
+What remains true and worth keeping is the sentence the grid was reaching for and could not support -
+`INSTANCE_STALL` is per-instance, so a watermark frozen by a commit that never landed, on an instance
+whose other shards keep completing, is covered by nothing that gates.
+[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md) **owns that gap**,
+including the red control a replacement detector must have first. Every run recorded here drained to
+`inFlight=0` with full key coverage, which is what that gap's shape predicts a false positive looks
+like.
 
 ## A fifth open item, 2026-09-01: a rebalance stall the astubbs#29 fix does not close either
 
