@@ -192,9 +192,50 @@ the `0.6.0.0` release notes are generated from.
   initialiser, not its declaration**, so a search over declarations reports the safe sites and the
   unsafe ones identically. Read the initialiser, or the search is a filter rather than a finding.
 
+## Update 2026-09-09 - the second site, and the sweep that found it
+
+This write-up's own defect-class sweep reported one apparent hit and dismissed it (above). The
+sweep run a day later against the post-astubbs#468 tree, by
+[`the-shard-displacement-orphan-is-unreachable-and-the-guard-is-outside-the-class-2026-09-08.md`](the-shard-displacement-orphan-is-unreachable-and-the-guard-is-outside-the-class-2026-09-08.md),
+found a REAL second instance and reported it rather than fixing it:
+`ShardManager.removeWorkFromShardFor`, the revoke and lost path's `removeWorkAtOffset`. It is now
+`ProcessingShard.removeWorkForRevokedRecord`, conditional in the same way, and the class is closed
+at both sites. Three things about it are worth carrying forward, because none of them were true of
+the stale sweep:
+
+- **The caller holds no container to name.** The sweep is handed the `ConsumerRecord`s one
+  generation was still carrying as incomplete, so the thing to compare against is the
+  *registration*, not a container the caller inspected. That works because
+  `PartitionState.maybeRegisterNewPollBatchAsWork` puts the same record instance into
+  `incompleteOffsets` and into the container it builds - a reference comparison, and a later
+  generation's re-delivery of the offset is a different object because it came from a different
+  fetch.
+- **Registration identity alone is the wrong condition, and the mistake is instructive.** An
+  occupant from another registration that is nonetheless STALE has to go; declining there would
+  leave a stale container holding an offset of a revoked partition, which is the state the sweep
+  exists to prevent. The guard is therefore two-legged and declines for exactly one thing - a LIVE
+  container from another registration - which is what makes the change a no-op everywhere except in
+  the defect case. Each leg has its own ablation arm, because a guard whose legs are not separately
+  falsifiable is a guard whose weaker half nobody notices going missing.
+- **It is not reachable in production today, on two independent arguments, and it was still worth
+  fixing.** The weaker one is thread ordering, and it has to name BOTH routes: on the ordinary route
+  the poll thread runs both callbacks, so a generation's sweep completes before the assignment that
+  could register a replacement begins; on the CLOSE route the sweep runs on the *control* thread
+  instead (`PartitionStateManager.resetOffsetMapAndRemoveWork`'s javadoc owns that route, anchor
+  `The route left is the close sequence`, and calls it live in every commit mode), which is also
+  `addWorkContainer`'s thread. "Both callbacks are on the poll thread" is the half-statement, and it
+  was written that way here first. The stronger argument is structural and does not mention threads
+  at all: `resetOffsetMapAndRemoveWork` installs `RemovedPartitionState` before it calls in, so every
+  occupant reads stale and the staleness leg carries all of them - on the shipped path the new method
+  is behaviourally identical to the old by-key one, and the decline branch is defence for a caller
+  that sweeps before the swap. Nothing checks either argument. Same posture as `getWorkIfAvailable`'s
+  last-resort sweep above: the conditional form costs one reference comparison and rests on neither.
+
 ## Related issues
 
 - astubbs/parallel-consumer#468 - this fix.
+- astubbs/parallel-consumer#483 - the sweep that found the second site; the fix for it is in the
+  Update above.
 - astubbs/parallel-consumer#336 and astubbs/parallel-consumer#373 - the accounting half, closed
   earlier: every exit path accounts for what the map gave up, not for what the caller inspected.
 - astubbs/parallel-consumer#437 - the retry-queue pairing whose invariant decides what the sweep may
