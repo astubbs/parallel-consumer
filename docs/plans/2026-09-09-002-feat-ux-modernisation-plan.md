@@ -16,7 +16,7 @@ execution: code
 - **Objective:** A developer who once used Parallel Consumer and is deciding whether to come back can define a working consumer from the README alone: typed handling per topic, a retry limit, a dead-letter destination and filtering, in one screen of code (the budget is forty lines), without opening the javadoc.
 - **Means:** A new, modern entry point that is a facade over today's engine, shipped beside the existing API as an equal. Its behaviours are specified as record outcomes so the engine can take each one over natively after the God-class decomposition, without the surface moving.
 - **Product authority:** This document, for the surface and its behaviours. The work sits under STRATEGY.md's Flexibility track; shipping it requires that document's audience and Tracks sections to record the returning developer and the surface work. The engine-native implementation of each outcome is separately planned work that must honour the behaviours fixed here. The Kafka Streams work (astubbs#255) and the language proxy (astubbs#242) are constraints on this surface, not scope.
-- **Open blockers:** Two, owner-only: the rejection bar for the per-record deserialisation copy, and who runs the returning-user trial and how many times (Outstanding Questions, Resolve Before Planning). Every other open item is deferred to planning.
+- **Open blockers:** One, owner-only: who runs the returning-user trial and how many times (Outstanding Questions, Resolve Before Planning). Every other open item is deferred to planning.
 
 ---
 
@@ -384,14 +384,13 @@ Every capability the comparable library offers is listed with its disposition he
 
 - The facade can implement park, export, filter and retry limit over today's public primitives: today's retry queue already holds a failed record incomplete while the map commits past it, so park is that state with the re-attempt withheld; the produce-many path for the export send, a per-record user-function attempt count the facade keeps itself (the engine's exposed counter also advances on dead-letter send re-attempts, so it is not the number the user is promised), and success-on-return for filter. Confirmed against the code on 2026-09-09.
 - The API-compatibility gate (astubbs#315) is the mechanism that proves R20; if it has not merged when this ships, R20 is proved by its check run on the branch.
-- Consuming raw bytes on the new door and deserialising per route costs one extra copy per record relative to a typed consumer; accepted provisionally, with the measurement and the bar above which the design is revisited as a Resolve Before Planning item.
+- Consuming raw bytes on the new door and deserialising per route costs no extra copy for the common case: the consumer copies each record out of its fetch buffer into a byte array before any deserialiser runs, and the route's deserialiser reads that same array. The one exception is a deserialiser written against the buffer-view API, which a typed consumer can serve without the array and this door cannot; planning measures the difference rather than assuming it.
 - The transactional commit mode's produce path is atomic with the offset commit, as `docs/plans/2026-08-07-001-test-transactional-eos-battle-test-plan.md` proved; R14 rests on it.
 
 ### Outstanding Questions
 
 **Resolve Before Planning**
 
-- The rejection bar for the extra deserialisation copy (Dependencies): the per-record throughput or latency regression, measured at zero processing time against the old door, above which the raw-bytes design is revisited. Only the owner can set the number; until it is set, planning may not treat the copy as accepted.
 - Who counts as a returning-user stand-in for the primary trial, and how many trials constitute the signal. Only the owner can set these.
 
 **Deferred to Planning**
@@ -403,6 +402,7 @@ Every capability the comparable library offers is listed with its disposition he
 - Whether the health surface (astubbs#226) has landed, and how the handle adopts it.
 - Which connection properties the facade owns outright and which pass through to route deserialisers, such as schema-registry settings.
 - Whether parked state is carried in the commit metadata, through the opaque-rider work (astubbs#460), so that a restart does not re-attempt a parked record; without it R10's per-assignment rule applies.
+- The measured per-record cost of the raw-bytes consumer against a typed one at zero processing time, on the client version PC targets (Dependencies).
 - Metric names for the R28 gauges, beside the existing incomplete-offset gauges, and whether the parked list is served from a control-thread snapshot as the dashboard plan prescribes.
 - Whether a stop (R24) also leaves the consumer group promptly on the consumer-commit modes, where today's close sends no leave-group request.
 
