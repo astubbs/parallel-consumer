@@ -85,7 +85,7 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 ## Breaking changes queued for next major version
 
 **The gate is currently OPEN: `0.6.0.0` is that major, it is unreleased, and it is the release being
-cut right now.** It already carries a `=== Breaking` section in `CHANGELOG.md` (the `bz.stub`
+cut right now.** It already carries a `### Breaking` section in `CHANGELOG.md` (the `bz.stub`
 package rename), so the items below are **not** waiting for some future bump - this is the pass they
 were collected for, and work that lands now lands in the right release.
 

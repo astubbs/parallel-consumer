@@ -417,7 +417,7 @@ Unit tests are surefire (`src/test/java/`); integration tests are failsafe and n
 
 ## Changelog
 
-**In a PR the changelog is never added to.** No new entries, and no `== Unreleased` section - a
+**In a PR the changelog is never added to.** No new entries, and no `## Unreleased` section - a
 shipped section is finished, and the in-flight section belongs to the release-time generator. There
 is no window in which a PR contributes an entry, and **the `repo: hygiene` gate does not enforce
 this** - it checks citations, so it will happily pass an entry the policy forbids.
