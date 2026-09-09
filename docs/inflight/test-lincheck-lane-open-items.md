@@ -451,6 +451,27 @@ author's call rather than a review fix.
   success while its transformer failed per-class would have made every calibration verdict read
   "not found".
 
+## The lane's 20-minute job timeout now sits inside its own run-time distribution, 2026-09-09
+
+**Sighting, recorded rather than diagnosed.** The `Lincheck` job hit its `timeout: 20` in
+`.github/workflows/maven.yml` and GitHub reported it as *cancelled* - the only non-success job in an
+otherwise wholly green run on a branch that touches no code this lane compiles
+([job 102324330280](https://github.com/astubbs/parallel-consumer/actions/runs/34306516342/job/102324330280),
+22m13s). It is not that branch's doing, and the three runs immediately before it on other branches
+say why: 14m49s, 12m55s and **19m58s**, the last clearing the cap by two seconds.
+
+So the budget is being ridden, not exceeded once. The entry's own comment prices this lane at
+*"7m42s measured on ubuntu-latest"*, and the runs above are 1.7-2.9x that. Whether the cause is the
+runner class, a change in what the arms explore, or the machine-dependent hit rate this note already
+owns two sections up, nobody has looked - and the number to check first is whether the bound was
+ever measured on the runner that runs it, which is the same question
+[`test-no-progress-window-may-not-transfer-to-w1.md`](test-no-progress-window-may-not-transfer-to-w1.md)
+answered for `NO_PROGRESS` by measuring the distribution instead of the crossings.
+
+**Do not raise the timeout as the first move.** A cap crossed by a lane whose cost has drifted is
+evidence about the cost, and raising it deletes that evidence with nothing going red to say so - the
+lane entry's own "the fix is NOT a retry" paragraph, one layer along.
+
 ## Disproven, recorded so it is not re-raised
 
 The claim that core's `<argLine>@{argLine} ${lincheck.jvm.args}</argLine>` feeds a literal
