@@ -13,10 +13,10 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** A developer who once used Parallel Consumer and is deciding whether to come back can define a working consumer from the README alone: typed handling per topic, a retry limit, a dead-letter destination and filtering, in one screen of code (the budget is forty lines), without opening the javadoc.
+- **Objective:** A developer who once used Parallel Consumer and is deciding whether to come back can define a working consumer from the README alone, and the README's own example proves it on every build: typed handling per topic, a retry limit, a dead-letter destination and filtering, in one screen of code (the budget is forty lines), without opening the javadoc.
 - **Means:** A new, modern entry point that is a facade over today's engine, shipped beside the existing API as an equal. Its behaviours are specified as record outcomes so the engine can take each one over natively after the God-class decomposition, without the surface moving.
 - **Product authority:** This document, for the surface and its behaviours. The work sits under STRATEGY.md's Flexibility track; shipping it requires that document's audience and Tracks sections to record the returning developer and the surface work. The engine-native implementation of each outcome is separately planned work that must honour the behaviours fixed here. The Kafka Streams work (astubbs#255) and the language proxy (astubbs#242) are constraints on this surface, not scope.
-- **Open blockers:** One, owner-only: who runs the returning-user trial and how many times (Outstanding Questions, Resolve Before Planning). Every other open item is deferred to planning.
+- **Open blockers:** None. Every open item is deferred to planning.
 
 ---
 
@@ -42,7 +42,7 @@ The demand is recorded across the issue tracker and is the oldest open surface w
 - KD6. **Capacity across topics is work-conserving fair share, not reservation.** Recorded from the owner on 2026-08-21 in `docs/inflight/next-multi-topic-multi-function.md`. (session-settled: user-directed - chosen over per-topic capacity reservation: an idle topic must not waste its share.) Superseded for the fluent API on 2026-09-10, user-directed: on virtual threads (astubbs#360) threads are cheap, so each route gets its own concurrency limit, a copy of the instance default, and routes never compete for one shared limit; reservation's cost, idle capacity, is nil there, which removes the reason for sharing. A platform-thread user sets a lower per-route limit so the sum fits the pool. (chosen over work-conserving sharing of one instance limit: sharing needs a topic-aware engine, per-route limits need only the facade.) Governs R6, R23.
 <!-- file-refs: N/A - the multi-topic note lives on unmerged branches; print it with bin/inflight.mjs docs show -->
 
-- KD7. **The primary success signal is a returning-user trial.** (session-settled: user-directed - chosen over the README example, issue closure, or workaround deletion as the primary signal; those remain secondary.) Governs Success Criteria.
+- KD7. **The primary success signal is the README's first example, compiled in CI and run in the sandbox.** (session-settled: user-directed - first chosen on 2026-09-09 as a returning-user trial over the README example; superseded on 2026-09-10, "the trial is not a thing that is actually going to happen", so the signal is the one that runs on every build. Issue closure and workaround deletion remain secondary.) Governs Success Criteria, AE13, R33.
 - KD8. **Full parity in one document.** The four independently plannable outcomes (entry point and routes, terminal outcomes, per-topic types, lifecycle) are specified here together. (session-settled: user-directed - chosen over owning one area and naming the rest as follow-ons.)
 - KD9. **Deserialisation happens per route, inside the facade.** The fluent API consumes raw bytes and applies each route's deserialisers itself. A payload that cannot be read is a per-record failure (R12) rather than an error on the poll thread. Governs R4, R12.
 - KD10. **An exported record travels the existing produce-many path.** Under the transactional commit mode it is in the same transaction as the offset commit; a failed export leaves the record parked. Governs R13, R14, R15.
@@ -114,7 +114,7 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 **Coexistence and sequencing**
 
 - R20. The classic API's public surface is unchanged and the API-compatibility gate passes with no allowed-breakage entries added for this work; the classic API's existing unit and integration suites pass unchanged as the behavioural regression beside the gate.
-- R30. The implementation plan is cut into milestones ordered by how much of the engine each needs to change, and every requirement is assigned to exactly one tier: **small** is facade-only, composed from today's public primitives with no engine edit; **medium** is a contained engine change on an existing seam, no God-class cut; **large** is engine-native work that waits for the decomposition. The first milestone is the smallest set that lets the returning-user trial run, and each milestone ships on its own. The expected tiering, for planning to confirm against the code rather than inherit:
+- R30. The implementation plan is cut into milestones ordered by how much of the engine each needs to change, and every requirement is assigned to exactly one tier: **small** is facade-only, composed from today's public primitives with no engine edit; **medium** is a contained engine change on an existing seam, no God-class cut; **large** is engine-native work that waits for the decomposition. The first milestone is the smallest set that lets the README's first example run in the sandbox, and each milestone ships on its own. The expected tiering, for planning to confirm against the code rather than inherit:
   - Small: the entry point, routes and types (R1 to R6), the classic-API change list as a constraint (R34), the sandbox and generator over the shipped mock consumer (R33), instance-wide batch mode over the existing batch option (R32, size only), outcomes and the filter value (R7 to R9), the retry limit and per-route policy (R10, R11), the three-way decode result (R12), export on the produce-many path (R13 to R15), the park observer (R16), the handle and console sink (R17), the wire constraint (R18), park in place as the retry queue with the re-attempt withheld (R27), the per-route breaker (R29), stop through the existing close paths (R24), the API rule and README (R21, R26).
   - Medium: per-route ordering at the shard-key seam (R6); the classic API's poll-path policy as a third arm on the existing seam (R25); seek and runtime route changes as control-thread commands (R31); the batch defects (astubbs#311, astubbs#164) and the maximum-wait release (R32); the parked-set query and its gauges where they need an engine accessor, the payload fraction above all (R19, R28); the compatibility gate (R20).
   - Large: the engine-native form of each outcome (R22); per-route batching, same-key batches and per-record outcomes inside a batch (R32); parked state carried in commit metadata so a restart does not re-attempt; per-route admission inside the engine, which the self-scaling work owns (R6, R23).
@@ -326,9 +326,8 @@ ParallelConsumerOptions.builder()
 
 ### Success Criteria
 
-- A returning user, or a stand-in who has not read the fluent API's README or its API, builds a working consumer with two routes of different value types, a filter on one of them, a retry limit and a dead-letter destination from the README alone, without opening the javadoc, within the one-screen budget in the Goal Capsule. Every failure they hit is recorded whether or not they succeed, they receive no help during the trial, and they record whether they would return; the criterion is met when their definition compiles and runs on the first attempt. Participant eligibility and the minimum number of trials are an Outstanding Question. Primary (KD7).
+- The README's first example, a definition with two routes of different value types, a filter on one of them, a retry limit and a dead-letter destination, compiles in CI and runs in the sandbox with no broker on every build, within the one-screen budget in the Goal Capsule, and a generated record that always fails is parked by the end of the run. Primary (KD7): it is the signal that runs, and it goes red when the surface drifts.
 - STRATEGY.md records the returning-developer audience and the surface work under its Flexibility track when the fluent API ships, and its marketing section leads with park in place as the capability the offset map alone makes possible (KD14).
-- The README's first example is the fluent API and is compiled in CI so it cannot drift.
 - Each of the three documented workarounds has a one-line first-class replacement shown in a migration section of the README.
 - Each issue in the cluster (astubbs#243, astubbs#254, astubbs#239, astubbs#149, astubbs#148, astubbs#153, astubbs#163, astubbs#231, astubbs#172, astubbs#189, astubbs#141, astubbs#158, astubbs#174, astubbs#246, astubbs#245, astubbs#165, astubbs#145) is either closed by the shipped surface or reduced to a named residual on the issue.
 
@@ -418,7 +417,7 @@ Every capability the comparable library offers is listed with its disposition he
 
 **Resolve Before Planning**
 
-- Who counts as a returning-user stand-in for the primary trial, and how many trials constitute the signal. Only the owner can set these.
+- None.
 
 **Deferred to Planning**
 
