@@ -22,6 +22,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -495,5 +496,40 @@ public class ConsumerManager<K, V> {
 
     public void onCommitRequested() {
         this.commitRequested = true;
+    }
+
+    /**
+     * Where the partition ends (exclusive), <b>if the consumer can answer out of what the last fetch already told
+     * it</b> - the high watermark that came back with the records, at no cost and with no request of its own.
+     * <p>
+     * {@link Consumer#currentLag(TopicPartition)} (KIP-695, kafka-clients 3.0+) is the high watermark minus the
+     * current position, computed from the last fetch response, so {@code position + lag} reconstructs the watermark
+     * exactly - both read here in one breath, on the thread that owns the consumer, so they cannot describe
+     * different moments.
+     * <p>
+     * <b>Nothing here may block or throw.</b> The position is asked for with a zero timeout, so a partition with no
+     * position yet raises {@link TimeoutException} instead of sending an {@code OffsetFetch}; the lag is empty until
+     * a fetch has happened. Every such outcome is the same answer - <em>not established</em> - and the caller's
+     * contract (see {@code PartitionState#maybeVerifyLoadedOffsetMapAgainstThePartition}) is to try again on the
+     * next batch rather than to assume anything. An offset-map check must never be able to slow a poll down, let
+     * alone fail one.
+     *
+     * @return the log end offset, exclusive, or empty when it is not knowable without asking the broker
+     */
+    public OptionalLong logEndOffsetIfKnownWithoutBlocking(TopicPartition partition) {
+        try {
+            OptionalLong lag = consumer.currentLag(partition);
+            if (!lag.isPresent()) {
+                return OptionalLong.empty();
+            }
+            long position = consumer.position(partition, Duration.ZERO);
+            return OptionalLong.of(position + lag.getAsLong());
+        } catch (Exception e) {
+            // Includes TimeoutException (no position without a request), IllegalStateException (the partition went
+            // away under a rebalance) and any consumer implementation that does not answer this question at all.
+            log.debug("Consumer cannot say where {} ends without blocking, so nothing is checked against it this " +
+                    "time round", partition, e);
+            return OptionalLong.empty();
+        }
     }
 }

@@ -173,8 +173,11 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      * @param toThrow  the typed exception for the strict policy, built lazily so its (longer) advice text costs
      *                 nothing on the IGNORE path
      */
+    // public, not package-private: the plausibility check in PartitionState is the one caller outside this package,
+    // and it must apply the SAME policy through the SAME handler rather than grow a second answer to "this build
+    // cannot believe this payload" - see PartitionState#maybeVerifyLoadedOffsetMapAgainstThePartition.
     @SneakyThrows
-    static HighestOffsetAndIncompletes handleUnreadableMetadata(long baseOffset,
+    public static HighestOffsetAndIncompletes handleUnreadableMetadata(long baseOffset,
                                                                         InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                                         String problem,
                                                                         Supplier<? extends InternalException> toThrow,
@@ -206,7 +209,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      *
      * @param tp may be null when the caller did not know the partition
      */
-    static String describeSource(TopicPartition tp, long baseOffset) {
+    public static String describeSource(TopicPartition tp, long baseOffset) {
         return msg("partition: {}, base offset: {}", tp, baseOffset);
     }
 
@@ -261,8 +264,12 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      *     {@link CorruptOffsetMetadataException}, which is the case that used to return a fabricated offset map
      *     instead of failing.</li>
      * </ol>
-     * A fourth outcome - a payload that decodes cleanly into a wrong-but-plausible map - is <b>not</b> covered, and
-     * cannot be: nothing in such a payload proves it wrong.
+     * A fourth outcome - a payload that decodes cleanly into a wrong-but-plausible map - is not covered <em>here</em>,
+     * and cannot be: nothing in such a payload proves it wrong. Something outside it can, and one thing does:
+     * {@code PartitionState#maybeVerifyLoadedOffsetMapAgainstThePartition} measures the decoded map against the
+     * partition itself at the first batch, and refuses one claiming offsets the partition does not hold - through
+     * {@link #handleUnreadableMetadata}, so it is the same user-visible event as the three above. A map that is
+     * merely wrong about offsets which do exist stays indistinguishable from a real one.
      *
      * @param baseOffset  the committed offset the payload is relative to, and what {@code IGNORE} falls back to
      * @param errorPolicy what to do when this build cannot read the payload

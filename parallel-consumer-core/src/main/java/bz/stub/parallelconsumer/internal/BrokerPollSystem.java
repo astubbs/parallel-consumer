@@ -331,8 +331,11 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
         log.debug("Poll completed");
 
-        // build records map
-        return new EpochAndRecordsMap<>(poll, wm.getPm());
+        // Build the records map, and take the fetch's own high watermark with it while we are still on the thread
+        // that owns the consumer - see ConsumerManager#logEndOffsetIfKnownWithoutBlocking. The control thread cannot
+        // ask this question later: the consumer is confined here, and by then the answer would belong to a different
+        // fetch.
+        return new EpochAndRecordsMap<>(poll, wm.getPm(), consumerManager::logEndOffsetIfKnownWithoutBlocking);
     }
 
     private void checkStateForPausingSubscriptions() {
