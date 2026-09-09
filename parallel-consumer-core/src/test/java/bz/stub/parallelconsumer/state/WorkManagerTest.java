@@ -979,6 +979,68 @@ public class WorkManagerTest {
     }
 
     /**
+     * <b>The load gate counts records queued behind a blocked {@code KEY} shard head as workable, and they are
+     * not.</b> Characterisation of what the gate reads today, against confluentinc#857 - not an assertion that
+     * the reading is right.
+     * <p>
+     * {@code isSufficientlyLoaded()} compares {@code inShards - parkedForRetry} against the in-flight target, and
+     * its own javadoc says why the subtraction is there: records waiting out a retry delay "occupy the buffer but
+     * no amount of worker capacity can advance them". A record queued behind a failing shard head under
+     * {@code KEY} ordering meets that description exactly - {@code getWorkIfAvailable} breaks out of the shard
+     * after the head - and it is nevertheless counted. So the gate's figure and its stated meaning disagree, by
+     * however many records sit behind blocked heads.
+     * <p>
+     * <b>What this is NOT evidence of.</b> It does not, on its own, say the gap is what stalls an instance: a
+     * permanently-failing head is itself workable (it is retried forever) and counts on its own account, so a
+     * buffer full of poisoned heads latches the gate whether or not anything is queued behind them. The soak arms
+     * recorded in {@code CommitResponseTimeoutSoakIT}'s {@code Calibration status} are what separate the two.
+     * This test pins the accounting so that a change to it is a decision rather than an accident.
+     *
+     * @see WorkManager#isSufficientlyLoaded()
+     * @see ShardManager#getWorkableRecords()
+     */
+    @Test
+    void theLoadGateCountsRecordsQueuedBehindABlockedKeyHeadAsWorkable() {
+        setupWorkManager(ParallelConsumerOptions.builder().ordering(KEY).build());
+        registerSomeWork(); // three records, ONE key, so one shard, and only its head is ever selectable
+
+        var taken = wm.getWorkIfAvailable();
+        assertThat(taken)
+                .as("KEY ordering hands out one record per shard, so the two behind the head stay queued")
+                .hasSize(1);
+        fail(taken.get(0));
+
+        assertThat(wm.getSm().getWorkableRecords().getInShards())
+                .as("all three are still held - a failure returns the head to its shard, it does not retire it")
+                .isEqualTo(3);
+        assertThat(wm.getSm().getWorkableRecords().getParkedForRetry())
+                .as("only the head is in the retry queue; the two behind it never failed, so nothing parks them")
+                .isEqualTo(1);
+        assertThat(wm.getWorkIfAvailable())
+                .as("and NOTHING is selectable: the head is in back-off and the shard is ordered")
+                .isEmpty();
+        assertThat(wm.getNumberOfWorkableRecordsInSystem())
+                .as("the gate nevertheless reads two workable records - the two that cannot be selected at all")
+                .isEqualTo(2);
+
+        advanceClockByDelay();
+
+        assertThat(wm.getWorkIfAvailable())
+                .as("the head's delay has passed, so it alone becomes selectable again")
+                .hasSize(1);
+        assertThat(wm.getNumberOfWorkableRecordsInSystem())
+                .as("with nothing parked, the gate reads all three as workable while one is selectable - the "
+                        + "over-read is the whole queue behind the blocked head, and it grows with it")
+                .isEqualTo(3);
+
+        assertThat(wm.isRecordsAwaitingProcessing())
+                .as("the SECOND consumer of the same over-read, measured rather than reasoned: a record queued "
+                        + "behind a blocked head still holds its selection claim, so drain() - which gates the "
+                        + "transition to closing on this - would wait on work no worker can reach")
+                .isTrue();
+    }
+
+    /**
      * Holds the O(1) conservation figure against an O(n) scan of what the shards actually contain. The two are
      * deliberately computed by different means - if they can be made to disagree, the conservation figure has a
      * departure path it does not know about.
