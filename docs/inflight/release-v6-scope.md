@@ -333,7 +333,8 @@ box means the v6 action for that line is done, not that the defect is closed:
   One chaos cell (cooperative plus draining) was predicted and never run; a revocation grace period
   is an owner decision.
 - **Refuted, astubbs#484 (merged 2026-09-08):** the "reset to earlier offset" replay branch behind
-  confluentinc#546 ([`bug-162-offset-state-truncation.md`](bug-162-offset-state-truncation.md)).
+  confluentinc#546 (its note retired by astubbs#494 into
+  [`absence-of-commit-data-was-inferred-from-a-sentinel-that-a-real-commit-shares-2026-09-09.md`](../solutions/logic-errors/absence-of-commit-data-was-inferred-from-a-sentinel-that-a-real-commit-shares-2026-09-09.md)).
   One fixture, one differing term, both arms' predictions held: polled-below-expected discards every
   loaded incomplete and rewinds the commit frontier, which is duplicates by construction, never
   loss; and the note's own hypothesis - that `committed()` races the client's position resolution -
