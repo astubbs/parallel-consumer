@@ -81,8 +81,11 @@ comes first because nothing else matters until it clears.
   3. `pr-431-must-pair-its-queue-removal-with-the-shard-removal.md` with
      `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the retry-queue orphan window; master
      is still shard-first and astubbs#431 is a draft.
-  4. `bug-unvalidated-batchsize.md` - `batchSize(0)` silently processes nothing; one `validate()`
-     bound closes all three shapes (astubbs#311). The cheapest real fix in the set.
+  4. `batchSize(0)` silently processing nothing - read as the cheapest real fix in the set, and it
+     was. Now fixed: `validate()` rejects zero, a negative and null, which is astubbs#311's
+     validation half; the arithmetic half stays open in `bug-batch-quantity-over-request.md`. The
+     note is gone and the record is in
+     `docs/solutions/logic-errors/an-unvalidated-option-failed-in-whichever-way-the-rest-of-the-configuration-decided-2026-09-09.md`.
   5. `bug-max-failure-history-is-inert.md` - a public option that does nothing; removing it is
      breaking, so it is settled before the major or carried forever.
   6. `bug-offset-commit-timeout-does-two-jobs.md` - the default makes a retry unreachable; the fix is
