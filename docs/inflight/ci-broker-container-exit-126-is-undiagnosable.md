@@ -61,8 +61,8 @@ The signature above, exactly: `TransactionalVisibilityIT` fell first and slowly 
 `NoClassDefFoundError: Could not initialize class ...BrokerIntegrationTest`. Codecov's PR comment
 renders that as **"20 Tests Failed"**, which is the misreading this note exists to pre-empt: it is
 one failure. The branch is the cleanest control this note has had - its entire delta from master is
-two markdown files under `docs/inflight/`, and the same lane had passed on the branch's own earlier
-heads.
+two markdown files under `docs/inflight/`, and the same lane had passed on an earlier head of the
+same branch two days before.
 <!-- post-merge: checked-end -->
 
 **The container's own output was in the job log, and it names the cause.** One line below the
