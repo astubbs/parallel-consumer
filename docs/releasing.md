@@ -38,7 +38,9 @@ Workflows: `release.yml` (release), `publish.yml` (snapshot-only).
 
 ## What state a changelog section is in
 
-`CHANGELOG.md` holds the release notes. **Nothing about it is a per-PR chore.**
+`CHANGELOG.md` holds the release notes, in Markdown - the release page body is the `## <version>` section
+verbatim, extracted by `release.yml` before it tags anything, and a missing or empty section fails the
+run. **Nothing about it is a per-PR chore.**
 **Release-time generation is in effect now, and it covers `0.6.0.0` itself.** "Frozen" below is a
 statement about *text already written in the file* - leave it alone - and never a claim that some
 release's published notes are settled. What state a section is in follows from whether its release
@@ -46,8 +48,8 @@ has **shipped**:
 
 | Section | State |
 |---|---|
-| `== 0.5.x` and below | Hand-written legacy from before the fork, and shipped. **Frozen.** |
-| `== 0.6.0.0` - the release being cut | **Generated on 2026-09-09 for the tag, from the commit log and the release notes in `docs/inflight/`, and frozen once 0.6.0.0 ships.** Until the tag, the one edit it takes is a correction for work that lands after generation. |
+| `## 0.5.x` and below | Hand-written legacy from before the fork, and shipped. **Frozen.** |
+| `## 0.6.0.0` - the release being cut | **Generated on 2026-09-09 for the tag, from the commit log and the release notes in `docs/inflight/`, and frozen once 0.6.0.0 ships.** Until the tag, the one edit it takes is a correction for work that lands after generation. |
 | Every release after it | Same treatment: generated when that release is cut, frozen once it ships. |
 
 Two readings this rules out. **`0.6.0.0` is not on the hand-written side of the line** - generation
@@ -141,11 +143,11 @@ it - and a human should re-apply it before freezing:
 - **Assemble as a set, not one commit at a time.** Merge related commits into a single entry, drop
   what turned out not to matter, and rewrite for someone who was not there. This is the part a
   per-PR entry could never do.
-- **One `=== Build & CI` entry for the whole release** - a short bullet list of the big hitters
+- **One `### Build & CI` entry for the whole release** - a short bullet list of the big hitters
   (quarantine lane, chaos suite, mutation testing) that tells a reader how carefully the library is
   tested, with the detail left to the log.
-- **Sections:** `=== Breaking`, `=== Improvements`, `=== Fixes`, `=== Dependencies`, `=== Examples`,
-  `=== Build & CI`.
+- **Sections:** `### Breaking`, `### Improvements`, `### Fixes`, `### Dependencies`, `### Examples`,
+  `### Build & CI`.
 - **Reference convention inside `CHANGELOG.md` only:** a bare `#NN` is this fork, `upstream #NN`
   is confluentinc; make issue links explicit (`.../issues/NN[#NN]`), since GitHub numbers issues and
   PRs from one sequence. The file is in the issue-reference gate's `EXEMPT_PATHS` for this reason -

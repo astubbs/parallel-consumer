@@ -97,6 +97,32 @@ jobs:
             echo "::error::Tag v${{ inputs.releaseVersion }} already exists."; exit 1
           fi
 
+      - name: Extract the release notes
+        env:
+          RELEASE_VERSION: ${{ inputs.releaseVersion }}
+        run: |
+          # CHANGELOG.md is Markdown, so the release body is its `## <version>` section verbatim -
+          # nothing is converted. It is extracted here, before release:prepare commits, tags or
+          # deploys anything, so a missing or empty section fails while it is still cheap. There is
+          # no fallback body: an auto-generated commit list on the release page is indistinguishable
+          # from the curated notes having silently vanished (astubbs#197). CHANGELOG.md is identical
+          # at master and at the tag, because release:prepare only rewrites poms. A dry run rehearses
+          # this step too, and the notes land in the job summary either way.
+          awk -v h="## $RELEASE_VERSION" '
+            $0 == h {grab=1; next}
+            /^## / && grab {exit}
+            grab {print}
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/release-notes.md"; then
+            echo "::error::CHANGELOG.md has no '## $RELEASE_VERSION' section, or it is empty. Refusing to release without notes."
+            exit 1
+          fi
+          {
+            echo "## Release notes for v$RELEASE_VERSION"
+            echo
+            cat "$RUNNER_TEMP/release-notes.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: git identity
         run: |
           git config user.name "github-actions[bot]"
@@ -130,27 +156,13 @@ jobs:
         if: ${{ !inputs.dryRun }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.releaseVersion }}
         run: |
-          # Use our curated CHANGELOG.md section as the release notes (not --generate-notes). This step
-          # runs at tag vX (the deploy step already checked it out), so CHANGELOG.md is present. Extract
-          # the "== <releaseVersion>" AsciiDoc section, convert it to Markdown (GitHub renders Markdown:
-          # "=== Heading" -> "### Heading", AsciiDoc "https://url[text]" -> "[text](https://url)"), and pass
-          # it via --notes-file. Fall back to --generate-notes if the section is missing/empty so a release
-          # never fails for lack of notes.
-          notes="$(mktemp)"
-          awk -v h="== ${{ inputs.releaseVersion }}" '
-            $0 == h {grab=1; next}
-            /^== / && grab {exit}
-            grab && /^\/\// {next}
-            grab {print}
-          ' CHANGELOG.md \
-            | sed -E 's/^=== /### /; s#(https?://[^[]+)\[([^]]+)\]#[\2](\1)#g' > "$notes"
-          if [ -s "$notes" ]; then
-            gh release create "v${{ inputs.releaseVersion }}" --title "v${{ inputs.releaseVersion }}" --notes-file "$notes"
-          else
-            echo "::warning::No CHANGELOG section for ${{ inputs.releaseVersion }}; using auto-generated notes."
-            gh release create "v${{ inputs.releaseVersion }}" --title "v${{ inputs.releaseVersion }}" --generate-notes
-          fi
+          # The body is the `## <version>` section of CHANGELOG.md, extracted and validated by the
+          # "Extract the release notes" step BEFORE anything was committed, tagged or deployed.
+          # Deliberately NOT --generate-notes: a commit-list body is what a reader gets when the
+          # curated notes silently go missing, which is the failure this pipeline had (astubbs#197).
+          gh release create "v$RELEASE_VERSION" --title "v$RELEASE_VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
 
       - name: Clean release plugin state
         if: always()

@@ -420,7 +420,7 @@ bin/test-check-copyright-headers.sh"
 # survives there LEGITIMATELY. The check prints every match it skipped in each of these, so the
 # exclusion is auditable rather than a silent hole. Justify any addition, in writing, here:
 #
-#   CHANGELOG.md      release notes. The `=== Breaking` entry NAMES the old Maven coordinate as
+#   CHANGELOG.md        release notes. The `### Breaking` entry NAMES the old Maven coordinate as
 #                       history and must keep saying so. AGENTS.md separately forbids a PR editing
 #                       this file at all, bar correcting a claim that has become false - which is
 #                       what the PROSE_GUARDS below are for, a human's job, not something to sweep.
@@ -548,7 +548,7 @@ test-rename-packages.sh"
 PROSE_GUARDS="\
 src/docs/README_TEMPLATE.adoc|drop-in replacement.*package.*are unchanged|Java packages \*move\*|The drop-in claim stops being TRUE and must not merely be qualified. Plan s8 drafts the replacement: say the packages MOVE from io.confluent.parallelconsumer to bz.stub.parallelconsumer, that the API itself is unchanged, and give the one-line sed under == Upgrading.
 CHANGELOG.md|only required change is the Maven groupId|two changes are required|The rename adds a second required change - every import moves - so this becomes a factual error the moment it lands. AGENTS.md allows exactly one changelog edit in a PR: correcting an existing claim that is now false. Rewrite that sentence. Do NOT add a new entry - the 0.6.0.0 section is generated at release time from the commit log.
-CHANGELOG.md|library API is otherwise unchanged|Rewrite your imports|Same class as the sentence above, in the === Breaking bullet: after the rename the caller's code changes too, so 'otherwise unchanged' reads as a promise the release does not keep. Correct it in place."
+CHANGELOG.md|library API is otherwise unchanged|Rewrite your imports|Same class as the sentence above, in the ### Breaking bullet: after the rename the caller's code changes too, so 'otherwise unchanged' reads as a promise the release does not keep. Correct it in place."
 
 # Rename detection is a similarity matrix over unmatched paths, and git gives up above
 # diff.renameLimit with a warning that is easy to miss, then reports add+delete. 264 files move

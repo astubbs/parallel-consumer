@@ -502,9 +502,9 @@ jobs:
               return;
             }
 
-            // The section comes from the CHANGELOG itself, not the patch: git has no funcname
-            // pattern for asciidoc, so a hunk header here reads `endif::[]` rather than the
-            // heading, and entries are too long for three lines of context to reach one.
+            // The section comes from the CHANGELOG itself, not the patch: a hunk header carries
+            // whatever funcname git guessed, not the `### Section` the entry sits under, and entries
+            // are too long for three lines of context to reach one.
             const fs = require("fs");
             const changelogText = fs.readFileSync(
               `${process.env.GITHUB_WORKSPACE}/CHANGELOG.md`, "utf8");

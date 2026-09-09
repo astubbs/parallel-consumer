@@ -29,19 +29,19 @@ function lines(...parts) {
 const CHANGELOG = lines(
   "== Unreleased",
   "",
-  "=== Build & CI",
+  "### Build & CI",
   "",
   "* some tooling change with no issue",
   "* another tooling change",
   "",
-  "=== Fixes",
+  "### Fixes",
   "",
   "* fix: an old entry that cites nothing",
   "* fix: one that cites (https://github.com/confluentinc/parallel-consumer/issues/857[#857])",
   "* fix: a newly added entry with no issue",
   "* fix: a newly added entry (https://github.com/astubbs/parallel-consumer/issues/42[#42])",
   "",
-  "=== Improvements",
+  "### Improvements",
   "",
   "* an improvement with no issue",
 );
@@ -131,9 +131,9 @@ test("non-bullet additions are ignored", () =>
   assert.deepStrictEqual(
     entriesMissingIssue(lines(
       "@@ -1,1 +1,2 @@",
-      "+=== Fixes",
+      "+### Fixes",
       "+",
-      "+NOTE:: some prose, not an entry"), CHANGELOG),
+      "+**Note:** some prose, not an entry"), CHANGELOG),
     []));
 
 // Accepted consequence of dropping edit-detection: reworking an old uncited entry asks for a
