@@ -134,3 +134,15 @@ of this engine. An in-generation replay of an already-registered offset - a `see
 or truncation replay - makes the displacement branch orphan an entry immediately, and nothing goes
 red for it; the purge would then collect it a tick later, which is precisely the difference this
 section makes.
+
+## Update 2026-09-09 - one of the sweep's other reports is closed
+
+**This note's own subject, state and `PROPOSED closed` marker are untouched.** The only reason this
+section exists is that astubbs/parallel-consumer#483 reported four by-key removals as one list on
+this note's thread, so a reader who arrives here is the reader who wants to know which of the other
+three moved: `ShardManager.removeWorkFromShardFor` is now conditional on the container the revoked
+record was registered as, and is no longer open. The mechanism, the two-legged guard and both
+unreachability arguments belong to the class's owner and are stated only there -
+[`../solutions/logic-errors/a-by-key-removal-cannot-say-which-container-it-meant-2026-09-07.md`](../solutions/logic-errors/a-by-key-removal-cannot-say-which-container-it-meant-2026-09-07.md),
+"Update 2026-09-09 - the second site". The other two stand as astubbs#483 left them, both
+deliberately.
