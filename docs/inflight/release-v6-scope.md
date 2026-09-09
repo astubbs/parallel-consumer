@@ -157,10 +157,11 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   validation half only - the over-request arithmetic stays deferred, so the issue stays open). A
   startup exception where there was silence, so it carries `!` and the release note names it under
   breaking.
-- [ ] **The gate-latch warning** (no PR yet; decided 2026-09-09) - a WARN when the record-intake
-  load gate has read loaded across many consecutive control-loop ticks while nothing retired: the
-  state astubbs#487 measured, today exported only as a paused-partition gauge and logged nowhere.
-  A log line, no semantic change; the last item to join the queue before it closed.
+- [ ] **The gate-latch warning** (astubbs#497, draft, in review; decided 2026-09-09) - a WARN when
+  the record-intake load gate has read loaded across many consecutive control-loop ticks while
+  nothing retired: the state astubbs#487 measured, today exported only as a paused-partition gauge
+  and logged nowhere. A log line, no semantic change; the last item to join the queue before it
+  closed. The Claude review is answered; the Codex review's findings are being worked through.
 - [x] **astubbs#477** - merged 2026-09-08. A dead broker-poll thread now closes the consumer in
   the consumer-commit modes, the shipped default among them, so the group rebalances at once instead
   of after `max.poll.interval.ms`. One derived predicate and one condition, proven red on every
