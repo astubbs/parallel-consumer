@@ -381,6 +381,48 @@ class PcBuiltProducerTest {
         assertThat(thrown).hasMessageThat().contains(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
     }
 
+    /**
+     * A substituted id is still transactional, so the presence check alone would pass it - and a replacement
+     * initialised under it would fence nothing. A real producer can say which id it was built under, so the check
+     * compares the value. Found by the review of astubbs#420.
+     */
+    @Test
+    void aFactoryThatSubstitutesTheTransactionalIdFailsAtConstructionNamingBothIds() {
+        ProducerFactory<String, String> substitutingFactory = config -> {
+            Map<String, Object> altered = new HashMap<>(config);
+            altered.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "the-factorys-own-id");
+            return new KafkaProducer<>(altered, new StringSerializer(), new StringSerializer());
+        };
+        var module = moduleWith(substitutingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+
+        var thrown = assertThrows(ProducerFactoryContractException.class, module::producerWrap);
+
+        assertThat(thrown).hasMessageThat().contains("the-factorys-own-id");
+        assertThat(thrown).hasMessageThat().contains(TransactionalIdDerivation.prefixFor(GROUP));
+    }
+
+    /**
+     * A consumer-commit mode builds a producer that carries no id, so it must not need the consumer's group id to do
+     * it: a manual-assignment consumer, or an unstubbed test double, has none. Found by the review of astubbs#420.
+     */
+    @Test
+    void aConsumerCommitModeBuildsWithoutTheConsumersGroupMetadata() {
+        @SuppressWarnings("unchecked")
+        Consumer<String, String> noGroup = mock(Consumer.class); // groupMetadata() answers null, as an unstubbed double does
+        when(noGroup.paused()).thenReturn(UniSets.of());
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(noGroup)
+                .producerConfig(minimalConfig())
+                .producerFactory(capturingFactory)
+                .commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)
+                .build();
+
+        var wrapper = new PCModule<>(options).producerWrap();
+
+        assertThat(wrapper.isConfiguredForTransactions()).isFalse();
+        assertThat(handedConfigs.get(0)).doesNotContainKey(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+    }
+
     @Test
     void aFactoryThatHonoursTheMapPassesTheConstructionCheck() {
         ProducerFactory<String, String> honestFactory = config -> new KafkaProducer<>(config, new StringSerializer(), new StringSerializer());

@@ -95,8 +95,13 @@ public class PCModule<K, V> {
 
     private Map<String, Object> resolvedProducerConfig() {
         if (resolvedProducerConfig == null) {
-            resolvedProducerConfig = TransactionalIdDerivation.resolve(options().getProducerConfig(),
-                    options().isUsingTransactionCommitMode(), groupIdForDerivation(), producerInstanceId);
+            boolean transactional = options().isUsingTransactionCommitMode();
+            // the group id is read only where an id is derived from it: a consumer-commit mode builds a producer
+            // that carries no id, and must not start needing the consumer's group metadata to do so - a
+            // manual-assignment consumer, or an unstubbed test double, has none. Found by the review of astubbs#420.
+            String groupId = transactional ? groupIdForDerivation() : null;
+            resolvedProducerConfig = TransactionalIdDerivation.resolve(options().getProducerConfig(), transactional,
+                    groupId, producerInstanceId);
         }
         return resolvedProducerConfig;
     }
@@ -170,7 +175,9 @@ public class PCModule<K, V> {
         }
         producersHandedOut.add(producer);
         try {
-            ProducerWrapper<K, V> wrapper = ProducerWrapper.forPcBuilt(options(), producer, transactional);
+            // null in every mode but the transactional one, where resolve() removes the key
+            String expectedId = (String) resolved.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+            ProducerWrapper<K, V> wrapper = ProducerWrapper.forPcBuilt(options(), producer, expectedId);
             log.info("Built producer from configuration (transactional: {}): {}", transactional, ProducerConfigRedaction.render(resolved));
             return wrapper;
         } catch (Throwable rejected) {

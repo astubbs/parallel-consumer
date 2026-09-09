@@ -22,7 +22,10 @@ import java.util.Map;
  * present - {@code transactional.id} above all. PC derives that id (see {@link ParallelConsumerOptions#getProducerConfig()}
  * for how) and reuses it for every replacement, so that re-initialising the replacement fences the producer it
  * replaces; a factory that drops or changes the id disables that fencing and voids the TransactionalId ACL prefix the
- * derived id was designed to fit. A factory that returns a cached or previously returned instance is rejected.
+ * derived id was designed to fit. Where the factory returns a {@link KafkaProducer}, PC checks at construction that it
+ * is transactional exactly when the map said so and that it carries the id the map carried, and rejects it otherwise;
+ * for any other producer type the id cannot be read back, and the contract rests on the factory. A factory that
+ * returns a cached or previously returned instance is rejected on every type.
  * Wrapping, instrumenting or substituting the producer is what overriding this is for; the configuration is not
  * negotiable.
  *
