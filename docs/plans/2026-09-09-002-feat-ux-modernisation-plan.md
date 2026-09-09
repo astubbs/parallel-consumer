@@ -36,7 +36,7 @@ The demand is recorded across the issue tracker and is the oldest open surface w
 
 - KD1. **The new door coexists with the old as an equal.** Both are documented; nothing is deprecated; the API-compatibility gate (astubbs#315) must pass unchanged for the old surface. (session-settled: user-directed - chosen over deprecating the old surface in favour of the new one: no forced migration for existing users.) Governs R20, R21.
 - KD2. **Facade first, engine second.** The new door ships as composition over today's primitives before any God-class cut lands; each behaviour is specified as an outcome so the engine can take it over later without the surface moving. (session-settled: user-directed - chosen over landing the outcome model in the engine first: the surface is the most user-facing change, it drives fixes the engine needs anyway, and the returning user should not wait for the decomposition.) Governs R7, R8, R9, R22, R23.
-- KD3. **One callback per route, everything else is data.** A route carries its types and one processing function; retry limit, backoff, dead-letter destination, ordering and concurrency are data on the instance. The processing function reports its outcome; retry-versus-terminal is never expressed as a list of exception classes; the three-way decode result of R12 is the one classification the surface carries. Type declarations borrow the Kafka Streams shape, consumed and produced with serdes, because every Kafka Java developer already reads it; the Streams chain grammar is not borrowed, because a route has one function and no topology. (session-settled: user-directed - chosen over Java-rich hooks such as predicate filters and exception-class retry lists: every callback is a function that must exist in each foreign client of the language proxy, and data crosses the wire for free.) Governs R3, R5, R6, R10, R16, R18.
+- KD3. **One callback per route, everything else is data.** A route carries its types and one processing function; retry limit, backoff, dead-letter destination, ordering and concurrency are data on the instance. The processing function reports its outcome; retry-versus-terminal is never expressed as a list of exception classes; the three-way decode result of R12 is the one classification the surface carries. Type declarations borrow the Kafka Streams shape, consumed and produced with serdes, because every Kafka Java developer already reads it; the Streams chain grammar is not borrowed across routes, because a route has one function and no topology; a short prelude on a route, filter, map and peek before process, is Java-binding sugar composed into that one function. (session-settled: user-directed - chosen over Java-rich hooks such as predicate filters and exception-class retry lists: every callback is a function that must exist in each foreign client of the language proxy, and data crosses the wire for free.) Governs R3, R5, R6, R10, R16, R18.
 - KD4. **The reference surface is a guide and a floor, not a ceiling.** Every capability the comparable library offers gets a disposition here, and anything beyond it is welcome when it falls out of this library's own mechanisms cheaply: the offset map, the transactional produce path, per-route limits. (session-settled: user-directed - first chosen as a ceiling on 2026-09-09, "we do not need to go beyond what it offers"; lifted on 2026-09-10, "it is only a guide; if it is easy to do, we should do better". The two additions admitted under the ceiling, terminate processing (astubbs#172) and the old-door deserialisation policy, stay; what the lift adds is park, export at capacity, the queryable parked set, scheduled retry as a park delay, direct park and export from the function, and per-route retry overrides.) Governs the Feature disposition section, R24, R25, R27, R28, R29.
 - KD5. **The proxy mirroring decision is left open, and the surface is designed for both.** No construct in the new door may be one a wire contract could not carry. (session-settled: user-directed - chosen over committing the proxy clients to the modern surface now.) Governs R18.
 - KD6. **Capacity across topics is work-conserving fair share, not reservation.** Recorded from the owner on 2026-08-21 in `docs/inflight/next-multi-topic-multi-function.md`. (session-settled: user-directed - chosen over per-topic capacity reservation: an idle topic must not waste its share.) Superseded for the new door on 2026-09-10, user-directed: on virtual threads (astubbs#360) threads are cheap, so each route gets its own concurrency limit, a copy of the instance default, and routes never compete for one shared limit; reservation's cost, idle capacity, is nil there, which removes the reason for sharing. A platform-thread user sets a lower per-route limit so the sum fits the pool. (chosen over work-conserving sharing of one instance limit: sharing needs a topic-aware engine, per-route limits need only the facade.) Governs R6, R23.
@@ -89,7 +89,7 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 - R7. Every record reaches exactly one terminal outcome: succeeded, filtered, parked, or exported; a retry is a step towards one of these, never an outcome of its own, and a parked record may later become exported (R27). Terminal exclusivity applies once a record leaves the retrying state; a record under the explicit unbounded limit may never leave it. A route that produces nothing reaches succeeded on a normal return.
 - R8. The processing function reports filtered by returning an explicit filtered outcome value; a normal return is success on every route, producing or not. It may also return park or export directly, with a reason, for a record it already knows is hopeless, which skips the remaining attempts (R27). A filtered record completes and commits like a success and is counted separately.
 - R9. The processing function reports retry by throwing; the existing retriable exception keeps its meaning; any other exception is also a retry. The distinction affects logging only.
-- R10. Retry stops after the retry limit, counted as attempts after the first. The limit is optional: the default is three attempts followed by park (R27), and an explicit unbounded value is opt-in, so the old door's retry-forever behaviour is available on the new door only by asking for it. Park is what makes a default finite limit safe: an exhausted record costs offset-map capacity, not a worker, and the map's bound is visible (R28). The count is per assignment: a rebalance, restart or crash resets it, so the limit bounds attempts within one assignment, a record reassigned before exhaustion starts again, and a record may exceed the limit across assignments.
+- R10. Retry stops after the retry limit, counted as attempts after the first. The limit is optional: the default is ten attempts followed by park (R27), which also gives the inert failure-history option of ten a meaning at last, and an explicit unbounded value is opt-in, so the old door's retry-forever behaviour is available on the new door only by asking for it. Park is what makes a default finite limit safe: an exhausted record costs offset-map capacity, not a worker, and the map's bound is visible (R28). The count is per assignment: a rebalance, restart or crash resets it, so the limit bounds attempts within one assignment, a record reassigned before exhaustion starts again, and a record may exceed the limit across assignments.
 - R11. On exhaustion the record is parked in place (R27); a finite retry limit needs no destination. Under key and unordered processing the partition commits past a parked record. Under partition ordering a parked record still holds its partition, so the documentation says park serves key and unordered processing and a partition-ordered instance should declare export.
 - R12. A payload a route cannot deserialise never ends the poll thread. A route's decode step yields one of three results: a value, a permanent failure, or a transient failure. A permanent failure is parked immediately without consuming attempts (R27); a transient one is a failed attempt under R9 and R10. A plain Kafka deserialiser that throws yields a transient failure by default, since it cannot tell a corrupt payload from a registry outage; a route that needs the distinction wraps its deserialiser to say so. Under the explicit unbounded limit every decode failure is a transient attempt, so AE1's definition behaves as the old door does.
 
@@ -113,9 +113,11 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 
 - R20. The old door's public surface is unchanged and the API-compatibility gate passes with no allowed-breakage entries added for this work; the old door's existing unit and integration suites pass unchanged as the behavioural regression beside the gate.
 - R30. The implementation plan is cut into milestones ordered by how much of the engine each needs to change, and every requirement is assigned to exactly one tier: **small** is facade-only, composed from today's public primitives with no engine edit; **medium** is a contained engine change on an existing seam, no God-class cut; **large** is engine-native work that waits for the decomposition. The first milestone is the smallest set that lets the returning-user trial run, and each milestone ships on its own. The expected tiering, for planning to confirm against the code rather than inherit:
-  - Small: the entry point, routes and types (R1 to R6), outcomes and the filter value (R7 to R9), the retry limit and per-route policy (R10, R11), the three-way decode result (R12), export on the produce-many path (R13 to R15), the park observer (R16), the handle and console sink (R17), the wire constraint (R18), park in place as the retry queue with the re-attempt withheld (R27), the per-route breaker (R29), stop through the existing close paths (R24), the door rule and README (R21, R26).
-  - Medium: the old door's poll-path policy as a third arm on the existing seam (R25); the parked-set query and its gauges where they need an engine accessor, the payload fraction above all (R19, R28); the compatibility gate (R20).
-  - Large: the engine-native form of each outcome (R22); parked state carried in commit metadata so a restart does not re-attempt; per-route admission inside the engine, which the self-scaling work owns (R6, R23).
+  - Small: the entry point, routes and types (R1 to R6), instance-wide batch mode over the existing batch option (R32, size only), outcomes and the filter value (R7 to R9), the retry limit and per-route policy (R10, R11), the three-way decode result (R12), export on the produce-many path (R13 to R15), the park observer (R16), the handle and console sink (R17), the wire constraint (R18), park in place as the retry queue with the re-attempt withheld (R27), the per-route breaker (R29), stop through the existing close paths (R24), the door rule and README (R21, R26).
+  - Medium: the old door's poll-path policy as a third arm on the existing seam (R25); seek and runtime route changes as control-thread commands (R31); the batch defects (astubbs#311, astubbs#164) and the maximum-wait release (R32); the parked-set query and its gauges where they need an engine accessor, the payload fraction above all (R19, R28); the compatibility gate (R20).
+  - Large: the engine-native form of each outcome (R22); per-route batching, same-key batches and per-record outcomes inside a batch (R32); parked state carried in commit metadata so a restart does not re-attempt; per-route admission inside the engine, which the self-scaling work owns (R6, R23).
+- R31. The handle exposes the consumer operations users have asked for, as commands that are data on the wire (R18): seek a partition to an offset, to its beginning, or to its end (astubbs#174, astubbs#246; the safe-exposure ask of astubbs#158 is answered by these being the only consumer operations the handle offers), and add or remove a route while the instance runs (astubbs#245), under the same definition-time checks as at start. A seek runs on the control thread between polls: the partition's in-flight work is abandoned and those records are delivered again from the new position, and its offset map is reset. Removing a route drains its in-flight work first.
+- R32. A route may declare batch mode: the function receives up to a declared number of records, released early when a declared maximum wait elapses (astubbs#165), and optionally only records sharing one key (astubbs#145). Each record in a batch reaches its own outcome, so one record's failure parks or retries that record alone (astubbs#189); the batch's produced records and filtered values are per record. The old door's batch defects, the extra in-flight request and the unvalidated size (astubbs#311, astubbs#164), are fixed in the engine before batch mode ships on the new door.
 - R26. The door rule: the old door receives only fixes for failures that today end the poll thread (R25); every other behaviour in R7 to R16 and R24 lands on the new door, and the README's old-door section says so. An issue in the Success Criteria cluster counts as closed when its capability is available on the new door; for an existing user the named residual is that it requires the new door. The README states beside its first example when to choose the old door: when pre-built Kafka clients are required.
 - R21. The README's first example uses the new door; the old door keeps its own documented section; a migration section maps each of the three documented workarounds (own dead-letter topic plus swallow, switch on topic name inside one handler, consume raw bytes to deserialise by hand) to its one-line new-door replacement.
 - R22. The behaviours in R7 to R15 hold when the facade implements them over today's engine, and hold unchanged when the engine implements them natively; the same acceptance examples are the oracle for both. The parity promise binds the terminal outcomes, not the reset: R10's per-assignment counting is a facade-era floor the engine-native form may tighten to a durable per-record count.
@@ -127,7 +129,7 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 
 Illustrative, not binding: the names are placeholders and the compiled README example decides the syntax (Outstanding Questions). What the examples fix is the shape the requirements imply: properties in, each route a closed block with its types and one `process` function, policy as data, a handle out. Type declarations borrow Kafka Streams' `Consumed.with` and `Produced.with` shape and its `Serdes` names, in this library's own package so no Streams dependency arrives; the chain grammar of the Streams DSL is deliberately not borrowed (KD3).
 
-The shortest definition: one topic, nothing else declared. Failures retry three times with the default delay, then park (R1, R2, R10, R11, R17):
+The shortest definition: one topic, nothing else declared. Failures retry ten times with the default delay, then park (R1, R2, R10, R11, R17):
 
 ```java
 try (var pc = ParallelConsumer.define(props)
@@ -160,7 +162,7 @@ ParallelConsumer.define(props)
 Retry and park policy, every call optional (R10, R13, R27). The export fraction has an instance-level default, eighty percent, itself configurable:
 
 ```java
-    .retryLimit(5)                                   // default 3; RetryLimit.unbounded() to opt out
+    .retryLimit(5)                                   // default 10; RetryLimit.unbounded() to opt out
     .retryDelay(Duration.ofSeconds(1))
     .afterRetries(park()
         .exportTo("orders.dlq")                      // optional; without it park is bounded by the map alone
@@ -184,6 +186,17 @@ ctx -> {
 }
 ```
 
+A prelude on a route, sugar composed into the one function before it crosses the wire (KD3):
+
+```java
+.route("orders", r -> r
+    .consumed(Consumed.with(Serdes.String(), jsonSerde(Order.class)))
+    .filter(ctx -> ctx.value().customerId() != null)     // false is the filtered outcome
+    .map(ctx -> ctx.value().withProcessedAt(now()))
+    .peek(order -> metrics.seen(order))
+    .process(order -> { downstreamDatabase.write(order); return Outcome.succeeded(); }))
+```
+
 Telling permanent from transient at decode time, when a stock deserialiser cannot (R12):
 
 ```java
@@ -202,6 +215,20 @@ parked.records(3).stream()                       // partition 3: offset, key, at
       .filter(rec -> rec.attempts() > 5)
       .forEach(parked::resume);                  // or parked::export
 pc.parked().total();                             // every route
+```
+
+Handle operations (R31) and a batch-mode route (R32):
+
+```java
+pc.seek("orders", 3, Seek.beginning());              // one partition; in-flight work is delivered again
+pc.addRoute("refunds", r -> r.consumed(Consumed.with(Serdes.String(), jsonSerde(Refund.class)))
+                            .process(ctx -> { refunds.apply(ctx.value()); return Outcome.succeeded(); }));
+pc.removeRoute("audit");                              // drains first
+
+.route("orders", r -> r
+    .consumed(Consumed.with(Serdes.String(), jsonSerde(Order.class)))
+    .batch(Batch.upTo(100).maxWait(Duration.ofSeconds(1)).sameKey())
+    .processBatch(batch -> batch.map(ctx -> ledger.post(ctx.value()) ? Outcome.succeeded() : Outcome.filtered())))
 ```
 
 The park observer, sugar over the outcome (R16), and the old door's poll-path policy (R25):
@@ -249,10 +276,12 @@ ParallelConsumerOptions.builder()
 
 ### Acceptance Examples
 
-- AE1. **Covers R10, R11.** Given a definition declaring the explicit unbounded retry limit and no dead-letter destination, when a record's function always throws, then the record is retried indefinitely and no offset past it commits under partition ordering, exactly as the old door behaves; and given a definition that declares no retry limit at all, then the record is attempted three times and parked.
+- AE1. **Covers R10, R11.** Given a definition declaring the explicit unbounded retry limit and no dead-letter destination, when a record's function always throws, then the record is retried indefinitely and no offset past it commits under partition ordering, exactly as the old door behaves; and given a definition that declares no retry limit at all, then the record is attempted ten times and parked.
 - AE2. **Covers R10, R11, R27.** Given a retry limit of two under key ordering, when a record's function throws three times, then the fourth attempt does not occur, the record is parked: its offset stays incomplete in the commit metadata, offsets past it on the same partition commit, it holds no worker, and the parked count for its topic is one.
 - AE18. **Covers R13, R27.** Given AE2's definition with a dead-letter destination and the default fraction, when parked records push a partition's payload past eighty percent of the metadata cap, then the oldest parked records on that partition are exported until the payload is below the fraction, each holding the original bytes and headers plus provenance headers reporting its attempts, and each exported record's source offset commits.
 - AE21. **Covers R29.** Given a route with a breaker of half the last hundred outcomes and a thirty-second open duration, when sixty of a hundred consecutive records fail terminally, then the route opens, its next records are withheld for thirty seconds with no attempt counted, other routes keep processing, the transition is counted, and after thirty seconds five probe records run and the route closes when they succeed.
+- AE22. **Covers R31.** Given a running instance, when the handle seeks one partition to its beginning, then that partition's in-flight records are abandoned and delivered again from offset zero, its offset map is reset, other partitions are untouched; and when a route is added at runtime for a new topic, then its records are processed under its own declared policy without a restart, and adding a route for an already-routed topic is refused as at definition time.
+- AE23. **Covers R32.** Given a route in batch mode with a size of one hundred and a maximum wait of one second, when forty records arrive and no more follow, then the function receives the forty after one second; and when one record in a batch throws, then that record alone is retried and later parked while the other records' outcomes stand.
 - AE20. **Covers R28.** Given AE2's definition and three parked records on one partition, when the handle is queried, then it reports three parked on that partition with the oldest one's age and the partition's payload fraction, lists the three with offset, key, attempts, last failure and parked-since; and when resume is issued for one of them, then that record is attempted again at once and, on success, its offset commits and the parked count reads two.
 - AE19. **Covers R27.** Given AE2's definition with a dead-letter destination and export-immediately declared, when a record exhausts its retries, then it is exported at once with provenance reporting three attempts and its source offset commits, which is the classic dead-letter queue.
 - AE3. **Covers R14.** Given the transactional commit mode and AE19's definition, when a consumer reads the dead-letter topic with read-committed isolation and the source consumer group's committed offset is observed separately, then the exported record becomes visible only together with that committed source offset; and when the export send fails after the record was produced but before the offset committed, then no source offset for it is committed and no exported record becomes visible.
@@ -277,7 +306,7 @@ ParallelConsumerOptions.builder()
 - STRATEGY.md records the returning-developer audience and the surface work under its Flexibility track when the door ships.
 - The README's first example is the new door and is compiled in CI so it cannot drift.
 - Each of the three documented workarounds has a one-line first-class replacement shown in a migration section of the README.
-- Each issue in the cluster (astubbs#243, astubbs#254, astubbs#239, astubbs#149, astubbs#148, astubbs#153, astubbs#163, astubbs#231, astubbs#172, astubbs#189) is either closed by the shipped surface or reduced to a named residual on the issue.
+- Each issue in the cluster (astubbs#243, astubbs#254, astubbs#239, astubbs#149, astubbs#148, astubbs#153, astubbs#163, astubbs#231, astubbs#172, astubbs#189, astubbs#141, astubbs#158, astubbs#174, astubbs#246, astubbs#245, astubbs#165, astubbs#145) is either closed by the shipped surface or reduced to a named residual on the issue.
 
 ### Feature disposition against the reference surface
 
@@ -315,9 +344,11 @@ Every capability the comparable library offers is listed with its disposition he
 | Per-key queue-depth diagnostics | Deferred | Belongs to the observability track and its GUI |
 | Circuit breaker | In scope (R29), per route | A declarative pause of one route driven by its observed failure rate; the facade already bounds each route, so opening one is withholding its records |
 | Trace-context propagation | Deferred | Owned by the record-tracing note; not asked for here |
-| Transform composition on a route (chaining, peek, conditional) | Deferred | A route has one function; composition is the user's code. Revisit if returning users ask |
+| Transform composition on a route (filter, map, peek before process) | In scope, Java-binding sugar | Composed into the one function before it crosses the wire, so the engine and the proxy still see one callback; nothing across routes |
 | Per-attempt failure observer | Deferred | A second callback with no data equivalent; R16 covers the once-per-record case |
-| Batch sink with size and age flush and a coverage contract | Deferred | Batch consumption exists on the old door; batching on the produce side is separate work |
+| Batch sink with size and age flush and a coverage contract | Deferred | Batching on the produce side is separate work |
+| Batch consumption: many records per call, max wait, same-key batches, per-record outcomes | In scope (R32), tiered | astubbs#165, astubbs#145, astubbs#189; the old door's batch option is the seed and its two defects are fixed first |
+| Seek a partition; add or remove a route at runtime | In scope (R31) | astubbs#174, astubbs#246, astubbs#245, and the only consumer operations the handle offers (astubbs#158) |
 | Broker-free test kit driving the real code path over a mock consumer | Deferred | The mock consumer ships in the main artefact, but it reaches the engine by being handed in as the consumer, which R1 removes on the new door; the kit is new work on the door, an injection point plus documentation |
 | Fixed-length wire-prefix stripping before deserialisation | Deferred | A route's deserialiser can do this; no door support needed |
 | Terminate processing from inside the function | In scope (R24) | astubbs#172; the close paths already exist, the outcome names one |
@@ -362,7 +393,6 @@ Every capability the comparable library offers is listed with its disposition he
 
 - The rejection bar for the extra deserialisation copy (Dependencies): the per-record throughput or latency regression, measured at zero processing time against the old door, above which the raw-bytes design is revisited. Only the owner can set the number; until it is set, planning may not treat the copy as accepted.
 - Who counts as a returning-user stand-in for the primary trial, and how many trials constitute the signal. Only the owner can set these.
-- The default retry limit: three attempts is the assumed value (R10); confirm or change it.
 
 **Deferred to Planning**
 
