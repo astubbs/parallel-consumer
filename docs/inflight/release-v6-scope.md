@@ -315,7 +315,7 @@ box means the v6 action for that line is done, not that the defect is closed:
   next arm: the observed retry cadence is about three times the configured delay, and the latch
   point is a function of it. **Decided 2026-09-09: the interim warning is v6-sized** - a WARN when
   the gate has read loaded across many consecutive ticks while nothing retired, no semantic change -
-  and joins tier 1 as its own item, still to be built. astubbs#487 itself is merged; the
+  and joined tier 1 as its own item, merged as astubbs#497 on 2026-09-10. astubbs#487 itself is merged; the
   retry-cadence arm is what remains of the measurement.
 
 **Resolved or reassigned - one line each, so the release note can say what was ruled out:**

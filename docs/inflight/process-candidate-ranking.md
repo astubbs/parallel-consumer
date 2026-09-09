@@ -138,7 +138,7 @@ comes first because nothing else matters until it clears.
 
 The sweep's reading above agrees with the look-at items below and added one this section had filed
 as 0.6.0.x: `batchSize(0)` silently processes nothing, and the sweep calls the `validate()` bound
-"the cheapest real fix in the set" (astubbs#311) - now in tier 1 by the owner's 2026-09-09 decision. Its list of instruments the release decision is
+"the cheapest real fix in the set" (astubbs#311) - put in tier 1 by the owner's 2026-09-09 decision and merged as astubbs#496. Its list of instruments the release decision is
 read through that are currently lying or unproven is worth reading before trusting a green.
 
 "Gate on open bugs" only works if every open bug has a disposition, so this is every `bug-` note on
@@ -170,7 +170,7 @@ its subject at any merge.
 
 - Config lies: `maxFailureHistory` is read nowhere; `offsetCommitTimeout` bounds two different
   waits; `batchSize`'s over-request arithmetic (astubbs#311's other half, deferred) - its validation
-  bound is in tier 1 since 2026-09-09.
+  bound merged as astubbs#496 on 2026-09-09.
 - Blind spots: the racy and uncalled pause API; no metric for a discarded offset map under the
   default `IGNORE` policy; the worker future swallowing framework exceptions.
 - Misdirection: the plain-`int` out-for-processing counter; the module's processor reference
