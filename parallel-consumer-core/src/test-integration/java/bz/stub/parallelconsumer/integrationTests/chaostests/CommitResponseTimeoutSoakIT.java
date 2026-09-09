@@ -204,7 +204,14 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * {@code maxConcurrency * retryDelay / userFunctionDuration}, which at these defaults is
  * {@code 14 * 1000/100 = 140}. <b>The latch is therefore an eventual certainty for any instance with
  * retry-forever and any poison at all</b>, at a computable ceiling of {@code 140 + 42 = 182} held
- * poison records here.
+ * poison records here. The two addends are different units on purpose: 140 bounds the parked share,
+ * and <b>the 42 is the gate's own threshold term</b>, {@code target(14) * loadingFactor(3)} read off
+ * the arms' gate lines, not a second measured population. {@code loadingFactor} is
+ * {@link bz.stub.parallelconsumer.internal.DynamicLoadFactor#getCurrentFactor()}, which starts at 2
+ * and steps up one at a time, so arm 1 latched against a threshold of 28 before it had stepped at
+ * all. {@code docs/inflight/bug-119-load-gate-counts-blocked-work-as-available.md} owns why a factor
+ * that had stepped further would latch later rather than never - the step-up is conditioned on the
+ * work request being fulfilled, which the latch is precisely what prevents.
  * <p>
  * <b>Measured, not asserted, and the measurement beats the bound.</b> {@code parkedForRetry} has
  * median 135 and hard max <b>140</b> in arms 1, 2 and 3 while {@code inShards} ranges over 549 to

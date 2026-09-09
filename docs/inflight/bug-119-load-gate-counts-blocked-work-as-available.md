@@ -76,6 +76,15 @@ which at this scenario's defaults (14 workers, a 1s static `defaultMessageRetryD
 function) is **140** records. The latch is therefore an eventual certainty, at a ceiling of
 `140 + 42 = 182` held poison records here.
 
+**The `42` there is the gate's threshold term, not a second measured population** -
+`targetAmountOfRecordsInFlight(14) * loadingFactor(3)`, read off the arms' own gate lines. The two
+addends are different units on purpose: one bounds how many held records are parked, the other is the
+line the remainder has to cross. `loadingFactor` is `DynamicLoadFactor#getCurrentFactor`, which starts
+at `DEFAULT_INITIAL_LOADING_FACTOR` of 2 and steps up one at a time, so arm 1 latched against a
+threshold of **28** before it had stepped at all; 182 is stated at the value the longer arms settled
+at, and a run that had stepped further would latch later, not never - see the step-up condition in the
+sweep below.
+
 **Measured, and the measurement beats the bound in the dangerous direction.** `parkedForRetry` has
 median 135 and hard max **140** across arms 1-3 while the population ranges from 549 to 17,103 - a 31x
 population change with an unchanged parked count, which is only possible if parked is set by
@@ -179,9 +188,21 @@ here rather than folded into the gate question.
 
 Checked and ruled out: `isWorkInFlightMeetingTarget()` and `hasWorkInFlight()` read
 `numberRecordsOutForProcessing`, which counts records actually dispatched to a worker and cannot
-include a queued one; `checkPipelinePressure()` reads the executor's own queue depth rather than any
-shard figure - and that is why the load factor barely moved in the stall, since the pool was never
-starved; `getNumberOfRecordsInShards()`'s remaining callers are diagnostics and tests.
+include a queued one; `getNumberOfRecordsInShards()`'s remaining callers are diagnostics and tests.
+
+**And the dynamic threshold does not grow its way back out - the step-up is conditioned on the very
+thing the latch stops.** A rising `loadingFactor` raises the gate's threshold, so in principle the
+factor could climb toward its ceiling of `DEFAULT_MAX_LOADING_FACTOR` and unlatch the gate on its own.
+It cannot, and the reason is a source condition rather than a coincidence of these runs:
+`checkPipelinePressure()` steps the factor only when `isPoolQueueLow() && lastWorkRequestWasFulfilled`,
+and that second term is set by `retrieveAndDistributeNewWork` as `gotWorkCount >= delta`, where
+`delta` is the shortfall of dispatched records against the loaded target. Once the shards have nothing
+selectable left, every pass hands back less than the shortfall, the flag stays `false`, and the factor
+is pinned wherever it stood when the latch arrived. **The idle pool does not rescue it either**:
+`isPoolQueueLow()` reads the executor's own queue depth, which was low throughout arm 4 - it is the
+fulfilment term that holds the factor down, not the pressure term. Which is what arm 4 shows from the
+outside: `loadingFactor(3)` across an unbroken `true` run of nearly nine minutes, eleven workers idle
+and the executor queue empty the whole time.
 
 ## Related
 
