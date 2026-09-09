@@ -63,6 +63,22 @@ class AmbientProbeExtensionTest {
      */
     private static final String ENVIRONMENT_DUMP_LOCK = "ambient-probe-environment-dump";
 
+    /**
+     * {@link LogCapture#of(Class)} attaches an appender to the logger for {@link AmbientProbeExtension}, which is
+     * process-global rather than test-scoped. The three headroom tests below each capture it and then assert on the
+     * EXACT set of {@code PC-DEADLINE-HEADROOM} lines they saw, so any two of them inside their {@code try} at the
+     * same time capture each other's line and both assertions are wrong - {@code hasSize(1)} gets 2, and the
+     * silence test gets a line belonging to a sibling. This module runs JUnit thread-parallel outside {@code -Pci}
+     * ({@code junit.jupiter.execution.parallel.mode.default=concurrent} in the core pom), so nothing else serialises
+     * them: measured red in 3 of 3 full core suite runs on 2026-09-09, on both arms of a matched pair.
+     * <p>
+     * A lock rather than {@code @Execution(SAME_THREAD)} on the class, which is what
+     * {@code LoadFactorCeilingReportingTest} and {@code ConsumerOffsetCommitterAsyncFailureLoggingTest} reach for:
+     * those classes capture in most of their methods, this one in three of many, and serialising the rest buys
+     * nothing. Hold it on any test that captures this logger, not only on these three.
+     */
+    private static final String HEADROOM_LOG_CAPTURE_LOCK = "ambient-probe-headroom-log-capture";
+
     // --- deadline headroom: measured at the end of the method, LABELLED after teardown ---
 
     /**
@@ -72,6 +88,7 @@ class AmbientProbeExtensionTest {
      * a {@code key=value} line, which is worse for a collector than a missing one.
      */
     @Test
+    @ResourceLock(HEADROOM_LOG_CAPTURE_LOCK)
     void headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod() {
         var extension = new AmbientProbeExtension();
         var context = contextFor(TimedFixture.class, "timedMethod");
@@ -97,6 +114,7 @@ class AmbientProbeExtensionTest {
 
     /** The other exit: a clean pass still reports, because a green run is what establishes normal. */
     @Test
+    @ResourceLock(HEADROOM_LOG_CAPTURE_LOCK)
     void headroomIsReportedOnAPassingTestToo() {
         var extension = new AmbientProbeExtension();
         var context = contextFor(TimedFixture.class, "timedMethod");
@@ -119,6 +137,7 @@ class AmbientProbeExtensionTest {
      * ran: nothing was captured, so nothing is emitted.
      */
     @Test
+    @ResourceLock(HEADROOM_LOG_CAPTURE_LOCK)
     void headroomIsSilentWithoutADeadlineAndWithoutAMeasurement() {
         var extension = new AmbientProbeExtension();
         var timedButUnmeasured = contextFor(TimedFixture.class, "timedMethod"); // no start instant
