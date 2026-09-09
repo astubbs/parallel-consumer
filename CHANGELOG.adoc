@@ -98,6 +98,12 @@ March 2026 on.
   and Kafka Streams metadata all route through the policy; before, most of them threw on assignment whatever it was
   set to.
 ** `FAIL` still stops the consumer, and now does so for every unreadable payload.
+* *`batchSize` below one is rejected at construction* (https://github.com/astubbs/parallel-consumer/pull/496[#496];
+  https://github.com/astubbs/parallel-consumer/issues/311[#311]). Zero, a negative or null now throws
+  `IllegalArgumentException` from `validate()`, naming the option. Before, zero started a consumer that joined the
+  group, polled, and processed nothing forever with no warning - or, with `messageBufferSize` set, died in a bare
+  `ArithmeticException`. Nothing changes for any value of one or more.
+** A deployment whose batch size comes from a property that resolves to zero now fails to start instead of idling.
 * *One exception renamed, one method removed* (https://github.com/astubbs/parallel-consumer/pull/267[#267]):
 ** `InternalRuntimeException` is `PCInternalRuntimeException` - it is what `getFailureCause()` returns, and the old name
    read like a JDK type in a stack trace.
@@ -633,28 +639,6 @@ the library is tested:
 * *Repository hygiene as a required check.* Every issue reference must name its repository, because the fork's issue
   numbers overlap upstream's; every cited file path must exist; copyright headers, the documentation data's structure,
   shell lint and the PR checklist are all gated; and a stacked PR cannot merge before its parents.
-* *Two reviews before a merge.* An automated code review is a required check and opens inline threads that block
-  the merge until resolved, and a human LGTM review is required on top of it.
-* *Releases are tag-as-truth.* A dispatch runs `release:prepare`, refuses if master's last CI run is not green, and
-  deploys exactly the commit it tagged; snapshots publish on every push to master. An earlier history-scanning
-  pipeline once re-released an ancient upstream commit, which is why
-  (link:docs/releasing.md[docs/releasing.md]).
-* *A self-hosted high-CPU lane* for the heavy suites, run on dispatch and on a schedule rather than per PR; the
-  required merge gate stays on GitHub-hosted runners
-  (link:docs/self-hosted-runner.md[docs/self-hosted-runner.md]).
-
-And how the project itself is run:
-
-* *Every open upstream issue has a mirror here.* Each carries labels for what it is and what shipped, and the
-  upstream thread carries one reply pointing at the mirror, so no report to the unmaintained repository is silent
-  (link:docs/upstream.md[docs/upstream.md]).
-* *Solved problems are written up where the next person will find them.* A searchable corpus of write-ups under
-  `docs/solutions/`, by category, each recording the mechanism, the experiment that settled it and the alternatives
-  rejected; the investigations in this release cite it and add to it.
-* *Dependencies move on their own.* Dependabot groups the routine bumps; the majors held back - Kafka 4, JUnit 6,
-  Testcontainers 2, Vert.x 5, Mutiny 3, WireMock 3 - are each recorded with the reason and what unblocks them.
-
-The detail behind each of these is in the commit log and `docs/solutions/`.
 
 // There is no 0.5.3.4 release. The upstream #892 metrics fix once tracked under a "0.5.3.4" heading here was
 // never published upstream as 0.5.3.4; it ships in this fork's 0.6.0.0 (folded into the Fixes above).
