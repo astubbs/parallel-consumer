@@ -344,9 +344,11 @@ box means the v6 action for that line is done, not that the defect is closed:
   having truncated nothing. Misdirection operators may alert on; not a data risk. **Decided
   2026-09-09:** absent commit data does not warn - a distinct INFO line saying no committed offset
   was found and the partition starts from the polled offset, no truncation branch taken, and the
-  WARN kept for the genuine truncation cases. An agent is building it red-first on its own PR
-  (branch `fix/162-absent-commit-data-warns`); it may close astubbs#162 if all three defects behind
-  the warning string are then settled.
+  WARN kept for the genuine truncation cases. Fixed by astubbs#494 (merged 2026-09-09), which closes
+  astubbs#162: absence of commit data is now recorded from the codec's default entry rather than
+  inferred from a sentinel that a real commit at offset zero shares, all three defects behind the
+  warning string are settled, and the mirror's fork-status text is drafted for the pre-release
+  sweep.
 - **Never reproduced:** the commit-response timeout (confluentinc#809, confluentinc#833). astubbs#471
   (merged) is the first experiment that hunts it; its first runs could not reach the timeout because
   the instance stalled first - see the intake-stall item in the confluentinc#857 list above, which
