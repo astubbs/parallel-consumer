@@ -3,7 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-state: open - mechanism settled, latch point derived, and the latch now reports itself (astubbs/parallel-consumer#495); waiting on astubbs#149 for the real fix -->
+<!-- inflight-state: open - mechanism settled, latch point derived, and the latch now reports itself (astubbs/parallel-consumer#497); waiting on astubbs#149 for the real fix -->
 
 **The filename carries astubbs#119, the fork mirror of confluentinc#857**, per this directory's rule
 that a note's number is always the fork's. `bug-857-family.md` carries an upstream number because it
@@ -149,7 +149,7 @@ direction already: `docs/data/roadmap.yaml`'s `dead-letter-queue` entry says in 
 "retrying forever is the only built-in answer today, and it is the wrong one for a poison record"
 (astubbs#149, confluentinc#310). Until that lands:
 
-- **Make the latch loud - DONE, astubbs/parallel-consumer#495.** The state was exported as the
+- **Make the latch loud - DONE, astubbs/parallel-consumer#497.** The state was exported as the
   `NUM_PAUSED_PARTITIONS` gauge and said nothing in the log; a gate reading `true` across
   `LATCHED_PASSES_BEFORE_WARNING` consecutive control-loop passes with nothing retiring is now a WARN
   naming the operands, once, with an INFO when it clears. No semantics changed - the gate's decision,
