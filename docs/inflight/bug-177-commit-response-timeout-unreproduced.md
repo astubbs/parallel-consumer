@@ -163,10 +163,13 @@ while only the failing head itself is `parkedForRetry`. That is the silent-stall
 comment names against confluentinc#857.
 
 **It has since been run, and it is half right.** The gate IS what stops intake; head-of-line blocking
-is NOT why. Three six-minute arms on 2026-09-08 settle it, and
+is NOT why. Three six-minute arms on 2026-09-08 settle it, and a fourth at a low poison rate on
+2026-09-09 turns the verdict into a threshold: the gate latches on an idle instance once the poison
+population outgrows what the retry service holds in back-off, so any retry-forever instance that
+meets poison gets there eventually.
 [`bug-119-load-gate-counts-blocked-work-as-available.md`](bug-119-load-gate-counts-blocked-work-as-available.md)
-**owns that question from here** - the arms, the verdict, the accounting gap that is real but was not
-involved, and the product decision that is all that remains. What matters to *this* note is only the
+**owns that question from here** - the arms, the latch point, the accounting gap that is real but was
+not the cause, and the fix that bounds failures rather than the buffer. What matters to *this* note is only the
 consequence: **the intake stall is not going to be fixed by a change to the gate**, so the arms below,
 which exist to make this scenario able to falsify its own assertion, are unchanged by it.
 
