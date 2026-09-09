@@ -406,6 +406,16 @@ Every capability the comparable library offers is listed with its disposition he
 - Engine-native implementation of each outcome: after the God-class decomposition.
 - The poll-timeout setting: a new engine setting on either API, orthogonal to the objective.
 
+**Considerations for later, from the wider ecosystem** (surveyed 2026-09-10, held outside the repository by owner decision; each names the mechanism it would ride on, none is a requirement here)
+
+- Scheduled messages, produce-later through a proxy topic: the scheduled-intent note.
+- Expiring messages, a validity deadline after which a record is dropped or exported: the expired disposition the work-identity note already wants, one more eligibility predicate beside park.
+- Delayed processing, a not-before lag per route: the same predicate as a park delay, applied on arrival.
+- Periodic and recurring jobs, cron-driven consumer code without messages: the scheduled-intent note, cron as a producer of obligations.
+- Commanding from the dashboard, pause, resume, export and trace: the control-plane note; R28's commands are the engine API it needs first.
+- Direct assignment and ad-hoc iteration of a topic without a consumer group: the handle-operations family (R31), useful for tools and the sandbox.
+- A per-record failure strategy hook deciding retry, export or skip: only as Java-binding sugar over the outcomes, never a second callback on the wire (KD3).
+
 **Tracked elsewhere**
 
 - Everything marked Not this plan in the disposition table: virtual threads per record (astubbs#360), and build-time module descriptors with a bill of materials.
@@ -415,6 +425,11 @@ Every capability the comparable library offers is listed with its disposition he
 - Everything marked Excluded in the disposition table.
 - The Kafka Streams API (astubbs#255): stateful processing goes there; the fluent API is per-record.
 - Deciding what the proxy clients mirror (KD5).
+- Several processes sharing one partition by key subset: needs cross-process coordination Kafka does not give; PC's answer is key parallelism inside the instance, the self-scaling direction, and the share-shaped facade for queue-style demand.
+- Many connections per process for one topic: one consumer per instance is the engine; more capacity is more instances.
+- Framework-managed process forking: process management belongs to the application and its orchestrator, per the embedded-not-cluster positioning.
+- A long-running-job mode that pauses while processing: not needed; the poller keeps the group alive during long work.
+- A background-jobs adapter in the style of a web framework's job system: ecosystem-adapter territory, not this surface.
 
 ### Dependencies / Assumptions
 
