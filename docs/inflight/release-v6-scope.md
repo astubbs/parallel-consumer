@@ -173,6 +173,11 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   first poll batch against a watermark read without blocking from the consumer's own position and
   lag, so no broker round trip sits inside the rebalance callback. Promoted from the
   owner's-decision list on 2026-09-08.
+- [ ] **The `batchSize` validation bound** (no PR yet; decided 2026-09-09) - `batchSize(0)` silently
+  processes nothing and a negative value fails obscurely; one `validate()` bound in the options,
+  in the style of its neighbours, closes every shape the note names (astubbs#311, the validation
+  half only - the over-request arithmetic stays deferred). The sweep's "cheapest real fix in the
+  set"; a startup exception where there was silence, so the release note names it.
 - [ ] **The gate-latch warning** (no PR yet; decided 2026-09-09) - a WARN when the record-intake
   load gate has read loaded across many consecutive control-loop ticks while nothing retired: the
   state astubbs#487 measured, today exported only as a paused-partition gauge and logged nowhere.
@@ -500,8 +505,8 @@ on 2026-09-07 and is the agents' reading, with their stated confidence - not the
 Where it disagrees with the tiers above, the tiers say so: the poisoned-transaction pair (the sweep:
 not gating; the owner named it the second exception on 2026-09-09), the transactional revoke wait (the sweep read
 astubbs#466 as having replaced the unbounded wait, which is right, and astubbs#408 as owning the
-bound), and the `batchSize` validation bound (the sweep: cheapest real fix; the triage below filed
-it as 0.6.0.x - it could ride in tier 1). Item 2 in its list, the dead poll thread, is
+bound), and the `batchSize` validation bound (the sweep: cheapest real fix; the triage had filed
+it as 0.6.0.x, and the owner moved it into tier 1 on 2026-09-09). Item 2 in its list, the dead poll thread, is
 astubbs#477, merged.
 
 The bar above is "the bugs that are already open". Six area sweeps each named what they read as gating (the owner's pass over
@@ -565,9 +570,9 @@ comes first because nothing else matters until it clears.
 
 ## Open defects with no PR - each one's disposition against the bar
 
-The sweep's reading above agrees with the look-at items below and adds one this section had filed
+The sweep's reading above agrees with the look-at items below and added one this section had filed
 as 0.6.0.x: `batchSize(0)` silently processes nothing, and the sweep calls the `validate()` bound
-"the cheapest real fix in the set" (astubbs#311). Its list of instruments the release decision is
+"the cheapest real fix in the set" (astubbs#311) - now in tier 1 by the owner's 2026-09-09 decision. Its list of instruments the release decision is
 read through that are currently lying or unproven is worth reading before trusting a green.
 
 "Gate on open bugs" only works if every open bug has a disposition, so this is every `bug-` note on
@@ -598,8 +603,8 @@ its subject at any merge.
 **0.6.0.x - open, real, not a gate for a bug release:**
 
 - Config lies: `maxFailureHistory` is read nowhere; `offsetCommitTimeout` bounds two different
-  waits; `batchSize` is unvalidated (astubbs#311, deferred with its sibling - but see the sweep's
-  "cheapest real fix" reading above; a one-line `validate()` bound could ride in tier 1).
+  waits; `batchSize`'s over-request arithmetic (astubbs#311's other half, deferred) - its validation
+  bound is in tier 1 since 2026-09-09.
 - Blind spots: the racy and uncalled pause API; no metric for a discarded offset map under the
   default `IGNORE` policy; the worker future swallowing framework exceptions.
 - Misdirection: the plain-`int` out-for-processing counter; the module's processor reference
