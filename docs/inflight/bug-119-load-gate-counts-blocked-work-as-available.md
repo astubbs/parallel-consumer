@@ -152,12 +152,22 @@ are fast because failure results arrive in the mailbox continuously, and healthy
 slow because the mailbox is empty and each one blocks for the commit interval. The asymmetry is what
 makes a pass count safer than an elapsed-time bound - **at the ordinary commit-interval default.**
 
-**It is not safe at every default, and the constant's javadoc now says so.** The healthy bound is the
-commit interval, and under `PERIODIC_TRANSACTIONAL_PRODUCER` that default is
-`DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS`, two orders of magnitude shorter than the ordinary one. The
-healthy grace collapses to roughly the same order as the latched cadence, so a fully-loaded
-transactional instance inside a long user function can be reported. A short commit interval set by
-hand does the same thing on any mode.
+**It is not safe at every default, and the constant's javadoc now says so. `getTimeToBlockFor()` has
+two branches, and the derivation described only one.**
+
+- **The commit interval, which is not always five seconds.** Under `PERIODIC_TRANSACTIONAL_PRODUCER`
+  the default is `DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS`, two orders of magnitude shorter than the
+  ordinary one, so the healthy grace collapses to roughly the same order as the latched cadence and a
+  fully-loaded transactional instance inside a long user function can be reported. A short commit
+  interval set by hand does the same on any mode.
+- **The retry-delay branch, which needs no unusual configuration at all.** When
+  `isWorkInFlightMeetingTarget()` is false - dispatch below full concurrency, which is the ordinary
+  state under `KEY` or `PARTITION` ordering whenever fewer keys are active than `maxConcurrency`
+  allows - and any record is in retry back-off, the pass blocks for
+  `min(commitInterval, max(defaultMessageRetryDelay, lowestScheduled))`. At the stock one-second retry
+  delay that is a one-second cadence, so the grace is roughly a hundred seconds rather than eight
+  minutes, on stock defaults. **This one is a static trace of the two branches rather than a measured
+  arm** - it wants a calibration run before anything is decided on it.
 
 **What is not decided.** The line carries its own discriminator today - it prints `parkedForRetry`,
 which the state this exists for holds continuously and a merely-slow instance reads as zero - so the

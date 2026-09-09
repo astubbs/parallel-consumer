@@ -92,14 +92,26 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * instance retiring nothing at all is beyond any workload this project has seen, and PC puts no ceiling on a
      * user function - which is why the report is a WARN and not an exception.
      * <p>
-     * <b>KNOWN FALSE-ALARM WINDOW, and the commit interval is what sets it - raised by review on
-     * astubbs/parallel-consumer#497.</b> The healthy bound above is the commit interval, not five seconds, and
-     * under {@link ParallelConsumerOptions.CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} the default is
-     * {@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS} - <b>100ms</b>. There the healthy
-     * grace collapses from eight minutes to about ten seconds, which is the same order as the latched cadence, so
-     * the asymmetry this count rests on is gone and a fully-loaded transactional instance inside a user function
-     * longer than about ten seconds can be reported. A short commit interval set by hand does the same on any
-     * mode.
+     * <b>KNOWN FALSE-ALARM WINDOWS - the eight minutes above is the BEST case, not the bound. Both raised by
+     * review on astubbs/parallel-consumer#497.</b> {@code getTimeToBlockFor()} has two branches and the healthy
+     * derivation above only describes one of them.
+     * <ul>
+     *     <li><b>The commit interval, which is not always five seconds.</b> Under
+     *     {@link ParallelConsumerOptions.CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} the default is
+     *     {@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS} - <b>100ms</b> - so the healthy
+     *     grace collapses from eight minutes to about ten seconds, the same order as the latched cadence, and the
+     *     asymmetry this count rests on is gone. A short commit interval set by hand does the same on any
+     *     mode.</li>
+     *     <li><b>The retry-delay branch, which needs no unusual configuration at all.</b> When
+     *     {@code isWorkInFlightMeetingTarget()} is false - dispatch below full concurrency, the ordinary state
+     *     under {@code KEY} or {@code PARTITION} ordering whenever fewer keys are active than
+     *     {@code maxConcurrency} allows - and any record at all is in retry back-off, the pass blocks for
+     *     {@code min(commitInterval, max(defaultMessageRetryDelay, lowestScheduled))} instead. At the stock
+     *     {@link ParallelConsumerOptions#DEFAULT_STATIC_RETRY_DELAY} of one second that is a one-second cadence,
+     *     not five, so a backlog-holding ordered instance with one transient retry pending has roughly a hundred
+     *     seconds of grace rather than eight minutes. This one is a static trace of the two branches, not a
+     *     measured arm.</li>
+     * </ul>
      * <p>
      * <b>The line itself carries the discriminator, which is why this is a documented cost rather than a
      * blocker</b>: the report prints {@code parkedForRetry}, and the state it exists for has records in retry
