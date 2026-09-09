@@ -39,6 +39,32 @@
 # once - so every row carries the loadavg read beside the run. The arm names below say what THIS
 # script started, never what the machine was doing; only the reading says that.
 #
+# WHAT IS STILL OPEN, AND WHAT RETIRES THIS SCRIPT. The INSTANCE_STALL half is answered: six runs on
+# 2026-09-08 read every accused member BUSY at both load levels - docs/inflight/bug-857-family.md,
+# "2026-09-08: the load arm", owns that grid. Two halves are not answered, and they are what keeps
+# this file in bin/ rather than in docs/solutions/:
+#
+#   - THE ZOMBIE_MEMBER ARM WAS NEVER EXERCISED. That grid drew three INSTANCE_STALL seeds. The two
+#     seeds this fork has ever recorded for ZOMBIE_MEMBER/REBALANCE_BLOCKED were not among them -
+#     7731567379755737438 from the 2026-08-12 sighting and 1053013618367208111 from the 2026-09-07
+#     one, both in docs/inflight/test-857-churn-storm-async-stalls.md. Every replay that arm has had
+#     was on an idle box, so it carries the exact weak-direction problem this runner was built to
+#     fix, and it takes those seeds unchanged.
+#   - THE BUSY-OBSERVATION THRESHOLD IS UNCALIBRATED. -Dchaos.instanceStallDumpAfterSeconds=20 was
+#     chosen to make the window's OPENING observable, not because 20s separates a heavily loaded
+#     member from a starved one. So the busy-dump and busy-observation columns this runner tallies
+#     have no threshold to be read against - they vary run to run across the recorded grid with no
+#     verdict attached to either end. Until something says which count is abnormal, "the
+#     discriminator armed" is all those columns establish.
+#
+# THE DOSE-RESPONSE IS NOT WHAT KEEPS THIS SCRIPT, and saying so is the point of this paragraph. Its
+# stated half was refuted by that grid - the one FAILED run was the LOWEST-load arm of the six and
+# its loaded twin passed - and re-asking it needs a quiet machine rather than a new instrument.
+#
+# RETIRE WHEN both open halves above are settled: the method then moves to a docs/solutions/ write-up
+# and this file is deleted, which is bin/AGENTS.md, "A script that answered its question is
+# finished". bin/lib/cpu-load.sh stays either way - bin/soak-test.sh sources it too.
+#
 # Usage:
 #   bin/exp-instance-stall-load-versus-idle.sh <seed> [<seed>...]
 #
