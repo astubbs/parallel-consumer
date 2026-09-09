@@ -11,6 +11,7 @@ import bz.stub.parallelconsumer.internal.RateLimiter;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.time.Duration;
 import java.util.*;
@@ -306,11 +307,16 @@ public class ProcessingShard<K, V> {
      * of the paths somebody remembered; only the caller that wins the compare-and-set moves the counter.
      * <p>
      * <b>This one is by KEY and takes whatever is there, which is correct for its callers and wrong for a
-     * caller that inspected a container first</b> - the revocation sweep is emptying an offset regardless of who
-     * occupies it, and {@link #onSuccess} is removing a container that by construction cannot have been
-     * replaced (a non-stale resident is never replaced by {@link #addWorkContainer}). A caller that judged a
-     * <em>particular</em> container and now wants that one gone must use {@link #evictIfStillResident} instead,
-     * because between the judgement and the removal a replacement can arrive.
+     * caller that inspected a container first</b> - {@link #onSuccess} is removing a container that by
+     * construction cannot have been replaced (a non-stale resident is never replaced by
+     * {@link #addWorkContainer}). A caller that judged a <em>particular</em> container and now wants that one
+     * gone must use {@link #evictIfStillResident} instead, because between the judgement and the removal a
+     * replacement can arrive.
+     * <p>
+     * <b>The revocation sweep used to be listed here as the other correct caller, on the grounds that it is
+     * emptying an offset regardless of who occupies it. That was wrong</b>, and it is
+     * {@link #removeWorkForRevokedRecord} now: the sweep is handed the records ONE generation was still
+     * carrying as incomplete, so "whoever occupies it" is exactly the distinction it needs to draw.
      */
     private WorkContainer<K, V> retire(WorkContainer<K, V> removed) {
         if (removed == null) {
@@ -342,6 +348,65 @@ public class ProcessingShard<K, V> {
         return workMap.remove(offset, inspected)
                 ? retire(inspected)
                 : null;
+    }
+
+    /**
+     * The revocation and lost sweep's removal: empties the offset of the container the revoked generation
+     * registered, and leaves a LIVE container that a later registration put there.
+     * <p>
+     * <b>The sweep is handed a {@link ConsumerRecord}, not a container, and that record IS the identifier.</b>
+     * {@code PartitionState.maybeRegisterNewPollBatchAsWork} puts the same record instance into its
+     * {@code incompleteOffsets} and into the {@link WorkContainer} it builds, so "the container this generation
+     * registered for this record" is a reference comparison and needs nothing else. A later generation
+     * re-delivering the same offset supplies a DIFFERENT record object, from a different fetch, which is what
+     * tells the two apart.
+     * <p>
+     * <b>The removal used to be {@code removeWorkAtOffset(record.offset())}</b>, which takes whatever occupies
+     * the offset when it lands - astubbs/parallel-consumer#468's defect class, reported at this site by
+     * astubbs/parallel-consumer#483's sweep and fixed here. If a live container has taken the offset, evicting it
+     * loses the record: it is gone from the shard while its own {@link PartitionState} still carries the offset as
+     * incomplete, so nothing selects it and the commit high-water mark cannot pass it until the partition is
+     * re-polled. The eviction is therefore conditional on the container this method inspected, settled in one
+     * atomic step by {@link #evictIfStillResident} - a compare-and-remove, which means "this container" only
+     * because {@link WorkContainer}'s equality is identity.
+     * <p>
+     * <b>Two conditions, because registration identity alone declines in a case where declining is wrong.</b> An
+     * occupant from another registration that is STALE has to go: leaving it is the state this sweep exists to
+     * prevent, where a stale container holds an offset of a revoked partition against the next assignment's work.
+     * So the only thing declined is a live container from another registration, which is exactly the defect case
+     * and nothing else - every other caller and every existing harness sees the behaviour it saw before.
+     * <p>
+     * CLEARED 2026-09-09 - SUSPECTED: that the staleness question can NPE out of a rebalance callback, the way
+     * confluentinc#757 and astubbs#345 both did on this path, because
+     * {@code PartitionStateManager.getPartitionState} answers null for a partition that was never assigned. The
+     * DISCRIMINATOR is that this method is reached only from {@code PartitionState.onPartitionsRemoved}, and
+     * {@code PartitionStateManager.resetOffsetMapAndRemoveWork} installs {@code RemovedPartitionState} for that
+     * partition BEFORE it calls in - so the state is present by construction, and every record here belongs to
+     * that partition because it came out of that state's own tracking. WHAT WOULD REOPEN IT: a second caller,
+     * from a path that has not installed a state. Nothing goes red for that - the open null-safety decision is
+     * {@code docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md}.
+     *
+     * @param revokedRecord the record the revoked generation was still carrying as incomplete
+     * @return the container this call evicted, or {@code null} if the offset was already empty or is now held by a
+     *         live container from a later registration - in which case this call changed nothing and must account
+     *         for nothing
+     */
+    WorkContainer<K, V> removeWorkForRevokedRecord(ConsumerRecord<K, V> revokedRecord) {
+        long offset = revokedRecord.offset();
+        WorkContainer<K, V> occupant = workMap.get(offset);
+        if (occupant == null) {
+            return null;
+        }
+        // reference identity is the SUBJECT here: same coordinates, different registration is the case this
+        // whole method exists to tell apart
+        @SuppressWarnings("ReferenceEquality")
+        boolean isTheRegistrationBeingRevoked = occupant.getCr() == revokedRecord;
+        if (!isTheRegistrationBeingRevoked && !isWorkContainerStale(occupant)) {
+            log.debug("Revoke/lost sweep leaves offset {} alone: it is held by a live container from a later " +
+                    "registration ({}), not by the record this revocation named", offset, occupant);
+            return null;
+        }
+        return evictIfStillResident(offset, occupant);
     }
 
 
