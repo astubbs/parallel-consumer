@@ -268,7 +268,7 @@ box means the v6 action for that line is done, not that the defect is closed:
   arm never fired, so nothing there moves; its two recorded seeds and the busy-observation
   calibration are what the experiment runner stays for, and its retire condition is in the
   runner's row. Merged.
-- [ ] **astubbs#487 (draft, arms run)** - **the intake stall under an always-failing key, found by
+- [x] **astubbs#487 (merged 2026-09-09)** - **the intake stall under an always-failing key, found by
   astubbs#471's soak, is the load gate, and head-of-line blocking is not why.** Three arms, one
   term each, predictions written first, every one confirmed. Under KEY ordering with half the keys
   poisoned, the gate `WorkManager#isSufficientlyLoaded` latched true on the first fetch, under a
@@ -308,8 +308,7 @@ box means the v6 action for that line is done, not that the defect is closed:
   unposted. One thing the arms did not explain, flagged as the next arm: the observed retry cadence
   is about three times the configured delay, and the latch point is a function of it. Owner's
   calls: whether to ask those reporters, and whether the cheap interim - a warning when the gate
-  latches with nothing retiring, no semantic change - is v6-sized. Box closes when astubbs#487
-  merges.
+  latches with nothing retiring, no semantic change - is v6-sized. Merged; the retry-cadence arm and the interim warning are what remain.
 
 **Resolved or reassigned since this list was written - kept so the release note can say what was ruled out:**
 
@@ -394,11 +393,14 @@ a v6 gate; the note must simply not claim more than the suite or the code can sh
   reachability question first. The release note says the suite cannot see that shape. One sibling
   found by the sweep is recorded, not fixed: the ledger's duplicate allowance is fleet-wide while
   redelivery is per-partition.
-- **One unconditional by-key shard removal remains on master** - the revoke sweep in
-  `ShardManager.removeWorkFromShardFor`, the second of the two astubbs#483's defect-class sweep
-  found. astubbs#468's identity-`equals` change made conditional removal possible and fixed the
-  stale sweep; this one was reported, not fixed. Cost is misdirection bounded to one control-loop
-  tick by astubbs#481's purge, never loss. A small fix, not a v6 gate.
+- ~~**One unconditional by-key shard removal remains on master**~~ - **fixed, astubbs#492 (merged
+  2026-09-09).** The revoke sweep in `ShardManager.removeWorkFromShardFor`, the second of the two
+  astubbs#483's defect-class sweep found, now declines to evict an occupant that is both from a
+  different registration and still live; red first on a fresh container that had displaced the
+  stale one, with an ablation arm per leg of the guard. No unconditional by-key removal of a
+  container remains in main. The retry queue's by-key removal is the same shape but is that queue's
+  keying model, reported by astubbs#483 and left. Cost before the fix was misdirection bounded to
+  one control-loop tick by astubbs#481's purge, never loss.
 - **The other rows of [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md)** - astubbs#482
   closed the most-sighted row, and astubbs#490 (merged 2026-09-09) worked the rest: the
   `processInKeyOrder` sanity-check row was already fixed on master by astubbs#29's merge (every
