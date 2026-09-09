@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: release-gate -->
+<!-- inflight-state: deferred - 6.1 announcement material; 0.6.0.0 is a bugs-only release (owner, 2026-09-07) and its announcement is release-0.6.0.0.md's -->
 
 **Lifted onto master 2026-09-05.** This note was written on the language-proxy branch on 2026-08-15
 and grew there for nine days, but every branch carrying it belongs to the proxy, polyglot, throttling
@@ -10,15 +11,24 @@ announcement was invisible from master. The content is unchanged apart from punc
 above. Several documents it cites still live only on those branches; each is marked where it is
 cited, and `node bin/inflight.mjs docs show <path>` reads it from the branch that holds it.
 
-**Read against the scope decision, 2026-09-09.** The owner decided on 2026-09-07 that v6 (0.6.0.0)
-is a stability release: the transactional revoke wait, the producer-recovery stack, the experimental
-Streams and Connect modules and the polyglot clients are all outside it. The source of truth for what
-ships is [`release-v6-scope.md`](release-v6-scope.md), and [`release-0.6.0.0.md`](release-0.6.0.0.md)
-holds the published wording. So of the material below, the theme, the ordering, the "claim nothing
-while it is experimental" rule and the claims decision apply to v6 as written; the Streams, Connect,
-other-runtimes and self-tuning sections of the points inventory describe a later announcement, and
-the P-row throughput decision stands (no headline). Nothing here is rewritten to match - it is the
-announcement plan as it was made, and this paragraph is what changed under it.
+**What this note is, corrected 2026-09-09 by the owner.** It is an aggregate written when 0.6.0.0
+was going to carry features. It no longer does: 0.6.0.0 is a bugs-only stability release (decision
+of 2026-09-07), and the scope note carried by astubbs#475 is the source of truth for what ships. Most
+of what follows - the Streams, Connect and other-runtime sections, the self-tuning section, the
+polyglot positioning, the performance inventory and the claims decision built on it - is material for
+the next release, 6.1, which the owner plans to start on once 0.6.0.0 is cut. What this note
+contributes to 0.6.0.0 is the theme and the ordering of the announcement, and the rule that nothing
+experimental is claimed; [`release-0.6.0.0.md`](release-0.6.0.0.md) holds 0.6.0.0's own wording.
+
+**Every performance figure below came from an experimental branch, not from master.** This note was
+written on the language-proxy branch and grew on the engine-performance stack, whose engine is
+substantially different from the one on master: the throughput tables, the ratios against 0.5.3.3,
+the withdrawn 1.75x, the surviving "up to 1.5x on an opt-in virtual-thread engine" sentence and every
+`bench/results` file cited were measured on that branch's engine, and none of them describes what
+0.6.0.0 ships. For 0.6.0.0 the claims decision reduces to: **no performance claim of any kind.** For
+6.1 every figure is re-taken on the tree that ships before it is published; the qualifiers the claims
+decision already attaches are necessary but not sufficient, because the engine they were measured on
+is not the one being announced until that stack merges.
 
 Owner's idea, 2026-08-15, for the v6 release. Recorded now because a theme is worth deciding while
 the work that justifies it is fresh, and forgotten otherwise.
