@@ -195,15 +195,20 @@ jobs:
           # inside the lane's own run-time distribution fails unrelated PRs at random, which is the
           # false red this repo treats as worse than no signal. 60 is headroom, not a measurement.
           #
-          # RAISING IT DOES NOT DELETE THE COST EVIDENCE, which is the usual objection and the
-          # reason this comment exists. Codecov records per-test duration per commit, for longer
-          # than a CI log is kept, so the drift stays readable without a required check going red to
-          # report it - and it names the cost rather than totalling it:
+          # THE CAUSE IS RUNNER SPEED, NOT THE CODE. Nearly all of this lane is
+          # WorkManagerLincheckTest's checkpoint-three tear stress arm - a fixed
+          # iterations-times-invocations budget that cannot stop early, so its wall clock is a
+          # function of runner CPU speed alone. On 2026-09-09 the job ran 5-8.5 min until ~01:00
+          # UTC, 12-20 min until ~04:00 on EVERY branch including docs-only ones, then 7-8 min
+          # again. Codecov records that one test between 292s and 720s on commits an hour apart:
           #   bin/inflight.mjs codecov test stressMustNotRediscoverTheCheckpointThreeTear
-          # That ONE test was recorded between 292s and 720s across six commits on 2026-09-09, which
-          # is most of the old 20-minute cap on its own. WHY it moves that much is undiagnosed and
-          # open in docs/inflight/test-lincheck-lane-open-items.md, which carries the job-level
-          # durations too.
+          # A change that appears on branches sharing no code and reverses on a clock is ordinary
+          # ubuntu-latest variance. 20 was 2.6x the priced cost, which that variance exceeds; 60 is
+          # sized so it no longer does. Do NOT re-price the test's budget instead - that class's own
+          # comment records the starve-and-count procedure the number came from, and lowering it
+          # because CI was slow is not that procedure.
+          # docs/inflight/test-lincheck-lane-open-items.md carries the durations and the reproduce
+          # commands.
           #
           # WHAT IT COSTS: bin/lincheck-test.sh has no internal cap, so this job timeout is the only
           # backstop against a genuine hang, and the runner minutes a hang can burn go from 20 to 60.
