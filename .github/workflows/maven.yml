@@ -184,14 +184,25 @@ jobs:
           # layer along. If the probe stops firing, the lane is broken and must go red until it is fixed;
           # docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md owns why.
           #
-          # 7m42s measured on ubuntu-latest (about 2m50s locally), nearly all of it
-          # WorkManagerLincheckTest, whose inverted arm cannot stop early and always pays its full
-          # bound. bin/lincheck-test.sh's header owns the five flags that each fail silently on their
-          # own.
+          # 7m42s measured on ubuntu-latest (about 2m50s locally) when this entry was written, nearly
+          # all of it WorkManagerLincheckTest, whose inverted arm cannot stop early and always pays
+          # its full bound. bin/lincheck-test.sh's header owns the five flags that each fail silently
+          # on their own.
+          #
+          # THE TIMEOUT IS SIZED FOR A SLOW VM, NOT A TYPICAL ONE. The inverted arm is pure CPU, so
+          # its cost scales with whatever hosted VM the job draws: on 2026-09-09 the same class took
+          # 292s on one VM and 707s on another for the same commit, with every other job on that
+          # commit at its normal duration, and two jobs that day finished at 19m against the 20m cap
+          # that used to be here. The class has also grown since calibration - about five minutes on
+          # a good VM now, from two - because the state classes it drives gained work. 30 fits a slow
+          # VM with the build in front of it. The right fix is recalibrating the inverted arm's
+          # iteration bound against the current tree, per
+          # docs/plans/2026-08-25-001-test-lincheck-poc-plan.md; this is the ceiling that keeps a slow
+          # VM from reading as a failure until that is done.
           - suite: lincheck
             name: "Lincheck"
             cmd: "bin/lincheck-test.sh"
-            timeout: 20
+            timeout: 30
             scenarios: ""
             shard: ""
 
