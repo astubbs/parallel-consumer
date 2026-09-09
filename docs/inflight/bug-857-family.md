@@ -93,7 +93,12 @@ This file keeps only the shape, so that a reader arriving here is not told the o
 established:
 
 - The fleet-scoped `NO_PROGRESS` firings are a **timing proxy** - the backlog drains every time the
-  detector fires. Its `## ANSWERED, 2026-08-28` and `## CONFIRMED, 2026-08-28` sections.
+  detector fires. Its `## ANSWERED, 2026-08-28` and `## CONFIRMED, 2026-08-28` sections. **Acted on
+  2026-09-09**: nine firings across four seeds, all drained, and `ChaosChurnStormIT`'s window widened
+  to 60s -
+  [`test-no-progress-window-may-not-transfer-to-w1.md`](test-no-progress-window-may-not-transfer-to-w1.md)
+  owns the verdict and the replay grid. **The five `NO_PROGRESS` seeds recorded in this file below
+  were part of that grid** - do not replay them again expecting news.
 - The per-instance `INSTANCE_STALL/NO_WORK_COMPLETED` firings are **a different line from the
   fleet-scoped one and must not be read with it**: one member stays live, keeps taking work, and
   returns nothing while the fleet finishes around it. What that member's workers are doing is the

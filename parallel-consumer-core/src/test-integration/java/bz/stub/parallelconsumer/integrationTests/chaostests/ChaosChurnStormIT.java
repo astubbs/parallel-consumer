@@ -41,6 +41,34 @@ import java.util.concurrent.atomic.AtomicLong;
  * than a distinct defect. A run that drains reproduces a known result; a run that stays FLAT is the
  * finding worth reporting.
  * <p>
+ * <b>The no-progress WINDOW was widened on that verdict, 2026-09-09</b>, to
+ * {@link ProgressProbe#CHURN_NO_PROGRESS_WINDOW} - the same bound W4 already held, reached here by a
+ * different mechanism. Three things settled it, and the third is the one that chose the number:
+ * <ul>
+ *   <li><b>Nine firings have now been watched past detection and all nine drained, on four seeds</b>
+ *   - the six above, the 2026-09-08 replay of {@code 5650361238717170909} (93487 to 101070 with 6513
+ *   outstanding at the firing), the 2026-09-09 hosted-runner run of {@code 3717713223451201639}, and
+ *   a local replay of {@code 87978223167568} (97633 to 100742, full key coverage). Zero flat.</li>
+ *   <li><b>The other term could not have been the one to move.</b> The firings sit 1196-6513 records
+ *   short, against a {@link ProgressProbe#TAIL_SLACK} of 500: a slack wide enough to excuse them
+ *   would be several percent of the backlog, and would blind the detector to the "stall with
+ *   THOUSANDS remaining" that constant's own javadoc names as the defect signature. The window is
+ *   crossed by seconds; the slack would have to be crossed by an order of magnitude.</li>
+ *   <li><b>The fleet's own pause length was measured, on PASSING runs too</b> - the longest stretch
+ *   with no completion anywhere in the fleet while the detector was armed, read off the
+ *   {@code [diagnose]} series rather than off the violation line (which can only ever say "the bound
+ *   plus detection latency"). Across thirteen replays on one desktop the armed peak reached 32.1s,
+ *   with three further runs at 28.2-30.1s that did not fire: the 30s bound sat inside the ordinary
+ *   distribution and three passing runs missed it by under two seconds. 60s is ~1.9x the measured
+ *   peak, the same ratio {@link ProgressProbe#REBALANCE_DWELL_BOUND} was calibrated at.</li>
+ * </ul>
+ * <b>The widening is not a disabling</b>, and that is asserted rather than argued -
+ * {@code NoProgressWindowIT} fires the detector at the wider bound on a fleet that genuinely stops.
+ * What it does NOT cover is the separate question of whether this detector MISSES real failures
+ * ({@code docs/testing.md}, "Experiment runners"), which a wider window can only make more pressing.
+ * The seeds, the trajectories and the per-run numbers are in
+ * {@code docs/inflight/test-no-progress-window-may-not-transfer-to-w1.md}.
+ * <p>
  * <b>The instance-stall line - also answered, 2026-09-07, do not re-derive</b>: seed
  * {@code 6077035105695} replays the shape behind every {@code INSTANCE_STALL/NO_WORK_COMPLETED}
  * firing on this scenario - one live member's returned-result count frozen while its records-out
@@ -107,8 +135,9 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
     protected void logDiagnosticContext() {
         log.warn("=== BEFORE INTERPRETING THIS RUN, read this class's 'Calibration status' javadoc. " +
                 "The recovery diagnostic has engaged on this scenario before and the backlog DRAINED " +
-                "on every one of six firings, which is what demoted the asynchronous stall to a " +
-                "timing proxy. If your result is 'it drains', you have reproduced a known result - " +
+                "on every one of nine firings across four seeds, which is what demoted the " +
+                "asynchronous stall to a timing proxy and then widened this scenario's no-progress " +
+                "window to 60s. If your result is 'it drains', you have reproduced a known result - " +
                 "the finding worth reporting is a run that stays FLAT. ===");
     }
 
@@ -136,7 +165,13 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
         AtomicLong totalStarted = fleet.getTotalStarted();
         Queue<String> allConsumed = fleet.getAllConsumed();
         Set<String> expectedKeys = fleet.getExpectedKeys();
-        ProgressProbe probe = fleet.getProbe();
+        ProgressProbe probe = fleet.getProbe()
+                // This scenario's own churn crosses the 30s default while the fleet is merely slow:
+                // the eager assignor revokes the whole assignment every few seconds, so each 45s
+                // HEAVY_SLEEP is redelivered before it ends and the fleet can sit wholly inside the
+                // heavy tail with nothing COMPLETING while every member is working. Widened on the
+                // evidence, not on the resemblance - see this class's "Calibration status" javadoc.
+                .withNoProgressWindow(ProgressProbe.CHURN_NO_PROGRESS_WINDOW);
 
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
                 .seed(seed.getValue())
