@@ -239,6 +239,7 @@ code:
 | **Per-key ORDERING and concurrency** | `KeyOrderLedger` | a key's offsets going backwards, or two deliveries of one key in flight at once |
 | **A stalled instance** | `InstanceStallProbeIT`, `ProgressProbe` | a member present and heartbeating while making no progress |
 | Lag stagnation (Class 2) - **reports, never gates** | `ProgressProbe` observations | a committed offset frozen while lag grows, group STABLE. **A timing measurement: crossing the bound does not fail the run** - see below |
+| **A commit that never lands** | `UncommittedCompletionDetector`, `WedgedPartitionRedControlIT`, `UncommittedCompletionProbeIT` | a partition whose completed work is not reaching the broker, while the instance's other shards keep completing - the half of the per-shard gap closed on 2026-09-09 |
 | **Watching a stall instead of killing it** | `-Dchaos.diagnoseStallRecovery=true` | keeps a stalled run alive so its state can be read |
 
 **Class 2 lag stagnation reports, and only reports - read its findings as speed, never as a verdict.**
@@ -270,13 +271,29 @@ runner and not on a laptop is the expected behaviour rather than a non-reproduct
 [`bug-857-family.md`](inflight/bug-857-family.md)'s `## A fourth open item` section **owns those
 runs**, including the ledger entry they withdrew.
 
-**The demotion REDUCED per-shard coverage, and that is a known gap rather than a relocation.**
-`INSTANCE_STALL` is per-INSTANCE, so one wedged shard on an instance whose other shards keep
-completing fires nothing that gates - and the correctness ledger does not close it either, because it
-counts records processed rather than offsets durably committed. What is uncovered, and the correlated
-gate that would close it (with the red control it must have first), is tracked in
-[`test-per-shard-liveness-has-no-gate.md`](inflight/test-per-shard-liveness-has-no-gate.md). Do not
-read "Class 2 was demoted" as "that case is covered elsewhere".
+**The demotion REDUCED per-shard coverage. Half of that is closed as of 2026-09-09; the other half
+is still open.** `INSTANCE_STALL` is per-INSTANCE, so one wedged shard on an instance whose other
+shards keep completing fires nothing that gates - and the correctness ledger does not close it
+either, because it counts records processed rather than offsets durably committed.
+
+- **Closed: a commit that never lands.** `UNCOMMITTED_COMPLETIONS/COMMIT_NOT_LANDING` gates on the
+  DIFFERENCE between a member's own next-offset-to-commit for a partition and what the group has
+  actually committed, held across consecutive samples with the committed offset not moving and the
+  group STABLE. It is not the demoted bound renamed: the quantity is two positions rather than an
+  elapsed time, and the Class 2 false positive is excluded structurally, because an incomplete
+  record pins `offsetHighestSequentialSucceeded` at exactly the offset the broker holds and the
+  difference is then zero. `UncommittedCompletionDetector` owns the rule.
+- **Still open: a shard that will never be dispatched again.** The signal above reads a PARTITION,
+  and any incomplete offset in it pins the local watermark too - so a wedged key-order shard inside
+  a partition still gates nothing.
+
+The red control is `WedgedPartitionRedControlIT` (a real engine, broker-free, one partition's
+commits answered and dropped; every existing gating detector shown green on it and the new one shown
+red), and `UncommittedCompletionProbeIT` pins the re-arm rules. Both are untagged deliberately, so
+they gate every default integration build.
+[`test-per-shard-liveness-has-no-gate.md`](inflight/test-per-shard-liveness-has-no-gate.md) stays
+open for the half that remains. Do not read "Class 2 was demoted" as "that case is covered
+elsewhere".
 
 **Recorded but not yet analysed - reach for this before adding instrumentation.** The ledger is an
 event register: it writes down facts and lets the end-of-run assessment decide what they mean. So

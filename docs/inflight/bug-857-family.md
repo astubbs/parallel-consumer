@@ -292,6 +292,14 @@ including the red control a replacement detector must have first. Every run reco
 `inFlight=0` with full key coverage, which is what that gap's shape predicts a false positive looks
 like.
 
+> **2026-09-09, and it narrows the sentence above rather than rewriting it.** The COMMIT half of that
+> gap now gates: `UNCOMMITTED_COMPLETIONS/COMMIT_NOT_LANDING` reads the difference between a member's
+> own next-offset-to-commit and the group's committed offset, with `WedgedPartitionRedControlIT` as
+> the red control this entry asked for. So "a watermark frozen by a commit that never landed" is no
+> longer covered by nothing. What still is: a key-order SHARD that will never be dispatched again
+> inside a partition whose local watermark is pinned anyway. The owning note carries both halves and
+> records that the two replay seeds were argued rather than re-run.
+
 ## A fifth item, 2026-09-01, RESOLVED 2026-09-05: a rebalance stall the astubbs#29 fix does not close either - and neither does any PC change
 
 `MultiInstanceRebalanceTest.largeNumberOfInstances`, `PERIODIC_CONSUMER_ASYNCHRONOUS`/`UNORDERED`.
@@ -1581,7 +1589,9 @@ nothing that gates - `INSTANCE_STALL` is re-armed by any returned work result, a
 records processed rather than offsets durably committed. **So the demotion reduced per-shard liveness
 coverage; it did not relocate it**, and an earlier version of this entry said otherwise. Tracked, with
 the correlated gate that would close it and the red control that gate must have first, in
-[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md).
+[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md) - which since
+2026-09-09 records that gate as LANDED for the commit half, with its red control, and still open for
+the shard-dispatch half.
 <!-- post-merge: checked-begin -->
 It was raised by the cross-model adversarial reviewer on astubbs#354, the PR that demoted the bound;
 three in-process reviewers on that same diff missed it, which is the clearest argument this file
