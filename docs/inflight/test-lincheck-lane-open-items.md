@@ -469,6 +469,9 @@ branch. Four jobs the same afternoon:
 - `docs/v6-burndown-checklist` - **succeeded at 19m58s**. This is the control arm: a documentation
   branch cannot change what the model checker explores, and it came two seconds inside the bound.
 - `fix/311-validate-batchsize` - succeeded at 12m55s.
+- astubbs/parallel-consumer#497 again, unchanged in anything the lane can see - **succeeded at
+  19m57s**. Same branch, same harnesses, two cancels and then a pass three seconds inside the bound.
+  That is the finding in one line: the outcome is decided by the runner, not by the diff.
 
 So the population is 13 to 20+ minutes against a 20-minute bound and a 7m42s baseline, and which
 side of the line a branch lands on is the runner it drew. Ruled out for astubbs/parallel-consumer#497
