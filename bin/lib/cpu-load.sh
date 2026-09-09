@@ -35,8 +35,9 @@ pc_cpu_count() {
         nproc
         return 0
     fi
-    if sysctl -n hw.ncpu >/dev/null 2>&1; then
-        sysctl -n hw.ncpu
+    local bsd_cores
+    if bsd_cores=$(sysctl -n hw.ncpu 2>/dev/null) && [ -n "$bsd_cores" ]; then
+        printf '%s\n' "$bsd_cores"
         return 0
     fi
     printf 'cpu-load: cannot determine the core count on this platform; assuming 4.\n' >&2
@@ -70,10 +71,17 @@ pc_cpu_load_start() { # free-cores
 }
 
 # Idempotent: safe to call from a trap that may also run after an explicit stop.
+#
+# THE `|| true` IS LOAD-BEARING and must not be tidied away. A burner PID can already be gone - reaped
+# after an explicit stop, killed from outside, or dead of anything - and `kill` on a dead PID FAILS.
+# `kill` is the last command of that `&&` list, so under `set -e` its failure is NOT exempt: it aborts
+# the caller. bin/soak-test.sh sources this file under `set -euo pipefail` and calls this both bare and
+# from an EXIT trap, so without the guard a stale PID skips the `SOAK RESULT` summary, and from the
+# trap it silently turns a successful run's exit 0 into a 1. Measured both ways, one term varied.
 pc_cpu_load_stop() {
     local p
     for p in "${PC_CPU_LOAD_PIDS[@]:-}"; do
-        [ -n "$p" ] && kill "$p" 2>/dev/null
+        [ -n "$p" ] && kill "$p" 2>/dev/null || true
     done
     PC_CPU_LOAD_PIDS=()
     PC_CPU_LOAD_BURNERS=0
