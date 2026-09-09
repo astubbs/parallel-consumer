@@ -342,9 +342,14 @@ a v6 gate; the note must simply not claim more than the suite or the code can sh
   stale sweep; this one was reported, not fixed. Cost is misdirection bounded to one control-loop
   tick by astubbs#481's purge, never loss. A small fix, not a v6 gate.
 - **The other rows of [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md)** - astubbs#482
-  closed the most-sighted row; the register still names several, one of them
-  (`processInKeyOrder` failing its own input sanity check) undiagnosed. A tag needs a green master,
-  so these are tag-day work rather than scope.
+  closed the most-sighted row, and astubbs#490 (draft, green) worked the rest on 2026-09-09: the
+  `processInKeyOrder` sanity-check row was already fixed on master by astubbs#29's merge (every
+  sighting predates it - the wait counted control-loop cycles while the poll thread fills the
+  batch); a shutdown test whose "in flight" stand-in was two loop cycles is fixed with a control arm;
+  the ambient-probe extension test's process-global log capture is fixed; rows whose owners merged
+  without retiring them are retired; four rows stay open with their reasons, none meeting the
+  quarantine bar. Nothing quarantined. A tag needs a green master, so what is left is tag-day work
+  rather than scope.
 - The maturity claim itself: `docs/data/module-maturity.yaml` carries a bare `production-use` next
   to a conditional support posture, and a renderer can lift the bare value without its condition.
   The tag-day checks below carry the recheck.
