@@ -85,12 +85,12 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 ## Breaking changes queued for next major version
 
 **The gate is currently OPEN: `0.6.0.0` is that major, it is unreleased, and it is the release being
-cut right now.** It already carries a `=== Breaking` section in `CHANGELOG.adoc` (the `bz.stub`
+cut right now.** It already carries a `=== Breaking` section in `CHANGELOG.md` (the `bz.stub`
 package rename), so the items below are **not** waiting for some future bump - this is the pass they
 were collected for, and work that lands now lands in the right release.
 
 Do not read "queued for next major" as "not yet". Check
-[`CHANGELOG.adoc`](../CHANGELOG.adoc) for whether the top section is still marked `(unreleased)`
+[`CHANGELOG.md`](../CHANGELOG.md) for whether the top section is still marked `(unreleased)`
 before deciding a breaking change must wait: while it is, the gate is open. It closes when 0.6.0.0
 ships, and then this section starts accruing for the release after it.
 

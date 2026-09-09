@@ -11,7 +11,7 @@ availability:
   since: 0.5.0.0
   evidence:
     tag: 0.5.0.0
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: >-
       This release made the threshold configurable. A hard-coded ten-second threshold and its rate-limited
       warning already existed before it, so what is new here is the option rather than the warning.

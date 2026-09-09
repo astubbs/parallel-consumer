@@ -11,7 +11,7 @@ availability:
   since: 0.5.3.0
   evidence:
     tag: 0.5.3.0
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Released as the fix for the auto-commit check failing against kafka-clients 3.7.0 and later.
 summary: Allow startup to continue when the reflective check that consumer auto-commit is disabled cannot inspect the supplied consumer.
 use_this_when:

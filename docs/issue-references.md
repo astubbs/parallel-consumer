@@ -147,7 +147,7 @@ does not auto-link inside one either, so a pasted log or a quoted gate failure i
 Editing the body re-runs the job, so a fix there needs no push.
 
 The files listed in `EXEMPT_PATHS` are exempt, because a bare number legitimately means upstream in
-them: `CHANGELOG.adoc`, `upstream-map.yaml`, `upstream-pr-analysis.adoc`, and the gate's own test
+them: `CHANGELOG.md`, `upstream-map.yaml`, `upstream-pr-analysis.adoc`, and the gate's own test
 fixtures.
 
 **Four opt-out scopes - reach for the narrowest that fits.** The in-file ones are written in

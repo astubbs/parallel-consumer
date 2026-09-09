@@ -404,7 +404,7 @@ RESIDUE_KNOWN='confluentinc/cp-kafka|the live integration-test broker image, tra
 #   .semaphore/         legacy Confluent internal CI, retained but inactive on the fork. Also checked,
 #                       for the same reason: it holds no reference today.
 FROZEN_PREFIXES="\
-CHANGELOG.adoc
+CHANGELOG.md
 README.adoc
 NOTICE
 LICENSE
@@ -420,7 +420,7 @@ bin/test-check-copyright-headers.sh"
 # survives there LEGITIMATELY. The check prints every match it skipped in each of these, so the
 # exclusion is auditable rather than a silent hole. Justify any addition, in writing, here:
 #
-#   CHANGELOG.adoc      release notes. The `=== Breaking` entry NAMES the old Maven coordinate as
+#   CHANGELOG.md      release notes. The `=== Breaking` entry NAMES the old Maven coordinate as
 #                       history and must keep saying so. AGENTS.md separately forbids a PR editing
 #                       this file at all, bar correcting a claim that has become false - which is
 #                       what the PROSE_GUARDS below are for, a human's job, not something to sweep.
@@ -454,7 +454,7 @@ bin/test-check-copyright-headers.sh"
 # and protect exactly the lines they protect in the template. Verified, not assumed. Excusing it would
 # have dropped a real check over ~1000 lines to save a mechanism that already works.
 SWEEP_EXCLUDE="\
-CHANGELOG.adoc
+CHANGELOG.md
 docs/plans/
 docs/solutions/
 docs/inflight/
@@ -547,8 +547,8 @@ test-rename-packages.sh"
 # `path|ERE|what to write instead` form, and --defer-prose keeps working for it.
 PROSE_GUARDS="\
 src/docs/README_TEMPLATE.adoc|drop-in replacement.*package.*are unchanged|Java packages \*move\*|The drop-in claim stops being TRUE and must not merely be qualified. Plan s8 drafts the replacement: say the packages MOVE from io.confluent.parallelconsumer to bz.stub.parallelconsumer, that the API itself is unchanged, and give the one-line sed under == Upgrading.
-CHANGELOG.adoc|only required change is the Maven groupId|two changes are required|The rename adds a second required change - every import moves - so this becomes a factual error the moment it lands. AGENTS.md allows exactly one changelog edit in a PR: correcting an existing claim that is now false. Rewrite that sentence. Do NOT add a new entry - the 0.6.0.0 section is generated at release time from the commit log.
-CHANGELOG.adoc|library API is otherwise unchanged|Rewrite your imports|Same class as the sentence above, in the === Breaking bullet: after the rename the caller's code changes too, so 'otherwise unchanged' reads as a promise the release does not keep. Correct it in place."
+CHANGELOG.md|only required change is the Maven groupId|two changes are required|The rename adds a second required change - every import moves - so this becomes a factual error the moment it lands. AGENTS.md allows exactly one changelog edit in a PR: correcting an existing claim that is now false. Rewrite that sentence. Do NOT add a new entry - the 0.6.0.0 section is generated at release time from the commit log.
+CHANGELOG.md|library API is otherwise unchanged|Rewrite your imports|Same class as the sentence above, in the === Breaking bullet: after the rename the caller's code changes too, so 'otherwise unchanged' reads as a promise the release does not keep. Correct it in place."
 
 # Rename detection is a similarity matrix over unmatched paths, and git gives up above
 # diff.renameLimit with a warning that is easy to miss, then reports add+delete. 264 files move

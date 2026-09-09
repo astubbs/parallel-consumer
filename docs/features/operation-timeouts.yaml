@@ -11,7 +11,7 @@ availability:
   since: 0.4.0.1
   evidence:
     tag: 0.4.0.1
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Both options landed in this release - a timeout for blocking producer sends, and offsetCommitTimeout for periodic synchronous commits.
 summary: Bound how long a produce flow waits for Kafka send completion and how long synchronous commit mode waits for an offset commit.
 use_this_when:

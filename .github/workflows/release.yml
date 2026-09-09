@@ -131,8 +131,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Use our curated CHANGELOG.adoc section as the release notes (not --generate-notes). This step
-          # runs at tag vX (the deploy step already checked it out), so CHANGELOG.adoc is present. Extract
+          # Use our curated CHANGELOG.md section as the release notes (not --generate-notes). This step
+          # runs at tag vX (the deploy step already checked it out), so CHANGELOG.md is present. Extract
           # the "== <releaseVersion>" AsciiDoc section, convert it to Markdown (GitHub renders Markdown:
           # "=== Heading" -> "### Heading", AsciiDoc "https://url[text]" -> "[text](https://url)"), and pass
           # it via --notes-file. Fall back to --generate-notes if the section is missing/empty so a release
@@ -143,7 +143,7 @@ jobs:
             /^== / && grab {exit}
             grab && /^\/\// {next}
             grab {print}
-          ' CHANGELOG.adoc \
+          ' CHANGELOG.md \
             | sed -E 's/^=== /### /; s#(https?://[^[]+)\[([^]]+)\]#[\2](\1)#g' > "$notes"
           if [ -s "$notes" ]; then
             gh release create "v${{ inputs.releaseVersion }}" --title "v${{ inputs.releaseVersion }}" --notes-file "$notes"

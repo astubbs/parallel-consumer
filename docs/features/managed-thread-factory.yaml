@@ -11,7 +11,7 @@ availability:
   since: 0.3.2.0
   evidence:
     tag: 0.3.2.0
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: The release entry adding Java EE managed executor support introduced the managed thread factory option in the same change.
 summary: Name the JNDI thread factory that creates the worker threads running your processing function, so a Java EE container owns them.
 use_this_when:

@@ -11,7 +11,7 @@ availability:
   since: 0.2.0.0
   evidence:
     tag: 0.2.0.0
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Added asynchronous, synchronous and producer-transactional commit modes, with an optional producer.
 readme_anchor: commit-mode
 summary: Choose periodic asynchronous, periodic synchronous or producer-transactional offset commits to match the required delivery boundary.
