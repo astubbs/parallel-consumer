@@ -327,6 +327,11 @@ public class ShardManager<K, V> {
      * <b>What that leaves, and who collects it.</b> A retry-queue entry whose container is now resident in no
      * shard - garbage, and {@link #purgeDepartedRetryEntries()} is what collects it, on the controller thread
      * where waiting is allowed. That method states the invariant and its bound; do not restate them here.
+     * <p>
+     * <b>The removal is CONDITIONAL on the container the revoked record was registered as</b>, not by key -
+     * {@link ProcessingShard#removeWorkForRevokedRecord} owns why, and holds the cleared suspicion about the
+     * staleness question it asks. This method's own contribution is the single-read {@code getShard} above it and
+     * the shard garbage collection below.
      */
     private void removeWorkFromShardFor(ConsumerRecord<K, V> consumerRecord) {
         ShardKey shardKey = computeShardKey(consumerRecord);
@@ -338,8 +343,9 @@ public class ShardManager<K, V> {
             // LOGGED rather than parked in an ignored local, which is a dead store SpotBugs reports in main
             // code - the same trade already settled at onFailure below. What this answer USED to decide was
             // whether to pair a retry-queue removal with it, and that is exactly what moved to the controller
-            // thread; null means the container had already gone, which is not an error on this path.
-            WorkContainer<K, V> removedFromTheShard = shardOpt.get().removeWorkAtOffset(consumerRecord.offset());
+            // thread; null now means EITHER the container had already gone OR a live container from a later
+            // registration owns the offset, and neither is an error on this path.
+            WorkContainer<K, V> removedFromTheShard = shardOpt.get().removeWorkForRevokedRecord(consumerRecord);
             log.trace("Revoke/lost sweep removed {} from shard {} - the retry queue is deliberately untouched here",
                     removedFromTheShard, shardKey);
 
