@@ -450,7 +450,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * {@link ShardManager#getWorkableRecords()} already exists to close for the {@code DEBUG} line.
      */
     @Value
-    public static class LoadGateReading {
+    private static class LoadGateReading {
 
         ShardManager.WorkableRecords records;
 
