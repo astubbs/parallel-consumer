@@ -848,9 +848,9 @@
                                * the emitter must be micrometer-registry-statsd on the Datadog or Etsy
                                  flavor, or LoggingMeterRegistry. Neither exists in this tree:
                                  micrometer-registry-statsd is not a dependency of any module, and
-                                 LoggingMeterRegistry is never constructed - the registries used are
-                                 SimpleMeterRegistry, CompositeMeterRegistry and (example-metrics)
-                                 PrometheusMeterRegistry;
+                                 LoggingMeterRegistry is never constructed - main code builds only
+                                 CompositeMeterRegistry, plus PrometheusMeterRegistry in
+                                 example-metrics (SimpleMeterRegistry appears in tests only);
                                * the meters must be instrumented with user-controlled, unvalidated
                                  input as metric names, tag keys or tag values. Every tag value PC
                                  itself emits is structurally incapable of carrying \n or \r: Kafka
