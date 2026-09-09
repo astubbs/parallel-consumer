@@ -2754,6 +2754,83 @@ Owner-gated: this is a `stall` register, so an owner makes the call. The proposa
 this file's `inflight-vetted` marker, which is where
 [`AGENTS.md`](AGENTS.md) -> "Vetting a note" says a proposal goes.
 
+## 2026-09-08: the load arm the "clean on idle" replays never had - every accused member reads BUSY, at every load level
+
+**What was open, and it was not the mechanism.** The instance-stall line was diagnosed on
+2026-09-07 as worker saturation by redelivered heavy dwells -
+[`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md), `## DIAGNOSED`,
+**owns that** and this section adds no reading of its own to it. What that section and
+`ChaosChurnStormIT`'s calibration javadoc both leave explicitly open is the other direction: *the
+seed reproduces the frozen shape every time and does not reproduce the firing*, because the run
+finishes about 46s into the freeze against a 150s bound. Every replay on record ran on an idle box,
+and **"clean on idle" is the weak direction** - a load-shaped stall by definition needs the load, so
+a green idle replay is consistent with starvation AND with a wedge.
+
+**The experiment.** `bin/exp-instance-stall-load-versus-idle.sh`, three seeds, two arms each, one
+machine, same tree (`fd3f91360` plus the runner itself), same seed, differing by one term:
+whether [`bin/lib/cpu-load.sh`](../../bin/lib/cpu-load.sh)'s burners run. Every run sets
+`-Dchaos.instanceStallDumpAfterSeconds=20`, because the dump defaults to the bound - so a run whose
+freeze ends first prints nothing and its green is **vacuous**, indistinguishable from one where the
+window never opened. `armed` below is that check, not an assumption.
+
+| seed | arm | burners | loadavg after | outcome | armed | busy dumps | STALL dumps | busy obs | STALL viol | peak | elapsed |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `6077035105695` | idle | 0 | 26.3 | passed | yes | 4 | **0** | 2 | **0** | 0ms | 304.9s |
+| `6077035105695` | loaded | 10 | 52.6 | passed | yes | 6 | **0** | 2 | **0** | 0ms | 300.0s |
+| `1630088991107806597` | idle | 0 | 15.5 | passed | yes | 3 | **0** | 0 | **0** | 0ms | 109.8s |
+| `1630088991107806597` | loaded | 10 | 44.8 | passed | yes | 4 | **0** | 0 | **0** | 0ms | 110.6s |
+| `5650361238717170909` | idle | 0 | 7.8 | FAILED | yes | 11 | **0** | 2 | **0** | 0ms | 531.6s |
+| `5650361238717170909` | loaded | 10 | 23.6 | passed | yes | 4 | **0** | 0 | **0** | 0ms | 136.5s |
+
+**The result, and it is the only claim this section makes: no arm produced the wedge signature.**
+Zero `INSTANCE_STALL` early dumps and zero `INSTANCE_STALL/NO_WORK_COMPLETED` violations in six
+runs. The discriminator armed in all six. The firing CONDITION was reproduced four times - a live
+member holding work with its completion count frozen **past the 150s bound**, which is exactly the
+state that raised every gating firing on CI - and each time the detector read the accused member's
+stacks and reported it non-gating:
+
+    INSTANCE_BUSY_IN_USER_CODE: instance 0 has held work (queued=0, outForProcessing=47) for 150s
+    with 10 worker(s) running user code
+
+Every dump is the 2026-09-07 signature verbatim: workers `TIMED_WAITING` in `Thread.sleep` at
+`ChaosScenarioBase.lambda$newInstance$1` beneath `UserFunctions.carefullyRun` - asleep **inside user
+code** - with `pc-broker-poll-PC-<id>` healthy in `Selector.select`.
+
+**THE STATED PREDICTION WAS HALF REFUTED, and that half is recorded here rather than quietly
+dropped.** The prediction was: *if starvation, the LOADED arm reproduces the firing while the IDLE
+arm stays clean*. The wedge half is refuted - nothing showed an accused member with a free worker
+and no progress. **But the idle arm did not stay clean either**, and the dose-response the
+prediction assumed is simply not in this data: seed `6077035105695` crossed the bound in BOTH arms;
+seed `1630088991107806597` crossed it in neither; and **the one FAILED run is the LOWEST-load arm of
+the six** (loadavg 7.8), whose own loaded twin passed in a quarter of the time. So these runs do
+**not** establish that load reproduces the firing. What they establish is narrower and is the
+question that was actually asked: **at every load level tested, the accused member was busy in user
+code, never wedged.**
+
+**Why the dose-response could not be read, stated so nobody re-runs this expecting one.** This is a
+shared desktop and the ambient load fell monotonically during the experiment as other sessions
+finished - the idle arms read 26.3, 15.5 and 7.8 in the order they ran. The burners were therefore
+not the only term that varied between the first pair and the last, which is precisely the confound
+the runner's own header warns about. A dose-response arm needs a quiet machine, and this one was not
+available. **The wedge/starvation verdict does not depend on it**, because the discriminator is
+evaluated per run and read the same way in all six.
+
+**A confound checked rather than waved past.** `InstanceProgressView`'s `BUSY_WORKERS_UNKNOWN` is
+`-1`, which fails `busy > 0` and falls into the **accusing** branch - so a `Thread.getAllStackTraces`
+walk that throws under contention would manufacture a violation that looks exactly like a wedge, and
+load is when that is most likely. No run produced a `thread dump unreadable` marker, so no reading
+here was manufactured that way.
+
+**Read `maxInstanceStall=0ms` as the finding, not a dead instrument.** `InstanceStallDetector` only
+advances `peakInstanceStallMs` on the nobody-in-user-code branch; a busy member re-arms the clock
+every sample. A `0ms` peak beside ten busy workers is the starvation reading stated positively.
+
+**What this does NOT touch.** No violation of any kind fired on five of the six runs, so the
+`ZOMBIE_MEMBER` arm was **never exercised** and nothing here bears on it - its current readings stay
+astubbs#486 and the churn note's 2026-09-07 sighting. The sixth run's single violation was
+fleet-scoped `NO_PROGRESS`, a different detector, recorded as a sighting in the churn note rather
+than read here.
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a

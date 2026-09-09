@@ -8,16 +8,11 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.MockConsumer;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
-import pl.tlinkowski.unij.api.UniMaps;
 
 import java.util.Base64;
-import java.util.function.UnaryOperator;
 
 import static bz.stub.parallelconsumer.offsets.OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -47,34 +42,19 @@ class ForeignOffsetMetadataOnAssignmentTest {
 
     static final long COMMITTED_OFFSET = 100L;
 
-    MockConsumer<String, String> mockConsumer;
-
     /**
-     * Builds a PC module whose consumer already has {@code metadata} committed against {@link #TP}, as if a previous
-     * owner of this consumer group had left it behind.
-     */
-    private PCModuleTestEnv moduleWithCommittedMetadata(String metadata,
-                                                        ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy policy) {
-        return moduleWithCommittedMetadata(metadata, builder -> builder.invalidOffsetMetadataPolicy(policy));
-    }
-
-    /**
-     * The same, but leaving {@link ParallelConsumerOptions#getInvalidOffsetMetadataPolicy()} unset - which is the
-     * configuration the astubbs#118 reporter actually ran, and so the one the regression must be pinned under.
+     * A module whose consumer has {@code metadata} committed against {@link #TP} - the shared setup in
+     * {@link OffsetCodecTestUtils}, which owns it because {@code ImplausibleOffsetMapOnFirstBatchTest} needs exactly
+     * the same thing. Leaving the policy unset is not incidental here: it is the configuration the astubbs#118
+     * reporter actually ran, and so the one the regression must be pinned under.
      */
     private PCModuleTestEnv moduleWithCommittedMetadata(String metadata) {
-        return moduleWithCommittedMetadata(metadata, builder -> builder);
+        return OffsetCodecTestUtils.moduleWithCommittedMetadata(TP, COMMITTED_OFFSET, metadata);
     }
 
     private PCModuleTestEnv moduleWithCommittedMetadata(String metadata,
-                                                        UnaryOperator<ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String>> configure) {
-        mockConsumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
-        mockConsumer.assign(UniLists.of(TP));
-        mockConsumer.commitSync(UniMaps.of(TP, new OffsetAndMetadata(COMMITTED_OFFSET, metadata)));
-
-        var options = configure.apply(ParallelConsumerOptions.<String, String>builder()
-                .consumer(mockConsumer)).build();
-        return new PCModuleTestEnv(options);
+                                                        ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy policy) {
+        return OffsetCodecTestUtils.moduleWithCommittedMetadata(TP, COMMITTED_OFFSET, metadata, policy);
     }
 
     /**
