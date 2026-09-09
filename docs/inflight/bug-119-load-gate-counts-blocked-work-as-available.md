@@ -1,4 +1,4 @@
-# Retry-forever plus any poison eventually stops the instance fetching, at a threshold you can compute
+# Retry-forever plus any FRACTION of never-succeeding records eventually stops the instance fetching, at a threshold you can compute
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
@@ -29,8 +29,8 @@ produced for confluentinc#809 and confluentinc#833.
 **This is not a pathological-workload result.** It does not need a 50% failure rate, it does not need
 `KEY` ordering, and it does not need the workers to be busy. At 1% poison the instance ran normally
 for a minute, delivering ~3,900 records, and then latched for good with **11 of its 14 workers idle**.
-Any long-lived instance that retries forever and meets any poison at all arrives here; the only
-question is when, and that is computable - see the latch point below.
+Any long-lived instance that retries forever while a non-zero *fraction* of its stream never
+succeeds arrives here; the only question is when, and that is computable - see the latch point below.
 
 ## Settled: the gate is the mechanism, and head-of-line blocking is not why
 
@@ -121,11 +121,34 @@ own keys, because at 1% over four bursts a key holds several records where arm 1
 each key exactly one. **Eleven idle workers sat beside 58 deliverable records they were not allowed
 to reach.** So: not the cause of the latch, and the reason the latch is unrecoverable.
 
+## Correction, 2026-09-09 - a FRACTION, not "any poison"; one bad record is not enough
+
+<!-- post-merge: checked -->
+Written into astubbs/parallel-consumer#497, and applied in place above rather than left standing,
+because this note is the live record rather than a dated one. **The phrase "any poison at all" was
+inherited from astubbs/parallel-consumer#487 and overstates the result; its own text on master is
+left alone.**
+
+**A single record that never succeeds does not latch the gate, and cannot.** The gate is
+`inShards - parkedForRetry > target * loadingFactor`: one held record, minus one parked while it
+waits out its back-off, is nowhere near a threshold of tens. Its offset map encodes a single gap
+compactly, the commit sits below it, and the instance runs indefinitely with that one record
+retrying beneath a healthy stream that keeps retiring.
+
+**What latches the gate is a non-zero FRACTION of a live stream that never succeeds.** The two
+properties that matter are both about the population, not about any one record: healthy records
+retire and leave the shards, never-succeeding ones do not, so their share of what is held rises
+monotonically while the stream keeps arriving. The parked term subtracted from it is bounded by
+throughput rather than by population, so the unparked remainder crosses the threshold eventually -
+at 1% in the measured arm, and sooner when the retry service is slower. "Any fraction" is the
+correct claim and it is still a strong one; "any poison" is not, and reads as if one bad record
+were enough.
+
 ## Not a product decision to be weighed - an eventual certainty to be bounded
 
 The earlier close called this "a decision", which understates it. There is no configuration of the
-existing code in which a long-lived instance with retry-forever and any poison does **not** end up
-here; the only variables are how long it takes and how idle the machine is when it happens. What is
+existing code in which a long-lived instance with retry-forever and a non-zero fraction of
+never-succeeding records does **not** end up here; the only variables are how long it takes and how idle the machine is when it happens. What is
 open is which of the mitigations below is taken, not whether the state is reachable.
 
 Two bounds are in play and only one of them is the gate.

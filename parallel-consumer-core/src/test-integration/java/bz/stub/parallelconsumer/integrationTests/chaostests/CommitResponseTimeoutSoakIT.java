@@ -267,6 +267,16 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *   pausedPartitions=20}. 549 is arm 1's pinned population, 138 sits inside the parked band arms 1-3
  *   measured, and every partition is paused.</li>
  * </ul>
+ * <b>And one correction to the wording above, not to its measurements.</b> The verdict block says
+ * "retry-forever and any poison at all", which overstates it: a <em>single</em> record that never
+ * succeeds is one held minus one parked against a threshold of tens, so it never crosses, its offset
+ * map encodes one gap compactly, and the instance runs indefinitely with it retrying under a healthy
+ * stream. What latches the gate is a non-zero <em>fraction</em> of a live stream that never succeeds -
+ * healthy records retire and these do not, so their share of what is held rises while the stream
+ * keeps arriving. Every arm above ran a fraction (0.5, then 0.01), so nothing measured changes; only
+ * the claim drawn from it narrows. The earlier text is left as it was written -
+ * {@code docs/inflight/bug-119-load-gate-counts-blocked-work-as-available.md} carries the correction
+ * in full.
  * <p>
  * <b>Still eliminated, re-measured on all four arms:</b> offset-encoding back pressure. Neither
  * {@code Offset map data too large} nor {@code not allow further messages} appears once in any of the

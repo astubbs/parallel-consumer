@@ -29,8 +29,12 @@ Fully qualified issue and PR references throughout, because this is destined for
 ## Draft - to be appended under `## Fork status`
 
 **A fourth mechanism, now characterised: the record-intake load gate latches, and any instance that
-retries forever gets there eventually.** This one is not a rebalance defect at all, which is why it
-sat inside this thread's symptom for so long without being named. A single instance, no rebalance
+retries forever while a non-zero fraction of its stream never succeeds gets there eventually.** This
+one is not a rebalance defect at all, which is why it sat inside this thread's symptom for so long
+without being named. **It takes a fraction, not one bad record**: a single record that never
+succeeds is one held minus one parked against a threshold of tens, so the instance runs indefinitely
+with it retrying underneath a healthy stream. What accumulates is the *share* of held records that
+never leave, because the healthy ones retire and these do not. A single instance, no rebalance
 and no misconfiguration, holding records that throw on every attempt, stops fetching from the broker
 **permanently** - every partition paused - while its workers keep retrying what it already holds.
 From outside it looks alive and loaded.
