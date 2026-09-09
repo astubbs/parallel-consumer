@@ -205,7 +205,7 @@ than carry a standalone abort.
   2026-09-10). `docs/releasing.md` says the section is generated at release time, but there is no
   generator in `bin/`, so astubbs#498 was that generation done by hand from the commit log and the
   release document. The section is now what the release page carries; astubbs#496 and astubbs#497
-  are already in it. The size-of-this-release table was dropped on this PR by owner decision.
+  are already in it. The size-of-this-release table was dropped by owner decision on 2026-09-10.
 - [ ] **Post the release page body by hand.** `release.yml` tries to build the notes from the
   `CHANGELOG.adoc` section, but its heading match is exact and the section is headed
   `== 0.6.0.0 (unreleased)`, so on master it matches nothing and falls back to generated notes.
