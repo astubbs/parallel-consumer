@@ -2,7 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
-<!-- inflight-state: open - the COMMIT half gated 2026-09-09 with a red control; the SHARD-DISPATCH half is still uncovered and has no red control -->
+<!-- inflight-state: open - the COMMIT half gated 2026-09-09 with a red control and both replay seeds green; the SHARD-DISPATCH half is still uncovered and has no red control -->
 
 ## 2026-09-09: half of this is closed, and the half that is not is now named precisely
 
@@ -37,10 +37,30 @@ never separate, and the new detector separates it *structurally* rather than by 
 incomplete record pins `offsetHighestSequentialSucceeded` at precisely the offset the broker holds, so
 the difference is zero however long the stagnation runs. That is also why the two replay seeds this
 note nominated (`6825864417772979246`, `4044221734199516240`) cannot fire it - their pinned partitions
-were pinned by an in-flight record, which is row three. **The seeds were NOT replayed**: the machine
-lock was held by another agent for the whole session, and the argument above is a proof about the
-signal rather than a measurement. Replaying them remains worth doing as confirmation, and is the one
-piece of this note's original bar that is unmet.
+were pinned by an in-flight record, which is row three.
+
+**Both seeds were then replayed, and they confirm it.** Full chaos suite per seed, this tree, a
+loaded workstation (load average 19-25, other agents building alongside - which biases towards
+crossing a timing bound, not away from it):
+
+| Seed | Suite result | Gating violations | `COMMIT_NOT_LANDING` | Class 2 observations | peak `lagStagnation` | peak `uncommittedCompletions` |
+|---|---|---|---|---|---|---|
+| `6825864417772979246` | 10 tests, 0 failures | 0 | **0** | 30 | 151500ms - **over the bound** | 3009 records |
+| `4044221734199516240` | 10 tests, 0 failures | 0 | **0** | 36 | 152020ms - **over the bound** | 2757 records |
+
+The `lagStagnation` peaks matter: on both seeds the Class 2 bound was genuinely CROSSED, so these are
+not runs where the false positive failed to occur. The new detector was silent through every one of
+them. And the `uncommittedCompletions` peaks matter for the opposite reason - a healthy chaos run
+carries thousands of records of finished-but-not-yet-committed work at its widest, which is why the
+detector must gate on whether the committed offset MOVES rather than on how large the gap gets.
+Predictions stated before the runs, all three held: Class 2 observes and the suite drains; the new
+detector fires on neither; the peak is non-zero but never gates.
+
+**One instrument trap this created, for whoever replays next.** The Class 2 interpretation text now
+names `UNCOMMITTED_COMPLETIONS/COMMIT_NOT_LANDING` (so a triager meeting a frozen watermark is told
+what the absence of that violation means). A log grep for the bare string therefore matches every
+Class 2 observation and reports one apparent finding per observation - it read 33 and 39 on these two
+runs, both of which are zero. Count `COMMIT_NOT_LANDING: partition`, or count `VIOLATION:`.
 
 **Refuted along the way, and it changed the design.** This note's own prescription - "a watermark
 stagnant *while completions advance and real backlog exists* is the wedge" - does not discriminate as
@@ -140,7 +160,8 @@ not fire on the old false positive. If instead the decision is that this case do
 gate, delete this note and say so in `docs/testing.md` - what must not happen is the gap quietly
 becoming folklore.
 
-**Amended 2026-09-09**: the first clause is met for the commit half and the seed replays are not.
-This note now closes when either the shard-dispatch half is shown unreachable - the astubbs#483 style
-verdict, recorded where the reachability argument lives - or a per-shard signal gates it with its own
-red control. `docs/testing.md` already carries the split, so the gap is not folklore either way.
+**Amended 2026-09-09**: both clauses are met for the commit half - the red control fires, and both
+replay seeds crossed the Class 2 bound while the new gate stayed silent. This note now closes when
+either the shard-dispatch half is shown unreachable - the astubbs#483 style verdict, recorded where
+the reachability argument lives - or a per-shard signal gates it with its own red control.
+`docs/testing.md` already carries the split, so the gap is not folklore either way.

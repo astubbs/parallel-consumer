@@ -95,13 +95,14 @@ class UncommittedCompletionDetector {
     private final java.util.Set<TopicPartition> reportedThisStretch = ConcurrentHashMap.newKeySet();
 
     /**
-     * The widest local-minus-committed gap seen while a stretch was accumulating, in records - the
-     * end-of-run peak, measured whether or not anything gated.
+     * The widest local-minus-committed gap seen on any sample, in records, for the end-of-run peaks
+     * line.
      * <p>
-     * Recorded for the same reason {@link ProgressProbe#getPeakLagStagnationMs()} still is after its
-     * detector was demoted: suppressing a finding must never lose the measurement, or a future
-     * re-calibration has nothing to read. See {@code recordLagStagnation}'s javadoc, which owns that
-     * invariant.
+     * <b>Measured on every sample that has a reporter, not only on the stretches that gate</b> - so a
+     * healthy run's peak is the largest gap its commit cadence legitimately opened, which is exactly
+     * the number a future re-calibration of {@link #COMMIT_NOT_LANDING_SAMPLES} needs. That is the
+     * same invariant {@code ProgressProbe#recordLagStagnation} states and the reason a demoted
+     * detector still earns its keep: suppressing a finding must never lose the measurement.
      */
     @Getter
     private volatile long peakUncommittedCompletions = 0;
