@@ -803,3 +803,28 @@ reporting defect
 records, reproduced here rather than newly found.
 
 **Recorded, not diagnosed.**
+
+## Sighting, 2026-09-09 - the outer wait again, on the recovery rung of astubbs#225, under a saturated runner
+
+<!-- post-merge: checked-begin - a dated CI sighting against a branch head, past tense -->
+`ChaosChurnStormIT#churnStormMeetsSlosAndBalancesLedger`, Chaos Pain Suite 4/4 on
+`docs/225-producer-fencing-brainstorm` at `a8768a1f7`
+([job 102343447461](https://github.com/astubbs/parallel-consumer/actions/runs/34312700397/job/102343447461)),
+seed `2074765733771906344`. Replay:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=2074765733771906344
+
+**The 2026-09-08 outer-wait signature exactly.** The run ended on the Awaitility alias
+`all messages consumed under churn` at its five-minute bound; the autopsy printed `violations (0)`
+beside forty-five non-gating `CLASS2_STALL/LAG_STAGNATION` observations, one per partition across the
+topic, each a committed offset stagnant for about 154s against the 150s bound - nothing gating, the
+per-shard gap [`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md) owns,
+firing all over the topic.
+
+**Not this branch's doing, on the same reasoning as the 2026-09-04 pom-only sighting**: the head differs
+from the one that passed this shard a quarter of an hour earlier by one docs-only commit, and the rung
+above it passed the shard on the same code. What is new about the conditions is the runner: this ran in
+the hour every lane of a five-rung stack was pushed at once beside three other people's branches, when
+the Lincheck lane on the same runner was timing out on every branch. Recorded, not replayed - the
+2026-09-08 entry above already established that a single replay of an outer-wait seed settles nothing.
+<!-- post-merge: checked-end -->
