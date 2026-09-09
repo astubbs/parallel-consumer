@@ -10,6 +10,16 @@ announcement was invisible from master. The content is unchanged apart from punc
 above. Several documents it cites still live only on those branches; each is marked where it is
 cited, and `node bin/inflight.mjs docs show <path>` reads it from the branch that holds it.
 
+**Read against the scope decision, 2026-09-09.** The owner decided on 2026-09-07 that v6 (0.6.0.0)
+is a stability release: the transactional revoke wait, the producer-recovery stack, the experimental
+Streams and Connect modules and the polyglot clients are all outside it. The source of truth for what
+ships is [`release-v6-scope.md`](release-v6-scope.md), and [`release-0.6.0.0.md`](release-0.6.0.0.md)
+holds the published wording. So of the material below, the theme, the ordering, the "claim nothing
+while it is experimental" rule and the claims decision apply to v6 as written; the Streams, Connect,
+other-runtimes and self-tuning sections of the points inventory describe a later announcement, and
+the P-row throughput decision stands (no headline). Nothing here is rewritten to match - it is the
+announcement plan as it was made, and this paragraph is what changed under it.
+
 Owner's idea, 2026-08-15, for the v6 release. Recorded now because a theme is worth deciding while
 the work that justifies it is fresh, and forgotten otherwise.
 
