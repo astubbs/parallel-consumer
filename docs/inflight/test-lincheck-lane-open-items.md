@@ -451,6 +451,33 @@ author's call rather than a review fix.
   success while its transformer failed per-class would have made every calibration verdict read
   "not found".
 
+## The lane's 20-minute budget has stopped being generous - sighting, 2026-09-09
+
+`maven.yml`'s `- suite: lincheck` entry carries `timeout: 20`, chosen against a **7m42s** measured
+baseline on `ubuntu-latest` that its own comment block records. On 2026-09-09 the lane was running
+at two to three times that, and a job cancelled at its budget renders as a red required check with
+no failing test in it - which reads as "this branch broke Lincheck".
+
+Recorded because CI logs expire and this is the evidence that the reds were the lane, not the
+branch. Four jobs the same afternoon:
+
+- `fix/119-gate-latch-warning`, **cancelled at the budget, twice**. Every other job in both runs
+  passed.
+- `docs/v6-burndown-checklist` - **succeeded at 19m58s**. This is the control arm: a documentation
+  branch cannot change what the model checker explores, and it came two seconds inside the bound.
+- `fix/311-validate-batchsize` - succeeded at 12m55s.
+
+So the population is 13 to 20+ minutes against a 20-minute bound and a 7m42s baseline, and which
+side of the line a branch lands on is the runner it drew. Ruled out for the astubbs#119 branch
+specifically: no Lincheck harness reaches the code it changed - `WorkManagerLincheckTest`'s
+operations are `handleFutureResult` and the revoke/reassign pair, and no harness in the lane
+mentions the intake gate at all.
+
+What to decide, not done here: whether the answer is a larger budget, a smaller
+`iterations(...)` on the arm that dominates the wall clock (`WorkManagerLincheckTest`, whose
+inverted arm cannot stop early), or splitting the suite. "A stress arm's hit rate is
+machine-dependent" above owns why lowering iterations is not free.
+
 ## Disproven, recorded so it is not re-raised
 
 The claim that core's `<argLine>@{argLine} ${lincheck.jvm.args}</argLine>` feeds a literal
