@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.*;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.PartitionState;
 import bz.stub.parallelconsumer.state.WorkManager;
 import com.facebook.infer.annotation.ThreadConfined;
 import io.micrometer.core.instrument.Gauge;
@@ -2322,19 +2323,53 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         workMailBox.drainTo(results, size);
 
         log.trace("Processing drained work {}...", results.size());
+        // Every drained result is landed before a failure is rethrown. A successful-work listener is user code
+        // that runs inside handleFutureResult; a throw there used to leave the results behind it in this local
+        // queue, unreachable - in flight forever, with no retry and no redelivery. On the ordinary pass the throw
+        // still ends the instance; on a recovery pass, which retries the drain, the results it left behind would
+        // be the very records the replay exists to put back.
+        RuntimeException firstFailure = null;
         for (var action : results) {
             if (action.isWakeUp()) {
                 continue;
             }
-            if (action.isNewConsumerRecords()) {
-                wm.registerWork(action.getConsumerRecords());
-            } else {
-                WorkContainer<K, V> work = action.getWorkContainer();
-                MDC.put(MDC_WORK_CONTAINER_DESCRIPTOR, work.toString());
-                wm.handleFutureResult(work);
-                MDC.remove(MDC_WORK_CONTAINER_DESCRIPTOR);
+            try {
+                if (action.isNewConsumerRecords()) {
+                    wm.registerWork(action.getConsumerRecords());
+                } else {
+                    WorkContainer<K, V> work = action.getWorkContainer();
+                    MDC.put(MDC_WORK_CONTAINER_DESCRIPTOR, work.toString());
+                    try {
+                        wm.handleFutureResult(work);
+                    } finally {
+                        MDC.remove(MDC_WORK_CONTAINER_DESCRIPTOR);
+                    }
+                }
+            } catch (RuntimeException failure) {
+                firstFailure = (RuntimeException) firstOrSuppress(firstFailure, failure); // first is null or a RuntimeException, so the cast holds
             }
         }
+        if (firstFailure != null) {
+            throw firstFailure;
+        }
+    }
+
+    /**
+     * The step of a recovery that runs under the producer write lock, after the invalidated producer is discarded
+     * (KTD4, KTD5): land every result already in the mailbox - each worker that produced into the aborted transaction
+     * has mailboxed its result, which holding the write lock guarantees - so the ledger is complete, then put the
+     * ledger's records back into processing. The drain is what makes the replay complete: a result still in the
+     * mailbox is a record whose offset would otherwise be committed for output the broker discarded. Package-visible
+     * so the drain-then-replay order is pinned by a test rather than by the one call site's comment. Nothing on this
+     * rung calls it; the recovery pass that does is the PR above.
+     *
+     * @return how many records the replay put back
+     */
+    @ThreadConfined(CONTROL_THREAD)
+    int replayWorkDiscardedByAbortedTransaction() {
+        assertOnControlThread("the replay of work an aborted transaction discarded");
+        processWorkCompleteMailBox(Duration.ZERO);
+        return wm.restoreWorkDiscardedByAbortedTransaction();
     }
 
     /**

@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.state;
 
 import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import com.facebook.infer.annotation.ThreadConfined;
 import bz.stub.parallelconsumer.internal.BrokerPollSystem;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
@@ -51,6 +52,12 @@ import static lombok.AccessLevel.*;
 @ToString
 @Slf4j
 public class PartitionState<K, V> {
+
+    /**
+     * The thread the aborted-transaction replay is confined to, as {@code ThreadConfined} names it: the control
+     * thread, which also stamps the replay generation on every dispatch, so the two are totally ordered.
+     */
+    public static final String CONTROL_THREAD = "pc-control";
 
     /**
      * Symbolic value for a parameter which is initialised as having an offset absent (instead of using Optional or
@@ -436,6 +443,14 @@ public class PartitionState<K, V> {
     private final OffsetMapCodecManager<K, V> om;
 
     /**
+     * The completed-but-uncommitted ledger (R13, KTD5): what {@link #onSuccess(long)} would otherwise drop, kept until
+     * the commit carrying it succeeds, so an aborted transaction's work can be put back. The retaining kind in
+     * transactional commit mode, the no-op kind otherwise - chosen once here rather than tested per completion. Its
+     * own class carries its monitor and its thread-safety invariant.
+     */
+    private final UncommittedCompletions<K, V> uncommittedCompletions;
+
+    /**
      * The offset the loaded offset map was committed against - the first offset this partition will be polled from,
      * and so the state to fall back to if the map turns out to be one we cannot believe.
      * <p>
@@ -491,6 +506,9 @@ public class PartitionState<K, V> {
                           OffsetMapCodecManager.HighestOffsetAndIncompletes offsetData,
                           long committedOffsetTheMapWasLoadedAgainst) {
         this.module = pcModule;
+        this.uncommittedCompletions = module.options().isUsingTransactionCommitMode()
+                ? new UncommittedCompletions<>()
+                : UncommittedCompletions.none();
 
         this.tp = topicPartition;
         this.partitionsAssignmentEpoch = newEpoch;
@@ -543,6 +561,11 @@ public class PartitionState<K, V> {
         recordCommittedOffset(committed);
         if (committed.equals(offerLastMadeForCommit)) {
             setClean();
+            // the ledger follows the same rule: only the answer to the latest offer trims what that offer carried.
+            // An older answer must not, because by then the snapshot is the newer offer's, which the broker has not
+            // acknowledged. Exact in transactional mode, the only mode with a retaining ledger, where every commit
+            // is answered before the next is offered
+            uncommittedCompletions.onCommitSuccess();
         } else {
             log.debug("Acknowledged commit for {} is {}, not the {} this partition last offered - the offset is " +
                             "recorded, but the partition stays dirty until the newer offer is answered",
@@ -670,6 +693,9 @@ public class PartitionState<K, V> {
      * (closed by astubbs#370, pinned by {@code PartitionStateRegistrationOrder370Test}). A fourth would need
      * an offset removed from the incomplete set by some route other than this method, or a completion for an
      * offset this state never registered.
+     * <p>
+     * @see #onSuccess(WorkContainer) which is what the engine calls; this overload keeps the record out of the ledger
+     *         and exists for the tests that drive offsets directly
      */
     public void onSuccess(long offset) {
         //noinspection OptionalAssignedToNull - null check to see if key existed
@@ -679,6 +705,70 @@ public class PartitionState<K, V> {
         updateHighestSucceededOffsetSoFar(offset);
 
         recordCompletion();
+    }
+
+    /**
+     * Records a completed container: the offset leaves the incomplete set, and in transactional commit mode the
+     * record enters the completed-but-uncommitted ledger until the commit carrying it succeeds.
+     */
+    public void onSuccess(WorkContainer<K, V> work) {
+        onSuccess(work.offset());
+        uncommittedCompletions.record(work.offset(), work.getCr());
+    }
+
+    /**
+     * Puts every completed-but-uncommitted record back into processing, after the transaction that carried its
+     * output was aborted (R13, KTD5). Each record goes back through the pair
+     * {@link #maybeRegisterNewPollBatchAsWork} uses for a fresh poll batch - a new {@link WorkContainer} at the
+     * partition's current epoch into its shard, then the record back into {@link #incompleteOffsets} - so
+     * {@link #isRecordPreviouslyCompleted} answers false for it again, {@link #getOffsetHighestSequentialSucceeded()}
+     * drops below it, and no offset from the aborted transaction can be committed. The partition is marked dirty so
+     * the next commit publishes the lowered frontier.
+     * <p>
+     * <b>Cleared suspicion, 2026-09-02: a container completing after the replay cannot target a restored offset.</b>
+     * The suspicion: {@link #onSuccess(long)} asserts the offset was still incomplete, so a late-arriving completion
+     * for a restored offset would either trip that assert or silently re-complete a record the replay just put back.
+     * The discriminator is what the caller does before calling this: recovery holds the producer write lock, so no
+     * worker is between {@code beginProducing} and {@code cleanUpContext}, and it drains the mailbox first - so every
+     * container that produced into the aborted transaction has already reached {@code handleFutureResult} and is
+     * either in this ledger (success) or the retry queue (failure) before the replay runs. A record on the
+     * {@code poll} flow takes no produce lock, but produced nothing, so nothing of it was discarded and its late
+     * completion targets an offset that is not in the ledger. What would reopen it: calling this outside the write
+     * lock, or before the drain - nothing gates that but the one call site in
+     * {@code AbstractParallelEoSStreamProcessor}.
+     * <p>
+     * Confined to the control thread - declared for RacerD by the annotation, and asserted at the one entry point,
+     * {@code AbstractParallelEoSStreamProcessor#replayWorkDiscardedByAbortedTransaction}. The ledger's monitor is
+     * not held across the replay itself, which enters the shard map's per-key lock and must not do so while holding
+     * it.
+     *
+     * @return how many records were put back
+     */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
+    public int restoreCompletedButUncommittedWork() {
+        Map<Long, ConsumerRecord<K, V>> discarded = uncommittedCompletions.snapshotInOffsetOrder();
+        if (discarded.isEmpty()) {
+            return 0;
+        }
+        long epoch = getPartitionsAssignmentEpoch();
+        for (ConsumerRecord<K, V> record : discarded.values()) {
+            // register, then publish - the order maybeRegisterNewPollBatchAsWork keeps (astubbs#370), for the same
+            // reason: a scanner may select and complete the container the instant it is reachable through its
+            // shard, and that completion must find the offset already in the incomplete set. Pinned by
+            // PartitionStateAbortedTransactionReplayTest's completion-on-publish case.
+            addNewIncompleteRecord(record);
+            getShardManager().addWorkContainer(epoch, record);
+        }
+        // forgotten only once every entry is back in processing: a throw mid-loop leaves the ledger intact for the
+        // next pass, and both registrations tolerate a repeat (the incomplete set is a put, the shard keeps its
+        // resident), so replaying an entry twice costs nothing
+        uncommittedCompletions.forget(discarded.keySet());
+        // a version stamp, not a completion: the commit frontier moved DOWN, and the next commit cycle must
+        // re-offer it rather than believe the last acknowledged offer still covers this partition
+        recordCompletion();
+        log.debug("Restored {} completed-but-uncommitted record(s) to processing for {} after an aborted transaction; commit frontier is now {}",
+                discarded.size(), tp, getOffsetToCommit());
+        return discarded.size();
     }
 
     public void onFailure(WorkContainer<K, V> work) {
@@ -1053,6 +1143,7 @@ public class PartitionState<K, V> {
         long collectedAt = completionCount.get();
         if (isDirtyAt(collectedAt)) {
             completionCountBeingCommitted = collectedAt;
+            uncommittedCompletions.snapshotForCommit(); // the same guard for the ledger: only what this commit carries is trimmed on its success
             OffsetAndMetadata offered = createOffsetAndMetadata();
             // remembering the offer WHOLE is what lets onOffsetCommitSuccess recognise the answer to it, and decline
             // to mark clean on the answer to an older one - the offset alone does not identify an offer, because
