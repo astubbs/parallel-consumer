@@ -96,7 +96,7 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 **Park and export**
 
 - R27. A parked record stays incomplete in the offset map, holds no worker, and is not re-attempted until its park delay elapses, which is how scheduled retry (astubbs#234) is delivered: a park policy may declare a delay after which the record is attempted again with its count reset, or no delay, meaning parked until resumed or exported. Otherwise it waits until an operator resumes it through the handle (R28), or a restart re-delivers it (R10's per-assignment rule). Parked records count against the partition's offset-map payload, never against the intake load gate. When a partition's payload reaches the declared fraction of Kafka's commit-metadata cap, eighty percent by default, its parked records are exported oldest-first to the declared dead-letter destination until the payload is below the fraction; with no destination declared, intake on that partition pauses at the cap's pressure threshold as it does today. A declared age bound exports a parked record before the topic's retention could delete it, and an instance may declare export-immediately, which is the classic dead-letter queue. The parked set is queryable and metered (R28), and the documentation states that consumer-group lag reads as stuck at the oldest parked record.
-- R28. The parked set is queryable per route, with an instance-wide roll-up. A route's handle answers, per partition: the parked count, the oldest parked record's age, the offset-map payload as a fraction of the cap, an estimated time to reach the export fraction from the current park rate and payload growth, and the count of unresolved records (parked, waiting and in flight), which is the honest lag figure beside the broker's offset distance; and it lists parked records with topic, partition, offset, key, attempt count, last failure and parked-since time. Two commands act on a parked record or a partition's parked set: resume, which re-attempts now, and export, which sends to the dead-letter destination now. The same figures are published as metrics (R19): parked count, oldest parked age and estimated time to export per topic-partition as gauges, the payload fraction per partition as a gauge, and exported records as a counter. Queries and commands are data on the wire (R18), and the embedded dashboard (astubbs#268) consumes them for its blocked-frontier panel rather than reading engine state itself.
+- R28. The parked set is queryable per route, retrieved from the handle by the route's name, with an instance-wide roll-up under a name of its own so the per-route accessor is never overloaded. A route's parked view spans every partition by default and answers, per partition on request: the parked count, the oldest parked record's age, the offset-map payload as a fraction of the cap, an estimated time to reach the export fraction from the current park rate and payload growth, and the count of unresolved records (parked, waiting and in flight), which is the honest lag figure beside the broker's offset distance; and it lists parked records with topic, partition, offset, key, attempt count, last failure and parked-since time. Two commands act on a parked record or a partition's parked set: resume, which re-attempts now, and export, which sends to the dead-letter destination now. The same figures are published as metrics (R19): parked count, oldest parked age and estimated time to export per topic-partition as gauges, the payload fraction per partition as a gauge, and exported records as a counter. Queries and commands are data on the wire (R18), and the embedded dashboard (astubbs#268) consumes them for its blocked-frontier panel rather than reading engine state itself.
 - R29. A route may declare a circuit breaker: a failure-rate threshold over a window of terminal outcomes, and an open duration. When the rate crosses the threshold the route opens: its records are withheld without counting an attempt for the open duration, then a declared number are let through half-open, and the route closes on their success or re-opens on failure. Other routes are unaffected; an instance-wide breaker is the same policy declared on the instance. Open, half-open and closed transitions are counted (R19) and the state is on the route's handle (R28). The policy is data. Retries and the breaker answer different failures: a retry is one record's transient failure, the breaker is a dependency that is down.
 - R13. An exported record carries the original key bytes, value bytes and headers unchanged, plus provenance headers naming the source topic, partition, offset, timestamp, attempt count, the time of the last failure and the last failure's class and message. The header names take the 2022 draft's prefix and names (astubbs#8: `pc-failure-count`, `pc-last-failure-at`, `pc-last-failure-cause`, `pc-partition`, `pc-offset`) and add the source topic and timestamp the draft lacked; the draft's reaction enum maps onto this document's outcomes, SHUTDOWN to stop (R24), SKIP to filtered (R8), DLQ to export. A destination shared by several routes carries records from all of them, so its consumer reads raw bytes and dispatches on the source-topic provenance header; a route may declare its own. Provenance headers are appended after the copied user headers, their names are reserved, and where a user header shares a name the last occurrence is the framework's and is authoritative.
 - R14. Under the transactional commit mode an export send is part of the transaction that commits the exported record's offset. An export send that fails inside that transaction aborts it, so no offset in it commits and every record in it is re-attempted; in today's engine the instance then terminates, and the producer-recovery work (astubbs#225) is what would change that. Until it lands, a persistently failing export under this mode terminates and restarts the instance with attempt counts reset (R10), so a parked record that cannot be exported makes no progress once the payload fraction is reached; Scope Boundaries records the limit.
@@ -128,7 +128,7 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 
 ### Illustrative surface
 
-Illustrative, not binding: the names are placeholders and the compiled README example decides the syntax (Outstanding Questions). What the examples fix is the shape the requirements imply: a definition from properties, one statement per route ending in `process` or a sink, policy as data, a handle out. Type declarations borrow Kafka Streams' `Consumed.with` and `Produced.with` shape and its `Serdes` names, in this library's own package so no Streams dependency arrives; the chain grammar of the Streams DSL is deliberately not borrowed across routes (KD3). A route is called a route, not a stream, because a stream in Streams is the start of a topology and this is a topic bound to one function. Format helpers such as `json(Order.class)` resolve to the deserialiser already on the classpath, and the format-named routes `json`, `avro`, `protobuf` and `bytes` are sugar for `topic(...).consumed(...)`. The one instance-wide setting, commit mode, is plain; per-route defaults carry the prefix `default`, and a route's own setting overrides its copy.
+Illustrative, not binding: the names are placeholders and the compiled README example decides the syntax (Outstanding Questions). What the examples fix is the shape the requirements imply: a definition from properties, one statement per route ending in `process` or a sink, policy as data, a handle out. Type declarations borrow Kafka Streams' `Consumed.with` and `Produced.with` shape and its `Serdes` names, in this library's own package so no Streams dependency arrives; the chain grammar of the Streams DSL is deliberately not borrowed across routes (KD3). A route is called a route, not a stream, because a stream in Streams is the start of a topology and this is a topic bound to one function. Format helpers such as `json(Order.class)` resolve to the deserialiser already on the classpath, and the format-named routes `json`, `avro`, `protobuf` and `bytes` are sugar for `route(...).consumed(...)`; the same verb, route, defines one before start, adds one after start, and on the handle retrieves one. The one instance-wide setting, commit mode, is plain; per-route defaults carry the prefix `default`, and a route's own setting overrides its copy.
 
 The shortest definition: one topic, nothing else declared. Failures retry ten times with the default delay, then park (R1, R2, R10, R11, R17):
 
@@ -161,7 +161,7 @@ pc.bytes(Set.of("audit", "audit-replay"))
     .concurrency(4)                                  // this route only; the self-scaling controller may move it later
     .toConsole();                                    // sink sugar: print the record and succeed
 
-pc.topic("legacy")                                   // the general form, for a non-string key or your own deserialiser
+pc.route("legacy")                                   // the general form, for a non-string key or your own deserialiser
     .consumed(Consumed.with(Serdes.Long(), new LegacyDeserializer()))
     .process(ctx -> Outcome.succeeded());
 
@@ -210,23 +210,24 @@ pc.json("orders", Order.class)
 Telling permanent from transient at decode time, when a stock deserialiser cannot (R12):
 
 ```java
-pc.topic("orders")
+pc.route("orders")
     .consumed(Consumed.with(Serdes.String(),
-        classify(avro(Order.class), e ->
+        classifyDecodeFailures(avro(Order.class), e ->
             e instanceof RestClientException ? Decode.transientFailure(e) : Decode.permanentFailure(e))))
     .process(ctx -> ...);
 ```
 
-Querying and acting on the parked set, per route, with an instance roll-up (R28):
+Querying and acting on the parked set, per route, with an instance roll-up under its own name (R28). The default view spans every partition; one partition is the rare case:
 
 ```java
-var parked = pc.route("orders").parked();       // this route's parked set
-parked.byPartition().forEach(p -> log.info("{} parked={} oldest={} payload={}% export in about {}",
-        p.partition(), p.count(), p.oldestAge(), p.payloadFraction() * 100, p.estimatedTimeToExport()));
-parked.records(3).stream()                       // partition 3: offset, key, attempts, last failure, since
+var parked = handle.route("orders").parked();   // this route's parked set, every partition
+parked.records().stream()                        // offset, key, attempts, last failure, parked-since
       .filter(rec -> rec.attempts() > 5)
       .forEach(parked::resume);                  // or parked::export
-pc.parked().total();                             // every route
+parked.byPartition().forEach(p -> log.info("{} parked={} oldest={} payload={}% export in about {}",
+        p.partition(), p.count(), p.oldestAge(), p.payloadFraction() * 100, p.estimatedTimeToExport()));
+parked.partition(3).records();                   // one partition, the rare case
+handle.parkedAllTopics().total();                // every route, named apart so parked() is never overloaded
 ```
 
 Handle operations (R31) and a batch-mode route (R32). A route added after `start` is the same statement:
