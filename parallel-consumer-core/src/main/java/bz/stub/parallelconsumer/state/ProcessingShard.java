@@ -11,6 +11,7 @@ import bz.stub.parallelconsumer.internal.RateLimiter;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.time.Duration;
 import java.util.*;
@@ -175,9 +176,28 @@ public class ProcessingShard<K, V> {
             // and RetryQueue.getLowestRetryTime read one entry high until then. Bounded misdirection, not the
             // stall this was first written up as.
             //
-            // The pairing gap is demonstrated; whether production can reach this branch with a queue-resident
-            // container is the open question, and it is what decides whether this is worth a design change.
-            // Both are in docs/inflight/bug-shard-displacement-orphans-the-retry-queue-entry.md.
+            // CLEARED 2026-09-08 - the purge above bounds the harm, and this says the case does not arise at
+            // all. SUSPECTED: that production can reach this branch with a queue-resident displaced container.
+            // It cannot, and note the argument turns on RESIDENCE, not on the queue - which is why it is
+            // unaffected by the rebalance callbacks no longer touching the queue.
+            // A container enters the retry queue only through ShardManager.onFailure, which needs it NOT stale
+            // (couldBeTakenAsWork refuses a stale container, so a stale one is never selected, never fails and
+            // never re-queues) and, since astubbs#437, still resident. The DISCRIMINATOR is what happens next:
+            // only three transitions can then make it stale - the removed-state swap and the putAll in
+            // PartitionStateManager, each immediately followed on the same thread by the sweep that takes it
+            // OUT OF ITS SHARD, and fenceForRevocation, which sweeps nothing but cannot be followed by a second
+            // container at the same offset, because a duplicate offset needs a re-assignment and that is the
+            // swept path. A container the sweep has removed is not a resident, so there is nothing here to
+            // displace. Bumping the epoch map alone changes no answer - PartitionState's epoch is final and
+            // staleness is only asked through the state object.
+            // WHAT WOULD REOPEN IT, and nothing goes red for any of it: an in-generation replay of an
+            // already-registered offset (a seek - there are none in main today - or an offset-reset/truncation
+            // replay), a topic-scoped shard key, or a second insertion site on workMap. The last leg is a
+            // property of the consumer's fetch position, not of this class, so the pairing gap is one arrival
+            // away rather than absent - and the purge is what makes that a bounded misdirection rather than a
+            // surprise, which is why both records are kept.
+            // Proof, control arms and ablation matrix: ShardDisplacementOrphanReachabilityTest and
+            // docs/solutions/logic-errors/the-shard-displacement-orphan-is-unreachable-and-the-guard-is-outside-the-class-2026-09-08.md.
             population.onRetired();
             // The displaced container gives back its claim IF it still holds one. It does not when it was
             // already taken as work, and does when it was only ever queued - the compare-and-set tells those
@@ -257,8 +277,15 @@ public class ProcessingShard<K, V> {
     }
 
     /**
-     * From the {@code onPartitionsRemoved} callback: the revoked record leaves the shard, and gives back its
-     * selection claim if it is still holding one.
+     * The unconditional removal: whatever occupies the offset leaves the shard, and gives back its selection
+     * claim if it is still holding one.
+     * <p>
+     * <b>It has no production caller any more.</b> It was the {@code onPartitionsRemoved} sweep's removal until
+     * that moved to {@link #removeWorkForRevokedRecord}, which names the registration it means; what is left are
+     * the tests that use this as a modelling primitive for "a container departs its shard". Kept for them rather
+     * than deleted, and named here so the next reader does not go looking for the caller this sentence used to
+     * claim. <b>Do not reach for it from main code</b> - a site that has judged a particular container wants
+     * {@link #evictIfStillResident}, and one that was handed a record wants {@link #removeWorkForRevokedRecord}.
      * <p>
      * This used to ask {@link WorkContainer#isAvailableToTakeAsWork()} whether to deduct, which is unanswerable:
      * a record out at a worker whose stale result the controller has just dropped ({@code handleFutureResult} ->
@@ -287,11 +314,16 @@ public class ProcessingShard<K, V> {
      * of the paths somebody remembered; only the caller that wins the compare-and-set moves the counter.
      * <p>
      * <b>This one is by KEY and takes whatever is there, which is correct for its callers and wrong for a
-     * caller that inspected a container first</b> - the revocation sweep is emptying an offset regardless of who
-     * occupies it, and {@link #onSuccess} is removing a container that by construction cannot have been
-     * replaced (a non-stale resident is never replaced by {@link #addWorkContainer}). A caller that judged a
-     * <em>particular</em> container and now wants that one gone must use {@link #evictIfStillResident} instead,
-     * because between the judgement and the removal a replacement can arrive.
+     * caller that inspected a container first</b> - {@link #onSuccess} is removing a container that by
+     * construction cannot have been replaced (a non-stale resident is never replaced by
+     * {@link #addWorkContainer}). A caller that judged a <em>particular</em> container and now wants that one
+     * gone must use {@link #evictIfStillResident} instead, because between the judgement and the removal a
+     * replacement can arrive.
+     * <p>
+     * <b>The revocation sweep used to be listed here as the other correct caller, on the grounds that it is
+     * emptying an offset regardless of who occupies it. That was wrong</b>, and it is
+     * {@link #removeWorkForRevokedRecord} now: the sweep is handed the records ONE generation was still
+     * carrying as incomplete, so "whoever occupies it" is exactly the distinction it needs to draw.
      */
     private WorkContainer<K, V> retire(WorkContainer<K, V> removed) {
         if (removed == null) {
@@ -323,6 +355,87 @@ public class ProcessingShard<K, V> {
         return workMap.remove(offset, inspected)
                 ? retire(inspected)
                 : null;
+    }
+
+    /**
+     * The revocation and lost sweep's removal: empties the offset of the container the revoked generation
+     * registered, and leaves a LIVE container that a later registration put there.
+     * <p>
+     * <b>The sweep is handed a {@link ConsumerRecord}, not a container, and that record IS the identifier.</b>
+     * {@code PartitionState.maybeRegisterNewPollBatchAsWork} puts the same record instance into its
+     * {@code incompleteOffsets} and into the {@link WorkContainer} it builds, so "the container this generation
+     * registered for this record" is a reference comparison. A later generation re-delivering the same offset
+     * supplies a DIFFERENT record object, from a different fetch, which is what tells the two apart.
+     * <p>
+     * <b>That identity has one named exception, and the second condition below is what covers it.</b>
+     * {@code addNewIncompleteRecord} puts unconditionally while {@link #addWorkContainer} DROPS an arrival whose
+     * resident is not stale, so an in-generation replay of an already-registered offset - a seek, an offset-reset
+     * or a truncation replay - leaves the partition naming record B while this shard still holds the container
+     * over record A. Then the comparison is false about a container that IS the right one. It is the same
+     * reopener {@link #addWorkContainer}'s own cleared suspicion names; nothing in main calls {@code seek} today.
+     * <p>
+     * <b>The removal used to be {@code removeWorkAtOffset(record.offset())}</b>, which takes whatever occupies
+     * the offset when it lands - astubbs/parallel-consumer#468's defect class, reported at this site by
+     * astubbs/parallel-consumer#483's sweep and fixed here. If a live container has taken the offset, evicting it
+     * loses the record: it is gone from the shard while its own {@link PartitionState} still carries the offset as
+     * incomplete, so nothing selects it and the commit high-water mark cannot pass it until the partition is
+     * re-polled. The eviction is therefore conditional on the container this method inspected, settled in one
+     * atomic step by {@link #evictIfStillResident} - a compare-and-remove, which means "this container" only
+     * because {@link WorkContainer}'s equality is identity.
+     * <p>
+     * <b>Two conditions, because registration identity alone declines in a case where declining is wrong.</b> An
+     * occupant from another registration that is STALE has to go: leaving it is the state this sweep exists to
+     * prevent, where a stale container holds an offset of a revoked partition against the next assignment's work.
+     * So the only thing declined is a live container from another registration, which is exactly the defect case
+     * and nothing else - every other caller and every existing harness sees the behaviour it saw before.
+     * <p>
+     * <b>ON TODAY'S ONLY CALLER THE DECLINE BRANCH CANNOT FIRE, and that is a stronger unreachability argument
+     * than the thread one.</b> {@code PartitionStateManager.resetOffsetMapAndRemoveWork} installs
+     * {@code RemovedPartitionState} for the partition BEFORE it calls in, and that state answers
+     * {@code isPartitionRemovedOrNeverAssigned}, so {@code checkIfWorkIsStale} is true for EVERY occupant and the
+     * second condition carries all of them - this method is behaviourally identical to a by-key removal on the
+     * shipped path. The branch is defence for a caller that sweeps BEFORE the swap, which is exactly what
+     * {@code ShardManagerLincheckTest.revokeSweep} does. Structural, and it does not rest on which thread runs
+     * what; the thread-ordering argument in {@code ShardRevokeSweepReplacementEvictionTest}'s javadoc is the
+     * weaker, caller-shaped one, and neither is checked by anything.
+     * <p>
+     * CLEARED 2026-09-09 - SUSPECTED: that the staleness question can NPE out of a rebalance callback, the way
+     * confluentinc#757 and astubbs#345 both did on this path, because
+     * {@code PartitionStateManager.getPartitionState} answers null for a partition that was never assigned. Note
+     * the state is resolved from the OCCUPANT, not from {@code revokedRecord}, and in the only branch that asks
+     * the occupant is by definition a different registration - so the discriminator has to be about the occupant.
+     * It is TWO facts: the state is installed before the call (and the {@code partition == null} case
+     * {@code continue}s without sweeping at all), and every {@link ShardKey} variant is partition-scoped -
+     * {@code KeyOrderedKey} holds a {@code TopicPartition}, {@code TopicPartitionKey} is one - so an occupant of
+     * this shard necessarily belongs to the revoked partition. WHAT WOULD REOPEN IT: a second caller from a path
+     * that has not installed a state, or <b>a topic-scoped shard key</b>, which would admit an occupant from a
+     * partition that may never have been assigned. That second reopener is the one
+     * {@link #addWorkContainer}'s cleared suspicion already lists for this class, and it reopens both at once.
+     * Nothing goes red for either - the open null-safety decision is
+     * {@code docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md}.
+     *
+     * @param revokedRecord the record the revoked generation was still carrying as incomplete
+     * @return the container this call evicted, or {@code null} if the offset was already empty or is now held by a
+     *         live container from a later registration - in which case this call changed nothing and must account
+     *         for nothing
+     */
+    WorkContainer<K, V> removeWorkForRevokedRecord(ConsumerRecord<K, V> revokedRecord) {
+        long offset = revokedRecord.offset();
+        WorkContainer<K, V> occupant = workMap.get(offset);
+        if (occupant == null) {
+            return null;
+        }
+        // Reference identity is the SUBJECT here: same coordinates, different registration is the case this
+        // whole method exists to tell apart. No @SuppressWarnings("ReferenceEquality") - measured, it suppresses
+        // nothing: neither WorkContainer nor Kafka's ConsumerRecord overrides equals, so Error Prone does not
+        // fire, which is also why isResident's == below carries no suppression either.
+        boolean isTheRegistrationBeingRevoked = occupant.getCr() == revokedRecord;
+        if (!isTheRegistrationBeingRevoked && !isWorkContainerStale(occupant)) {
+            log.debug("Revoke/lost sweep leaves offset {} alone: it is held by a live container from a later " +
+                    "registration ({}), not by the record this revocation named", offset, occupant);
+            return null;
+        }
+        return evictIfStillResident(offset, occupant);
     }
 
 
@@ -424,6 +537,11 @@ public class ProcessingShard<K, V> {
                     // It reopens the moment anything puts into a shard off the controller thread, and
                     // nothing would go red if that happened - hence the conditional form anyway: it costs
                     // the same, and it does not rest on a thread-confinement claim nothing checks.
+                    //
+                    // That discriminator is the SAME single-writer fact the displacement branch's own cleared
+                    // suspicion rests on (see addWorkContainer), reached independently from the other side. So
+                    // "anything puts into a shard off the controller thread" reopens both at once, and
+                    // ShardDisplacementOrphanReachabilityTest is the only thing that would notice.
                     log.debug("shard {} there are still stale work container, need to remove container : {}", this, workContainer);
                     WorkContainer<K, V> removed = evictIfStillResident(workContainer.offset(), workContainer);
                     if (removed != null) {

@@ -8,10 +8,11 @@
 Tracked as astubbs#311. Gated on `isUsingBatching()`, so **a default configuration (`batchSize = 1`)
 is unaffected** - but every configuration that actually uses batching is affected, continuously.
 Surfaced by the batching ideation pass (`core-batching-enhancements.md`) and confirmed by reading
-`master`. The `batchSize` validation gap this note
-originally carried is now [`bug-unvalidated-batchsize.md`](bug-unvalidated-batchsize.md), tracked
-under the same issue; that one needs a caller to pass a bad value, this one is the defect the
-library inflicts on a correct configuration.
+`master`. The `batchSize` validation gap this note originally carried was split out, and is now
+**fixed** - `validate()` rejects a batch size below one, and the write-up is
+[`an-unvalidated-option-failed-in-whichever-way-the-rest-of-the-configuration-decided-2026-09-09.md`](../solutions/logic-errors/an-unvalidated-option-failed-in-whichever-way-the-rest-of-the-configuration-decided-2026-09-09.md).
+That one needed a caller to pass a bad value; this one is the defect the library inflicts on a
+correct configuration, so astubbs#311 stays open for it.
 
 ## The arithmetic is wrong, and it fires almost always
 

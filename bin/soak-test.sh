@@ -38,8 +38,15 @@ TEST="${1:?usage: bin/soak-test.sh <ITTestClass#method> [runs] [extra-maven-args
 RUNS="${2:-10}"
 if [ "$#" -gt 1 ]; then shift 2; else shift 1; fi
 
-if command -v nproc >/dev/null 2>&1; then CORES=$(nproc); else CORES=$(sysctl -n hw.ncpu 2>/dev/null || echo 4); fi
+# The burners come from bin/lib/cpu-load.sh, which is also the control term of the load-versus-idle
+# experiment runner - one generator, so the two cannot drift about what "loaded" means.
+# shellcheck source=lib/cpu-load.sh
+. "$(dirname "$0")/lib/cpu-load.sh"
+# Never leave burners running if the soak is interrupted - they have no natural exit.
+trap 'pc_cpu_load_stop' EXIT INT TERM
+
 FREE_CORES="${SOAK_FREE_CORES:-2}"
+CORES=$(pc_cpu_count)
 LOAD=$(( CORES - FREE_CORES ))
 [ "$LOAD" -lt 0 ] && LOAD=0
 SOAK_DIR="${SOAK_DIR:-$(mktemp -d -t soak.XXXXXX)}"
@@ -48,19 +55,6 @@ mkdir -p "$SOAK_DIR"
 echo "SOAK: ${TEST}"
 echo "SOAK: ${RUNS} run(s); ${CORES} cores, burning ${LOAD} to leave ~${FREE_CORES}; logs in ${SOAK_DIR}"
 
-LOAD_PIDS=()
-start_load() {
-  for _ in $(seq 1 "$LOAD"); do
-    ( while :; do :; done ) & LOAD_PIDS+=("$!")
-  done
-}
-stop_load() {
-  for p in "${LOAD_PIDS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done
-  LOAD_PIDS=()
-}
-# Never leave burners running if the soak is interrupted - they have no natural exit.
-trap 'stop_load' EXIT INT TERM
-
 # Build once, unloaded: a slow build under contention is not the signal we are looking for, and it
 # would dominate the wall clock of every run.
 echo "SOAK: building first (unloaded)"
@@ -68,7 +62,7 @@ echo "SOAK: building first (unloaded)"
   -Dcopyright.skip=true -Djacoco.skip=true >"${SOAK_DIR}/build.log" 2>&1 \
   || { echo "SOAK: build FAILED - see ${SOAK_DIR}/build.log"; exit 1; }
 
-[ "$LOAD" -gt 0 ] && start_load
+[ "$LOAD" -gt 0 ] && pc_cpu_load_start "$FREE_CORES"
 
 PASS=0; FAIL=0; FAILED_RUNS=()
 for n in $(seq 1 "$RUNS"); do
@@ -86,7 +80,7 @@ for n in $(seq 1 "$RUNS"); do
   fi
 done
 
-stop_load
+pc_cpu_load_stop
 
 echo
 echo "SOAK RESULT: ${FAIL}/${RUNS} failed (${LOAD} load threads, ~${FREE_CORES} cores left free)"
