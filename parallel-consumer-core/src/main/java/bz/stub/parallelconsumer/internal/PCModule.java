@@ -81,7 +81,10 @@ public class PCModule<K, V> {
     /**
      * The {@link ReplacementProducerSource} for this module, the seam a recovery replaces an invalidated producer
      * through: present only where PC built the producer itself, because a caller's finished instance carries no
-     * configuration to rebuild from. Nothing in this rung calls it; the manager that does is the recovery PR above.
+     * configuration to rebuild from. Each call builds from the same configuration - the same
+     * {@code transactional.id} included, so that initialising the replacement fences the producer it replaces. The
+     * id travels with the source so a failure to build can name it. {@link ProducerRecovery} builds every
+     * replacement through it.
      * <p>
      * Only the builds this source makes run under {@link UserFunctions#carefullyRun}: the seam is overridable, and an
      * {@link Error} from the constructor (a serializer's static initialiser failing, say) must surface as a failure
@@ -147,7 +150,7 @@ public class PCModule<K, V> {
         if (producerManager == null) {
             ProducerWrapper<K, V> wrapper = producerWrap();
             try {
-                this.producerManager = new ProducerManager<>(wrapper, consumerManager(), workManager(), options());
+                this.producerManager = new ProducerManager<>(wrapper, consumerManager(), workManager(), options(), replacementProducerWrap());
             } catch (Throwable constructionFailed) {
                 // The manager's constructor initialises transactions, which can throw (a coordinator that is not
                 // there yet, say). A producer PC built is PC's to close: nobody else holds it, and the processor that

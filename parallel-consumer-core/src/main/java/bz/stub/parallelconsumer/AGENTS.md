@@ -54,7 +54,11 @@ every entry point, and `RetryQueueIteratorConfinementTest` failing when the two 
 **`ThreadConfined.ANY` says "one thread, whichever one got here first"**, which is the honest value
 when the confining thread varies by caller - an object handed out per call, like that iterator. Name
 a thread instead only when the code really does pin one, and then the assertion has something
-specific to compare against.
+specific to compare against. The recovery pass is the pinned case: `@ThreadConfined(PartitionState.CONTROL_THREAD)` on its methods,
+`assertOnControlThread` at each entry point in `AbstractParallelEoSStreamProcessor`. An unstarted instance
+has no control thread and nothing to race, so the assertion lets a test drive the gate directly; once the
+thread exists, any other caller fails loudly. Added with astubbs#225's recovery pass, which is where the
+first named-thread annotations are.
 
 **Check the premise before you write it.** The declaration is only as good as the claim that the
 state is confined, and that claim is easy to get wrong from reading one method:
