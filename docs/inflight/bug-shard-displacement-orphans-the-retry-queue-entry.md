@@ -135,27 +135,14 @@ or truncation replay - makes the displacement branch orphan an entry immediately
 red for it; the purge would then collect it a tick later, which is precisely the difference this
 section makes.
 
-## Update 2026-09-09 - the other half of astubbs#483's defect-class sweep is now fixed
+## Update 2026-09-09 - one of the sweep's other reports is closed
 
-**This note's own state is unchanged**, and the `PROPOSED closed` marker at the top stands as it
-was: nothing below touches the displacement branch, its orphan, or the reachability argument. What
-changed is the second item astubbs/parallel-consumer#483 reported alongside them and did not fix -
-`ShardManager.removeWorkFromShardFor`, the revoke and lost path's `removeWorkAtOffset`, and the last
-unconditional by-key shard removal in main.
-
-It is now conditional on the container the revoked record was registered as
-(`ProcessingShard.removeWorkForRevokedRecord`), which is the same shape
-astubbs/parallel-consumer#468 gave the stale sweep, arrived at from the other side: the caller here
-holds a `ConsumerRecord` and not a container, so what it names is the *registration*. The write-up
-that owns the class carries the mechanism, the two-legged guard and why the middle option was wrong:
+**This note's own subject, state and `PROPOSED closed` marker are untouched.** The only reason this
+section exists is that astubbs/parallel-consumer#483 reported four by-key removals as one list on
+this note's thread, so a reader who arrives here is the reader who wants to know which of the other
+three moved: `ShardManager.removeWorkFromShardFor` is now conditional on the container the revoked
+record was registered as, and is no longer open. The mechanism, the two-legged guard and both
+unreachability arguments belong to the class's owner and are stated only there -
 [`../solutions/logic-errors/a-by-key-removal-cannot-say-which-container-it-meant-2026-09-07.md`](../solutions/logic-errors/a-by-key-removal-cannot-say-which-container-it-meant-2026-09-07.md),
-"Update 2026-09-09 - the second site".
-
-**Recorded here because it is a claim about this note's neighbourhood, not about this note.** The
-sweep's four items were reported as one list on one PR, so a reader arriving at the displacement
-orphan is the reader most likely to want to know which of the other three moved. Two remain as
-astubbs#483 left them, both deliberately: `ProcessingShard.onSuccess`'s by-key removal (a non-stale
-resident is never displaced, and the third staleness checkpoint in `WorkManager.handleFutureResult`
-stops a stale result reaching it - re-verified 2026-09-09), and `RetryQueue.remove`/`removeAll`
-being by coordinates at every call site, which is the queue's keying model rather than a removal
-that forgot to name its target.
+"Update 2026-09-09 - the second site". The other two stand as astubbs#483 left them, both
+deliberately.

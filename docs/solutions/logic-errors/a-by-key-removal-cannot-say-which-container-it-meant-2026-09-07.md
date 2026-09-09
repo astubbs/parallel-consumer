@@ -217,11 +217,19 @@ the stale sweep:
   container from another registration - which is what makes the change a no-op everywhere except in
   the defect case. Each leg has its own ablation arm, because a guard whose legs are not separately
   falsifiable is a guard whose weaker half nobody notices going missing.
-- **It is not reachable in production today, and it was still worth fixing.** Both rebalance
-  callbacks run on the broker-poll thread, so the revoke sweep for a generation completes before
-  the assignment that could register a replacement begins - an argument about callers that nothing
-  checks. Same posture as `getWorkIfAvailable`'s last-resort sweep above: the conditional form costs
-  one reference comparison and does not rest on it.
+- **It is not reachable in production today, on two independent arguments, and it was still worth
+  fixing.** The weaker one is thread ordering, and it has to name BOTH routes: on the ordinary route
+  the poll thread runs both callbacks, so a generation's sweep completes before the assignment that
+  could register a replacement begins; on the CLOSE route the sweep runs on the *control* thread
+  instead (`PartitionStateManager.resetOffsetMapAndRemoveWork`'s javadoc owns that route, anchor
+  `The route left is the close sequence`, and calls it live in every commit mode), which is also
+  `addWorkContainer`'s thread. "Both callbacks are on the poll thread" is the half-statement, and it
+  was written that way here first. The stronger argument is structural and does not mention threads
+  at all: `resetOffsetMapAndRemoveWork` installs `RemovedPartitionState` before it calls in, so every
+  occupant reads stale and the staleness leg carries all of them - on the shipped path the new method
+  is behaviourally identical to the old by-key one, and the decline branch is defence for a caller
+  that sweeps before the swap. Nothing checks either argument. Same posture as `getWorkIfAvailable`'s
+  last-resort sweep above: the conditional form costs one reference comparison and rests on neither.
 
 ## Related issues
 

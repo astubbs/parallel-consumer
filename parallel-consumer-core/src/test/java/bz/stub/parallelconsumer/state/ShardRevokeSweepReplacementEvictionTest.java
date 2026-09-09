@@ -31,14 +31,27 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * nothing selects it and nothing completes it, and the commit high-water mark cannot pass it until the partition
  * is re-polled.
  * <p>
- * <b>Whether production reaches it, stated plainly.</b> Not today, and the discriminator is the thread: both
- * rebalance callbacks run on the broker-poll thread, so the revoke sweep for a generation completes before the
- * assignment that could register a replacement at one of its offsets even begins - the same single-poll-thread
- * argument astubbs#483 used for {@code addWorkContainer}'s displacement branch. That is an argument about
- * callers, and nothing checks it; the conditional form costs one reference comparison and does not rest on it,
- * which is exactly why astubbs#468 wrote {@code getWorkIfAvailable}'s last-resort sweep conditionally against a
- * race it had shown was unreachable there. These arms therefore drive the sweep directly rather than through a
- * rebalance, and say so.
+ * <b>Whether production reaches it, stated plainly. Not today, on TWO independent arguments</b>, and the second
+ * is the stronger one:
+ * <ol>
+ * <li><b>Thread ordering, on each of the two production routes.</b> On the ordinary route both rebalance
+ *     callbacks run on the broker-poll thread, so a generation's revoke sweep completes before the assignment
+ *     that could register a replacement at one of its offsets begins - the same single-poll-thread argument
+ *     astubbs#483 used for {@code addWorkContainer}'s displacement branch. On the CLOSE route the sweep runs on
+ *     the <em>control</em> thread instead ({@code maybeCloseConsumer}'s {@code onLeavePrepare} drives
+ *     {@code onPartitionsRevoked} into it - {@code PartitionStateManager.resetOffsetMapAndRemoveWork}'s javadoc
+ *     owns that route and calls it live in every commit mode), which is also
+ *     {@link ProcessingShard#addWorkContainer}'s thread, so the two still cannot interleave. Saying only "both
+ *     callbacks are on the poll thread" is wrong for that half, and was wrong here until 2026-09-09.</li>
+ * <li><b>The state is already {@code RemovedPartitionState} when the sweep runs</b>, so every occupant reads
+ *     stale and the staleness condition carries all of them. Structural rather than about threads;
+ *     {@link ProcessingShard#removeWorkForRevokedRecord} owns it.</li>
+ * </ol>
+ * Both are arguments about callers and nothing checks either. The conditional form costs one reference
+ * comparison and rests on neither, which is exactly why astubbs#468 wrote {@code getWorkIfAvailable}'s
+ * last-resort sweep conditionally against a race it had shown was unreachable there. These arms therefore drive
+ * the sweep at {@code PartitionState.onPartitionsRemoved} - one level below the state swap - so that the
+ * decline branch is reachable at all; a test driven through {@code PartitionStateManager} could not reach it.
  *
  * @author Antony Stubbs
  * @see ShardStaleSweepReplacementEvictionTest for the same defect at the stale sweep, with its production seam
@@ -146,6 +159,11 @@ class ShardRevokeSweepReplacementEvictionTest {
                 + "sweep is being asked about two stale containers and this arm proves nothing")
                 .that(fresh.getEpoch()).isEqualTo(currentEpoch());
 
+        // sampled BEFORE the sweep, because the decline branch must move neither
+        long populationBefore = sm.getRecordPopulation().getInSystem();
+        long awaitingSelectionBefore = sm.sumOfShardAvailableCounters();
+        boolean freshHeldItsClaim = fresh.isSelectionClaimed();
+
         revokeSweepForTheRevokedGeneration();
 
         // IDENTITY, never Truth's hasValue or containsExactly: the question is WHICH OBJECT survived, and
@@ -155,6 +173,21 @@ class ShardRevokeSweepReplacementEvictionTest {
                 + "partition is re-polled")
                 .that(shard.getWorkContainerAtOffset(CONTESTED_OFFSET).orElse(null))
                 .isSameInstanceAs(fresh);
+
+        // THE ACCOUNTING HALF OF THE DECLINE BRANCH. A decline is a new exit that must retire nothing and
+        // release nothing - and this class's recurring defect is a population deficit, which is permanent and
+        // silent (RecordPopulation has no clamp and nothing reconciles it against the shards). Nothing else here
+        // goes red if a later change turns the decline into retire(occupant): the offset assertion above is
+        // satisfied by a retire that leaves the container in the map.
+        assertWithMessage("the decline retired nothing - the map gave up nothing, so RecordPopulation must not "
+                + "move; a deficit here is permanent and makes the load gate over-fetch for the consumer's life")
+                .that(sm.getRecordPopulation().getInSystem()).isEqualTo(populationBefore);
+        assertWithMessage("the decline released no selection claim either - the container is still resident, so "
+                + "it still holds whatever claim it held")
+                .that(sm.sumOfShardAvailableCounters()).isEqualTo(awaitingSelectionBefore);
+        assertWithMessage("and the surviving container's own claim record is unchanged, read from the container "
+                + "rather than inferred from the counter")
+                .that(fresh.isSelectionClaimed()).isEqualTo(freshHeldItsClaim);
     }
 
     /**
@@ -196,9 +229,16 @@ class ShardRevokeSweepReplacementEvictionTest {
         shard.plantResident(staleButNotTheOneNamed);
         assertWithMessage("PRECONDITION: this container must be from a registration the sweep was NOT handed")
                 .that(staleButNotTheOneNamed.getCr()).isNotSameInstanceAs(revokedRecord);
+        assertWithMessage("PRECONDITION: and it must actually be STALE - asserted rather than left to the "
+                + "fixture's epoch, because staleness is the property this arm pins and a fixture change that "
+                + "made it live would turn the arm into a duplicate of the one above without going red")
+                .that(wm.checkIfWorkIsStale(staleButNotTheOneNamed)).isTrue();
 
         revokeSweepForTheRevokedGeneration();
 
-        assertThat(shard.getWorkContainerAtOffset(CONTESTED_OFFSET)).isEmpty();
+        assertWithMessage("a stale container holding an offset of a revoked partition is what this sweep "
+                + "exists to remove - declining on registration identity alone would leave it there against the "
+                + "next assignment's work")
+                .that(shard.getWorkContainerAtOffset(CONTESTED_OFFSET)).isEmpty();
     }
 }
