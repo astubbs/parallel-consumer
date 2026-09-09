@@ -468,9 +468,19 @@ ever measured on the runner that runs it, which is the same question
 [`test-no-progress-window-may-not-transfer-to-w1.md`](test-no-progress-window-may-not-transfer-to-w1.md)
 answered for `NO_PROGRESS` by measuring the distribution instead of the crossings.
 
-**Do not raise the timeout as the first move.** A cap crossed by a lane whose cost has drifted is
-evidence about the cost, and raising it deletes that evidence with nothing going red to say so - the
-lane entry's own "the fix is NOT a retry" paragraph, one layer along.
+**Owner ruling, 2026-09-09: the cap is raised to 60 minutes, and the cost question stays open.**
+`Lincheck` is a REQUIRED merge context, so a cap sitting inside the lane's own run-time distribution
+fails unrelated PRs at random - a false red, which this repo treats as worse than no signal at all,
+and it is not a price worth paying to keep a cost measurement in a place that reports it by breaking
+merges.
+
+**The evidence is not lost by raising it**, which is the objection this ruling has to answer. The
+durations above are recorded here, and `bin/inflight.mjs codecov slow` keeps this lane's wall clock
+per commit, so the drift stays readable without a required check going red to report it. **Why the
+lane got 2-3x slower is undiagnosed and stays open** - the first place its own matrix comment says to
+look is the machine-dependent stress hit rate two sections up, and the number nobody has is what this
+lane costs on the runner class that actually runs it. Whoever picks that up should read the drift
+from codecov rather than re-deriving it from job pages, which expire.
 
 ## Disproven, recorded so it is not re-raised
 

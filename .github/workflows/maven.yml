@@ -184,14 +184,27 @@ jobs:
           # layer along. If the probe stops firing, the lane is broken and must go red until it is fixed;
           # docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md owns why.
           #
-          # 7m42s measured on ubuntu-latest (about 2m50s locally), nearly all of it
+          # COST: 7m42s when this entry was written (about 2m50s locally), nearly all of it
           # WorkManagerLincheckTest, whose inverted arm cannot stop early and always pays its full
           # bound. bin/lincheck-test.sh's header owns the five flags that each fail silently on their
           # own.
+          #
+          # THE TIMEOUT IS 60, NOT SIZED TO THAT 7m42s, and deliberately so (owner ruling,
+          # 2026-09-09). Successful runs of this lane had drifted to 12m55s-19m58s by then and one
+          # crossed the old cap of 20 - and because Lincheck is a REQUIRED merge context, a cap
+          # inside the lane's own run-time distribution fails unrelated PRs at random, which is the
+          # false red this repo treats as worse than no signal. 60 is headroom, not a measurement.
+          #
+          # RAISING IT DOES NOT DELETE THE COST EVIDENCE, which is the usual objection and the reason
+          # this comment exists: the drifted durations are recorded in
+          # docs/inflight/test-lincheck-lane-open-items.md, and codecov keeps this lane's wall clock
+          # per commit (bin/inflight.mjs codecov slow), so the drift stays readable without a
+          # required check going red to report it. WHY the lane got 2-3x slower is still
+          # undiagnosed and still open in that note.
           - suite: lincheck
             name: "Lincheck"
             cmd: "bin/lincheck-test.sh"
-            timeout: 20
+            timeout: 60
             scenarios: ""
             shard: ""
 
