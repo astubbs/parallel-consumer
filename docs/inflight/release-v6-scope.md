@@ -645,6 +645,13 @@ Context worth inheriting on the day:
 - **`CHANGELOG.adoc`'s `== 0.6.0.0` section is working text until the tag** - it is regenerated from
   the commit log, so do not quote it as the release notes, and when agents work in parallel exactly
   one holds that file; it is the highest-collision file in the repo.
+- **The README's trademark wording claims nothing it does not have.** The 2026-08-11 branding
+  rename put "KAFKA ... has been licensed for use by Antony Stubbs and contributors" at the top of
+  the README and in the attribution section - the Foundation's boilerplate for a licence nobody
+  holds. astubbs#495 removes the top note and rewrites the attribution sentence as nominative use:
+  a registered mark of the Foundation, an independent library that works with Apache Kafka, no
+  affiliation and no endorsement. On the day: reread the attribution section against the
+  Foundation's third-party naming guidance, and confirm no "licensed" claim has crept back in.
 - **A dependency version in prose drifts silently.** The `3.9.1`/`3.9.2` mismatch came from a
   Dependabot group bump moving `kafka.version` after the note was written. Re-read the
   `=== Dependencies` section against `pom.xml` immediately before cutting, not weeks earlier.
