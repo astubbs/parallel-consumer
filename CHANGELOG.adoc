@@ -46,26 +46,6 @@ Known limitations below alongside what the test suite still cannot see.
 Every fix below was reproduced deterministically and shown to fail before the fix and pass after it; the
 write-up behind each is in the linked PR.
 
-=== The size of this release
-
-Measured from the `0.5.3.2` tag - upstream's last published release, October 2024 - to the commit this section was
-written at, with rename detection so the package move counts once. Nearly all of it is the fork's own work, from
-March 2026 on.
-
-* Pull requests merged on the fork: 263.
-* Main code (Java under `src/main`): 16,999 lines added and 6,882 removed across 139 files, 57 of them new.
-* Test code (Java under `src/test` and `src/test-integration`): 50,164 lines added and 4,957 removed across 336 files,
-  228 of them new - about three lines of test for every line of main code, which is where a stability release earns
-  its claim.
-* Beyond the Java: the documentation under `docs/`, and the gates, scripts and workflows under `bin/` and `.github/`
-  described under Build & CI, together larger than the Java change.
-
-// Regenerate at the tag. The figures above were taken on branch docs/v6-changelog-and-release-notes; rerun before
-// cutting and correct any that moved:
-//   gh pr list -R astubbs/parallel-consumer --state merged --limit 1000 --json number --jq length
-//   git diff --numstat -M50% 0.5.3.2..HEAD -- '*.java'   (split paths on src/main vs src/test, src/test-integration)
-//   git diff --name-status -M50% 0.5.3.2..HEAD -- '*.java' | awk '$1=="A"'   (new files, split the same way)
-
 === Breaking
 
 * *Coordinates and packages* (https://github.com/astubbs/parallel-consumer/pull/55[#55],
