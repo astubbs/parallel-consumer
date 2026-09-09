@@ -33,7 +33,7 @@ offset 0, so bootstrap expected offset 1 and truncated. The original reporter co
 the message stopped.
 
 **2. The `expected 0 from loaded commit data` form - a second defect, and the one this thread never
-got an answer for. Fixed in astubbs/parallel-consumer#PR.**
+got an answer for. Fixed in astubbs/parallel-consumer#494.**
 
 It was reported here on **0.5.2.7**, after the fix above shipped, with a broker CLI screenshot
 showing an empty `CURRENT-OFFSET` for exactly the partitions that warned. That screenshot is the

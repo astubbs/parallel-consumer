@@ -1249,7 +1249,7 @@ entries:
   - id: bug-546-bootstrap-truncation-warning
     group: rebalance-stability
     summary: The "Truncating state" warning on assignment - three defects behind one string, all three now settled here
-    fork: {branches: [fix/162-offset-reset-replay-branch, fix/162-absent-commit-data-warns], prs: [484], fork_issue: 162, status: in-progress}
+    fork: {branches: [fix/162-offset-reset-replay-branch, fix/162-absent-commit-data-warns], prs: [484, 494], fork_issue: 162, status: in-progress}
     upstream: {repo: confluentinc/parallel-consumer, issues: [546], prs: [563], related: [489, 545], status: open, last_checked: 2026-09-09}
     adoc_anchor: null
     notes: >
@@ -1259,8 +1259,7 @@ entries:
       OffsetRunLength and recorded in the changelog - but it does not close the issue,
       because users reported the same warning on 0.5.2.7 after it shipped, which is the
       most important fact in the upstream thread and is absent from the mirror body.
-      (2) That 0.5.2.7 report is the absent-commit-data case, fixed on branch
-      fix/162-absent-commit-data-warns:
+      (2) That 0.5.2.7 report is the absent-commit-data case, fixed by astubbs#494:
       PartitionState.maybeTruncateBelowOrAbove never asked whether commit data existed, so
       a partition with no committed offset computed an expectation of 0 and warned having
       pruned nothing. It now reports at INFO and takes no truncation branch, and the
