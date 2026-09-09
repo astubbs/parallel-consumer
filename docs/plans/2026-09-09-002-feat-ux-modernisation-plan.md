@@ -13,10 +13,10 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** A developer who once used Parallel Consumer and is deciding whether to come back can define a working consumer from the README alone: typed handling per topic, a retry limit, a dead-letter destination and filtering, in one screen of code, without opening the javadoc.
+- **Objective:** A developer who once used Parallel Consumer and is deciding whether to come back can define a working consumer from the README alone: typed handling per topic, a retry limit, a dead-letter destination and filtering, in one screen of code (the budget is forty lines), without opening the javadoc.
 - **Means:** A new, modern entry point that is a facade over today's engine, shipped beside the existing API as an equal. Its behaviours are specified as record outcomes so the engine can take each one over natively after the God-class decomposition, without the surface moving.
 - **Product authority:** This document, for the surface and its behaviours. The engine-native implementation of each outcome is separately planned work that must honour the behaviours fixed here. The Kafka Streams work (astubbs#255) and the language proxy (astubbs#242) are constraints on this surface, not scope.
-- **Open blockers:** None before planning. Every open item is classified under Outstanding Questions.
+- **Open blockers:** One, owner-only: the rejection bar for the per-record deserialisation copy (Outstanding Questions, Resolve Before Planning). Every other open item is deferred to planning.
 
 ---
 
@@ -36,7 +36,7 @@ The demand is recorded across the issue tracker and is the oldest open surface w
 
 - KD1. **The new door coexists with the old as an equal.** Both are documented; nothing is deprecated; the API-compatibility gate (astubbs#315) must pass unchanged for the old surface. (session-settled: user-directed - chosen over deprecating the old surface in favour of the new one: no forced migration for existing users.) Governs R20, R21.
 - KD2. **Facade first, engine second.** The new door ships as composition over today's primitives before any God-class cut lands; each behaviour is specified as an outcome so the engine can take it over later without the surface moving. (session-settled: user-directed - chosen over landing the outcome model in the engine first: the surface is the most user-facing change, it drives fixes the engine needs anyway, and the returning user should not wait for the decomposition.) Governs R7, R8, R9, R22, R23.
-- KD3. **One callback per route, everything else is data.** A route carries its types and one processing function; retry limit, backoff, dead-letter destination, ordering and concurrency are data on the instance. The processing function reports its outcome; retry-versus-terminal is never expressed as a list of exception classes. (session-settled: user-directed - chosen over Java-rich hooks such as predicate filters and exception-class retry lists: every callback is a function that must exist in each foreign client of the language proxy, and data crosses the wire for free.) Governs R3, R5, R6, R10, R18.
+- KD3. **One callback per route, everything else is data.** A route carries its types and one processing function; retry limit, backoff, dead-letter destination, ordering and concurrency are data on the instance. The processing function reports its outcome; retry-versus-terminal is never expressed as a list of exception classes. (session-settled: user-directed - chosen over Java-rich hooks such as predicate filters and exception-class retry lists: every callback is a function that must exist in each foreign client of the language proxy, and data crosses the wire for free.) Governs R3, R5, R6, R10, R16, R18.
 - KD4. **The feature ceiling is the reference surface.** The document addresses every capability the comparable library offers, and adds nothing beyond it. (session-settled: user-directed - chosen over a richer outcome vocabulary and extra hooks: "we do not need to go beyond what it offers".) Governs the Feature disposition section.
 - KD5. **The proxy mirroring decision is left open, and the surface is designed for both.** No construct in the new door may be one a wire contract could not carry. (session-settled: user-directed - chosen over committing the proxy clients to the modern surface now.) Governs R18.
 - KD6. **Capacity across topics is work-conserving fair share, not reservation.** Recorded from the owner on 2026-08-21 in `docs/inflight/next-multi-topic-multi-function.md`. (session-settled: user-directed - chosen over per-topic capacity reservation: an idle topic must not waste its share.) Governs R23.
@@ -44,7 +44,7 @@ The demand is recorded across the issue tracker and is the oldest open surface w
 
 - KD7. **The primary success signal is a returning-user trial.** (session-settled: user-directed - chosen over the README example, issue closure, or workaround deletion as the primary signal; those remain secondary.) Governs Success Criteria.
 - KD8. **Full parity in one document.** The four independently plannable outcomes (entry point and routes, terminal outcomes, per-topic types, lifecycle) are specified here together. (session-settled: user-directed - chosen over owning one area and naming the rest as follow-ons.)
-- KD9. **Deserialisation happens per route, inside the facade.** The new door consumes raw bytes and applies each route's deserialisers itself. A payload that cannot be read becomes a failed outcome for that one record rather than an error on the poll thread. Governs R4, R12.
+- KD9. **Deserialisation happens per route, inside the facade.** The new door consumes raw bytes and applies each route's deserialisers itself. A payload that cannot be read is a per-record failure (R12) rather than an error on the poll thread. Governs R4, R12.
 - KD10. **A dead-letter record travels the existing produce path.** Under the transactional commit mode it is in the same transaction as the offset commit; a failed dead-letter send leaves the record incomplete. Governs R13, R14, R15.
 - KD11. **Policy is per instance; a topic has exactly one route.** Two functions on one topic is not offered. Governs R2, R6.
 
@@ -75,40 +75,40 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 **Entry point and routes**
 
 - R1. A consumer is defined from connection properties and started to obtain a handle; the user constructs no Kafka client objects. Supplying pre-built clients remains possible through the old door only.
-- R2. A route binds one topic to one processing function; registering a second route for the same topic is refused at definition time.
+- R2. A route binds one topic, or under R5 a set of topics, to one processing function; registering a second route for a topic already routed is refused at definition time.
 - R3. A route declares its own key and value types for consumed records and, when it produces, separate key and value types for produced records.
-- R4. A route's deserialisers are applied per record inside the facade; the consumer itself is configured for raw bytes by the facade, never by the user.
+- R4. A route's deserialisers are applied per record inside the facade and, when the route declares produced types, its serialisers are applied to produced records before they reach the produce path; the consumer and the producer are both configured for raw bytes by the facade, never by the user. Deserialiser settings supplied in the connection properties are refused at definition time with a message naming the setting and the route that supersedes it; the remaining properties are passed to each route deserialiser's configuration.
 - R5. A set of topics that share one function and one type pair may be declared as a single route.
 - R6. Retry limit, retry delay, dead-letter destination, ordering mode and concurrency limit are declared once per instance and apply to every route; declaring any of them on a route is refused at definition time.
 
 **Outcomes and policy**
 
-- R7. Every record reaches exactly one terminal outcome: succeeded, filtered, dead-lettered, or exhausted with no destination; a retry is a step towards one of these, never an outcome of its own.
-- R8. The processing function reports filtered by returning without a result and without throwing; a filtered record completes and commits like a success and is counted separately.
+- R7. Every record reaches exactly one terminal outcome: succeeded, filtered, or dead-lettered; a retry is a step towards one of these, never an outcome of its own. A route that produces nothing reaches succeeded on a normal return.
+- R8. The processing function reports filtered by returning an explicit filtered outcome value; a normal return is success on every route, producing or not. A filtered record completes and commits like a success and is counted separately.
 - R9. The processing function reports retry by throwing; the existing retriable exception keeps its meaning; any other exception is also a retry. The distinction affects logging only.
-- R10. Retry stops after the configured limit, counted as attempts after the first; the default limit is unbounded so that the old door's behaviour is the default for a definition that sets nothing.
-- R11. On exhaustion, the record is dead-lettered when a destination is declared; when none is declared it is logged and left incomplete, which is today's behaviour, so that a returning user who declares nothing loses nothing.
-- R12. A payload a route cannot deserialise is a failed attempt for that record under R9 and R10; it never ends the poll thread.
+- R10. Retry stops after the declared limit, counted as attempts after the first. The limit must be declared, and an explicit unbounded value is one of the choices; a definition that declares neither is refused at definition time, so the old door's retry-forever behaviour is available on the new door only by asking for it. The count is per assignment: a rebalance, restart or crash resets it, so the limit bounds attempts within one assignment and a record may exceed it across assignments.
+- R11. A finite retry limit declared without a dead-letter destination is refused at definition time, because a record that can neither succeed nor go anywhere would hold its partition forever. On exhaustion the record is dead-lettered. Under partition ordering the partition does not advance while an exhausted record is incomplete.
+- R12. A payload a route cannot deserialise never ends the poll thread. The route's deserialisation step reports the failure as permanent or transient: a permanent failure reaches the dead-letter outcome of R11 immediately without consuming attempts; a transient one is a failed attempt under R9 and R10.
 
 **Dead-letter**
 
-- R13. A dead-letter record carries the original key bytes, value bytes and headers unchanged, plus provenance headers naming the source topic, partition, offset, timestamp, attempt count and the last failure's class and message.
-- R14. Under the transactional commit mode the dead-letter send is part of the transaction that commits the record's offset.
-- R15. A dead-letter send that fails leaves the record incomplete, so its offset is not committed and it is attempted again under R10; the instance does not stop.
-- R16. Exhaustion is observable once per record, after the last attempt, with the record, the last failure and the attempt count, as a Java-binding observer that is sugar over the outcome (KD3).
+- R13. A dead-letter record carries the original key bytes, value bytes and headers unchanged, plus provenance headers naming the source topic, partition, offset, timestamp, attempt count and the last failure's class and message. One instance-wide destination carries records from every route, so its consumer reads raw bytes and dispatches on the source-topic provenance header.
+- R14. Under the transactional commit mode the dead-letter send is part of the transaction that commits the record's offset. A dead-letter send that fails inside that transaction aborts it, so no offset in it commits and every record in it is re-attempted; in today's engine the instance then terminates, and the producer-recovery work (astubbs#225) is what would change that.
+- R15. Under the non-transactional commit modes, a dead-letter send that fails leaves the record incomplete with its attempt count kept; only the dead-letter send is re-attempted after the retry delay, never the user function, and the instance does not stop.
+- R16. Exhaustion is observable once per record, after the last attempt, with the record, the last failure and the attempt count, as a Java-binding observer that is sugar over the outcome (KD3); it ships in the first cut. When decoding failed the observer receives a raw envelope of the original bytes and headers; typed values are present only when decoding succeeded.
 
 **Lifecycle and observability**
 
-- R17. The handle exposes a bounded graceful shutdown that drains in-flight work, is usable with try-with-resources, and a blocking wait for shutdown; the existing drain and shutdown timeouts govern the bound.
-- R18. Every construct on the new door is either data a wire contract can carry or the one processing function per route; no second callback is required for correct operation, and any observer is optional sugar.
-- R19. Outcome counts (succeeded, filtered, dead-lettered, exhausted) are published through the existing metrics integration, tagged by topic.
+- R17. The handle exposes a bounded graceful shutdown that drains in-flight work, is usable with try-with-resources, and a blocking wait for shutdown. The handle's close drains, bounded by the drain timeout, with the shutdown timeout bounding the close that follows; this differs from the old door, whose plain close does not drain and is bounded by the shutdown timeout alone.
+- R18. Every construct on the new door is either data a wire contract can carry or the one processing function per route; no second callback is required for correct operation, and any observer is optional sugar. From the wire's point of view a route's deserialisation is part of that one function: bytes cross the wire and a foreign client decodes them inside its function, so the per-route deserialisers of R4 are Java-binding sugar composed into the function, not a second construct the contract carries.
+- R19. Outcome counts (succeeded, filtered, dead-lettered) are published through the existing metrics integration, tagged by topic.
 
 **Coexistence and sequencing**
 
 - R20. The old door's public surface is unchanged and the API-compatibility gate passes with no allowed-breakage entries added for this work.
-- R21. The README's first example uses the new door; the old door keeps its own documented section.
+- R21. The README's first example uses the new door; the old door keeps its own documented section; a migration section maps each of the three documented workarounds (own dead-letter topic plus swallow, switch on topic name inside one handler, consume raw bytes to deserialise by hand) to its one-line new-door replacement.
 - R22. The behaviours in R7 to R15 hold when the facade implements them over today's engine, and hold unchanged when the engine implements them natively; the same acceptance examples are the oracle for both.
-- R23. When more than one route has work and the instance is at its concurrency limit, capacity is shared between routes on a work-conserving basis (KD6); until the engine is topic-aware this is not enforced, and the document says so at the new door.
+- R23. When more than one route has work and the instance is at its concurrency limit, capacity is shared between routes on a work-conserving basis (KD6); until the engine is topic-aware this is not enforced, and the new door's documentation states what a user gets instead: capacity is shared per shard, so a topic's share follows its assigned partitions under partition and unordered modes and its active keys under key ordering, and a topic with more partitions or more active keys can dominate the limit.
 
 ### Key Flows
 
@@ -138,28 +138,30 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 
 ### Acceptance Examples
 
-- AE1. **Covers R10, R11.** Given a definition with no retry limit and no dead-letter destination, when a record's function always throws, then the record is retried indefinitely and no offset past it commits under partition ordering, exactly as the old door behaves.
+- AE1. **Covers R10, R11.** Given a definition declaring the explicit unbounded retry limit and no dead-letter destination, when a record's function always throws, then the record is retried indefinitely and no offset past it commits under partition ordering, exactly as the old door behaves.
 - AE2. **Covers R10, R11, R13.** Given a retry limit of two and a dead-letter destination, when a record's function throws three times, then the fourth attempt does not occur, the dead-letter topic holds one record with the original bytes and headers plus provenance headers reporting three attempts, and the source offset commits.
-- AE3. **Covers R14.** Given the transactional commit mode and AE2's definition, when a consumer reads the dead-letter topic with read-committed isolation, then the dead-letter record becomes visible only together with the committed source offset.
-- AE4. **Covers R15.** Given a dead-letter destination that is unreachable, when a record exhausts its retries, then the record remains incomplete, its offset does not commit, the instance keeps processing other records, and the record is attempted again after the retry delay.
-- AE5. **Covers R8, R19.** Given a route whose function returns no result for records with a missing field, when a thousand records are consumed of which a hundred lack the field, then the succeeded count is nine hundred, the filtered count is one hundred, all offsets commit, and nothing is produced for the hundred.
-- AE6. **Covers R4, R12.** Given two routes on two topics, when one topic carries a payload the route's deserialiser rejects, then that record follows AE2 with the deserialisation error as its failure, the other topic's records are unaffected, and the poll thread is alive throughout.
-- AE7. **Covers R2, R6.** Given a definition that registers a second route for a topic already routed, or sets a retry limit on a route, when the definition is built, then it is refused with a message naming the topic or the instance-level setting, before any connection is opened.
+- AE3. **Covers R14.** Given the transactional commit mode and AE2's definition, when a consumer reads the dead-letter topic with read-committed isolation and the source consumer group's committed offset is observed separately, then the dead-letter record becomes visible only together with that committed source offset; and when the dead-letter send fails after the record was produced but before the offset committed, then no source offset for it is committed and no dead-letter record becomes visible.
+- AE4. **Covers R15.** Given a non-transactional commit mode and a dead-letter destination that is unreachable, when a record exhausts its retries, then the record remains incomplete, its offset does not commit, its attempt count is unchanged, the user function is not run again, the instance keeps processing other records, and the dead-letter send is re-attempted after the retry delay.
+- AE5. **Covers R8, R19.** Given a route whose function returns the filtered outcome for records with a missing field, when a thousand records are consumed of which a hundred lack the field, then the succeeded count is nine hundred, the filtered count is one hundred, all offsets commit, and nothing is produced for the hundred.
+- AE6. **Covers R4, R12.** Given two routes on two topics, when one topic carries a payload the route's deserialiser rejects, then that record, reported permanent by the deserialiser, is dead-lettered without consuming attempts, with the deserialisation error as its failure and the original bytes preserved, while a failure the deserialiser reports transient follows AE2; the other topic's records are unaffected, and the poll thread is alive throughout.
+- AE7. **Covers R2, R4, R6, R10, R11.** Given a definition that registers a second route for a topic already routed, sets a retry limit on a route, supplies deserialiser settings in the connection properties, declares a finite retry limit without a dead-letter destination, or declares neither a retry limit nor the explicit unbounded value, when the definition is built, then it is refused with a message naming the offending topic or setting, before any connection is opened.
 - AE8. **Covers R3.** Given a route consuming string keys and JSON-typed values that produces long keys and Avro-typed values, when the function returns produced records, then they are typed by the route's produced types and the compiler accepts the definition without casts.
 - AE9. **Covers R17.** Given a running handle inside try-with-resources, when the block exits with work in flight, then in-flight work drains up to the configured drain timeout before the consumer closes, and offsets for drained work commit.
 - AE10. **Covers R20.** Given the old door's public surface before this work, when the API-compatibility gate runs after it, then the gate passes with no new allowed-breakage entry.
 - AE11. **Covers R22.** Given AE1 to AE9 passing against the facade, when the engine implements dead-letter natively behind the same definition, then AE1 to AE9 pass unchanged.
+- AE12. **Covers R16.** Given an exhaustion observer registered, when a record exhausts its retries and is dead-lettered, then the observer is invoked exactly once with that record, the last failure and the attempt count, after the last attempt and before the record's offset commits; and when the record's decoding had failed, the observer's record is the raw envelope of the original bytes and headers.
+- AE13. **Covers the one-screen objective.** Given the README's first example, a two-route definition with JSON and Avro values, a retry limit and a dead-letter destination, when it is compiled in CI, then it compiles and its definition fits within the forty-line budget named in the Goal Capsule.
 
 ### Success Criteria
 
-- A returning user, or a reviewer standing in for one, builds a working consumer with a route per topic, a retry limit and a dead-letter destination from the README alone, without opening the javadoc. Primary (KD7).
+- A returning user, or a stand-in who has not read the new door's README or its API, builds a working consumer with two routes of different value types, a retry limit and a dead-letter destination from the README alone, without opening the javadoc, within the one-screen budget in the Goal Capsule. Every failure they hit is recorded whether or not they succeed; the criterion is met when their definition compiles and runs on the first attempt. Primary (KD7).
 - The README's first example is the new door and is compiled in CI so it cannot drift.
 - Each of the three documented workarounds has a one-line first-class replacement shown in a migration section of the README.
-- Each issue in the cluster (astubbs#243, astubbs#254, astubbs#239, astubbs#149, astubbs#163, astubbs#189) is either closed by the shipped surface or reduced to a named residual on the issue.
+- Each issue in the cluster (astubbs#243, astubbs#254, astubbs#239, astubbs#149, astubbs#163, astubbs#153, astubbs#189) is either closed by the shipped surface or reduced to a named residual on the issue.
 
 ### Feature disposition against the reference surface
 
-Every capability the comparable library offers is listed with its disposition here (KD4). "In scope" means this plan specifies it; "Deferred" means it fits the door and is wanted later; "Excluded" means it contradicts what this library is.
+Every capability the comparable library offers is listed with its disposition here (KD4). The survey was taken on 2026-09-09; its inventory is held outside the repository by owner decision, so this table is the authoritative copy and a later reader re-checks it against the library, not against a citation. "In scope" means this plan specifies it; "Deferred" means it fits the door and is wanted later; "Excluded" means it contradicts what this library is; "Not this plan" means the capability belongs to separately tracked work that is orthogonal to the door.
 
 | Capability | Disposition | Reason |
 |---|---|---|
@@ -176,11 +178,12 @@ Every capability the comparable library offers is listed with its disposition he
 | Exhaustion observer, once per record | In scope (R16) | As Java-binding sugar over the outcome |
 | Ordering modes: unordered, key, partition | In scope (R6) | Already exist; the door maps to them; a "sequential" mode is partition ordering with concurrency one |
 | Concurrency limit | In scope (R6) | Exists |
+| Work-conserving fair share of capacity across topics | In scope (R23), not enforced until the engine is topic-aware | KD6 |
 | Back-pressure with pause and resume | In scope, unchanged | Exists in the engine; the door exposes the existing settings |
 | Handle: bounded graceful shutdown, try-with-resources, await | In scope (R17) | The existing close modes, given the idiom |
 | Outcome counters by topic | In scope (R19) | Falls out of the outcome vocabulary |
 | Produce results to another topic | In scope (R3) | The existing produce path, with separate output types |
-| Poll timeout setting | In scope, unchanged | Exists |
+| Poll timeout setting | In scope, needs a new instance-level setting | The long poll is hard-coded at two seconds today; no user-facing option exists on either door |
 | Health snapshot on the handle | Deferred | astubbs#226 is the health surface; the door adopts it when it lands |
 | Per-key queue-depth diagnostics | Deferred | Belongs to the observability track and its GUI |
 | Circuit breaker | Deferred | A declarative form of pause driven by observed failure rate; the primitives exist and the README shows the DIY composition |
@@ -202,9 +205,13 @@ Every capability the comparable library offers is listed with its disposition he
 
 - Everything marked Deferred in the disposition table.
 - A stop-the-instance outcome (astubbs#172) and scheduled retry (astubbs#234): above the ceiling (KD4).
-- Per-route policy (retry, ordering, concurrency per topic): refused for now (R6); the next issue after per-topic functions, and the multi-topic note keeps it.
+- Per-route policy (retry, ordering, concurrency, dead-letter destination per topic): refused for now (R6); the next issue after per-topic functions, and the multi-topic note keeps it.
 - Cross-topic key identity (astubbs#150) and topic priority (astubbs#236): stay with the multi-topic note.
 - Engine-native implementation of each outcome and topic-aware fair share (R23): after the God-class decomposition.
+
+**Tracked elsewhere**
+
+- Everything marked Not this plan in the disposition table: virtual threads per record (astubbs#360), and build-time module descriptors with a bill of materials.
 
 **Outside this work's identity**
 
@@ -216,24 +223,23 @@ Every capability the comparable library offers is listed with its disposition he
 
 - The facade can implement dead-letter, filter and retry limit over today's public primitives: the produce-many path for the dead-letter send, the attempt count the record context already exposes, and success-on-return for filter. Confirmed against the code on 2026-09-09.
 - The API-compatibility gate (astubbs#315) is the mechanism that proves R20; if it has not merged when this ships, R20 is proved by its check run on the branch.
-- Consuming raw bytes on the new door and deserialising per route costs one extra copy per record relative to a typed consumer; accepted for the door's benefit, to be measured in planning.
+- Consuming raw bytes on the new door and deserialising per route costs one extra copy per record relative to a typed consumer; accepted provisionally, with the measurement and the bar above which the design is revisited as a Resolve Before Planning item.
 - The transactional commit mode's produce path is atomic with the offset commit, as the battle-test plan proved; R14 rests on it.
 
 ### Outstanding Questions
 
 **Resolve Before Planning**
 
-- None.
+- The rejection bar for the extra deserialisation copy (Dependencies): the per-record throughput or latency regression, measured at zero processing time against the old door, above which the raw-bytes design is revisited. Only the owner can set the number; until it is set, planning may not treat the copy as accepted.
 
 **Deferred to Planning**
 
 - Whether the new door is a new module or a package in the core module, and its name.
 - The exact chain syntax and the handle's method names; a compiled README example is the arbiter, and a cheap sketch settles it.
 - How the facade multiplexes routes into the engine's single function, and how it recovers the route for a record under a pattern subscription; a pattern subscription needs either a default route or a definition-time refusal.
-- Whether the exhaustion observer (R16) is offered at all in the first cut, given it is sugar.
-- Metric names and tags for R19, consistent with the existing metrics.
+- Metric names and tags for R19, consistent with the existing metrics, and whether the outcome counters extend the existing processed and failed record meters or sit beside them.
 - Whether the health surface (astubbs#226) has landed, and how the handle adopts it.
-- The measured cost of the extra deserialisation copy (Dependencies).
+- Which connection properties the facade owns outright and which pass through to route deserialisers, such as schema-registry settings.
 
 ### Sources / Research
 
@@ -242,7 +248,7 @@ Every capability the comparable library offers is listed with its disposition he
 - `docs/inflight/core-decompose-abstract-parallel-eos-stream-processor.md` - the cut order and the PRs to merge first; why engine-native outcomes wait.
 - `docs/inflight/branch-ks-streams-workstream.md` - the Streams door and its status.
 - `docs/inflight/core-work-identity-model.md` - the disposition vocabulary this document narrows to the ceiling.
-- Issues: astubbs#243, astubbs#254, astubbs#239, astubbs#149, astubbs#231, astubbs#163, astubbs#153, astubbs#172, astubbs#189, astubbs#185, astubbs#255, astubbs#242, astubbs#226, astubbs#315, astubbs#360.
+- Issues: astubbs#243, astubbs#254, astubbs#239, astubbs#149, astubbs#231, astubbs#163, astubbs#153, astubbs#172, astubbs#189, astubbs#255, astubbs#242, astubbs#226, astubbs#315, astubbs#360.
 - The README anchors `skipping-records` and the circuit-breaker section, for today's documented behaviour and the DIY composition.
 <!-- file-refs: N/A - the four docs/inflight and docs/plans sources above live on unmerged branches; print them with bin/inflight.mjs docs show, which searches every ref -->
 

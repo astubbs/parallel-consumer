@@ -50,9 +50,9 @@ ordering and concurrency belongs to the instance and applies to every route on i
 most one route.
 
 **Record outcome**
-The terminal disposition of one record: succeeded, filtered (completed without a result and without
-error), dead-lettered (retries exhausted and the record sent to the declared destination), or
-exhausted with nowhere to go. Retry is not an outcome but a step towards one. The vocabulary is
+The terminal disposition of one record: succeeded, filtered (the processing function chose to drop
+it, and it commits like a success), or dead-lettered (retries exhausted and the record sent to the
+declared destination). Retry is not an outcome but a step towards one. The vocabulary is
 shared by the user-facing definition and the engine, so a behaviour first implemented above the
 engine can later be implemented inside it without changing what the user sees.
 
