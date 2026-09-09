@@ -33,9 +33,10 @@ completed. New questions arrive faster than old ones close.
   [`core-hasten-adjacent-systems-register.md`](core-hasten-adjacent-systems-register.md) owns the
   result. **What it leaves open is a benchmark, not a search:** its README claims 6.6x and 41x
   Parallel Consumer's throughput, measured against upstream 0.5.3.3 pinned at a hundred workers.
-  *Settles:* whether the gap is the worker-pool configuration or the engine - rerun its own JMH
-  harness with `maxConcurrency` raised to match the per-record work, and against the fork's
-  artifact. Do not answer the claim in public before it runs.
+  *Settled 2026-09-09, the configuration:* rerun at 2000 workers, PC wins both orderings at 10 ms
+  and key-ordered at 100 ms; [`../plans/2026-09-09-001-investigate-kpipe-benchmark-rerun.md`](../plans/2026-09-09-001-investigate-kpipe-benchmark-rerun.md)
+  owns it. **Still open:** the same run against the fork's artifact, and the sweep above 2000
+  workers to find PC's own ceiling on that box.
 - **The systems uForwarder never mentions**, which is its own signal: SQS, RabbitMQ, Pulsar shared
   subscriptions, and Parallel Consumer itself. *Settles:* whether the queue-semantics-over-a-log
   family has an answer nobody in this space cites - Pulsar shared subscriptions especially, since

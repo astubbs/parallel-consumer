@@ -288,10 +288,15 @@ upstream artifact, not this fork - so the headline measures a hundred-thread poo
 virtual threads and lands exactly at `workers ÷ work-time`. **That is a configuration ceiling, not an
 engine one**, and its own captures record the costs: about 1.7 KB allocated per record against
 about 35 B for Parallel Consumer, and `KEY_ORDERED` losing to Parallel Consumer's `KEY` mode on one
-of its two machines at sub-millisecond work. Nothing here has run it. A rerun with Parallel
-Consumer's concurrency raised to match, and against the fork's artifact, is the cheapest public
-claim in this register to settle, and
-[`process-prior-art-research-targets.md`](process-prior-art-research-targets.md) queues it.
+of its two machines at sub-millisecond work.
+
+**MEASURED 2026-09-09, and the headline is the setting.** Its own harness, rerun here with the
+constant at 2000, gives Parallel Consumer 0.5.3.3 **1.7x KPipe unordered and 1.6x key-ordered at
+10 ms**, and at 100 ms puts PC at 91 percent of its new configured ceiling with KPipe 2.6x ahead
+unordered and **0.56x behind key-ordered**. The 100-worker control reproduced KPipe's published
+numbers within 15 percent. Method, table and raw JMH output:
+[`../plans/2026-09-09-001-investigate-kpipe-benchmark-rerun.md`](../plans/2026-09-09-001-investigate-kpipe-benchmark-rerun.md).
+Not run: the fork's artifact, and anything above 2000 workers.
 
 **It also carries a proof of at-least-once worth reading beside this repo's chaos suite**: 21
 jcstress classes (being ported to Fray as of 2026-09-08), jqwik property suites over the offset

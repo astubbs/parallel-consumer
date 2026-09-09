@@ -1,0 +1,524 @@
+[
+    {
+        "jmhVersion" : "1.36",
+        "benchmark" : "io.github.eschizoid.kpipe.benchmarks.ParallelProcessingBenchmark.confluent",
+        "mode" : "thrpt",
+        "threads" : 1,
+        "forks" : 2,
+        "jvm" : "/home/astubbs/.local/share/mise/installs/java/graalvm-community-25.0.2/bin/java",
+        "jvmArgs" : [
+            "-XX:ThreadPriorityPolicy=1",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+EnableJVMCIProduct",
+            "-XX:+EnableJVMCI",
+            "-XX:-UnlockExperimentalVMOptions",
+            "-XX:MaxRAM=48g",
+            "-XX:MaxRAMPercentage=20",
+            "-XX:ActiveProcessorCount=8"
+        ],
+        "jdkVersion" : "25.0.2",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "25.0.2+10-jvmci-b01",
+        "warmupIterations" : 2,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 3,
+        "measurementTime" : "10 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "workMicros" : "10000"
+        },
+        "primaryMetric" : {
+            "score" : 101349.1583279025,
+            "scoreError" : 3332.5042676449134,
+            "scoreConfidence" : [
+                98016.6540602576,
+                104681.66259554742
+            ],
+            "scorePercentiles" : {
+                "0.0" : 99167.45820842632,
+                "50.0" : 101457.07878090307,
+                "90.0" : 102717.83534405979,
+                "95.0" : 102717.83534405979,
+                "99.0" : 102717.83534405979,
+                "99.9" : 102717.83534405979,
+                "99.99" : 102717.83534405979,
+                "99.999" : 102717.83534405979,
+                "99.9999" : 102717.83534405979,
+                "100.0" : 102717.83534405979
+            },
+            "scoreUnit" : "ops/s",
+            "rawData" : [
+                [
+                    101468.14078374802,
+                    101446.01677805811,
+                    101311.17397521237
+                ],
+                [
+                    99167.45820842632,
+                    101984.32487791046,
+                    102717.83534405979
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.36",
+        "benchmark" : "io.github.eschizoid.kpipe.benchmarks.ParallelProcessingBenchmark.confluent",
+        "mode" : "thrpt",
+        "threads" : 1,
+        "forks" : 2,
+        "jvm" : "/home/astubbs/.local/share/mise/installs/java/graalvm-community-25.0.2/bin/java",
+        "jvmArgs" : [
+            "-XX:ThreadPriorityPolicy=1",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+EnableJVMCIProduct",
+            "-XX:+EnableJVMCI",
+            "-XX:-UnlockExperimentalVMOptions",
+            "-XX:MaxRAM=48g",
+            "-XX:MaxRAMPercentage=20",
+            "-XX:ActiveProcessorCount=8"
+        ],
+        "jdkVersion" : "25.0.2",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "25.0.2+10-jvmci-b01",
+        "warmupIterations" : 2,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 3,
+        "measurementTime" : "10 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "workMicros" : "100000"
+        },
+        "primaryMetric" : {
+            "score" : 18268.97084088688,
+            "scoreError" : 62.77651482804406,
+            "scoreConfidence" : [
+                18206.194326058834,
+                18331.747355714924
+            ],
+            "scorePercentiles" : {
+                "0.0" : 18243.030536903007,
+                "50.0" : 18263.36631767045,
+                "90.0" : 18298.68095103862,
+                "95.0" : 18298.68095103862,
+                "99.0" : 18298.68095103862,
+                "99.9" : 18298.68095103862,
+                "99.99" : 18298.68095103862,
+                "99.999" : 18298.68095103862,
+                "99.9999" : 18298.68095103862,
+                "100.0" : 18298.68095103862
+            },
+            "scoreUnit" : "ops/s",
+            "rawData" : [
+                [
+                    18243.030536903007,
+                    18251.96317315846,
+                    18263.86654565246
+                ],
+                [
+                    18298.68095103862,
+                    18262.866089688443,
+                    18293.41774888029
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.36",
+        "benchmark" : "io.github.eschizoid.kpipe.benchmarks.ParallelProcessingBenchmark.confluentKey",
+        "mode" : "thrpt",
+        "threads" : 1,
+        "forks" : 2,
+        "jvm" : "/home/astubbs/.local/share/mise/installs/java/graalvm-community-25.0.2/bin/java",
+        "jvmArgs" : [
+            "-XX:ThreadPriorityPolicy=1",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+EnableJVMCIProduct",
+            "-XX:+EnableJVMCI",
+            "-XX:-UnlockExperimentalVMOptions",
+            "-XX:MaxRAM=48g",
+            "-XX:MaxRAMPercentage=20",
+            "-XX:ActiveProcessorCount=8"
+        ],
+        "jdkVersion" : "25.0.2",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "25.0.2+10-jvmci-b01",
+        "warmupIterations" : 2,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 3,
+        "measurementTime" : "10 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "workMicros" : "10000"
+        },
+        "primaryMetric" : {
+            "score" : 61088.49163534628,
+            "scoreError" : 708.378222942166,
+            "scoreConfidence" : [
+                60380.11341240412,
+                61796.869858288446
+            ],
+            "scorePercentiles" : {
+                "0.0" : 60841.874322850395,
+                "50.0" : 61032.82478806746,
+                "90.0" : 61448.5137561166,
+                "95.0" : 61448.5137561166,
+                "99.0" : 61448.5137561166,
+                "99.9" : 61448.5137561166,
+                "99.99" : 61448.5137561166,
+                "99.999" : 61448.5137561166,
+                "99.9999" : 61448.5137561166,
+                "100.0" : 61448.5137561166
+            },
+            "scoreUnit" : "ops/s",
+            "rawData" : [
+                [
+                    60875.35780412289,
+                    60841.874322850395,
+                    60905.42129389484
+                ],
+                [
+                    61160.22828224009,
+                    61448.5137561166,
+                    61299.55435285285
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.36",
+        "benchmark" : "io.github.eschizoid.kpipe.benchmarks.ParallelProcessingBenchmark.confluentKey",
+        "mode" : "thrpt",
+        "threads" : 1,
+        "forks" : 2,
+        "jvm" : "/home/astubbs/.local/share/mise/installs/java/graalvm-community-25.0.2/bin/java",
+        "jvmArgs" : [
+            "-XX:ThreadPriorityPolicy=1",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+EnableJVMCIProduct",
+            "-XX:+EnableJVMCI",
+            "-XX:-UnlockExperimentalVMOptions",
+            "-XX:MaxRAM=48g",
+            "-XX:MaxRAMPercentage=20",
+            "-XX:ActiveProcessorCount=8"
+        ],
+        "jdkVersion" : "25.0.2",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "25.0.2+10-jvmci-b01",
+        "warmupIterations" : 2,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 3,
+        "measurementTime" : "10 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "workMicros" : "100000"
+        },
+        "primaryMetric" : {
+            "score" : 9585.497879201905,
+            "scoreError" : 19.25622649642511,
+            "scoreConfidence" : [
+                9566.24165270548,
+                9604.75410569833
+            ],
+            "scorePercentiles" : {
+                "0.0" : 9576.415513077696,
+                "50.0" : 9584.083657355834,
+                "90.0" : 9594.856726637905,
+                "95.0" : 9594.856726637905,
+                "99.0" : 9594.856726637905,
+                "99.9" : 9594.856726637905,
+                "99.99" : 9594.856726637905,
+                "99.999" : 9594.856726637905,
+                "99.9999" : 9594.856726637905,
+                "100.0" : 9594.856726637905
+            },
+            "scoreUnit" : "ops/s",
+            "rawData" : [
+                [
+                    9576.415513077696,
+                    9582.140710475722,
+                    9586.026604235947
+                ],
+                [
+                    9581.729476062133,
+                    9594.856726637905,
+                    9591.818244722024
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.36",
+        "benchmark" : "io.github.eschizoid.kpipe.benchmarks.ParallelProcessingBenchmark.kpipe",
+        "mode" : "thrpt",
+        "threads" : 1,
+        "forks" : 2,
+        "jvm" : "/home/astubbs/.local/share/mise/installs/java/graalvm-community-25.0.2/bin/java",
+        "jvmArgs" : [
+            "-XX:ThreadPriorityPolicy=1",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+EnableJVMCIProduct",
+            "-XX:+EnableJVMCI",
+            "-XX:-UnlockExperimentalVMOptions",
+            "-XX:MaxRAM=48g",
+            "-XX:MaxRAMPercentage=20",
+            "-XX:ActiveProcessorCount=8"
+        ],
+        "jdkVersion" : "25.0.2",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "25.0.2+10-jvmci-b01",
+        "warmupIterations" : 2,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 3,
+        "measurementTime" : "10 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "workMicros" : "10000"
+        },
+        "primaryMetric" : {
+            "score" : 58388.5830189583,
+            "scoreError" : 382.76993826911456,
+            "scoreConfidence" : [
+                58005.813080689186,
+                58771.35295722741
+            ],
+            "scorePercentiles" : {
+                "0.0" : 58216.528421062125,
+                "50.0" : 58354.12875400584,
+                "90.0" : 58597.69391196227,
+                "95.0" : 58597.69391196227,
+                "99.0" : 58597.69391196227,
+                "99.9" : 58597.69391196227,
+                "99.99" : 58597.69391196227,
+                "99.999" : 58597.69391196227,
+                "99.9999" : 58597.69391196227,
+                "100.0" : 58597.69391196227
+            },
+            "scoreUnit" : "ops/s",
+            "rawData" : [
+                [
+                    58320.09187841435,
+                    58388.16562959734,
+                    58490.04232371579
+                ],
+                [
+                    58216.528421062125,
+                    58318.975948997926,
+                    58597.69391196227
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.36",
+        "benchmark" : "io.github.eschizoid.kpipe.benchmarks.ParallelProcessingBenchmark.kpipe",
+        "mode" : "thrpt",
+        "threads" : 1,
+        "forks" : 2,
+        "jvm" : "/home/astubbs/.local/share/mise/installs/java/graalvm-community-25.0.2/bin/java",
+        "jvmArgs" : [
+            "-XX:ThreadPriorityPolicy=1",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+EnableJVMCIProduct",
+            "-XX:+EnableJVMCI",
+            "-XX:-UnlockExperimentalVMOptions",
+            "-XX:MaxRAM=48g",
+            "-XX:MaxRAMPercentage=20",
+            "-XX:ActiveProcessorCount=8"
+        ],
+        "jdkVersion" : "25.0.2",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "25.0.2+10-jvmci-b01",
+        "warmupIterations" : 2,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 3,
+        "measurementTime" : "10 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "workMicros" : "100000"
+        },
+        "primaryMetric" : {
+            "score" : 47881.318474795924,
+            "scoreError" : 1279.7770841395354,
+            "scoreConfidence" : [
+                46601.54139065639,
+                49161.095558935456
+            ],
+            "scorePercentiles" : {
+                "0.0" : 47260.87528572604,
+                "50.0" : 48062.63053947156,
+                "90.0" : 48338.764606906596,
+                "95.0" : 48338.764606906596,
+                "99.0" : 48338.764606906596,
+                "99.9" : 48338.764606906596,
+                "99.99" : 48338.764606906596,
+                "99.999" : 48338.764606906596,
+                "99.9999" : 48338.764606906596,
+                "100.0" : 48338.764606906596
+            },
+            "scoreUnit" : "ops/s",
+            "rawData" : [
+                [
+                    48001.833414492125,
+                    48123.427664451,
+                    47260.87528572604
+                ],
+                [
+                    47360.70544351487,
+                    48202.30443368495,
+                    48338.764606906596
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.36",
+        "benchmark" : "io.github.eschizoid.kpipe.benchmarks.ParallelProcessingBenchmark.kpipeKeyOrdered",
+        "mode" : "thrpt",
+        "threads" : 1,
+        "forks" : 2,
+        "jvm" : "/home/astubbs/.local/share/mise/installs/java/graalvm-community-25.0.2/bin/java",
+        "jvmArgs" : [
+            "-XX:ThreadPriorityPolicy=1",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+EnableJVMCIProduct",
+            "-XX:+EnableJVMCI",
+            "-XX:-UnlockExperimentalVMOptions",
+            "-XX:MaxRAM=48g",
+            "-XX:MaxRAMPercentage=20",
+            "-XX:ActiveProcessorCount=8"
+        ],
+        "jdkVersion" : "25.0.2",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "25.0.2+10-jvmci-b01",
+        "warmupIterations" : 2,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 3,
+        "measurementTime" : "10 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "workMicros" : "10000"
+        },
+        "primaryMetric" : {
+            "score" : 37437.964986652696,
+            "scoreError" : 114.49823670937893,
+            "scoreConfidence" : [
+                37323.46674994332,
+                37552.46322336207
+            ],
+            "scorePercentiles" : {
+                "0.0" : 37383.928912741416,
+                "50.0" : 37452.974269541955,
+                "90.0" : 37483.3117668283,
+                "95.0" : 37483.3117668283,
+                "99.0" : 37483.3117668283,
+                "99.9" : 37483.3117668283,
+                "99.99" : 37483.3117668283,
+                "99.999" : 37483.3117668283,
+                "99.9999" : 37483.3117668283,
+                "100.0" : 37483.3117668283
+            },
+            "scoreUnit" : "ops/s",
+            "rawData" : [
+                [
+                    37390.773565784606,
+                    37455.548961582586,
+                    37463.82713547798
+                ],
+                [
+                    37383.928912741416,
+                    37450.39957750132,
+                    37483.3117668283
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.36",
+        "benchmark" : "io.github.eschizoid.kpipe.benchmarks.ParallelProcessingBenchmark.kpipeKeyOrdered",
+        "mode" : "thrpt",
+        "threads" : 1,
+        "forks" : 2,
+        "jvm" : "/home/astubbs/.local/share/mise/installs/java/graalvm-community-25.0.2/bin/java",
+        "jvmArgs" : [
+            "-XX:ThreadPriorityPolicy=1",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+EnableJVMCIProduct",
+            "-XX:+EnableJVMCI",
+            "-XX:-UnlockExperimentalVMOptions",
+            "-XX:MaxRAM=48g",
+            "-XX:MaxRAMPercentage=20",
+            "-XX:ActiveProcessorCount=8"
+        ],
+        "jdkVersion" : "25.0.2",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "25.0.2+10-jvmci-b01",
+        "warmupIterations" : 2,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 3,
+        "measurementTime" : "10 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "workMicros" : "100000"
+        },
+        "primaryMetric" : {
+            "score" : 5402.688537817212,
+            "scoreError" : 6.344198177407551,
+            "scoreConfidence" : [
+                5396.344339639804,
+                5409.0327359946195
+            ],
+            "scorePercentiles" : {
+                "0.0" : 5399.402119754172,
+                "50.0" : 5402.529758895062,
+                "90.0" : 5405.124240776142,
+                "95.0" : 5405.124240776142,
+                "99.0" : 5405.124240776142,
+                "99.9" : 5405.124240776142,
+                "99.99" : 5405.124240776142,
+                "99.999" : 5405.124240776142,
+                "99.9999" : 5405.124240776142,
+                "100.0" : 5405.124240776142
+            },
+            "scoreUnit" : "ops/s",
+            "rawData" : [
+                [
+                    5399.402119754172,
+                    5401.435039995502,
+                    5405.110308587334
+                ],
+                [
+                    5401.701364760786,
+                    5403.358153029338,
+                    5405.124240776142
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    }
+]
+
+
