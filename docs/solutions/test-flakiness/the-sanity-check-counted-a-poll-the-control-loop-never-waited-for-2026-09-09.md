@@ -122,10 +122,36 @@ again on 2026-09-09:
   replaced its cycle count with `awaitUntilTrue(gotK0::get)` plus `awaitForCommit(1)`; its comment
   records the reasoning.
 - `inFlightMessagesCommittedIfProcessedDuringShutdown` - **still had `awaitForSomeLoopCycles(2)`
-  standing in for "the record is in flight"**, and was caught red by the campaign above. Fixed with
-  the same shape; see the register and the commit that did it.
+  standing in for "the record is in flight"**, and was caught red by the campaign above:
+  `assertCommits` saw `[]`, because `close()` had no in-flight work to complete. Now waits on the
+  user function actually being entered. Matched-pair on the class under heavy load, the fix as the
+  only difference: red twice in fourteen runs on the unfixed arm, none in fourteen on the fixed one
+  - a small n, so the fix rests on the mechanism and on the sabotage below rather than on that
+  count.
 - `executorThreadsInterruptedOnShutdownTimeout` - reviewed and left alone; its wait is on the latch
   the user function holds, not on a cycle count.
+
+## The sabotage that took four attempts, and why that is the interesting part
+
+`docs/testing-at-write-time.md` requires breaking the behaviour and watching the test fail before
+trusting a changed test. For `inFlightMessagesCommittedIfProcessedDuringShutdown` that took four
+main-code mutations, and **the first three left it green** - which, taken at face value, reads as
+"this test asserts nothing about committing". It does not. The mutations had not reached the commit:
+
+1. `closeDrainFirst()` switched to `DONT_DRAIN` - never ran. The test calls `close()`, which *is*
+   `closeDontDrainFirst()` already, and `DONT_DRAIN` still finishes work in flight by design.
+2. The close-sequence call to `commitOffsetsThatAreReady()` removed - green.
+3. `commitOffsetsThatAreReady()` neutered outright - green, and this one printed a marker proving it
+   ran. So the offset this test asserts is not committed by that method at all.
+4. `AbstractOffsetCommitter#retrieveOffsetsAndCommit`'s call to `commitOffsets` removed - **red on
+   all three parameters**, on the assertion under test.
+
+**The marker is what separated "no effect" from "never ran"**, and it is why attempts 1 and 2 are
+recorded rather than quietly dropped: without one, three green sabotages would have made a strong
+and wrong case that the test was dark, and the honest conclusion from a green sabotage is *"I have
+not yet shown the test still guards its property"*, never *"the property is unguarded"*. The
+cheapest form is a `System.err.println` inside the mutated branch; the AGENTS.md rule it instances is
+**verify your instrumentation actually reached the run**.
 
 ## Prevention
 

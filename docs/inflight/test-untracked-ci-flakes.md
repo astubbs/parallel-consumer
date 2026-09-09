@@ -51,7 +51,9 @@ own and was caught by the campaign that retired them:
   could find nothing to complete and the commit assertion read `[]`. The same defect class as the
   row above, and named as an outstanding instance by the very commit that fixed that one. Now waits
   on the user function actually being entered, which is a stronger precondition: a `[]` after it is
-  a product signal. Covered by the same solution doc.
+  a product signal. Covered by the same solution doc - **read its sabotage section before touching
+  this test**, because three of the four mutations that look like they cut the commit do not reach
+  it, and a green sabotage there is a false "this test is dark", not a result.
 - `AmbientProbeExtensionTest`'s three headroom methods - `LogCapture` attaches to a **process-global**
   logger, and three methods asserting the exact set of lines they saw ran concurrently and captured
   each other. Red 4 of 4 class-alone runs on `master`, green 6 of 6 with a shared `@ResourceLock`;
