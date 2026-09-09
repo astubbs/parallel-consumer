@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Rust</name>
+    <artifactId>parallel-consumer-proxy-client-rust</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over the Rust toolchain. This module is in the reactor only under
+        -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
+        opt-in is load-bearing - and all it does today is build a program that prints one fixture
+        line and check that it did (astubbs#242).
+
+        Cargo.toml beside this pom is the language-native build file. Cargo and Maven share the
+        same target/ directory here, which is convenient rather than accidental: the default
+        `mvn clean` then removes cargo's output too, with no fileset to write and none to go
+        stale.
+
+        Both commands go through bin/foreign-client-step.sh, which decides what an ABSENT cargo
+        means: a banner and a skip by default, red under -Dpc.foreign.strict=1, which is what the
+        CI row passes. The commands themselves are declared here and nowhere else.
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>bash</pc.foreign.build.executable>
+        <pc.foreign.build.args>${pc.foreign.step} --tool cargo -- cargo build --quiet</pc.foreign.build.args>
+        <pc.foreign.test.executable>bash</pc.foreign.test.executable>
+        <pc.foreign.test.args>${pc.foreign.step} --tool cargo --hello rust -- target/debug/hello</pc.foreign.test.args>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+            <!--
+                NO maven-clean-plugin FILESET HERE, and that is a decision rather than an omission -
+                "nothing to clean" and "nobody wired the clean" look identical in a pom. Everything
+                this module builds lands under target/, which Maven's default clean already takes.
+                cargo writes into the same target/ Maven cleans by default, so the two agree with no configuration.
+            -->
+        </plugins>
+    </build>
+
+</project>

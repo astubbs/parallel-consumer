@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client TypeScript</name>
+    <artifactId>parallel-consumer-proxy-client-typescript</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over the TypeScript toolchain. This module is in the reactor only under
+        -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
+        opt-in is load-bearing - and all it does today is build a program that prints one fixture
+        line and check that it did (astubbs#242).
+
+        package.json beside this pom is the language-native build file, and `npm run build` is
+        one command by design: its `prebuild` hook runs `npm ci` first, so the toolchain check
+        stays a check for npm rather than for npm-plus-a-populated-node_modules. tsc really does
+        run - this module proves the TypeScript compiler works, not merely that Node can execute
+        a file.
+
+        Both commands go through bin/foreign-client-step.sh, which decides what an ABSENT npm
+        means: a banner and a skip by default, red under -Dpc.foreign.strict=1, which is what the
+        CI row passes. The commands themselves are declared here and nowhere else.
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>bash</pc.foreign.build.executable>
+        <pc.foreign.build.args>${pc.foreign.step} --tool npm -- npm run build</pc.foreign.build.args>
+        <pc.foreign.test.executable>bash</pc.foreign.test.executable>
+        <pc.foreign.test.args>${pc.foreign.step} --tool npm --hello typescript -- node target/tsc/hello.js</pc.foreign.test.args>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+            <!--
+                NO maven-clean-plugin FILESET HERE, and that is a decision rather than an omission -
+                "nothing to clean" and "nobody wired the clean" look identical in a pom. Everything
+                this module builds lands under target/, which Maven's default clean already takes.
+                node_modules is a fetched-dependency directory - this language's ~/.m2 - and `mvn clean` does not empty ~/.m2, so it is deliberately left alone; tsc's output goes to target/tsc.
+            -->
+        </plugins>
+    </build>
+
+</project>

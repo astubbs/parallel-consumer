@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Java</name>
+    <artifactId>parallel-consumer-proxy-client-java</artifactId>
+
+    <!--
+        The Java end of the polyglot build scaffolding (astubbs#242): an ordinary Maven module that
+        compiles one class, runs it, and asserts the one fixture line every other language also
+        prints. No toolchain detection, because the JDK that is running Maven is the toolchain.
+
+        A LEAF MODULE TODAY, AN AGGREGATOR LATER, and the difference is worth stating because the
+        source branch astubbs/parallel-consumer#293 has the aggregator form. There, this artifactId
+        is a nested aggregator over api / direct / grpc / harness - a shared client surface with two
+        transports behind it. That structure belongs to the Java reference client, which is its own
+        rung of this stack; splitting it here would mean three modules each printing the same line,
+        which the duplicate-code detectors would rightly flag and which would prove nothing three
+        times. The rung that brings the real client converts this module and moves this class out.
+
+        NOTHING IS PUBLISHED: deploy, install and gpg are all skipped by the clients aggregator.
+    -->
+
+    <dependencies>
+        <!--
+            THE SHARED ArchUnit RULES, and the reason this module has any dependency at all.
+            EveryModuleWiresUpArchUnitTest fails the build for a module with src/test/java and no
+            wired TestConventionsArchTest, because a module ArchUnit was never pointed at reports
+            nothing rather than reporting itself unprotected. The rules live once, in core's test
+            jar, which is how every other module in this reactor reaches them.
+
+            Test scope, so no client ever ships an edge to the engine.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

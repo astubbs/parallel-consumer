@@ -1,0 +1,8 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# Build scaffolding for the Ruby proxy client (astubbs#242). NO GEMS, deliberately: printing one
+# line needs none, and a `bundle install` would make this module's ability to run depend on the
+# network rather than only on ruby being on PATH. The module's build and run commands call ruby
+# directly for the same reason - see its pom.
+
+source "https://rubygems.org"

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Scala</name>
+    <artifactId>parallel-consumer-proxy-client-scala</artifactId>
+
+    <!--
+        The Scala end of the polyglot build scaffolding (astubbs#242). Like Kotlin and Java it is an
+        ordinary Maven module - scala-maven-plugin resolves the compiler from Central - so it needs
+        no toolchain detection and sits in the clients aggregator's default <modules>.
+
+        THE ASSERTION IS A JUnit 5 TEST WRITTEN IN SCALA, not ScalaTest or munit: the reactor
+        already has JUnit and Truth in test scope for every module, and adding a Scala-specific
+        test framework to a module that makes one assertion would be a dependency chosen for
+        fashion rather than need. The Scala wave can bring one when it has something to say that
+        JUnit cannot.
+    -->
+
+    <properties>
+        <!--
+            Scala 2.13 rather than 3.x, matching this build's Java 8 bytecode target: -release 8 is
+            supported across the whole 2.13 line, and nothing here needs a Scala 3 feature.
+        -->
+        <scala.version>2.13.14</scala.version>
+        <scala.binary.version>2.13</scala.binary.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala-library</artifactId>
+            <version>${scala.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>net.alchim31.maven</groupId>
+                <artifactId>scala-maven-plugin</artifactId>
+                <version>4.9.2</version>
+                <configuration>
+                    <scalaVersion>${scala.version}</scalaVersion>
+                    <args>
+                        <arg>-release</arg>
+                        <arg>${release.target}</arg>
+                        <arg>-Xlint</arg>
+                    </args>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>scala-compile</id>
+                        <goals>
+                            <goal>compile</goal>
+                            <goal>testCompile</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

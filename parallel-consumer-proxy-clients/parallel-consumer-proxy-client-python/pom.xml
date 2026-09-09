@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Python</name>
+    <artifactId>parallel-consumer-proxy-client-python</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over the Python toolchain. This module is in the reactor only under
+        -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
+        opt-in is load-bearing - and all it does today is build a program that prints one fixture
+        line and check that it did (astubbs#242).
+
+        pyproject.toml beside this pom is the language-native build file. The build step is
+        `compileall`, which is the closest Python has to a compile: it is the step that fails on a
+        syntax error rather than deferring it to run time, so a broken source is caught before the
+        fixture runs. No pip install and no virtualenv - printing one line needs no dependency,
+        and a step that needed the network would stop toolchain PRESENCE being the only thing that
+        decides whether this module can run.
+
+        Both commands go through bin/foreign-client-step.sh, which decides what an ABSENT python3
+        means: a banner and a skip by default, red under -Dpc.foreign.strict=1, which is what the
+        CI row passes. The commands themselves are declared here and nowhere else.
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>bash</pc.foreign.build.executable>
+        <pc.foreign.build.args>${pc.foreign.step} --tool python3 -- python3 -m compileall -q src</pc.foreign.build.args>
+        <pc.foreign.test.executable>bash</pc.foreign.test.executable>
+        <pc.foreign.test.args>${pc.foreign.step} --tool python3 --hello python -- python3 src/hello.py</pc.foreign.test.args>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+            <!--
+                THE ONE CLEAN FILESET IN THIS TREE, because Python is the one language here that
+                writes its build output beside the SOURCE rather than under target/: compileall
+                leaves __pycache__ directories in src/. Every other module's output is already
+                covered by Maven's default clean, and each of their poms says so rather than
+                leaving the reader to guess whether the absence was a decision.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <!-- version from the root pom's pluginManagement -->
+                <configuration>
+                    <filesets>
+                        <fileset>
+                            <directory>${project.basedir}/src</directory>
+                            <includes>
+                                <include>**/__pycache__/**</include>
+                            </includes>
+                        </fileset>
+                    </filesets>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

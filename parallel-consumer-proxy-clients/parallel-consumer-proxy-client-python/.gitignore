@@ -1,0 +1,5 @@
+# compileall writes bytecode BESIDE THE SOURCE rather than under target/, so nothing the repo
+# already ignores covers it. Module-local rather than a root rule, so the reason travels with the
+# only module it applies to; the matching maven-clean fileset in this module's pom is what removes
+# it on `mvn clean`.
+__pycache__/
