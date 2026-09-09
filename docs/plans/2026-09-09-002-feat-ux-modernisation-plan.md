@@ -55,7 +55,7 @@ The demand is recorded across the issue tracker and is the oldest open surface w
 
 This plan owns the modern surface and the behaviours it promises. The breakdown below is the current understanding, not a committed roadmap.
 
-- **Depends on** nothing before planning. The facade composes today's public primitives (KD2), with one engine item inside this plan: R25's third arm on the poll path's exception seam.
+- **Depends on** nothing before planning for the small tier. The facade composes today's public primitives (KD2), with one engine item inside this plan: R25's third arm on the poll path's exception seam. Export under the transactional commit mode beyond today's terminate-on-failure (R14, medium tier) depends on the producer-recovery stack: astubbs#474, which puts an aborted transaction's work back instead of the instance dying, and astubbs#410, which replaces the invalidated producer; astubbs#426, already merged, is what lets R1 build the producer from properties today.
 - **Enables** the engine-native takeover of each outcome, which is separately planned work sequenced after the God-class decomposition in `docs/inflight/core-decompose-abstract-parallel-eos-stream-processor.md` (astubbs#479).
 - **Shares** the record-outcome vocabulary with the dead-letter brainstorm (astubbs#313, prior-art report `docs/plans/2026-08-18-001-investigate-dlq-prior-art-report.md`). This document answers that report's six open questions at product level (R7 to R15); the 2022 draft astubbs#8 remains the implementation seed for the engine-native form.
 - **Shares** the per-topic design cluster with `docs/inflight/next-multi-topic-multi-function.md` (astubbs#254, astubbs#243, astubbs#236, astubbs#150, astubbs#245, astubbs#244). R2 to R4 settle the attachment shape; cross-topic key identity and topic priority stay with that note.
@@ -79,10 +79,10 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 
 - R1. A consumer is defined from connection properties and started to obtain a handle; the user constructs no Kafka client objects. Supplying pre-built clients remains possible through the old door only.
 - R2. A route binds one topic, or under R5 a set of topics, to one processing function; registering a second route for a topic already routed is refused at definition time.
-- R3. A route declares its own key and value types for consumed records and, when it produces, separate key and value types for produced records. The processing function returns zero or more produced records, each naming its destination topic; zero records on a normal return is success (R7), and the filtered value (R8) carries no output.
+- R3. A route declares its own key and value types for consumed records and, when it produces, separate key and value types for produced records. The processing function returns zero or more produced records, each naming its destination topic; zero records on a normal return is success (R7), and the filtered value (R8) carries no output. A route that has not declared produced types cannot return a produced record, and in the Java binding that is a compile error: declaring produced types changes the route's type so that only its function may return a producing outcome. On the wire, where types cannot help, the engine refuses a produced record from a non-producing route at definition time.
 - R4. A route declares its deserialisers through the general form, consumed with a key and a value deserialiser, or through a format helper that resolves to the deserialiser already on the classpath for JSON, Avro or Protobuf, with the key defaulting to string; a format-named route, json, avro, protobuf or bytes with the topic, is sugar that desugars to the route form. A route's deserialisers are applied per record inside the facade and, when the route declares produced types, its serialisers are applied to produced records before they reach the produce path; the consumer and the producer are both configured for raw bytes by the facade, never by the user. Deserialiser settings supplied in the connection properties are refused at definition time with a message naming the setting and the route that supersedes it; the remaining properties are passed to each route deserialiser's configuration.
 - R5. A set of topics that share one function and one type pair may be declared as a single route.
-- R6. Dead-letter destination, commit mode and ordering mode are declared once per instance and apply to every route; declaring any of them on a route is refused at definition time. Concurrency limit, which is the route's admission target (CONCEPTS.md), retry limit, retry delay and park policy are per route: each route takes a copy of the instance default unless it declares its own. The declared admission target is a starting point, not a constant: the self-scaling work (astubbs#333 and the navigator rungs astubbs#392, astubbs#456) makes admission adaptive per route at runtime, and merges after this. The export fraction of R27 is an instance default, eighty percent unless declared, which a park policy may override.
+- R6. Dead-letter destination, commit mode and ordering mode are declared once per instance and apply to every route; declaring any of them on a route is refused at definition time. Concurrency limit, which is the route's admission target (CONCEPTS.md), retry limit, retry delay, park policy and breaker are per route: each route takes a copy of the instance default unless it declares its own, and the surface names the two kinds apart, instance-wide settings plain and per-route defaults with a default prefix. The declared admission target is a starting point, not a constant: the self-scaling work (astubbs#333 and the navigator rungs astubbs#392, astubbs#456) makes admission adaptive per route at runtime, and merges after this. The export fraction of R27 is an instance default, eighty percent unless declared, which a park policy may override.
 
 **Outcomes and policy**
 
@@ -119,7 +119,7 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 - R31. The handle exposes the consumer operations users have asked for, as commands that are data on the wire (R18): seek a partition to an offset, to its beginning, or to its end (astubbs#174, astubbs#246; the safe-exposure ask of astubbs#158 is answered by these being the only consumer operations the handle offers), and add or remove a route while the instance runs (astubbs#245), under the same definition-time checks as at start. A seek runs on the control thread between polls: the partition's in-flight work is abandoned and those records are delivered again from the new position, and its offset map is reset. Removing a route drains its in-flight work first.
 - R32. A route may declare batch mode: the function receives up to a declared number of records, released early when a declared maximum wait elapses (astubbs#165), and optionally only records sharing one key (astubbs#145). Each record in a batch reaches its own outcome, so one record's failure parks or retries that record alone (astubbs#189); the batch's produced records and filtered values are per record. The old door's batch defects, the extra in-flight request and the unvalidated size (astubbs#311, astubbs#164), are fixed in the engine before batch mode ships on the new door.
 - R26. The door rule: the old door receives only fixes for failures that today end the poll thread (R25); every other behaviour in R7 to R16 and R24 lands on the new door, and the README's old-door section says so. An issue in the Success Criteria cluster counts as closed when its capability is available on the new door; for an existing user the named residual is that it requires the new door. The README states beside its first example when to choose the old door: when pre-built Kafka clients are required.
-- R21. The README's first example uses the new door; the old door keeps its own documented section; a migration section maps each of the three documented workarounds (own dead-letter topic plus swallow, switch on topic name inside one handler, consume raw bytes to deserialise by hand) to its one-line new-door replacement.
+- R21. The README is rewritten for two doors: its first example uses the new door; each door has its own section; the error-handling and skipping-records sections are rewritten around outcomes, park and export; a migration section maps each of the three documented workarounds (own dead-letter topic plus swallow, switch on topic name inside one handler, consume raw bytes to deserialise by hand) to its one-line new-door replacement.
 - R22. The behaviours in R7 to R15 hold when the facade implements them over today's engine, and hold unchanged when the engine implements them natively; the same acceptance examples are the oracle for both. The parity promise binds the terminal outcomes, not the reset: R10's per-assignment counting is a facade-era floor the engine-native form may tighten to a durable per-record count.
 - R24. The processing function may report a stop outcome (astubbs#172). The instance then takes no new work and closes through the drain-first or the dont-drain-first path, selected once per instance as data; the record that reported stop is left incomplete so it is delivered again after a restart, and in-flight work follows the chosen close path. Stop is a request about the instance, not a terminal outcome of the record under R7. The awaiting caller learns that the instance stopped by request rather than by close; the stopping record and the reason are recorded once; stops are counted beside the R19 outcome counters. An automatic restart re-delivers the stopping record and the function will stop again, so the definition's author owns breaking that loop.
 - R25. On the old door, a deserialisation failure thrown by the poll is handled by a policy declared once per instance as data: fail the instance, which is today's behaviour and the default, or skip and log the record, or dead-letter its raw bytes and headers under R13. The policy is a third arm of the poll path's existing typed per-exception seam, so it is contained work; the new door never reaches it because R4 keeps deserialisation off the poll path. Together R4, R12 and R25 close the deserialisation cluster (astubbs#148, astubbs#153, astubbs#163).
@@ -127,49 +127,59 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 
 ### Illustrative surface
 
-Illustrative, not binding: the names are placeholders and the compiled README example decides the syntax (Outstanding Questions). What the examples fix is the shape the requirements imply: properties in, each route a closed block with its types and one `process` function, policy as data, a handle out. Type declarations borrow Kafka Streams' `Consumed.with` and `Produced.with` shape and its `Serdes` names, in this library's own package so no Streams dependency arrives; the chain grammar of the Streams DSL is deliberately not borrowed (KD3). A route is called a route, not a stream, because a stream in Streams is the start of a topology and this is a topic bound to one function. Format helpers such as `json(Order.class)` resolve to the deserialiser already on the classpath, and the format-named routes `json`, `avro`, `protobuf` and `bytes` are sugar for the route form.
+Illustrative, not binding: the names are placeholders and the compiled README example decides the syntax (Outstanding Questions). What the examples fix is the shape the requirements imply: a definition from properties, one statement per route ending in `process` or a sink, policy as data, a handle out. Type declarations borrow Kafka Streams' `Consumed.with` and `Produced.with` shape and its `Serdes` names, in this library's own package so no Streams dependency arrives; the chain grammar of the Streams DSL is deliberately not borrowed across routes (KD3). A route is called a route, not a stream, because a stream in Streams is the start of a topology and this is a topic bound to one function. Format helpers such as `json(Order.class)` resolve to the deserialiser already on the classpath, and the format-named routes `json`, `avro`, `protobuf` and `bytes` are sugar for `topic(...).consumed(...)`. Instance-wide settings are plain; per-route defaults carry the prefix `default`, and a route's own setting overrides its copy.
 
 The shortest definition: one topic, nothing else declared. Failures retry ten times with the default delay, then park (R1, R2, R10, R11, R17):
 
 ```java
-try (var pc = ParallelConsumer.define(props)
-        .json("orders", Order.class, r -> r
-            .process(ctx -> { inventory.reserve(ctx.value()); return Outcome.succeeded(); }))
-        .start()) {
-    pc.awaitShutdown();
+var pc = ParallelConsumer.define(props);
+pc.json("orders", Order.class)
+    .process(ctx -> { inventory.reserve(ctx.value()); return Outcome.succeeded(); });
+try (var handle = pc.start()) {
+    handle.awaitShutdown();
 }
 ```
 
-Two routes. They are siblings, not a pipeline: each route is a closed block, so a route's own settings cannot be read as the next route's or as the instance's (R3, R5, R6, R23):
+Two routes, one statement each, so a formatter cannot hide the boundary. Instance settings on the definition; per-route defaults prefixed; a route's own setting overrides (R3, R5, R6, R23):
 
 ```java
-ParallelConsumer.define(props)
-    .route("orders", r -> r                          // the general form; json("orders", Order.class, r -> ...) is its sugar
-        .consumed(Consumed.with(Serdes.String(), json(Order.class)))
-        .produced(Produced.with(Serdes.String(), avro(OrderEvent.class)))
-        .process(ctx -> Outcome.produce(
-            new ProducerRecord<>("order-events", ctx.key(), OrderEvent.from(ctx.value())))))
-    .bytes(Set.of("audit", "audit-replay"), r -> r
-        .concurrency(4)                      // this route only; the self-scaling controller may move it later
-        .toConsole())                        // sink sugar: print the record and succeed
-    .concurrency(100)                        // the default every route copies
-    .ordering(KEY)
-    .start();
+var pc = ParallelConsumer.define(props)
+    .ordering(KEY)                                   // instance-wide: the engine has one
+    .defaultConcurrency(100)                         // per-route default: every route copies it
+    .defaultRetryLimit(10);
+
+pc.json("orders", Order.class)
+    .produced(Produced.with(Serdes.String(), avro(OrderEvent.class)))   // now, and only now, process may produce
+    .retryLimit(5)                                   // this route only
+    .process(ctx -> Outcome.produce(
+        new ProducerRecord<>("order-events", ctx.key(), OrderEvent.from(ctx.value()))));
+
+pc.bytes(Set.of("audit", "audit-replay"))
+    .concurrency(4)                                  // this route only; the self-scaling controller may move it later
+    .toConsole();                                    // sink sugar: print the record and succeed
+
+pc.topic("legacy")                                   // the general form, for a non-string key or your own deserialiser
+    .consumed(Consumed.with(Serdes.Long(), new LegacyDeserializer()))
+    .process(ctx -> Outcome.succeeded());
+
+try (var handle = pc.start()) {
+    handle.awaitShutdown();
+}
 ```
 
-Retry and park policy, every call optional (R10, R13, R27). The export fraction has an instance-level default, eighty percent, itself configurable:
+Retry and park policy, every call optional, as a per-route default on the definition or on one route (R10, R13, R27, R29). The export fraction has an instance-level default, eighty percent, itself configurable:
 
 ```java
-    .retryLimit(5)                                   // default 10; RetryLimit.unbounded() to opt out
-    .retryDelay(Duration.ofSeconds(1))
-    .afterRetries(park()
+pc.defaultAfterRetries(park()
         .exportTo("orders.dlq")                      // optional; without it park is bounded by the map alone
         .exportAtOffsetMapFraction(0.5)              // optional; overrides the instance default of 0.8
         .exportOlderThan(Duration.ofDays(2)))        // optional; before retention wins
-    .exportAtOffsetMapFraction(0.8)                  // the instance default, if you want it explicit
-    .circuitBreaker(failureRate(0.5).over(100).openFor(Duration.ofSeconds(30)).halfOpenProbes(5))
-// or the classic queue:
-    .afterRetries(exportImmediately("orders.dlq"))
+  .exportAtOffsetMapFraction(0.8)                    // the instance default, if you want it explicit
+  .defaultCircuitBreaker(failureRate(0.5).over(100).openFor(Duration.ofSeconds(30)).halfOpenProbes(5));
+
+pc.json("payments", Payment.class)
+    .afterRetries(exportImmediately("payments.dlq")) // this route: the classic queue
+    .process(ctx -> ...);
 ```
 
 Outcomes inside the one function (R8, R9, R24). `downstreamDatabase` is your own client, captured by the lambda; this library never sees it:
@@ -187,20 +197,21 @@ ctx -> {
 A prelude on a route, sugar composed into the one function before it crosses the wire (KD3):
 
 ```java
-.route("orders", r -> r
-    .consumed(Consumed.with(Serdes.String(), jsonSerde(Order.class)))
+pc.json("orders", Order.class)
     .filter(ctx -> ctx.value().customerId() != null)     // false is the filtered outcome
     .map(ctx -> ctx.value().withProcessedAt(now()))
     .peek(order -> metrics.seen(order))
-    .process(order -> { downstreamDatabase.write(order); return Outcome.succeeded(); }))
+    .process(order -> { downstreamDatabase.write(order); return Outcome.succeeded(); });
 ```
 
 Telling permanent from transient at decode time, when a stock deserialiser cannot (R12):
 
 ```java
-.consumed(Consumed.with(Serdes.String(),
-    classify(avroSerde(Order.class), e ->
-        e instanceof RestClientException ? Decode.transientFailure(e) : Decode.permanentFailure(e))))
+pc.topic("orders")
+    .consumed(Consumed.with(Serdes.String(),
+        classify(avro(Order.class), e ->
+            e instanceof RestClientException ? Decode.transientFailure(e) : Decode.permanentFailure(e))))
+    .process(ctx -> ...);
 ```
 
 Querying and acting on the parked set, per route, with an instance roll-up (R28):
@@ -215,26 +226,25 @@ parked.records(3).stream()                       // partition 3: offset, key, at
 pc.parked().total();                             // every route
 ```
 
-Handle operations (R31) and a batch-mode route (R32):
+Handle operations (R31) and a batch-mode route (R32). A route added after `start` is the same statement:
 
 ```java
-pc.seek("orders", 3, Seek.beginning());              // one partition; in-flight work is delivered again
-pc.addRoute("refunds", r -> r.consumed(Consumed.with(Serdes.String(), jsonSerde(Refund.class)))
-                            .process(ctx -> { refunds.apply(ctx.value()); return Outcome.succeeded(); }));
+handle.seek("orders", 3, Seek.beginning());          // one partition; in-flight work is delivered again
+pc.json("refunds", Refund.class)                      // after start: a runtime route add
+    .process(ctx -> { refunds.apply(ctx.value()); return Outcome.succeeded(); });
 pc.removeRoute("audit");                              // drains first
 
-.route("orders", r -> r
-    .consumed(Consumed.with(Serdes.String(), jsonSerde(Order.class)))
+pc.json("orders", Order.class)
     .batch(Batch.upTo(100).maxWait(Duration.ofSeconds(1)).sameKey())
-    .processBatch(batch -> batch.map(ctx -> ledger.post(ctx.value()) ? Outcome.succeeded() : Outcome.filtered())))
+    .processBatch(batch -> batch.map(ctx -> ledger.post(ctx.value()) ? Outcome.succeeded() : Outcome.filtered()));
 ```
 
 The park observer, sugar over the outcome (R16), and the old door's poll-path policy (R25):
 
 ```java
-    .route("orders", r -> r
-        .onParked((record, failure, attempts) -> log.warn("parked {} after {}", record.offset(), attempts, failure))
-        ...)
+pc.json("orders", Order.class)
+    .onParked((record, failure, attempts) -> log.warn("parked {} after {}", record.offset(), attempts, failure))
+    .process(ctx -> ...);
 
 ParallelConsumerOptions.builder()
     .consumer(consumer)
