@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: release-gate -->
+<!-- inflight-vetted: 2026-09-07 - astubbs#135 is still open and still carries its own checklist ("Not-an-issue items" plus the carried-over issue list), so the delete-when is unmet; every roadmap item it names (astubbs#139, astubbs#158, astubbs#126, astubbs#149, astubbs#147, astubbs#142) is still open, and the disabled-test count it says to reconcile now has an answer - master carries no live bare @Disabled at all, so the issue line saying six files do is the stale one -->
 
 
 astubbs#135 (mirroring confluentinc#172) is the 1.0 release train. It has not been groomed in years and

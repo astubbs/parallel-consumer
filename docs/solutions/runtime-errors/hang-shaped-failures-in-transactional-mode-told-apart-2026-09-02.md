@@ -77,7 +77,7 @@ correctly moved to abortable-error, every subsequent send is refused, and the in
 without progressing. Settled from the code rather than by experiment: the only `abortTransaction()`
 call site is `ProducerManager#close(Duration)`, and `lazyMaybeBeginTransaction` never opens a
 replacement, so there is **no recovery path short of `close()`**. Owner:
-[`docs/inflight/bug-wedged-after-poisoned-transaction.md`](../../inflight/bug-wedged-after-poisoned-transaction.md).
+[`docs/inflight/bug-poisoned-transaction-not-aborted-while-running.md`](../../inflight/bug-poisoned-transaction-not-aborted-while-running.md), which absorbed `bug-wedged-after-poisoned-transaction.md` (the note this document cited) on 2026-09-08 and carries the same item.
 
 ## The discriminator: read what the logs do NOT contain
 

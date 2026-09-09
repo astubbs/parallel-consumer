@@ -207,3 +207,38 @@ that removes a container from a shard without removing it from the queue.
 releases its selection claim, but cannot remove its retry-queue entry - the shard holds no reference
 to the queue. Demonstrated during this work's defect-class sweep; tracked in
 `docs/inflight/bug-shard-displacement-orphans-the-retry-queue-entry.md`.
+
+## Correction, 2026-09-08 - astubbs#431 did not land, and the window is now closed from a third side
+
+Everything above is left as written; this section says which of its claims have stopped describing
+the code, and why the reasoning still holds.
+
+**astubbs/parallel-consumer#431 is CLOSED as superseded, never merged.** The paragraphs above describe
+what it "must add" and what happens "when astubbs#431 lands with the paired removal"; neither will
+ever happen, and the arms they promise to invert stay exactly as written.
+The design that shipped for that defect takes the poll thread off the retry queue entirely rather
+than teaching it to decline - both designs, and why the first was correct and still lost, are in
+[`retry-queue-write-lock-on-the-rebalance-path.md`](retry-queue-write-lock-on-the-rebalance-path.md).
+
+**Production has NO sweep-side queue removal at all now**, so neither modelled ordering above is
+production's. `aQueueFirstSweepDefeatsTheOneShotConfirmation` and its control both still pass exactly
+as written - they hand-build both removals - and their assertions are NOT inverted. What changed is
+their standing: they are the record of why a one-shot residency confirmation is not a complete answer
+on its own, which is now the reason a second mechanism exists rather than a warning about an
+incoming PR. The arm that drove the real sweep was re-stated to match, under the name
+`theProductionSweepLeavesTheRetryQueueToTheController`.
+
+**The confirmation this write-up is about is now belt-and-braces.**
+`ShardManager.purgeDepartedRetryEntries()` collects, once per control-loop pass, any retry-queue
+entry whose container is resident in no shard - so it would collect every orphan the confirmation
+prevents, a tick later. The confirmation is kept because it costs one reference comparison to save
+that tick on the common interleaving, and because removing it is a separate decision with its own
+evidence to gather; it is explicitly a live question rather than a settled one.
+
+**"What would reopen it" is superseded in one direction and sharpened in the other.** Removing a
+container from a shard without removing it from the queue is now the *designed* behaviour of every
+rebalance callback, and is safe because the purge collects the result. What would reopen it is a
+second WRITER of the retry queue: an add from any thread but the controller would make the purge's
+scan-then-remove a real race, because `RetryQueue` removes by topic/partition/offset and so cannot
+say which container it meant. `@ControllerThreadOnly` on `add` declares that, and
+`ArchitectureTest.rebalanceCallbacksMustNotBlock` catches the rebalance-callback case only.

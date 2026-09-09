@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: process -->
+<!-- inflight-vetted: 2026-09-07 - the tracked half is resolved - neither `pr-323-docs-outstanding.md` nor `pr-324-tooling-outstanding.md` is on master any more, and no note there carries a delete-when-it-merges marker; the gate arm is still branch-scoped in `bin/check-branch-self-reference.sh`, so the inherited-phrase gap it describes is unchanged and the not-defects record is what the note is now for. Dropped the now-satisfied "delete this note when both are resolved" line and dated the thirteen-file figure -->
 
 `bin/check-branch-self-reference.sh` now catches the bare phrase spelling as well as the branch name
 and the PR number - but **only on lines the current branch added**, because a phrase names nobody and
@@ -9,8 +10,8 @@ demanding an attestation for a sentence you did not write turns `post-merge: che
 gate header owns that reasoning.
 
 The consequence is that everything already on master is invisible to it. A sweep of `docs/inflight/`
-found the phrase in thirteen files. Most are fine; these are the ones that are not. Delete this note
-when both are resolved.
+found the phrase in thirteen files (a 2026-08-26 snapshot - re-run the sweep at the foot of this
+note rather than trusting it). Most are fine; the two below were the ones that were not.
 
 ## Two notes outlived the PRs that owned them - done on master, twice over
 

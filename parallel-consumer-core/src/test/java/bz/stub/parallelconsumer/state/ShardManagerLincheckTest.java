@@ -116,12 +116,20 @@ public class ShardManagerLincheckTest {
      * unreachable here, because every {@code addWork} is an insertion into nothing. A sweep that DECLINES
      * leaves the resident in place, the next {@code addWork} takes the branch, and the harness reports
      * {@code NullPointerException} on the fixture rather than on the shard map. That is where this was
-     * measured: astubbs/parallel-consumer#431's branch, which adds the declining sweep and is still open.
+     * measured: astubbs/parallel-consumer#431's branch, which added the declining sweep.
      * <p>
-     * <b>So on master this is latent, and fixing it here is deliberate.</b> The harness is green without the
-     * assignment today - re-measured, not assumed - and would go red the moment that PR lands, on its
-     * fixture rather than on the thing it tests. A harness whose fixture contradicts its own comment is a
-     * false green waiting for a schedule, so it is corrected where the correction is cheap and separable.
+     * <b>Correction, 2026-09-08: that PR is CLOSED as superseded, so no declining sweep is coming.</b> The
+     * fix for its defect took the poll thread off the retry queue entirely rather than teaching it to decline
+     * ({@code ShardManager.purgeDepartedRetryEntries}, and
+     * {@code docs/solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md} carries both
+     * designs), and the rebalance sweeps still remove their resident. So the reach measured above stays
+     * unreachable from production, and the "would go red the moment that PR lands" urgency below is void.
+     * <p>
+     * <b>So on master this is latent, and fixing it here was still right.</b> The harness is green without
+     * the assignment - re-measured, not assumed - and the reach remains reachable from a state the product
+     * deliberately creates rather than only from a test shortcut. A harness whose fixture contradicts its own
+     * comment is a false green whatever the schedule, which is the part of the argument that did not depend
+     * on that PR landing.
      * <p>
      * Assigning the partition is what the fixture already claims to model - the constructor's "ordinary
      * steady state of a running consumer", which has its partition assigned. It does not touch the parked

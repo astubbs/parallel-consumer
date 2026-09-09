@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - still live cross-branch context, because the rename is not finished across branches: the root `AGENTS.md` still carries its "IN FLIGHT: rename your branch BEFORE you merge master" section, though every open PR head except astubbs#8 (`features/retry-dlq`, deliberately excluded as too old) now has `parallel-consumer-core/src/main/java/bz/`, so that section is close to retirable. Re-checked the mechanised claims on master - `bin/rename-packages.sh --verify-only` and `bin/ci-mutation-test.sh`'s exit 2/3 both exist, `TestConventionRules` names the new package, and `KafkaSanityTests` carries the repaired `{@link bz.stub.parallelconsumer.internal.BrokerPollSystem}` form -->
 
 
 The package-rename project's entry. Branches working the rename keep their own account of it at this

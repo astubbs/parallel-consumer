@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-vetted: 2026-09-07 - traced again at HEAD and every step holds: `BrokerPollSystem.controlLoop`s catch calls `notifyPollerDied` and rethrows with no `finally`; `maybeCloseConsumerManager()` is reached only from its `doClose()`, which the thrown loop never reaches; and `AbstractParallelEoSStreamProcessor.maybeCloseConsumer()` is still gated on `isResponsibleForCommits()`, still `committer instanceof ProducerManager`, so in `PERIODIC_CONSUMER_SYNC` and `PERIODIC_CONSUMER_ASYNCHRONOUS` nothing closes the consumer. astubbs#451 is MERGED and, as the note says, changes nothing in the close sequence -->
 
 Impact is `stall` rather than `reliability` because the consequence is one named thing that stops and
 stays stopped: the dead member's partitions are consumed by nobody until a Kafka timeout finally
