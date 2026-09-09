@@ -32,7 +32,7 @@ and points here; nothing is maintained on the issue. Everything else below owns 
 | [`docs/data/roadmap.yaml`](../data/roadmap.yaml), [`docs/data/module-maturity.yaml`](../data/module-maturity.yaml) | The claims rendered into the README; the maturity value is a tag-day recheck |
 | `CHANGELOG.adoc` | Generated from the commit log at release time; working text until the tag |
 | [`docs/plans/2026-07-28-release-pipeline-hardening.md`](../plans/2026-07-28-release-pipeline-hardening.md) | The dated plan for the publish pipeline |
-| `release-v6-announcement.md` (on astubbs#446, not on master) | The announcement theme and plan; follows v6 |
+| [`release-v6-announcement.md`](release-v6-announcement.md) | The announcement theme and plan, qualified on 2026-09-09 as 6.1 material with its figures from an experimental branch; what it lends 0.6.0.0 is the theme, the ordering and the experimental-claims rule |
 | `release-v6-merge-order.md`, `release-0600-blockers.md` (deleted) | Folded into this file on 2026-09-08; `git show 2c874ecac:docs/inflight/release-0600-blockers.md` for the history |
 
 **astubbs#197's body was shed to a pointer on 2026-09-09.** Everything it carried is either done on
@@ -200,7 +200,7 @@ than carry a standalone abort.
   `== 0.6.0.0 (unreleased)`, so on master it matches nothing and falls back to generated notes.
   On the day: convert the curated section and `gh release edit v0.6.0.0 --notes-file <file>`
   after `release.yml` has cut the release. astubbs#199 fixes the match and can follow.
-- [ ] **astubbs#446** - lift the announcement plan onto master, so the announcement is not being
+- [x] **astubbs#446** - merged 2026-09-09. Lift the announcement plan onto master, so the announcement is not being
   written from a branch nobody merges.
 - [ ] The tag-day artefact checks in the section of that name below.
 - [ ] Amend the release claim, not the standard, for what is still open. `release-0.6.0.0.md`
