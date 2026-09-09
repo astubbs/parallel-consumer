@@ -368,7 +368,10 @@ public class OffsetMapCodecManager<K, V> {
         HighestOffsetAndIncompletes incompletes = decodeOffsetMapForPartition(tp, offsetData);
         log.debug("Loaded incomplete offsets from offset payload {}", incompletes);
         long epoch = epochOfPartitionBeingAssigned(tp);
-        return new PartitionState<>(epoch, module, tp, incompletes);
+        // The committed offset travels with the decoded map: PartitionState checks the map's claim against the
+        // partition itself at the first batch, and falls back to this offset when the claim turns out to be one no
+        // partition could have produced - see PartitionState#maybeVerifyLoadedOffsetMapAgainstThePartition.
+        return new PartitionState<>(epoch, module, tp, incompletes, offsetData.offset());
     }
 
     public String makeOffsetMetadataPayload(long baseOffsetForPartition, PartitionState<K, V> state) throws NoEncodingPossibleException {
