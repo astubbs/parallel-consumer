@@ -156,20 +156,29 @@ fraction the wrong knob. Duration is the wrong knob too - the stall arrives in m
 `not allow further messages`). **Neither string appears once in either run's log**, so offset-encoding
 back pressure is eliminated.
 
-The untested candidate is the load gate. `WorkManager#isSufficientlyLoaded` compares
+The candidate named here was the load gate. `WorkManager#isSufficientlyLoaded` compares
 `workable = inShards - parkedForRetry` against `targetAmountOfRecordsInFlight * loadingFactor`, and
 `inShards` counts records queued **behind** a blocked shard head - records that can never be worked -
-while only the failing head itself is `parkedForRetry`. A shard set full of unworkable queued records
-would therefore read as "sufficiently loaded", the broker poller would stay paused, and nothing would
-ever arrive to change it. That is the silent-stall shape the gate's own comment names against
-confluentinc#857. **This is a hypothesis, not a result.**
+while only the failing head itself is `parkedForRetry`. That is the silent-stall shape the gate's own
+comment names against confluentinc#857.
+
+**It has since been run, and it is half right.** The gate IS what stops intake; head-of-line blocking
+is NOT why. Three six-minute arms on 2026-09-08 settle it, and a fourth at a low poison rate on
+2026-09-09 turns the verdict into a threshold: the gate latches on an idle instance once the poison
+population outgrows what the retry service holds in back-off, so any retry-forever instance that
+meets poison gets there eventually.
+[`bug-119-load-gate-counts-blocked-work-as-available.md`](bug-119-load-gate-counts-blocked-work-as-available.md)
+**owns that question from here** - the arms, the latch point, the accounting gap that is real but was
+not the cause, and the fix that bounds failures rather than the buffer. What matters to *this* note is only the
+consequence: **the intake stall is not going to be fixed by a change to the gate**, so the arms below,
+which exist to make this scenario able to falsify its own assertion, are unchanged by it.
 
 ### What to run next, in order
 
-1. **Re-run either arm with `WorkManager` at DEBUG and read the `isSufficientlyLoaded=` line at the
-   moment successes freeze.** It prints its own operands (`inShards`, `parkedForRetry`, the threshold)
-   for exactly this purpose. It either confirms or eliminates the load gate, and until it is read the
-   other arms are guesswork. One run settles it.
+1. **DONE, 2026-09-08 - `WorkManager` at DEBUG.** The gate read `true` on all but the first four of
+   ~37k evaluations with every partition paused; a control arm on ordering stalled identically, and a
+   control arm on the gate's threshold flipped the outcome. Verdict and evidence in the note named
+   above, and in `CommitResponseTimeoutSoakIT`'s `Calibration status`.
 2. **Per-attempt rather than per-record failure**, so records eventually succeed, the shards drain and
    the instance keeps committing for the whole run. On this evidence it is the only shape that keeps
    the commit path alive indefinitely - promoted from "a different mechanism" to "the first arm that

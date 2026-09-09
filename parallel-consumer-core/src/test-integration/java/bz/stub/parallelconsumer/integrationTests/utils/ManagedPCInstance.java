@@ -248,6 +248,9 @@ public class ManagedPCInstance implements Runnable {
                     .consumer(newConsumer)
                     .commitMode(config.commitMode)
                     .maxConcurrency(config.maxConcurrency);
+            if (config.messageBufferSize > 0) {
+                optionsBuilder.messageBufferSize(config.messageBufferSize);
+            }
             if (config.commitMode == CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER) {
                 optionsBuilder.producer(kcu.createNewProducer(config.commitMode));
             }
@@ -512,6 +515,17 @@ public class ManagedPCInstance implements Runnable {
         @Builder.Default private final int pollDelayMs = 0;
         @Builder.Default private final int maxConcurrency = 10;
         @Builder.Default private final boolean useCooperativeAssignor = false;
+        /**
+         * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#messageBufferSize} - 0 (the default) leaves the
+         * dynamic load factor alone, which is what every scenario but a deliberate intake experiment wants.
+         * <p>
+         * It is here because it is the ONE term that moves the record-intake gate's threshold without moving
+         * anything else: it pins the load factor so that {@code targetAmountOfRecordsInFlight * factor} equals the
+         * size asked for, leaving {@code maxConcurrency} - and so the worker count and the retry throughput -
+         * untouched. A control arm that raised {@code maxConcurrency} instead would move two terms and settle
+         * nothing.
+         */
+        @Builder.Default private final int messageBufferSize = 0;
         /** Scenario-specific consumer property overrides, applied last (e.g. a low max.poll.interval.ms). */
         private final Properties extraConsumerProps;
     }

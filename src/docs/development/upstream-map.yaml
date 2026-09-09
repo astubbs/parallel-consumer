@@ -1248,25 +1248,35 @@ entries:
 
   - id: bug-546-bootstrap-truncation-warning
     group: rebalance-stability
-    summary: The "Truncating state" warning on assignment - three defects behind one string, only one of them fixed
-    fork: {branches: [], prs: [], fork_issue: 162, status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [546], prs: [563], related: [489, 545], status: open, last_checked: 2026-08-20}
+    summary: The "Truncating state" warning on assignment - three defects behind one string, all three now settled here
+    fork: {branches: [fix/162-offset-reset-replay-branch, fix/162-absent-commit-data-warns], prs: [484, 494], fork_issue: 162, status: in-progress}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [546], prs: [563], related: [489, 545], status: open, last_checked: 2026-09-09}
     adoc_anchor: null
     notes: >
-      confluentinc PR #563 (RunLength decode returning base offset 0 after a no-progress
-      commit) is ALREADY IN this tree, guarded in OffsetRunLength and recorded in the
-      changelog. It does not close the issue: users reported the same warning on 0.5.2.7,
-      after that fix shipped, which is the most important fact in the upstream thread and
-      is absent from the mirror body. Two paths remain at HEAD. First,
-      PartitionState.maybeTruncateBelowOrAbove never checks whether commit data existed,
-      so a partition with no committed offset reports expecting 0 from loaded commit data
-      and truncates nothing - also the landing point for astubbs#217's metadata-decode
-      recovery, so a normal new consumer group gets a false warning. Second, the
-      below-expected reset branch was never diagnosed upstream; the untested hypothesis
-      is a commit and position read race at cooperative handoff. Neither is covered by
-      any test - nothing in the tree asserts on the warning at all. astubbs#106,
-      astubbs#306 and astubbs#207 touch this code and address neither. Detail in
-      docs/inflight/bug-162-offset-state-truncation.md.
+      All three defects behind the one warning string are settled in this fork; upstream's
+      issue remains open there. (1) confluentinc PR #563 (RunLength decode returning base
+      offset 0 after a no-progress commit) is ALREADY IN this tree, guarded in
+      OffsetRunLength and recorded in the changelog - but it does not close the issue,
+      because users reported the same warning on 0.5.2.7 after it shipped, which is the
+      most important fact in the upstream thread and is absent from the mirror body.
+      (2) That 0.5.2.7 report is the absent-commit-data case, fixed by astubbs#494:
+      PartitionState.maybeTruncateBelowOrAbove never asked whether commit data existed, so
+      a partition with no committed offset computed an expectation of 0 and warned having
+      pruned nothing. It now reports at INFO and takes no truncation branch, and the
+      absence is carried from the codec's default entry rather than read back off the
+      KAFKA_OFFSET_ABSENCE sentinel, which a real commit at offset 0 shares. Covered by
+      PartitionStateAbsentCommitData162Test, whose control arm fails if the sentinel
+      shortcut is substituted. (3) The below-expected reset branch is REFUTED as a defect
+      PC can reach on its own (astubbs#484) - the client resolves an initializing
+      partition's fetch position AFTER the rebalance listener runs, so PC's own committed()
+      read can never be the newer of the two, and a commit PC writes decodes back to
+      exactly the offset it was filed under, pinned over four commit shapes by
+      PartitionStateBootstrapTruncation162Test. Corrected on the way past: astubbs#217's
+      metadata-decode recovery does NOT land on the no-commit-data path - under the default
+      IGNORE policy it keeps the committed offset. astubbs#106, astubbs#306 and astubbs#207
+      touch this code and address none of it. The knowledge is in
+      docs/solutions/logic-errors/absence-of-commit-data-was-inferred-from-a-sentinel-that-a-real-commit-shares-2026-09-09.md;
+      the drafted mirror reply is docs/inflight/issue-response-162.md.
 
   - id: reactor-scheduler-rationale
     group: features
