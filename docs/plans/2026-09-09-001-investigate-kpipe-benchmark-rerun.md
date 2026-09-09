@@ -71,10 +71,34 @@ the third; both reproduce here, which is the control that makes the other two ro
   six hundred times per pass at its 10,000 in-flight watermark, so its 100 ms cell is a watermark
   reading, not an engine reading, in the same way PC's is a worker-count reading.
 
+## Addendum, same day: 4000 workers, the 100 ms unordered cell only
+
+Asked for after the table above. Same harness, same box, `CONFLUENT_MAX_CONCURRENCY = 4000`,
+`confluent` arm at 100 ms, two forks, three iterations; raw output in
+`pc-maxconcurrency-4000-100ms-unordered.json`.
+
+| PC UNORDERED, workers | Ceiling `workers / 0.1 s` | Measured | Of ceiling |
+|---:|---:|---:|---:|
+| 100 | 1,000 | 998 | 100% |
+| 2000 | 20,000 | 18,269 | 91% |
+| 4000 | 40,000 | **29,964** (0.6%) | **75%** |
+
+Doubling the dial from 2000 to 4000 bought 1.6x, not 2x, and 29,964 a second at 100 ms is about
+3,000 records in flight. That is the plateau the fork's own campaign found and attributed, with a
+control arm, to the Java Kafka stack under platform threads rather than to the engine: a bare
+`KafkaConsumer` with a thread pool stops at about 2,850 in flight on that harness, and PC at about
+2,750 (`docs/inflight/bug-in-flight-ceiling-above-2000-concurrency.md` on
+astubbs/parallel-consumer#363). KPipe's 47,881 at this cell is about 4,800 in flight on virtual
+threads, which is the same stack without the platform-thread plateau. So the remaining gap at
+100 ms is the thread type, and the fork's `useVirtualThreads` arm, which held 5,000 in flight at
+100 ms where platform threads held 2,850 (`docs/inflight/perf-virtual-threads-measured.md`, same
+PR), is the arm this cell should be rerun with once it ships.
+<!-- file-refs: N/A - both inflight notes live on the perf/engine-concurrency branch, astubbs/parallel-consumer#363, not on this one -->
+
 ## What it does not establish
 
 - Nothing about this fork's engine: the artifact is upstream 0.5.3.3, and the fork has not released.
-- Nothing above 2000 workers, and nothing about where PC's own in-flight ceiling sits on this box.
+- Nothing above 4000 workers; the ceiling on this box is bracketed at about 3,000 in flight, not located.
 - Nothing about sub-millisecond work, allocation, or latency percentiles, which KPipe's capture
   also reports and which were not rerun.
 - 8 processors and the Graal JIT are the same for every arm, so the ratios stand, but the absolutes
