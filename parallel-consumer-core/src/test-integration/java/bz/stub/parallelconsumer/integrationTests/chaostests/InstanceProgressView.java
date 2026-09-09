@@ -66,6 +66,55 @@ public interface InstanceProgressView {
     long workResultsReturned();
 
     /**
+     * This member's own next-offset-to-commit for {@code tp} - {@code offsetHighestSequentialSucceeded
+     * + 1}, exactly what PC would commit for that partition if it committed at this instant - or empty
+     * when the member does not own the partition (never assigned, or revoked). Default empty so a
+     * scripted view need not fake it.
+     * <p>
+     * <b>Read against the GROUP's committed offset this is the per-partition liveness signal</b>
+     * {@link UncommittedCompletionDetector} gates on, and its javadoc owns why the difference
+     * discriminates where an elapsed-time bound cannot. Everything it needs is already public API
+     * ({@code WorkManager#getPm}, {@code PartitionStateManager#getPartitionState},
+     * {@code PartitionState#getOffsetHighestSequentialSucceeded}), which is what let the gate land
+     * without the main-code accessor {@link InstanceStallDetector#INSTANCE_STALL_BOUND}'s granularity
+     * note declines to add for a probe.
+     * <p>
+     * <b>A removed partition answers empty, not zero.</b> {@code PartitionStateManager} installs
+     * {@code RemovedPartitionState} on revocation rather than deleting the entry, and that null object
+     * answers every offset question with the there-is-no-state version - which read as a real reading
+     * would report a member as infinitely behind the moment it lost the partition.
+     */
+    default java.util.OptionalLong localOffsetToCommit(org.apache.kafka.common.TopicPartition tp) {
+        return java.util.OptionalLong.empty();
+    }
+
+    /**
+     * The one place this suite re-derives PC's next-offset-to-commit for a partition, shared by the
+     * live adapter below and by {@code WedgedPartitionRedControlIT}'s view over a bare processor.
+     * <p>
+     * <b>It re-derives {@code PartitionState#getOffsetToCommit}, which is the definition</b> - that
+     * method is exactly {@code getOffsetHighestSequentialSucceeded() + 1} and is what
+     * {@code getCommitDataIfDirty} encodes on every path, so it is the quantity
+     * {@link UncommittedCompletionDetector}'s whole argument rests on. It is {@code protected}
+     * "visible for testing", so this package cannot call it, and this suite does not widen main-code
+     * visibility for a probe. Naming it here is what makes the pair greppable: a change to
+     * {@code getOffsetToCommit}'s definition must change this too, and nothing enforces that.
+     * Recorded as a line in {@code docs/refactoring.md}, raised by the automated review on
+     * astubbs#491.
+     * <p>
+     * <b>A removed partition answers empty, not zero</b> - see {@link #localOffsetToCommit}.
+     */
+    static java.util.OptionalLong localOffsetToCommitOf(
+            bz.stub.parallelconsumer.state.WorkManager<?, ?> wm,
+            org.apache.kafka.common.TopicPartition tp) {
+        var state = wm.getPm().getPartitionState(tp);
+        if (state == null || state.isRemoved()) {
+            return java.util.OptionalLong.empty();
+        }
+        return java.util.OptionalLong.of(state.getOffsetHighestSequentialSucceeded() + 1);
+    }
+
+    /**
      * Identity that changes when the instance brings up a NEW PC (a restart). A fresh incarnation
      * gets a fresh full bound-window rather than inheriting the old PC's silence.
      */
@@ -115,6 +164,14 @@ public interface InstanceProgressView {
             public int busyWorkers() {
                 return pc.getParallelConsumer() == null ? InstanceStallDetector.BUSY_WORKERS_UNKNOWN
                         : InstanceStallDetector.busyWorkersOf(pc.getInstanceId());
+            }
+
+            @Override
+            public java.util.OptionalLong localOffsetToCommit(org.apache.kafka.common.TopicPartition tp) {
+                var parallelConsumer = pc.getParallelConsumer();
+                return parallelConsumer == null
+                        ? java.util.OptionalLong.empty()
+                        : localOffsetToCommitOf(parallelConsumer.getWm(), tp);
             }
 
             @Override
