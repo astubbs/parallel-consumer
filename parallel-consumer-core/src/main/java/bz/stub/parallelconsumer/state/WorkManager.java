@@ -499,6 +499,21 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * maintained on the admission/retirement path, monotonic, and is the exact figure "no record left a shard, by
      * any route" needs. Nothing new is counted for this.
      * <p>
+     * <b>Cleared suspicion, 2026-09-09 - the observation runs BEFORE this pass drains its mailbox, and that
+     * cannot manufacture a report.</b> Its caller is the first statement of the control loop, ahead of
+     * {@code processWorkCompleteMailBox}, so the figure read here is as of the top of the pass. The suspicion is
+     * that a completion sitting in the mailbox therefore goes unseen and the count climbs through work that did
+     * in fact retire. It does not: the observation happens at the same point in every pass, so the window between
+     * two consecutive readings spans one whole pass, drain included, and no retirement can fall between them.
+     * What the position does cost is one pass of latency - a completion that lands during the pass that reaches
+     * the count is not visible until the next one, so the WARN can fire immediately before the recovery line
+     * rather than instead of it. That is bounded at one pass in
+     * {@link #LATCHED_PASSES_BEFORE_WARNING}, self-correcting on the following pass, and the alternative - a
+     * second reading of the shards at the end of the pass - costs a fair-lock acquisition on the hottest path in
+     * the engine to buy it. Raised by review on astubbs/parallel-consumer#497. It would reopen if the
+     * observation ever moved to a different point in the loop than the gate reading it uses, or if a second
+     * caller appeared: nothing would go red for either.
+     * <p>
      * <b>Thread confinement.</b> The three counters below are written and read only from here, and this method's
      * only production caller is the control loop's once-per-pass
      * {@code AbstractParallelEoSStreamProcessor#maybeWakeupPoller}. They are deliberately <b>not</b>
@@ -531,10 +546,24 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             }
         } else {
             if (latchReported) {
-                log.info("Record intake has resumed after {} gated control loop passes: workable={} vs " +
-                                "target({})*loadingFactor({})={}, pausedPartitions={}.",
-                        consecutiveLatchedPasses, reading.getWorkable(), reading.getTarget(),
-                        reading.getLoadingFactor(), reading.getThreshold(), pausedPartitions);
+                // Two different events clear the latch and they are NOT the same news. A gate that has gone
+                // unloaded means intake can actually resume; a record retiring while the gate still reads loaded
+                // means the instance is making progress again but the poller is still gated. Reporting the second
+                // as "intake has resumed" would be a false all-clear - an operator would stop watching an instance
+                // that is still not fetching - so they are separate statements, each greppable on its own.
+                if (reading.isLoaded()) {
+                    log.info("The record-intake latch has cleared after {} gated control loop passes - records are " +
+                                    "retiring again, but the gate still reads loaded, so the broker poller stays " +
+                                    "paused: workable={} vs target({})*loadingFactor({})={}, pausedPartitions={}.",
+                            consecutiveLatchedPasses, reading.getWorkable(), reading.getTarget(),
+                            reading.getLoadingFactor(), reading.getThreshold(), pausedPartitions);
+                } else {
+                    log.info("Record intake has resumed after {} gated control loop passes - the gate no longer " +
+                                    "reads loaded: workable={} vs target({})*loadingFactor({})={}, " +
+                                    "pausedPartitions={}.",
+                            consecutiveLatchedPasses, reading.getWorkable(), reading.getTarget(),
+                            reading.getLoadingFactor(), reading.getThreshold(), pausedPartitions);
+                }
             }
             consecutiveLatchedPasses = 0;
             latchReported = false;

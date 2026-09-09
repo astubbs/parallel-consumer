@@ -1132,13 +1132,29 @@ public class WorkManagerTest {
             succeed(taken.get(0));
             boolean ignoredLoaded = wm.isSufficientlyLoadedReportingLatch(LATCH_TEST_PAUSED_PARTITIONS);
 
+            var cleared = logs.messagesAt(Level.INFO, LATCH_TEST_MARKER);
             assertWithMessage("one record retiring is the whole of the recovery condition")
-                    .that(logs.messagesAt(Level.INFO, LATCH_TEST_MARKER)).hasSize(1);
+                    .that(cleared).hasSize(1);
+            assertWithMessage("and it must NOT read as an all-clear: the gate is still loaded here, so the poller "
+                    + "is still paused, and an operator told intake had resumed would stop watching")
+                    .that(cleared.get(0))
+                    .contains("the gate still reads loaded, so the broker poller stays paused");
 
             drivePassesWithNothingRetiring(WorkManager.LATCHED_PASSES_BEFORE_WARNING);
 
             assertWithMessage("a second latch after a recovery is reported again, not swallowed by the first")
                     .that(logs.messagesAt(Level.WARN, LATCH_TEST_MARKER)).hasSize(2);
+
+            // Drain below the threshold with no observation in between, so the next pass is the FIRST to see an
+            // unloaded gate - the other of the two clear conditions, and the only one that is really an all-clear.
+            for (var remaining = wm.getWorkIfAvailable(1000); !remaining.isEmpty(); remaining = wm.getWorkIfAvailable(1000)) {
+                succeed(remaining);
+            }
+            boolean ignoredUnloaded = wm.isSufficientlyLoadedReportingLatch(LATCH_TEST_PAUSED_PARTITIONS);
+
+            var resumed = logs.messagesAt(Level.INFO, LATCH_TEST_MARKER, "Record intake has resumed");
+            assertWithMessage("an unloaded gate is the clear that really is an all-clear, and says so")
+                    .that(resumed).hasSize(1);
         }
     }
 
