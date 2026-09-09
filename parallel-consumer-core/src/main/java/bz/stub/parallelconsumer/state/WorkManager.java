@@ -83,16 +83,45 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *     evaluations across a nine-minute unbroken latch, about 87ms a pass, so 100 passes is roughly nine seconds
      *     - and the state it reports is permanent, so being a few seconds late costs nothing.</li>
      *     <li><b>Healthy, inside a long user function</b> - the mailbox is empty, so the pass blocks for
-     *     {@code getTimeToBlockFor()}, bounded by the commit interval
-     *     ({@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL}, five seconds). 100 passes is then over eight
-     *     minutes in which not one record anywhere in the instance retired.</li>
+     *     {@code getTimeToBlockFor()}, bounded above by the commit interval. At the ordinary default
+     *     ({@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL}, five seconds) 100 passes is over eight minutes
+     *     in which not one record anywhere in the instance retired.</li>
      * </ul>
-     * A pass count therefore grants the healthy case roughly fifty times the wall-clock grace it gives the state it
-     * is hunting, which no single elapsed-time bound can do. Eight minutes of a fully-loaded instance retiring
-     * nothing at all is beyond any workload this project has seen, and PC puts no ceiling on a user function - which
-     * is why the report is a WARN and not an exception.
+     * At that default the pass count therefore grants the healthy case roughly fifty times the wall-clock grace it
+     * gives the state it is hunting, which no single elapsed-time bound can do. Eight minutes of a fully-loaded
+     * instance retiring nothing at all is beyond any workload this project has seen, and PC puts no ceiling on a
+     * user function - which is why the report is a WARN and not an exception.
+     * <p>
+     * <b>KNOWN FALSE-ALARM WINDOW, and the commit interval is what sets it - raised by review on
+     * astubbs/parallel-consumer#497.</b> The healthy bound above is the commit interval, not five seconds, and
+     * under {@link ParallelConsumerOptions.CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} the default is
+     * {@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS} - <b>100ms</b>. There the healthy
+     * grace collapses from eight minutes to about ten seconds, which is the same order as the latched cadence, so
+     * the asymmetry this count rests on is gone and a fully-loaded transactional instance inside a user function
+     * longer than about ten seconds can be reported. A short commit interval set by hand does the same on any
+     * mode.
+     * <p>
+     * <b>The line itself carries the discriminator, which is why this is a documented cost rather than a
+     * blocker</b>: the report prints {@code parkedForRetry}, and the state it exists for has records in retry
+     * back-off continuously - every measured arm sat in the tens or above - while an instance that is merely slow
+     * has nothing failing and reads {@code parkedForRetry=0}. Narrowing the trigger on that term would change what
+     * the report fires on and needs its own measurement, so it is not done here; it is recorded in
+     * {@code docs/inflight/bug-119-load-gate-counts-blocked-work-as-available.md}.
      */
     static final int LATCHED_PASSES_BEFORE_WARNING = 100;
+
+    /**
+     * The tail both clear lines carry, and the reason they are not an all-clear on their own.
+     * <p>
+     * The trigger reads {@link RecordPopulation#getRetiredTotal()}, which rises when a record leaves a shard by any
+     * route. That is right for the trigger - a revocation really does drain the shards and really does unlatch the
+     * gate - and wrong for a message that would otherwise read as "processing recovered", because revoking a stalled
+     * instance is exactly what an operator or the group coordinator does to one. Shared text rather than shared code
+     * on purpose: each line stays a whole literal that can be grepped for in the source.
+     */
+    private static final String SHARDS_EMPTIED_BY =
+            "Records leave the shards by SUCCESS, by REVOCATION or by a stale container being swept, and this line " +
+                    "does not say which - it is not on its own evidence that processing recovered.";
 
     /**
      * {@link RecordPopulation#getRetiredTotal()} as of the previous control-loop pass, so that "did anything retire
@@ -104,8 +133,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     /**
      * How many consecutive passes the gate has read loaded with nothing retiring. Reset the moment either clause
      * stops holding.
+     * <p>
+     * A {@code long} rather than an {@code int} because it keeps counting after the WARN has fired - the clear
+     * line reports how long the latch actually lasted, which is the figure an operator wants and the reason not
+     * to stop at the threshold. At the latched cadence measured in astubbs#487 an {@code int} would wrap after
+     * some years of unbroken latching and print a negative duration; a {@code long} cannot, and costs nothing.
      */
-    private int consecutiveLatchedPasses = 0;
+    private long consecutiveLatchedPasses = 0;
 
     /**
      * Whether the WARN for the current run of latched passes has already been emitted - what makes the report fire
@@ -499,6 +533,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * maintained on the admission/retirement path, monotonic, and is the exact figure "no record left a shard, by
      * any route" needs. Nothing new is counted for this.
      * <p>
+     * <b>"By any route" is literal, and the clear lines say so rather than claiming recovery.</b> That counter
+     * rises on success, on revocation, and on a stale container being swept - its own javadoc says as much. For
+     * the TRIGGER that is exactly right: a revocation really does drain the shards and really does unlatch the
+     * gate. For the REPORT it is not, and an earlier wording said "records are retiring again" and "intake has
+     * resumed", either of which a revoked instance would have emitted while nothing had succeeded - a false
+     * all-clear at the moment an operator is intervening. The lines now say what is measured, records leaving the
+     * shards, and name the three routes. Raised by review on astubbs/parallel-consumer#497.
+     * <p>
      * <b>Cleared suspicion, 2026-09-09 - the observation runs BEFORE this pass drains its mailbox, and that
      * cannot manufacture a report.</b> Its caller is the first statement of the control loop, ahead of
      * {@code processWorkCompleteMailBox}, so the figure read here is as of the top of the pass. The suspicion is
@@ -536,7 +578,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 // where it stops identifying the event. docs/inflight/bug-unbounded-log-lines.md owns that rule.
                 log.warn("Record intake has been gated shut for {} consecutive control loop passes with no record " +
                                 "retiring: inShards={} parkedForRetry={} workable={} vs target({})*loadingFactor({})={}, " +
-                                "pausedPartitions={}. The broker poller stays paused until held records retire, so this " +
+                                "pausedPartitions={} (as of the last poll). The broker poller stays paused until held " +
+                                "records retire, so this " +
                                 "instance has stopped fetching while still looking alive. The usual cause is records " +
                                 "failing on every attempt and being retried forever; bound the failures (a retry limit " +
                                 "or a dead-letter path) rather than the buffer.",
@@ -552,15 +595,17 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 // as "intake has resumed" would be a false all-clear - an operator would stop watching an instance
                 // that is still not fetching - so they are separate statements, each greppable on its own.
                 if (reading.isLoaded()) {
-                    log.info("The record-intake latch has cleared after {} gated control loop passes - records are " +
-                                    "retiring again, but the gate still reads loaded, so the broker poller stays " +
-                                    "paused: workable={} vs target({})*loadingFactor({})={}, pausedPartitions={}.",
+                    log.info("The record-intake latch has cleared after {} gated control loop passes - records have " +
+                                    "left the shards again, but the gate still reads loaded, so the broker poller " +
+                                    "stays paused: workable={} vs target({})*loadingFactor({})={}, " +
+                                    "pausedPartitions={} (as of the last poll). " + SHARDS_EMPTIED_BY,
                             consecutiveLatchedPasses, reading.getWorkable(), reading.getTarget(),
                             reading.getLoadingFactor(), reading.getThreshold(), pausedPartitions);
                 } else {
                     log.info("Record intake has resumed after {} gated control loop passes - the gate no longer " +
-                                    "reads loaded: workable={} vs target({})*loadingFactor({})={}, " +
-                                    "pausedPartitions={}.",
+                                    "reads loaded, so the poller can fetch again: workable={} vs " +
+                                    "target({})*loadingFactor({})={}, pausedPartitions={} (as of the last poll). "
+                                    + SHARDS_EMPTIED_BY,
                             consecutiveLatchedPasses, reading.getWorkable(), reading.getTarget(),
                             reading.getLoadingFactor(), reading.getThreshold(), pausedPartitions);
                 }

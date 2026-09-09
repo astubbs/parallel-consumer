@@ -144,6 +144,33 @@ at 1% in the measured arm, and sooner when the retry service is slower. "Any fra
 correct claim and it is still a strong one; "any poison" is not, and reads as if one bad record
 were enough.
 
+## Open, from the review of the latch warning - the pass count is calibrated against ONE commit interval
+
+<!-- post-merge: checked -->
+`WorkManager#LATCHED_PASSES_BEFORE_WARNING` is derived from the loop's two cadences: latched passes
+are fast because failure results arrive in the mailbox continuously, and healthy-but-slow passes are
+slow because the mailbox is empty and each one blocks for the commit interval. The asymmetry is what
+makes a pass count safer than an elapsed-time bound - **at the ordinary commit-interval default.**
+
+**It is not safe at every default, and the constant's javadoc now says so.** The healthy bound is the
+commit interval, and under `PERIODIC_TRANSACTIONAL_PRODUCER` that default is
+`DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS`, two orders of magnitude shorter than the ordinary one. The
+healthy grace collapses to roughly the same order as the latched cadence, so a fully-loaded
+transactional instance inside a long user function can be reported. A short commit interval set by
+hand does the same thing on any mode.
+
+**What is not decided.** The line carries its own discriminator today - it prints `parkedForRetry`,
+which the state this exists for holds continuously and a merely-slow instance reads as zero - so the
+operator can tell the two apart from the report itself. Narrowing the *trigger* on that term is the
+obvious next move and is **not** taken here, because it changes what the report fires on and wants its
+own measured arm: a transient zero in the parked count would suppress a real latch, and no arm has
+measured how often that happens. Scaling the count from the configured commit interval is the other
+candidate, and reintroduces the clock the design avoided.
+
+<!-- post-merge: checked -->
+Raised by review on astubbs/parallel-consumer#497, which corrected the constant's javadoc rather than
+changing the trigger.
+
 ## Not a product decision to be weighed - an eventual certainty to be bounded
 
 The earlier close called this "a decision", which understates it. There is no configuration of the

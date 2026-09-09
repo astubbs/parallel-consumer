@@ -1140,10 +1140,26 @@ public class WorkManagerTest {
                     .that(cleared.get(0))
                     .contains("the gate still reads loaded, so the broker poller stays paused");
 
-            drivePassesWithNothingRetiring(WorkManager.LATCHED_PASSES_BEFORE_WARNING);
+            // The count has to go back to ZERO, not merely re-arm the flag. Driving one pass short first is what
+            // separates the two: with the flag reset but the count left standing, the very next latched pass is
+            // already over the threshold and the second WARN arrives immediately. Asserting only the cumulative
+            // count after a full batch cannot see that - it is satisfied either way. Found by review.
+            drivePassesWithNothingRetiring(WorkManager.LATCHED_PASSES_BEFORE_WARNING - 1);
+            assertWithMessage("the second latch is counted from zero: one pass short, and there is still only the "
+                    + "first WARN - a recovery that re-armed the flag without clearing the count would have "
+                    + "fired again on its very first pass")
+                    .that(logs.messagesAt(Level.WARN, LATCH_TEST_MARKER)).hasSize(1);
 
+            drivePassesWithNothingRetiring(1);
+
+            var warnings = logs.messagesAt(Level.WARN, LATCH_TEST_MARKER);
             assertWithMessage("a second latch after a recovery is reported again, not swallowed by the first")
-                    .that(logs.messagesAt(Level.WARN, LATCH_TEST_MARKER)).hasSize(2);
+                    .that(warnings).hasSize(2);
+            assertWithMessage("and the second report is a fresh reading, not a replay of the first - it counts "
+                    + "its own hundred passes and names the population as it now stands")
+                    .that(warnings.get(1))
+                    .contains("gated shut for " + WorkManager.LATCHED_PASSES_BEFORE_WARNING
+                            + " consecutive control loop passes");
 
             // Drain below the threshold with no observation in between, so the next pass is the FIRST to see an
             // unloaded gate - the other of the two clear conditions, and the only one that is really an all-clear.
@@ -1155,6 +1171,42 @@ public class WorkManagerTest {
             var resumed = logs.messagesAt(Level.INFO, LATCH_TEST_MARKER, "Record intake has resumed");
             assertWithMessage("an unloaded gate is the clear that really is an all-clear, and says so")
                     .that(resumed).hasSize(1);
+        }
+    }
+
+    /**
+     * <b>A revocation clears the latch, and the report must not call that a recovery.</b> The trigger reads
+     * {@link RecordPopulation#getRetiredTotal()}, which rises when a record leaves a shard <em>by any route</em> -
+     * success, revocation, or a stale container being swept. For the trigger that is right: a revocation really
+     * does drain the shards. For the operator-facing line it is not, and this is the reachable case that makes it
+     * matter, because revoking is what an operator or the group coordinator does <em>to</em> a stalled instance -
+     * so a line reading "intake has resumed" here would be an all-clear delivered at the exact moment somebody is
+     * intervening, with nothing having succeeded.
+     *
+     * @see WorkManager#observeLoadGateLatch
+     */
+    @Test
+    void aRevocationClearsTheLatchWithoutTheReportClaimingRecovery() {
+        setupLoadedInstance();
+
+        try (var logs = LogCapture.of(WorkManager.class, Level.INFO)) {
+            drivePassesWithNothingRetiring(WorkManager.LATCHED_PASSES_BEFORE_WARNING);
+            assertWithMessage("latched, with nothing having succeeded")
+                    .that(logs.messagesAt(Level.WARN, LATCH_TEST_MARKER)).hasSize(1);
+            assertWithMessage("and nothing has succeeded - the arm's premise")
+                    .that(successfulWork).isEmpty();
+
+            wm.onPartitionsRevoked(UniLists.of(topicPartitionOf(0)));
+            boolean ignoredLoaded = wm.isSufficientlyLoadedReportingLatch(LATCH_TEST_PAUSED_PARTITIONS);
+
+            var cleared = logs.messagesAt(Level.INFO, LATCH_TEST_MARKER);
+            assertWithMessage("the revocation retired every held record, so the latch clears")
+                    .that(cleared).hasSize(1);
+            assertWithMessage("but not one of them succeeded, so the line must not say processing recovered - it "
+                    + "reports what was measured, records leaving the shards, and names revocation as one of the "
+                    + "ways that happens")
+                    .that(cleared.get(0))
+                    .contains("Records leave the shards by SUCCESS, by REVOCATION or by a stale container being swept");
         }
     }
 
