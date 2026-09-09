@@ -63,10 +63,16 @@ class InstanceStallDetector {
      * threads finish records and heartbeats keep flowing. What per-instance cannot see is one wedged
      * shard on an instance whose other shards keep completing; that case remains
      * {@code CLASS2_STALL}'s - which since 2026-08-25 reports it as an observation rather than
-     * failing on it, precisely because it cannot tell that case from a slow one. <b>So that case has
-     * no gating detector at all today.</b> That is a known, deliberate reduction in coverage, not an
-     * oversight, and it is tracked in {@code docs/inflight/test-per-shard-liveness-has-no-gate.md};
-     * do not read the demotion as evidence the case is covered elsewhere.
+     * failing on it, precisely because it cannot tell that case from a slow one.
+     * <b>Since 2026-09-09 half of that case gates again, and half still does not.</b>
+     * {@link UncommittedCompletionDetector} covers a partition whose completed work never reaches
+     * the broker - a commit-path defect - by reading the difference between a member's own
+     * next-offset-to-commit and the group's committed offset, which is a position rather than a
+     * duration and so cannot be crossed by load. What is still uncovered is a key-order SHARD that
+     * will never be dispatched again inside a partition: any incomplete offset pins that partition's
+     * local watermark too, so the difference reads zero. That remainder is tracked in
+     * {@code docs/inflight/test-per-shard-liveness-has-no-gate.md}; do not read the demotion, or its
+     * partial repayment, as evidence the whole case is covered.
      * <p>
      * Bound arithmetic (why 150s cannot fire legitimately): a completion arrives at the end of every
      * user-function execution, so the longest legitimate GAP is one heaviest record - W1's 45s dwell,

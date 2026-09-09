@@ -598,6 +598,14 @@ cosmetic - see the last bullet.*
   producer write lock), and the same defect the moment there is a second selector. Swap the two lines
   when that PR lands over astubbs#370; the invariant and why it holds are on
   `maybeRegisterNewPollBatchAsWork`.
+- **`getOffsetToCommit()` is `protected` "visible for testing", so the chaos probes re-derive it.**
+  `InstanceProgressView#localOffsetToCommitOf` computes the same
+  `getOffsetHighestSequentialSucceeded() + 1` because it cannot call the method, and
+  `UncommittedCompletionDetector`'s whole argument rests on the probe reading *exactly* what PC would
+  commit - so a change to this method's definition silently invalidates that gate, and nothing
+  enforces the pair. Widening it to public collapses them; the owner's call, because the chaos suite
+  otherwise declines to widen main-code visibility for a probe. Raised by the automated review on
+  astubbs#491.
 
 ### state/PartitionStateManager.java
 - There was a throwaway `OffsetMapCodecManager` per assignment
