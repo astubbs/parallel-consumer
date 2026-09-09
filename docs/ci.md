@@ -72,12 +72,13 @@ document. This section is the detail behind it.
   catch-all defined by subtraction; see
   ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). It also carries two
   batched jobs: **`static: analysis`** - Infer then SpotBugs, the cheaper signal first - and
-  **`scan: repo`** - the two duplication scanners, dependency vulnerability review and the
-  whole-tree CVE scan, the build after the three no-build tools. In both, each step keeps the name
-  of the job it used
+  **`scan: repo`** - the two duplication scanners and dependency vulnerability review, no build.
+  In both, each step keeps the name of the job it used
   to be (`static: infer`, `static: spotbugs`; `dups: clones`, `dups: similarity`,
-  `deps: vulnerabilities`, `deps: whole-tree CVE scan`), so a red
-  step still reads the way the red check did. **`Mutation Tests (PIT, PR-scoped)` was folded into
+  `deps: vulnerabilities`), so a red
+  step still reads the way the red check did. **`deps: whole-tree CVE scan` was folded into
+  `scan: repo` too and came back out on 2026-09-09** - it is its own job and its own check again,
+  deliberately not required: see the not-required table below. **`Mutation Tests (PIT, PR-scoped)` was folded into
   `scan: repo` too and had to be pulled back out** - see
   ["A required check must not wait on a non-gating lane"](#a-required-check-must-not-wait-on-a-non-gating-lane).
   It is a job again, `continue-on-error` on its two steps rather than on the job. Both batched jobs guard their `if:`
@@ -320,6 +321,7 @@ every other PR) and not after (nothing merges). The live instance of this is
 | Check | Why not |
 |---|---|
 | `Mutation Tests (PIT, PR-scoped)` | **Requiring it would be vacuous, and there is now a second, independent reason it must stay out.** *Vacuous:* both steps of the job carry `continue-on-error: true`, so a PIT verdict cannot fail the check whatever the ruleset says. The property worth gating is that the lane could not measure anything, which `bin/ci-mutation-test.sh` signals through its own exit codes rather than by finding survivors; gating that means removing `continue-on-error` first, which is a code change, not a ruleset edit. *Runtime:* PIT is bimodal - about 11 seconds when nothing in scope changed, up to ~20 minutes when it mutates - and a required check blocks the merge until the job it belongs to finishes. A lane whose outcome is deliberately advisory must not gate with its runtime either, which is why it is its own job again rather than steps of `scan: repo` (see ["A required check must not wait on a non-gating lane"](#a-required-check-must-not-wait-on-a-non-gating-lane)) |
+| `deps: whole-tree CVE scan` | **Deliberately not required since 2026-09-09.** A finding must show as a red check without blocking a merge nothing in the PR can fix; the fix is an `excludeVulnerabilityIds` entry with a retirement condition or a dependency change, on its own PR. It came out of `scan: repo` for that reason: a job emits one check, and a step under `continue-on-error` reports green, which hides the finding rather than surfacing it. The scheduled lane in `dependency-audit.yml` still fails on a finding |
 | `Performance (optional)` | The self-hosted lane is dispatch-only, so this context is never produced on a PR. Requiring it would block every PR permanently |
 | `compat: kafka 4.x (experimental)` | Disabled with `if: false` |
 | `full build (master)` | Push-only; never produced on a PR |
@@ -562,25 +564,22 @@ runner count rather than about this workflow:
   globally would mean six-plus scans per PR from one account: it is switched on
   (`-Dossindex.skip=false`) in **exactly two places, whose triggers cannot both fire for one
   event** - this workflow on **dispatch and weekly on a schedule**, and the identically-named
-  `deps: whole-tree CVE scan` **step** of `maven.yml`'s `scan: repo` on every PR. Everything below
+  `deps: whole-tree CVE scan` **job** of `maven.yml` on every PR (its own, non-required check). Everything below
   is true of both; they are the same steps in two files, and changing one means changing the other.
   The schedule catches what no PR can, an unchanged tree acquiring a new advisory. (The one
   deliberate exception to "there is almost no scheduled build" below; it re-runs no suite the gate
   already covers.) The PR half skips for fork and Dependabot PRs, which receive no Actions secrets
   and would 401 forever.
-  - **Findings fail the scheduled lane, and are advisory on a PR.** astubbs/parallel-consumer#281
-    retired the standing backlog into `excludeVulnerabilityIds` entries in the root pom, each
-    carrying a stated retirement condition, so a finding that reaches either lane is by
-    construction an advisory nobody has looked at. The scheduled lane still goes red on one. On
-    the PR lane, since 2026-09-09 (owner decision), a finding renders as a red
-    `deps: CVE findings (advisory)` step with a warning annotation while the `scan: repo` check
-    stays green: a new advisory against an unchanged dependency was turning every open PR red at
-    once, and a required context nothing in the PR can fix blocks work rather than protecting it.
-    What is NOT advisory is a scan that cannot be proven to have run - exit 1 still fails the
-    check, because a scan that did not happen is not a pass. The reasoning this overrides, that a
-    solo maintainer reads the PR gate and not a scheduled alert, is kept in
-    `bin/check-ossindex-audit.sh`'s header; the annotation and the red step are what keep the
-    finding visible on the PR without holding the merge.
+  - **Findings fail it - and on a PR, that red does not block the merge.**
+    astubbs/parallel-consumer#281 retired the standing backlog into `excludeVulnerabilityIds`
+    entries in the root pom, each carrying a stated retirement condition, so a finding that reaches
+    either lane is by construction an advisory nobody has looked at, and both lanes go red on one.
+    Since 2026-09-09 (owner decision) the PR job's check is **not in the master ruleset**: a new
+    advisory against an unchanged dependency had turned every open PR red at once on a required
+    context, and a check that blocks a merge nothing in the PR can fix protects nothing. The red
+    stays in the PR's checks list where the maintainer sees it; the scheduled lane is unchanged.
+    The reasoning this overrides - that the PR gate is the only channel a solo maintainer reliably
+    reads - is kept in `bin/check-ossindex-audit.sh`'s header and named in the job's comment.
   - **Two different reds, and they stay distinguishable.** Exit 1: the scan could not be proven to
     have run, so the *check* is broken and nothing was learned about the tree. Exit 2: the scan ran
     and found something, so the *tree* needs triage. Separate headings in the job summary. When both

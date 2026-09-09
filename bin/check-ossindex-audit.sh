@@ -53,11 +53,11 @@
 # what a PR cannot see - an unchanged tree acquiring a new advisory - but it is the second channel,
 # not the first.
 #
-# WHERE THAT IS ENFORCED, since 2026-09-09: in dependency-audit.yml (schedule and dispatch), where
-# exit 2 fails the job. On the PR lane in maven.yml the owner downgraded exit 2 to an advisory step -
-# red in the step list, a warning annotation, a green required check - after a new advisory against
-# an unchanged dependency turned every open PR red at once; the workflow comment records the
-# reasoning it overrides. Exit 1 fails the PR lane as before. This script does not know which lane
+# WHERE THAT RED LANDS, since 2026-09-09: on a PR, `deps: whole-tree CVE scan` is its own check and
+# is NOT in the master ruleset, so a finding turns the check red without blocking the merge (owner
+# decision, after a new advisory against an unchanged dependency turned every open PR red at once;
+# the job's comment in maven.yml records the reasoning it overrides). On the schedule and on
+# dispatch (dependency-audit.yml) it fails the run as before. This script does not know which lane
 # it is on and must not: it reports the two verdicts, and the caller decides what each costs.
 #
 # The cost is a false positive blocking unrelated work, and it is real: OSS Index produced two false

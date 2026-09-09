@@ -599,10 +599,11 @@ jobs:
 
   # ── Scanners (PR-only) ────────────────────────────────────────────────
 
-  # Four checks that used to be four jobs - `dups: clones`, `dups: similarity`,
-  # `deps: vulnerabilities` and `deps: whole-tree CVE scan` - now run as steps of one. The repo is on
-  # the free plan's 20-concurrent-job cap, so each was a slot the sharded suites queued behind
-  # (ce-optimize run `ci-fewer-jobs`).
+  # Three checks that used to be three jobs - `dups: clones`, `dups: similarity` and
+  # `deps: vulnerabilities` - now run as steps of one. The repo is on the free plan's
+  # 20-concurrent-job cap, so each was a slot the sharded suites queued behind (ce-optimize run
+  # `ci-fewer-jobs`). `deps: whole-tree CVE scan` was folded in here too and came back OUT on
+  # 2026-09-09: it is its own, NOT-required job again, below - its header says why.
   #
   # `Mutation Tests (PIT, PR-scoped)` WAS FOLDED IN HERE TOO, AND HAD TO COME BACK OUT. It is a
   # separate job again, below. A job emits ONE check run and that check reports only when the whole
@@ -615,8 +616,7 @@ jobs:
   # FAIL AT THE END, REPORT EVERYTHING. Every scanner step carries `!cancelled()`, so a red first
   # scanner never hides the ones after it; the job's own conclusion aggregates the step failures,
   # so there is no verdict step and no continue-on-error anywhere in this job. Cheapest signal
-  # first: dependency review takes seconds, the two duplication engines take about a minute each,
-  # then the whole-tree CVE scan.
+  # first: dependency review takes seconds, the two duplication engines take about a minute each.
   #
   # One checkout at fetch-depth 0: both duplication tools compare the PR against its base branch
   # (`compare_with_base`, `max-increase`), which needs the base's history on disk. Do not narrow it.
@@ -628,78 +628,27 @@ jobs:
   # the swap and its ordering. `Mutation Tests (PIT, PR-scoped)` is NOT among them - that context
   # was never required, is produced by its own job again, and needs no ruleset edit either way.
   #
-  # THE CVE STEPS RUN PR-AUTHORED BUILD CODE IN A JOB THAT HOLDS `pull-requests: write`, which the
-  # standalone job deliberately did not (dependency-audit.yml's `permissions:` comment states why).
-  # What contains it is the credentials guard below: those steps run only for a branch in THIS
-  # repository, i.e. one pushed by somebody who already has write access, so the build code they
-  # execute is not attacker-supplied in the way a fork PR's would be. The OSS Index secrets stay on
-  # the two steps that need them and are not visible to the pinned third-party actions above.
-  # A SKIPPED REQUIRED CHECK IS PENDING FOREVER, WHICH IS WHY THIS `if:` NAMES A STATUS FUNCTION.
-  # `!cancelled()` replaces the implicit job-level `success()`, so the `needs: prepare-deps` edge
-  # below can no longer SKIP this job when the cache lane fails. That mattered here and nowhere else
-  # in this fold: the three no-build scanners were three jobs with no dependency on prepare-deps at
-  # all, and they reported through a failed cache job; batching them behind the CVE steps'
-  # cache edge silently made a transient Maven Central timeout (docs/solutions/build-errors/ - the
-  # Azure west-US case prepare-deps exists for) able to wedge every PR on a required context that
-  # never resolves. Red is recoverable and visible; pending is neither.
-  #
-  # NOTHING IS DEGRADED INTO A PASS by running anyway, which is the constraint that decides the
-  # shape. The scanners need no Maven at all. The cache restore below is restore-only with a prefix
-  # fallback, so with prepare-deps dead the CVE steps get an older cache or a cold one -
-  # slower, not silently weaker - and a Maven step that genuinely cannot resolve still fails its
-  # step, which still fails this job. A CANNOT-measure reads as red, never as a tick.
-  #
-  # `!cancelled()` and not `always()`: a superseded push cancels this run, and it should stay
-  # cancelled rather than spend a runner finishing work nobody will read.
+  # NO `needs:` EDGE ANY MORE, AND NO MAVEN. Nothing left in this job builds, so the cache edge
+  # that once let a transient Maven Central timeout wedge every PR on a required context that
+  # never resolves (a skipped required check is pending forever) left with the CVE steps. The
+  # `!cancelled()` stays as the cheap habit that keeps a required check reporting, and not
+  # `always()`: a superseded push cancels this run, and it should stay cancelled rather than spend
+  # a runner finishing work nobody will read.
   scan:
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     name: "scan: repo"
     runs-on: ubuntu-latest
-    # 45 while this job also carried the mutation lane, sized around that step's own 20-minute cap.
-    # PIT is its own job again, so the cap comes back down to what the remaining steps need: they
-    # measured 3m29s end to end on job 101622402881, and the only one that can legitimately run long
-    # is the Maven audit, whose standalone job held 20. 25 is that plus ~5 minutes for the
-    # fetch-depth-0 checkout, the JDK, a cold cache restore and the three no-build scanners - room
-    # for a bad day without letting a hung tool sit for three quarters of an hour.
-    timeout-minutes: 25
-    needs: prepare-deps
-    # All three no-build tools post PR comments: the two duplication tools through their
-    # github-token / github_token inputs, dependency review through comment-summary-in-pr. Same
-    # grant the clones job carried; nothing widens. The CVE steps need nothing beyond
-    # `contents: read` - they report to the job summary, never to a comment.
+    # The three no-build scanners measured under four minutes end to end with the Maven audit still
+    # in the job (job 101622402881); without it, 10 is room for a slow registry without letting a
+    # hung tool sit.
+    timeout-minutes: 10
+    # All three tools post PR comments: the two duplication tools through their github-token /
+    # github_token inputs, dependency review through comment-summary-in-pr. Same grant the clones
+    # job carried; nothing widens. No build code runs here any more, so nothing PR-authored
+    # executes under this write grant.
     permissions:
       contents: read
       pull-requests: write
-    env:
-      # TWO WAYS A PR ARRIVES WITHOUT THE OSS INDEX CREDENTIALS, AND BOTH MUST SKIP RATHER THAN GO
-      # RED. The preflight below turns a missing secret into a red check on purpose - it is the
-      # right answer when the secret is missing by accident. On these two it would be missing by
-      # design, every time, which is a permanent false alarm that teaches people to ignore the check.
-      #
-      #   1. FORK PRs receive no secrets at all. Same test the self-hosted lanes use.
-      #   2. DEPENDABOT PRs. The branch is in THIS repository, so the fork test passes it - but
-      #      GitHub swaps the secret store for a Dependabot-triggered run: `secrets.*` resolves
-      #      against Dependabot secrets, not Actions secrets, so OSSINDEX_USERNAME/OSSINDEX_TOKEN
-      #      come back empty and the preflight fails deterministically. Every dependency-update PR
-      #      would carry a red whole-tree audit, on the PRs least likely to be read line by line.
-      #
-      # Gated on `github.actor` rather than the PR author because the actor is what actually selects
-      # the secret store: when a human pushes to a Dependabot branch the run is theirs, Actions
-      # secrets ARE present, and the scan should run normally.
-      #
-      # The alternative - mirroring the two secrets into the Dependabot secret store - was rejected.
-      # It would put the OSS Index token in a second store, reachable by a job that runs
-      # `test-compile` over a dependency set an automated process just changed. The scheduled
-      # whole-tree scan in dependency-audit.yml covers what those PRs merge anyway, one channel
-      # later and without handing the credential around.
-      #
-      # This was the standalone job's `if:`, unchanged in meaning and moved here because a job-level
-      # `if:` cannot skip four steps of a job that has other work to do. It is ONE copy on purpose:
-      # repeated inline on five steps it would drift. Guarded steps read
-      # `!cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true'`.
-      CVE_SCAN_CREDENTIALS_PRESENT: >-
-        ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        && github.actor != 'dependabot[bot]' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -806,8 +755,84 @@ jobs:
           compare_with_base: true
           max_increase: 10
 
-      # ── Whole-tree CVE scan (was the `deps: whole-tree CVE scan` job) ──────────────────────
+  # ── Whole-tree CVE scan (PR-only, and NOT a required check) ─────────────
+
+  # ITS OWN JOB AGAIN, AND DELIBERATELY NOT IN THE MASTER RULESET. Owner decision, 2026-09-09: a
+  # finding must turn this check RED, and must NOT block the merge. A new advisory against an
+  # unchanged dependency (CVE-2026-59296 on micrometer-core) had turned every open PR red in the
+  # same hour on the required `scan: repo` context - astubbs/parallel-consumer#480 and
+  # astubbs/parallel-consumer#488 among them, neither of which touched a dependency - and a required
+  # check that goes red for something no PR can fix blocks the release burn-down rather than
+  # protecting it.
+  #
+  # WHY A JOB AND NOT A STEP. A GitHub job emits ONE check run. A failing step of `scan: repo`
+  # fails that required check; a step under `continue-on-error` reports the check GREEN, which is
+  # what astubbs/parallel-consumer#489's first cut did - the advisory step exited 2, the check
+  # ticked, and nothing in the PR's checks list said so. "Red but not blocking" therefore needs its
+  # own context, and a context the ruleset does not require: this one. docs/ci.md's not-required
+  # table carries the row and the reason, so nobody adds it back as an oversight.
+  #
+  # WHAT THIS OVERRIDES, kept rather than deleted: bin/check-ossindex-audit.sh's header argues
+  # (WHY FINDINGS ARE FATAL) that on a tree whose known debt is excluded with reasons, a finding is
+  # by construction unlooked-at, and the PR gate is the only channel a solo maintainer reliably
+  # reads. Both still hold; what changed is that the finding lands on the PR as a red check the
+  # maintainer sees, not as a lock on the merge. The scheduled and dispatched lane in
+  # dependency-audit.yml still fails on a finding, unchanged. That file OWNS the rest of the
+  # reasoning for this lane - what it covers that `deps: vulnerabilities` does not, why exactly one
+  # job may switch the plugin on, why a green Maven run is not evidence the scan happened, and the
+  # two different reds. Read its header before changing anything here.
+  #
+  # `!cancelled()` on a `needs: prepare-deps` edge, as the mutation job explains: this context is
+  # not required, so a skipped run pends nobody, but the implicit `success()` would silently
+  # delete the only whole-tree CVE signal a PR gets whenever the cache lane has a transient
+  # failure. The restore below is restore-only with a prefix fallback, so a dead cache lane means a
+  # colder cache, not a false verdict; a Maven step that genuinely cannot resolve still fails.
+  #
+  # `contents: read` ONLY. PR-authored build code runs here (`test-compile`), so this job holds no
+  # `pull-requests: write` - the reason the standalone job never did, per dependency-audit.yml's
+  # `permissions:` comment. It reports to the job summary and an artifact, never to a comment.
+  cve:
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    name: "deps: whole-tree CVE scan"
+    runs-on: ubuntu-latest
+    # The standalone job's cap, and dependency-audit.yml's for the same steps.
+    timeout-minutes: 20
+    needs: prepare-deps
+    permissions:
+      contents: read
+    env:
+      # TWO WAYS A PR ARRIVES WITHOUT THE OSS INDEX CREDENTIALS, AND BOTH MUST SKIP RATHER THAN GO
+      # RED. The preflight below turns a missing secret into a red check on purpose - it is the
+      # right answer when the secret is missing by accident. On these two it would be missing by
+      # design, every time, which is a permanent false alarm that teaches people to ignore the check.
       #
+      #   1. FORK PRs receive no secrets at all. Same test the self-hosted lanes use.
+      #   2. DEPENDABOT PRs. The branch is in THIS repository, so the fork test passes it - but
+      #      GitHub swaps the secret store for a Dependabot-triggered run: `secrets.*` resolves
+      #      against Dependabot secrets, not Actions secrets, so OSSINDEX_USERNAME/OSSINDEX_TOKEN
+      #      come back empty and the preflight fails deterministically. Every dependency-update PR
+      #      would carry a red whole-tree audit, on the PRs least likely to be read line by line.
+      #
+      # Gated on `github.actor` rather than the PR author because the actor is what actually selects
+      # the secret store: when a human pushes to a Dependabot branch the run is theirs, Actions
+      # secrets ARE present, and the scan should run normally.
+      #
+      # The alternative - mirroring the two secrets into the Dependabot secret store - was rejected.
+      # It would put the OSS Index token in a second store, reachable by a job that runs
+      # `test-compile` over a dependency set an automated process just changed. The scheduled
+      # whole-tree scan in dependency-audit.yml covers what those PRs merge anyway, one channel
+      # later and without handing the credential around.
+      #
+      # This was the standalone job's `if:`, unchanged in meaning and moved here because a job-level
+      # `if:` cannot skip four steps of a job that has other work to do. It is ONE copy on purpose:
+      # repeated inline on five steps it would drift. Guarded steps read
+      # `!cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true'`.
+      CVE_SCAN_CREDENTIALS_PRESENT: >-
+        ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        && github.actor != 'dependabot[bot]' }}
+    steps:
+      - uses: actions/checkout@v6
+
       # .github/workflows/dependency-audit.yml OWNS the reasoning for this lane - what it covers
       # that `deps: vulnerabilities` above does not, why exactly one job may switch the plugin on,
       # why findings gate the PR, why a green Maven run is not evidence the scan happened, and the
@@ -815,13 +840,10 @@ jobs:
       # dispatch, which is the half no PR can cover. Read its header before changing anything here;
       # the comments below are only what a reader of THIS job cannot do without.
       #
-      # BEHIND THE CREDENTIALS GUARD AGAIN, like every other step here that talks to OSS Index. These
-      # two were unguarded only because the mutation lane was folded in below and needed a JDK and a
-      # cache on every PR, forks and Dependabot ones included. That lane is its own job again and
-      # carries its own copies, so the CVE block is once more the only thing here that builds and
-      # the guard goes back where it was - a fork or Dependabot PR now sets up nothing it will not
-      # use. `server-id: ossindex` is inert when the audit steps skip anyway: setup-java only writes
-      # a settings.xml <server> entry, which nothing reads unless the Maven audit run happens.
+      # Behind the credentials guard like every step here that talks to OSS Index, so a fork or
+      # Dependabot PR sets up nothing it will not use. `server-id: ossindex` is inert when the audit
+      # steps skip anyway: setup-java only writes a settings.xml <server> entry, which nothing reads
+      # unless the Maven audit run happens.
       - uses: actions/setup-java@v5
         if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
         with:
@@ -837,7 +859,6 @@ jobs:
 
       # Restore-only, off prepare-deps' rotating key. These steps must not SAVE a cache: it would
       # compete with the key the build lanes own, and it resolves a different (smaller) set.
-      # Guarded for the same reason as the JDK above - nothing left in this job builds without it.
       - name: Restore Maven cache
         if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
         uses: actions/cache/restore@v4
@@ -893,50 +914,15 @@ jobs:
             -Dossindex.reportFile=target/ossindex-report.json \
             | tee ossindex-audit.log
 
-      # THE STEP THAT CARRIES THE OLD JOB'S NAME, because it is the one that decided red: it renders
-      # findings into the run summary, exits 1 when it cannot prove the scan happened, and 2 when the
-      # scan found something.
-      #
-      # FINDINGS ARE ADVISORY ON A PR; A SCAN THAT CANNOT BE PROVEN TO HAVE RUN STILL FAILS. Owner
-      # decision, 2026-09-09: a new advisory against an unchanged dependency was turning every open
-      # PR red at once (CVE-2026-59296 on micrometer-core landed on astubbs/parallel-consumer#480
-      # and astubbs/parallel-consumer#488 the same hour, neither touched a dependency), and a required context that
-      # goes red for something no PR can fix blocks the release burn-down rather than protecting it.
-      # This OVERRIDES the reasoning bin/check-ossindex-audit.sh's header records under WHY
-      # FINDINGS ARE FATAL - that on a tree whose known debt is excluded with reasons, a finding is
-      # by construction unlooked-at, and the PR gate is the only channel a solo maintainer reliably
-      # reads. That reasoning is kept there, still true, and still enforced where it costs nobody a
-      # merge: the scheduled and dispatched lane in dependency-audit.yml fails on findings exactly
-      # as before. Here the two reds the script distinguishes get the two different treatments they
-      # always demanded: exit 1 (the CHECK is broken) fails this step and the job, because a scan
-      # that did not happen is not degraded into a pass; exit 2 (the TREE has a finding) is handed
-      # to the advisory step below, which renders red in the step list and annotates the run, and
-      # cannot fail the job - the same step-level `continue-on-error` shape the mutation lane uses,
-      # for the same reason: a job-level flag would make a broken scan green too.
+      # THE STEP THAT DECIDES RED: it renders findings into the run summary, exits 1 when it cannot
+      # prove the scan happened, and 2 when the scan found something. Both fail this job - and this
+      # job fails nothing but itself, which is the whole design (job header above).
       - name: "deps: whole-tree CVE scan"
-        id: cve_scan
         if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
         shell: bash
         run: |
           set -o pipefail
-          verdict=0
-          bash bin/check-ossindex-audit.sh ossindex-audit.log | tee -a "$GITHUB_STEP_SUMMARY" || verdict=$?
-          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
-          if [ "$verdict" -eq 2 ]; then
-            echo "findings: advisory on a PR - see the next step; the scan itself ran and is green here"
-            exit 0
-          fi
-          exit "$verdict"
-
-      # The advisory half of the verdict above. Red in the step list, a warning annotation on the
-      # run, and nothing the ruleset can see - `continue-on-error` is on the STEP, not the job.
-      - name: "deps: CVE findings (advisory)"
-        if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' && steps.cve_scan.outputs.verdict == '2' }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          echo "::warning title=OSS Index advisories::the whole-tree CVE scan found advisories nobody has triaged - read the job summary; fix, or add an excludeVulnerabilityIds entry with a reason and a retirement condition. Advisory on a PR; the scheduled lane in dependency-audit.yml still fails on this."
-          exit 2
+          bash bin/check-ossindex-audit.sh ossindex-audit.log | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Kept so a finding can be triaged from the structured report rather than re-run by hand, and
       # so a failed run can be diagnosed from the log that produced the verdict.
