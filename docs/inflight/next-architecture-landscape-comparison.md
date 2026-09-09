@@ -134,3 +134,53 @@ the architecture rather than about either project:
   plus bindings, with specific languages reimplemented natively - arrived at from the other direction.
 - **The broker is pluggable:** Kafka via two client adapters, and NATS JetStream. PC is Kafka-only by
   construction, which is a scope decision worth making consciously rather than by default.
+
+
+## Add KPipe - the embedded competitor, and the first to benchmark against PC (2026-09-08)
+
+<https://github.com/eschizoid/kpipe> - Apache-2.0, on Maven Central as `io.github.eschizoid:kpipe-*`,
+Java 25 floor. One author; first commit 2025-04-09, then near-dormant until v1.0.0 on 2026-03-09,
+forty releases since, still committing on 2026-09-08. **Surveyed from source, README, benchmark
+harness and git history; not run.** The full entry, against the Hasten register's eight questions,
+is in `core-hasten-adjacent-systems-register.md` on astubbs/parallel-consumer#367; this is the pointer
+and the part that answers *this* note's questions.
+
+It sits where llingr does not: **embedded, JVM-only, same side of the position axis as PC**, and it
+is the first system found anywhere in this corpus that names Parallel Consumer as its comparator.
+
+- **Who owns scheduling:** the library, but there is no scheduler. `PARALLEL` starts one virtual
+  thread per record as it arrives; `KEY_ORDERED` keeps a map of per-key queues, each drained by a
+  virtual thread that exits when its queue empties, capped at 10,000 distinct keys with an
+  evict-empty-idle policy and a stall when nothing is evictable. Nothing chooses *which* work goes
+  next - arrival order is the order. PC's controller loop selecting across shards under per-partition
+  in-flight limits, retry delays and commit-metadata backpressure is the thing KPipe does not have.
+- **What crosses the language boundary:** nothing. No sidecar, no FFI, no polyglot story at all.
+- **The unit of work:** one record, same as PC and llingr - not Beam's bundle.
+- **Worker death:** a virtual thread per record makes it free to start and nothing to detect; the
+  cost moved to allocation, which its own captures put at about 1.7 KB per record against about 35 B
+  for PC.
+- **Ordering:** per-key serial queues, plus a whole-consumer `SEQUENTIAL` mode. No partition mode.
+- **Commit:** lowest still-pending offset per partition, in memory, committed as the contiguous
+  prefix - the llingr shape, and the same restart cost `market-analysis-llingr.md` measured: a crash
+  replays everything above the frontier. Nothing is encoded into commit metadata.
+- **Where PC deliberately differs:** the encoded frontier, the shard scheduler, `PARTITION` order,
+  transactional produce (KPipe's README says *not supported*, and its source has no
+  `initTransactions`), and every adaptive or global half proposed in this corpus - KPipe's only
+  capacity control is a fixed in-flight watermark that pauses polling at 10,000.
+- **Where KPipe is ahead, stated plainly:** a built-in dead-letter topic with a specified failure
+  matrix (a failed DLQ send blocks the frontier rather than dropping the record); a single
+  guarantees page stating the at-least-once boundary case by case, which PC does not have in one
+  place; a typed pipeline with JSON, Avro, Protobuf and Schema Registry modules; jqwik property
+  suites over the offset lifecycle; and a 21-class jcstress suite being ported to Fray under a
+  written ADR, which is a tool decision this project should read before making its own.
+
+**Its benchmark is a configuration ceiling, and the same lesson as llingr's.** The README claims
+6.6x PC's throughput at 10 ms of work per record and 41x at 100 ms. The JMH harness pins PC 0.5.3.3
+(the abandoned upstream artifact) at `maxConcurrency(100)`, `UNORDERED`, so PC lands at exactly
+`workers / work-time` - its own capture predicts 1,000 records per second at 100 ms and measures
+968. The setting dominates the engine, which is the finding
+[`market-analysis-llingr.md`](market-analysis-llingr.md) section 5a already records from the other
+direction. The same capture has `KEY_ORDERED` losing to PC's `KEY` mode at 1 ms on one of two
+machines. **Rerun with PC's concurrency matched to the per-record work, against the fork's
+artifact, before anything is said in public** - it is the cheapest external claim about this engine
+to settle, and unlike llingr's harness it keeps a real broker in the path.
