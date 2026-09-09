@@ -115,6 +115,93 @@ class ParallelConsumerOptionsTest {
         options.validate();
     }
 
+    /**
+     * {@code batchSize(0)} is the shape that costs a caller a day: it is accepted, the consumer starts cleanly, and
+     * it processes nothing forever - {@link ParallelConsumerOptions#isUsingBatching()} is false at zero so nothing
+     * divides, but {@link ParallelConsumerOptions#getTargetAmountOfRecordsInFlight()} is zero too, so no work is ever
+     * requested (astubbs#311). Nothing in the log says why.
+     */
+    @Test
+    void zeroBatchSizeIsRejected() {
+        var options = optionsBuilder()
+                .batchSize(0)
+                .build();
+
+        var thrown = assertThrows(IllegalArgumentException.class, options::validate);
+
+        // the option paired with the value it was given, and the bound it broke - a caller who reads only this line
+        // has to be able to fix the configuration from it
+        assertThat(thrown).hasMessageThat().contains(ParallelConsumerOptions.Fields.batchSize + " (0)");
+        assertThat(thrown).hasMessageThat().contains("at least 1");
+    }
+
+    /**
+     * A negative behaves exactly as zero does - the in-flight target goes negative, the delta is never positive, and
+     * no work is requested - so it is the same defect and gets the same rejection rather than a second shape.
+     */
+    @Test
+    void negativeBatchSizeIsRejected() {
+        var options = optionsBuilder()
+                .batchSize(-1)
+                .build();
+
+        var thrown = assertThrows(IllegalArgumentException.class, options::validate);
+
+        assertThat(thrown).hasMessageThat().contains(ParallelConsumerOptions.Fields.batchSize + " (-1)");
+        assertThat(thrown).hasMessageThat().contains("at least 1");
+    }
+
+    /**
+     * The field is boxed and carries no {@code @NonNull}, so null is reachable through the public builder. Untouched
+     * it unboxes to a bare {@link NullPointerException} inside
+     * {@link ParallelConsumerOptions#isUsingBatching()} - a stack trace that names neither the option nor what was
+     * wrong with it. Rejected in {@code validate()} for the reason
+     * {@link ParallelConsumerOptions#getCommitInterval()} already gives for a null commit mode: the misconfiguration
+     * is validation's to report, at the point that can name the option.
+     */
+    @Test
+    void nullBatchSizeIsRejected() {
+        var options = optionsBuilder()
+                .batchSize(null)
+                .build();
+
+        var thrown = assertThrows(IllegalArgumentException.class, options::validate);
+
+        assertThat(thrown).hasMessageThat().contains(ParallelConsumerOptions.Fields.batchSize);
+        assertThat(thrown).hasMessageThat().contains("at least 1");
+    }
+
+    /**
+     * The bound must not move the floor: one is the default and the whole non-batching configuration, so a bound that
+     * rejected it would reject every default deployment.
+     */
+    @Test
+    void theDefaultBatchSizeOfOneIsAccepted() {
+        var options = optionsBuilder().build();
+
+        options.validate();
+
+        assertWithMessage("one is the default and the non-batching configuration, so the bound has to admit it")
+                .that(options.getBatchSize())
+                .isEqualTo(1);
+        assertThat(options.isUsingBatching()).isFalse();
+    }
+
+    /**
+     * And the other end: a large valid batch size is untouched by the bound, in value and in behaviour.
+     */
+    @Test
+    void aLargeBatchSizeIsAcceptedUnchanged() {
+        var options = optionsBuilder()
+                .batchSize(10_000)
+                .build();
+
+        options.validate();
+
+        assertThat(options.getBatchSize()).isEqualTo(10_000);
+        assertThat(options.isUsingBatching()).isTrue();
+    }
+
     /*
      * The cases below are the explicit half of the truth table for "unset is the absence of a value, never inferred
      * from the value itself" (astubbs#422), plus the one way a caller can return an options object to unset after it

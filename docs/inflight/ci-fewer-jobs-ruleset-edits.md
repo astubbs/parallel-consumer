@@ -14,7 +14,12 @@ checklist" below. `maven.yml`'s no-build scanners `dups: clones`, `dups: similar
 build-dependent static analysers `static: infer` and `static: spotbugs` became steps of one new job,
 `static: analysis` - see "The static-analysis fold" below. `dependency-audit.yml`'s
 `deps: whole-tree CVE scan` became a further step of `scan: repo` - see "The CVE fold" below; that
-workflow keeps its `schedule` and `workflow_dispatch` triggers and is not deleted. `maven.yml`'s
+workflow keeps its `schedule` and `workflow_dispatch` triggers and is not deleted. **That fold has
+since been undone as well**: astubbs#489 made the CVE scan its own `cve` job again on 2026-09-09, <!-- post-merge: checked -->
+producing the `deps: whole-tree CVE scan` context on every PR, deliberately NOT required - a finding
+must show as a red check without blocking a merge nothing in the PR can fix, and a job emits one
+check, so that cannot be a step of a required one. Its context stays OFF the ruleset on purpose;
+`docs/ci.md`'s not-required table owns the row. `maven.yml`'s
 `Mutation Tests (PIT, PR-scoped)` became the last step of `scan: repo`, and **that one fold has
 since been undone**: astubbs#463 gave the lane its own `mutation` job back, because a required check <!-- post-merge: checked -->
 must not wait on a twenty-minute advisory one. Its row is on the checks list again, and it owed
@@ -277,6 +282,12 @@ now a step of `scan: repo`; the workflow itself is **not deleted** - it keeps `s
 So the name `deps: whole-tree CVE scan` still exists in the tree, as both a job in that workflow and
 a step in this one, and is still on the removal list above: no PR run produces it any more, and a
 required context nothing produces on a PR leaves every PR pending.
+
+<!-- post-merge: checked-begin -->
+**Superseded 2026-09-09 by astubbs#489:** a PR run produces that context again, from `maven.yml`'s
+own `cve` job, and it must stay off the ruleset for the opposite reason to the one above - not
+because nothing produces it, but because it is meant to go red without blocking.
+<!-- post-merge: checked-end -->
 
 What the fold had to carry:
 

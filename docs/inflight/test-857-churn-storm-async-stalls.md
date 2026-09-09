@@ -3,7 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-vetted: 2026-09-07 - still true and current (its last section is dated today): the diagnosis it records has landed in the tree - InstanceStallDetector now emits the non-gating INSTANCE_BUSY_IN_USER_CODE observation and reserves the violation for nobody-in-user-code, reads -Dchaos.instanceStallDumpAfterSeconds defaulting to the bound, and InstanceStallProbeIT.takesOneThreadDumpPerFiringInTheDefaultConfiguration pins the count. ChaosChurnStormIT still sets CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS and still never sets useCooperativeAssignor, so the opening argument holds; all three cited sibling notes still resolve. The torture-harness anchors are covered by the file-refs N/A comments already in the note -->
+<!-- inflight-vetted: 2026-09-07 - still true and current (its last section is dated today): the diagnosis it records has landed in the tree - InstanceStallDetector now emits the non-gating INSTANCE_BUSY_IN_USER_CODE observation and reserves the violation for nobody-in-user-code, reads -Dchaos.instanceStallDumpAfterSeconds defaulting to the bound, and InstanceStallProbeIT.takesOneThreadDumpPerFiringInTheDefaultConfiguration pins the count. ChaosChurnStormIT still sets CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS and still never sets useCooperativeAssignor, so the opening argument holds; all three cited sibling notes still resolve. The torture-harness anchors are covered by the file-refs N/A comments already in the note Re-vetted 2026-09-08 after the load-versus-idle control arm (`bin/exp-instance-stall-load-versus-idle.sh`, recorded in `bug-857-family.md`, "2026-09-08: the load arm"): **PROPOSED closed for the INSTANCE_STALL line only** - not this note, and not the ZOMBIE_MEMBER arm, which those six runs never exercised. The starvation reading now has the LOAD direction as well as the idle one: three seeds, two arms, one term, and the firing CONDITION itself reproduced four times - a live member holding work with its count frozen past the 150s bound - with every early dump reading INSTANCE_BUSY and ten workers inside UserFunctions.carefullyRun. Zero INSTANCE_STALL dumps and zero INSTANCE_STALL violations in six runs. Recorded against it: the prediction's dose-response half was REFUTED (the one failing run was the lowest-load arm, and its loaded twin passed), so this proposes the wedge is ruled out, never that load drives the firing. Checked: InstanceStallDetector still reserves the violation for nobody-in-user-code and reports a working member as INSTANCE_BUSY_IN_USER_CODE, busyWorkersOf still returns BUSY_WORKERS_UNKNOWN=-1 into the accusing branch, and no run produced an unreadable dump. Owner-gated: this note is impact `misdirection`, so an agent proposes and an owner closes. -->
 
 **Commit mode: `PERIODIC_CONSUMER_ASYNCHRONOUS`** (`ChaosChurnStormIT`, verified in source). This is
 why the file exists separately, and it is the most important fact in it:
@@ -767,3 +767,41 @@ scenario, which carries the `soak` tag and is excluded from the integration lane
 pom and wrapper fix, plus one unit test in `QuarantinedAnnotationContractTest`. Nothing it carries is
 loaded by the chaos lane, so it cannot reach `ChaosChurnStormIT`.
 <!-- post-merge: checked-end -->
+
+## Sighting, 2026-09-08 - a `NO_PROGRESS` firing that RECOVERED, on a local replay with the instance reading clean throughout
+
+Produced as a by-product of the instance-stall load arm recorded in
+[`bug-857-family.md`](bug-857-family.md) ("2026-09-08: the load arm..."), on seed
+`5650361238717170909` - the seed this file's 2026-09-04 entry recorded from a pom-only PR. It is
+logged here because it belongs to a **different detector** from the one that experiment was about,
+and reading the two together is the mistake this file's own head warns against.
+
+    VIOLATION: NO_PROGRESS: fleet consumed count stuck at 93487/100000 for 30s (bound 30s)
+
+**It recovered.** The replay carried `-Dchaos.diagnoseStallRecovery=true`, so the fleet ran on past
+detection, and consumption resumed: `93487` at the firing to `101070/100000` at teardown. That is
+the *drains* branch of the deciding experiment
+[`test-no-progress-window-may-not-transfer-to-w1.md`](test-no-progress-window-may-not-transfer-to-w1.md)
+states - "Drains -> calibration; stays flat -> this is the fleet-level stall the family has been
+hunting". **That note owns this question**; what is added here is one seed's answer, and its
+outstanding count at the firing was **6513 records against a `TAIL_SLACK` of 500**, larger than every
+row in that note's table.
+
+**The run still FAILED, and not on any detector.** It ended on the outer Awaitility wait with
+`done=false` despite `consumed=101070/100000` - consumed counts deliveries including duplicates,
+while the scenario's completion predicate also requires the ledger to cover every expected key, and
+it never did (`inFlight` 96-102 at the end). 69 non-gating `CLASS2_STALL/LAG_STAGNATION`
+observations, `maxLagStagnation=151439ms`, `maxInstanceStall=0ms`. That is the same pairing as this
+file's other 2026-09-08 sighting - a clean per-instance reading beside a real outer-wait failure -
+which is the per-shard gap
+[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md) owns.
+
+**Its own loaded twin passed in a quarter of the time** (136.5s against 531.6s, same seed, same
+tree), so this seed's outcome is not deterministic and a single replay of it settles nothing.
+
+**And the autopsy printed `violations (0)`** with the `NO_PROGRESS` line in the same log - the
+reporting defect
+[`test-chaos-autopsy-omits-fleet-violations.md`](test-chaos-autopsy-omits-fleet-violations.md)
+records, reproduced here rather than newly found.
+
+**Recorded, not diagnosed.**

@@ -67,6 +67,16 @@
     <logger name="bz.stub.parallelconsumer.state.RemovedPartitionState" level="${pc.log.level:-info}"/>
     <logger name="bz.stub.parallelconsumer.internal.BrokerPollSystem" level="${pc.log.level:-info}"/>
 
+    <!-- The record-intake load gate's own equation, on ITS OWN property rather than pc.log.level.
+         WorkManager sits under the bz.stub.parallelconsumer pin below, which is a bare literal, so
+         -Dpc.log.level=debug does NOT reach it - raising the gate needed a logger of its own or the
+         instrumentation would silently never have reached the run (docs/logging.md, "Prove which
+         config loaded"). Separate from pc.log.level because this line fires on every control-loop
+         tick: it is what settles whether a stalled instance stopped fetching because the gate
+         latched, and nothing else in a run wants it.
+             -Dpc.loadgate.log.level=debug -Dit.test=CommitResponseTimeoutSoakIT -->
+    <logger name="bz.stub.parallelconsumer.state.WorkManager" level="${pc.loadgate.log.level:-info}"/>
+
     <!-- Keep general PC at info to reduce noise -->
     <logger name="bz.stub.parallelconsumer" level="info"/>
 

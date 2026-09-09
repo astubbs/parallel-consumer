@@ -155,6 +155,18 @@ public class OffsetMapCodecManager<K, V> {
             return new HighestOffsetAndIncompletes(Optional.of(highestSeenOffset), incompleteOffsets);
         }
 
+        /**
+         * <b>No commit data at all</b> - the assignment carried no committed offset for the partition, so there is
+         * nothing to decode and nothing to expect of the first poll.
+         * <p>
+         * The empty {@link #highestSeenOffset} IS that fact, and it is the only place the fact exists: it is
+         * built here and at no decode site, because every decode has a committed offset to be relative to. It
+         * cannot be recovered downstream from the offsets themselves - a real commit filed at offset 0 with no
+         * offset map decodes to a highest-seen of {@code -1}, the same
+         * {@code PartitionState#KAFKA_OFFSET_ABSENCE} sentinel this absence leaves behind, and computes the same
+         * bootstrap expectation of 0. {@code PartitionState} therefore records the distinction at construction
+         * rather than inferring it later; see its {@code commitDataWasLoadedOnAssignment}.
+         */
         public static HighestOffsetAndIncompletes of() {
             return new HighestOffsetAndIncompletes(Optional.empty(), new TreeSet<>());
         }
@@ -356,7 +368,10 @@ public class OffsetMapCodecManager<K, V> {
         HighestOffsetAndIncompletes incompletes = decodeOffsetMapForPartition(tp, offsetData);
         log.debug("Loaded incomplete offsets from offset payload {}", incompletes);
         long epoch = epochOfPartitionBeingAssigned(tp);
-        return new PartitionState<>(epoch, module, tp, incompletes);
+        // The committed offset travels with the decoded map: PartitionState checks the map's claim against the
+        // partition itself at the first batch, and falls back to this offset when the claim turns out to be one no
+        // partition could have produced - see PartitionState#maybeVerifyLoadedOffsetMapAgainstThePartition.
+        return new PartitionState<>(epoch, module, tp, incompletes, offsetData.offset());
     }
 
     public String makeOffsetMetadataPayload(long baseOffsetForPartition, PartitionState<K, V> state) throws NoEncodingPossibleException {

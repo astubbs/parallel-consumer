@@ -1457,22 +1457,30 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             brokerPollSubsystem.closeAndWait();
         } catch (Exception e) {
             // We continue to the consumer close regardless: stopping here would leak the consumer
-            // entirely. But the poll loop may still be running, so the consumer close below may
-            // legitimately refuse - see ThreadConfinedConsumer.
+            // entirely. The usual reason to be here is a poll thread that died, and maybeCloseConsumer below
+            // now closes the consumer in that case whatever the commit mode. The one case it still cannot
+            // cover is a poll loop that is STILL RUNNING (this wait timed out): the consumer belongs to that
+            // thread and closing it from here would be the data race ThreadConfinedConsumer exists to
+            // prevent, so it is left open and the warning that follows says what that costs.
             ThrowableUtils.logWithoutEscaping(e, () ->
-                    log.warn("The broker poll system did not shut down cleanly - the consumer may not be closed, " +
-                            "in which case this member will not leave its consumer group promptly and the group's " +
-                            "next rebalance will be delayed by up to session.timeout.ms. Cause: {}",
+                    log.warn("The broker poll system did not shut down cleanly. The consumer close that follows " +
+                            "is the backstop and covers the usual cause, a poll thread that died; it is skipped " +
+                            "only if that thread is somehow still running, in which case the consumer stays open " +
+                            "and this member holds its partitions until max.poll.interval.ms expires. Cause: {}",
                             ThrowableUtils.describeWithRootCause(e), e));
         }
 
         try {
             maybeCloseConsumer();
         } catch (Exception e) {
+            // max.poll.interval.ms, not session.timeout.ms: an unclosed consumer object still has its
+            // heartbeat thread, which keeps the session alive, so what finally evicts this member is that
+            // thread's own poll-interval check (AbstractCoordinator.handlePollTimeoutExpiry).
+            // session.timeout.ms is the timeout for the case where this JVM has gone away entirely.
             ThrowableUtils.logWithoutEscaping(e, () ->
                     log.warn("Failed to close the Kafka consumer - this member will not send a LeaveGroup request, " +
-                            "so the group's next rebalance will be delayed by up to session.timeout.ms and these " +
-                            "partitions will stay assigned to this dead member until then. Cause: {}",
+                            "so these partitions stay assigned to this dead member, and the group's next " +
+                            "rebalance is delayed, until max.poll.interval.ms expires. Cause: {}",
                             ThrowableUtils.describeWithRootCause(e), e));
         }
 
@@ -1499,7 +1507,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * This way, if partitions are revoked, the commit can be made inline.
      */
     private void maybeCloseConsumer() {
-        if (isResponsibleForCommits()) {
+        // The second arm is the backstop for a poll thread that DIED. In the consumer-commit modes the poller is
+        // the designated closer, and isResponsibleForCommits() is false here - so before this arm existed, a
+        // poller that never reached its own doClose left the consumer open: no LeaveGroup, and the member held
+        // its partitions until max.poll.interval.ms expired. It answers false while the poll thread is still
+        // alive, so this does not start closing a consumer another thread is polling.
+        if (isResponsibleForCommits() || brokerPollSubsystem.pollThreadEndedWithoutClosingTheConsumer()) {
             // shutdownTimeout, not a literal: the user configures how long close may take, and a
             // hardcoded 10s both ignored a shorter budget and capped a longer one. master called
             // consumer.close() with no timeout at all, so this is also the first time the value is

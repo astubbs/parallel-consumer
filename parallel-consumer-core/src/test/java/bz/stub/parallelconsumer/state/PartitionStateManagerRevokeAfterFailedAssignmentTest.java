@@ -47,12 +47,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * {@code brokerPollSubsystem.supervise()} surfaces the dead poller's future, {@code supervisorLoop} runs
  * {@code doClose}, and {@code maybeCloseConsumer} closes the consumer - whose {@code AbstractCoordinator.close} runs
  * {@code onLeavePrepare}, which invokes {@code onPartitionsRevoked} (or {@code onPartitionsLost}; both reach
- * {@code onPartitionsRemoved} and this sweep) and only then {@code maybeLeaveGroup}. That step is gated on
- * {@code committer instanceof ProducerManager}, so the sweep is a live path only in
- * {@code PERIODIC_TRANSACTIONAL_PRODUCER} mode. In the default consumer-commit modes the thread that would have
- * closed the consumer is the poll thread, and it is gone - nothing reaches the sweep, and the guard under test is
- * insurance there rather than a live path. That gap is its own defect, recorded in
- * {@code docs/inflight/bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md}.
+ * {@code onPartitionsRemoved} and this sweep) and only then {@code maybeLeaveGroup}. <b>The sweep is a live path in
+ * every commit mode</b>, though it was not when this test was written: {@code maybeCloseConsumer} was gated on
+ * {@code committer instanceof ProducerManager} alone, so in the consumer-commit modes the thread that would have
+ * closed the consumer was the dead poll thread and nothing reached the sweep - the guard under test was insurance
+ * there. That was its own defect, fixed by giving {@code maybeCloseConsumer} a second arm for a poll thread that
+ * ended without closing the consumer:
+ * {@code docs/solutions/logic-errors/a-duty-assigned-by-role-is-unassigned-when-the-role-holder-dies-2026-09-08.md},
+ * pinned by {@code PollerDeathClosesTheConsumerTest}.
  * <p>
  * <b>What the old throw cost, on the route that is live.</b> {@code AbstractCoordinator.close} throws out of
  * {@code onLeavePrepare} <em>before</em> it reaches {@code maybeLeaveGroup}, and {@code ClassicKafkaConsumer.close}

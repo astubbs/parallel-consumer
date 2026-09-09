@@ -533,6 +533,13 @@ cosmetic - see the last bullet.*
   encode/decode, drop the consumer dependency, remove the `null` usage. (static-state at
   `todo remove static state manipulation from tests` and
   `todo refactored to constant in the remove statics branch`; see "Remove static state".)
+- The `catch (OffsetDecodingError)` in `loadPartitionStateForAssignment` is unreachable from
+  production. Every undecodable payload now goes through `InvalidOffsetMetadataHandlingPolicy` in
+  `EncodedOffsetPair.decodeToIncompletes` (which uses `OffsetEncoding.maybeDecode`), and the only
+  caller of `OffsetEncoding.decode` - the one site that throws it - is `EncodedOffsetPair.unwrap`,
+  which has test callers only. Either delete the catch or give the checked exception a live thrower;
+  as it stands it documents a recovery route that cannot be taken. Found by the astubbs#162 sweep,
+  which had been told that route was where astubbs#217's recovery landed.
 - `can refactor other options out for analysis only`: prune the "keep multiple encodings for
   comparison" analysis-only code once the encoding choice is settled.
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
@@ -580,10 +587,28 @@ cosmetic - see the last bullet.*
   vacuously forever (see `docs/inflight/static-archunit-main-code-rules.md`).
 
 ### state/PartitionState.java (715 lines)
+- `getOffsetHighestSequentialSucceeded()` finds the lowest tracked incomplete with
+  `incompleteOffsets.keySet().ceiling(KAFKA_OFFSET_ABSENCE)`, using an offset-absence sentinel as a
+  below-every-offset floor. `firstKey()` guarded by `isEmpty()` says the same thing without borrowing
+  a constant that means something else - found by the sentinel sweep on astubbs#162, where the same
+  constant read as a second meaning was the defect.
 - `Needs to be concurrent because`: concurrent commit-data collection exists only because
   control/poller threads share state - removed under shared-nothing (confluentinc#200).
   `todo refactor use of null shouldn't be needed`: `null` passed to the codec manager
   (confluentinc#233). `visible for legacy testing`: visibility widened for legacy tests.
+- **`getOffsetToCommit()` is `protected` "visible for testing", so the chaos probes re-derive it.**
+  `InstanceProgressView#localOffsetToCommitOf` computes the same
+  `getOffsetHighestSequentialSucceeded() + 1` because it cannot call the method, and
+  `UncommittedCompletionDetector`'s whole argument rests on the probe reading *exactly* what PC would
+  commit - so a change to this method's definition silently invalidates that gate, and nothing
+  enforces the pair. Widening it to public collapses them; the owner's call, because the chaos suite
+  otherwise declines to widen main-code visibility for a probe. Raised by the automated review on
+  astubbs#491.
+
+### state/PartitionStateManager.java
+- `incrementPartitionAssignmentEpoch` defaults a missing **epoch** from
+  `PartitionState.KAFKA_OFFSET_ABSENCE`, an **offset** constant. Correct arithmetic (the first epoch
+  becomes 0), wrong vocabulary; the epoch domain wants its own constant or an `Optional`.
 - There was a throwaway `OffsetMapCodecManager` per assignment
   (`todo remove throw away instance creation`, confluentinc#233); PR astubbs#57
   cached it (the `confluentinc#859` leak site), but the broader [confluentinc#233](https://github.com/confluentinc/parallel-consumer/issues/233)
