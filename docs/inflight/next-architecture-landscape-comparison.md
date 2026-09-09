@@ -181,6 +181,11 @@ is the first system found anywhere in this corpus that names Parallel Consumer a
 968. The setting dominates the engine, which is the finding
 [`market-analysis-llingr.md`](market-analysis-llingr.md) section 5a already records from the other
 direction. The same capture has `KEY_ORDERED` losing to PC's `KEY` mode at 1 ms on one of two
-machines. **Rerun with PC's concurrency matched to the per-record work, against the fork's
-artifact, before anything is said in public** - it is the cheapest external claim about this engine
-to settle, and unlike llingr's harness it keeps a real broker in the path.
+machines. Unlike llingr's harness it keeps a real broker in the path, which is why it was cheap to rerun.
+
+**Rerun 2026-09-09 with the constant at 2000, and the claim inverts at 10 ms.** Same harness, same
+box: PC 0.5.3.3 delivered 1.7x KPipe unordered and 1.6x key-ordered at 10 ms; at 100 ms PC sat at
+91 percent of its new ceiling, 2.6x behind KPipe unordered and 1.8x ahead key-ordered. The
+100-worker control reproduced KPipe's published numbers within 15 percent. The dated record with
+method and raw JMH output is `docs/plans/2026-09-09-001-investigate-kpipe-benchmark-rerun.md` on
+astubbs/parallel-consumer#367. Not run: the fork's artifact, and anything above 2000 workers.
