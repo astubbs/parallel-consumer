@@ -1,6 +1,7 @@
 # The A/B soak harness for the confluentinc#857 revoke deadlock, and what it measured
 
 <!-- inflight-type: register -->
+<!-- inflight-vetted: 2026-09-07 - register re-read and one stale line fixed in place: the "Known defect in the harness" section still read as an open TODO while the 2026-09-02 section below it records the per-arm gate that closed it, so the heading and wording now point there. Everything else checks out - Rebalance857CommitSyncDeadlockProbeIT and tryCommitOffsetsOnRevoke still exist, branch experiment/857-deadlock-control-arm-do-not-merge is still on origin, and bin/lib/chaos-experiment-common.sh, bin/chaos-test.sh and bin/test-check-quarantine-registry.sh all still resolve. NB the A/B runner script itself is not on master - it lives on the overnight-harness branch, astubbs#405, still OPEN -->
 
 Consulted rather than completed: this is how to re-run the deadlock A/B, and what it returned on
 2026-08-27/28. Kept because the setup is easy to get wrong in ways that produce a confident wrong
@@ -17,6 +18,17 @@ repetitions.
 where a thread dump caught the poll thread BLOCKED on the `commitCommand` monitor, and replaying one
 on a laptop opened the window zero times - on the eager scenario as well as the cooperative one. The
 chaos suite finds this defect by luck; the probe finds it by construction.
+
+**Stronger reason, 2026-09-08, and it does not depend on whether the window opens: those six seeds
+could never have answered the question they were recorded for.** Each capture asks whether the poll
+thread is still found BLOCKED on that monitor. astubbs#29 replaced the monitor with a
+`ReentrantLock`, and a thread waiting on a lock parks rather than blocking - so with the deadlock
+*deliberately restored* at `6aab3ff5a`, all 80 poll-thread diagnoses read `WAITING` on a
+`ReentrantLock$NonfairSync` and not one read BLOCKED. Match a capture by the method pair
+(`tryCommitOffsetsOnRevoke` under `onPartitionsRevoked`) and the holder (`pc-control`), never by
+thread state or lock type. [`bug-857-family.md`](bug-857-family.md)'s `## 2026-09-08` section owns
+the grid; the seed `2867310537409227917` named below was replayed on the fix arm the same day and
+came back **void** - green with zero declines, so the window never opened.
 
 ## Two settings that silently destroy the experiment
 
@@ -51,13 +63,14 @@ blocking revoke never declines, it deadlocks.
 
 This reproduces the 2026-08-18 result independently, on different hardware.
 
-## Known defect in the harness
+## Known defect in the harness - FIXED, see the 2026-09-02 section below
 
-The window gate counts `declines == 0` as NO-WINDOW, which is right for the FIXED arm and **wrong for
-the CONTROL arm**, where the window-evidence is the failures and timeouts instead. It mislabelled
-every control invocation. Harmless where the result is unambiguous; fix it before reusing the script
-for anything marginal, because a gate that misreads one arm is how a marginal result gets read
-backwards.
+The window gate counted `declines == 0` as NO-WINDOW, which is right for the FIXED arm and **wrong
+for the CONTROL arm**, where the window-evidence is the failures and timeouts instead. It
+mislabelled every control invocation. Harmless where the result is unambiguous; a gate that misreads
+one arm is how a marginal result gets read backwards, which is why it was worth fixing. The last
+section of this file records the per-arm gate that replaced it, and the three further runner defects
+found alongside it.
 
 ## The overnight CI runs, read
 

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-state: closed - the owed edit has been made. `gh api repos/astubbs/parallel-consumer/rules/branches/master` on 2026-09-07 lists `scan: repo` and `static: analysis` as required and none of the ten removal-list contexts, which is exactly the condition this note's own last paragraph sets for having nothing left that is true and unowned elsewhere. Kept rather than deleted because docs/ci.md cites it from three places and a later reader arriving from one of them needs to land on the answer; those three passages still say the removals are "currently owed" and are now stale -->
 
 Standalone jobs were deleted because `repo: hygiene` already ran every gate they ran, via
 `bin/check-all.sh --with-tests`'s glob, on every PR: `Copyright header check` (the whole of
@@ -13,11 +14,17 @@ checklist" below. `maven.yml`'s no-build scanners `dups: clones`, `dups: similar
 build-dependent static analysers `static: infer` and `static: spotbugs` became steps of one new job,
 `static: analysis` - see "The static-analysis fold" below. `dependency-audit.yml`'s
 `deps: whole-tree CVE scan` became a further step of `scan: repo` - see "The CVE fold" below; that
-workflow keeps its `schedule` and `workflow_dispatch` triggers and is not deleted. `maven.yml`'s
-`Mutation Tests (PIT, PR-scoped)` became the last step of `scan: repo` -
-and is the one fold here that owes **no** ruleset edit at all; see "The PIT fold owes no
-ruleset edit" below, which exists so a reader diffing the checks list does not go looking for the
-entry that is deliberately absent.
+workflow keeps its `schedule` and `workflow_dispatch` triggers and is not deleted. **That fold has
+since been undone as well**: astubbs#489 made the CVE scan its own `cve` job again on 2026-09-09, <!-- post-merge: checked -->
+producing the `deps: whole-tree CVE scan` context on every PR, deliberately NOT required - a finding
+must show as a red check without blocking a merge nothing in the PR can fix, and a job emits one
+check, so that cannot be a step of a required one. Its context stays OFF the ruleset on purpose;
+`docs/ci.md`'s not-required table owns the row. `maven.yml`'s
+`Mutation Tests (PIT, PR-scoped)` became the last step of `scan: repo`, and **that one fold has
+since been undone**: astubbs#463 gave the lane its own `mutation` job back, because a required check <!-- post-merge: checked -->
+must not wait on a twenty-minute advisory one. Its row is on the checks list again, and it owed
+**no** ruleset edit in either direction; see "The PIT fold owes no ruleset edit" below, which exists
+so a reader diffing the checks list does not go looking for the entry that is deliberately absent.
 Every name on the removal list in "The edit" below is still a **required status-check context in the master ruleset**, and the ruleset is repository settings, not tree state - no PR can change it
 ([`docs/ci.md`](../ci.md), "The required list is repository settings, not tree state").
 <!-- file-refs: N/A - copyright.yml and pr-checklist.yml are named as the files this work deleted; the record of each is its deleting commit, `git log --diff-filter=D -- .github/workflows/copyright.yml .github/workflows/pr-checklist.yml` -->
@@ -211,12 +218,16 @@ re-read it whenever a job is renamed or folded.
 
 ## The PIT fold owes no ruleset edit - and that is the point of this section
 
-`Mutation Tests (PIT, PR-scoped)` is a check the `ci-fewer-jobs` folds remove from a PR's
-checks list, and the only one removed whose name is **not** on the removal list above. It was never a required
+**The PIT fold itself has been undone** - astubbs#463 gave the lane its own `mutation` job again - <!-- post-merge: checked -->
+and this section outlives it, because it is about a ruleset edit that was never owed in either
+direction.
+
+`Mutation Tests (PIT, PR-scoped)` was the one check the `ci-fewer-jobs` folds removed from a PR's
+checks list whose name is **not** on the removal list above. It has never been a required
 context: [`docs/ci.md`](../ci.md)'s "These are deliberately NOT required" table has always carried a
-row for it, because the job was `continue-on-error: true` and a required check reads the *conclusion*
-- which `continue-on-error` makes success even when the step fails. Requiring it would have gated
-nothing. So there is nothing to remove, and nothing to add.
+row for it, because the lane is `continue-on-error: true` and a required check reads the *conclusion*
+- which `continue-on-error` makes success even when the step fails. Requiring it would gate
+nothing. So there was nothing to remove when it went, and nothing to add now it is back.
 
 Written down because the absence is indistinguishable from an oversight. Somebody comparing a PR's
 checks list before and after the merge sees one more row disappear than the removal list accounts
@@ -234,10 +245,11 @@ What the fold had to carry:
   scope, `2` broken lane -> `exit 1`, anything else -> `exit "$rc"`) is copied unchanged, `set +e`
   handling included.
 - **A step-level `timeout-minutes: 20`,** where the job held 30. PIT is ~11s when nothing is in scope
-  and up to half an hour when something is; the job bound is now 45 and is only a backstop. The step
-  bound is the load-bearing one: it stops a mutating run leaving the scanner and CVE results waiting,
-  and a timed-out *step* still lets the job finish and report, where the old timed-out *job* reported
-  nothing at all (the sighting in [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md)).
+  and up to half an hour when something is; the job bound is only a backstop (45 while the lane sat
+  in `scan: repo`, 25 on the `mutation` job astubbs#463 restored). The step bound is the load-bearing <!-- post-merge: checked -->
+  one, and it survived the un-fold with the rest of the step: a timed-out *step* still lets the job
+  finish and report, where the old timed-out *job* reported nothing at all (the sighting in
+  [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md)).
 - **The JDK and the Maven cache restore came out from behind the credentials guard.** They were
   guarded because the CVE block was the only thing in the job that built; PIT runs on every PR
   including fork and Dependabot ones, so leaving them guarded would have handed the mutation lane a
@@ -250,15 +262,16 @@ What the fold had to carry:
   non-advisory inside `repo: hygiene`'s `bin/check-all.sh --with-tests` sweep, which is required, so
   nothing is lost by not gating on it twice here.
 
-**The name-matching consumer needs a second repair, and it is in `bin/` rather than in a
-workflow**: `bin/check-pr-analysis-surfaces.sh` lists check runs through
-`test("Mutation|static: analysis|scan: repo|CVE|Quarantine")`. After this fold no check run is named
-`Mutation Tests (PIT, PR-scoped)`, so the `Mutation` alternative matches nothing - it is `racerd`
-again, one fold later. Nothing breaks: `scan: repo` is already in the pattern and is now the row
-that carries the PIT job summary, so the surface is still listed, under the batched name. The fix is
-to drop the now-dead `Mutation` alternative, leaving
-`test("static: analysis|scan: repo|CVE|Quarantine")`, and to say in the comment above it that the
-PIT summary now hangs off `scan: repo`.
+**The name-matching consumer took a second repair, and the un-fold reverted it - which is how the
+class reached three instances**: `bin/check-pr-analysis-surfaces.sh` lists check runs through
+`test("Mutation|static: analysis|scan: repo|CVE|Quarantine")`. While PIT was a step, no check run
+was named `Mutation Tests (PIT, PR-scoped)`, so the `Mutation` alternative matched nothing and was
+dropped - `racerd` again, one fold later. astubbs#463 made the job real again and the dropped <!-- post-merge: checked -->
+alternative silently stopped listing its job summary, which is `racerd` a third time. The
+alternative is restored, and the pattern is no longer guarded by a comment alone:
+**`bin/test-check-pr-analysis-surfaces.sh` reads the `scan`, `mutation` and `static` job names out
+of `.github/workflows/maven.yml` and fails when one of them stops matching**, so the next rename or
+fold goes red rather than dropping a row in silence.
 
 ## The CVE fold
 
@@ -269,6 +282,12 @@ now a step of `scan: repo`; the workflow itself is **not deleted** - it keeps `s
 So the name `deps: whole-tree CVE scan` still exists in the tree, as both a job in that workflow and
 a step in this one, and is still on the removal list above: no PR run produces it any more, and a
 required context nothing produces on a PR leaves every PR pending.
+
+<!-- post-merge: checked-begin -->
+**Superseded 2026-09-09 by astubbs#489:** a PR run produces that context again, from `maven.yml`'s
+own `cve` job, and it must stay off the ruleset for the opposite reason to the one above - not
+because nothing produces it, but because it is meant to go red without blocking.
+<!-- post-merge: checked-end -->
 
 What the fold had to carry:
 

@@ -50,7 +50,7 @@ class RetryQueueTest extends RetryQueueTestBase {
         WorkContainer<String, String> present = workFor(0);
         retryQueue.add(present);
 
-        assertThat(retryQueue.<String, String>removeAll(Collections.emptyList())).isFalse();
+        assertThat(retryQueue.removeAll(Collections.emptyList())).isFalse();
 
         assertThat(retryQueue.size()).isEqualTo(1);
         assertThat(retryQueue.contains(present)).isTrue();
@@ -64,7 +64,7 @@ class RetryQueueTest extends RetryQueueTestBase {
     void removeAllOfAnEmptyListAgainstAnEmptyQueueReportsUnmodified() {
         assertThat(retryQueue.isEmpty()).isTrue();
 
-        assertThat(retryQueue.<String, String>removeAll(Collections.emptyList())).isFalse();
+        assertThat(retryQueue.removeAll(Collections.emptyList())).isFalse();
 
         assertThat(retryQueue.isEmpty()).isTrue();
     }

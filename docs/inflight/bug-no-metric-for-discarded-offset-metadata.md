@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-vetted: 2026-09-07 - `ParallelConsumerOptions.invalidOffsetMetadataPolicy` still defaults to `IGNORE`, `EncodedOffsetPair.handleUnreadableMetadata` still only `log.warn`s the discard, and `handleUnreadableMetadata` still appears nowhere under `metrics/`; `PCMetricsDef` still carries no counter for a discarded map (`METADATA_SPACE_USED` is the only metadata-named entry). astubbs#207 is MERGED, which is what made the default `IGNORE` - it is the notes premise, not its fix -->
 <!-- post-merge: checked-begin -->
 
 When `invalidOffsetMetadataPolicy` is `IGNORE` - **the default since astubbs#207** - PC discards an

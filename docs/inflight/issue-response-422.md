@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - unposted: astubbs#422 is closed with no comments; the fix PR was cited as astubbs#422 (the issue itself) and is corrected here to astubbs#427, which is the merged PR carrying explicitDefaultConstantInTransactionalModeIsKept -->
 <!-- post-merge: exempt-file - a drafted issue reply, held until the pre-release sweep posts it.
      It deliberately outlives the PR that wrote it, so it cannot be written in post-merge terms. -->
 
@@ -14,7 +15,7 @@ section", is what consumes it, so all of these go out together with one view of 
 
 ---
 
-Fixed in astubbs/parallel-consumer#422.
+Fixed in astubbs/parallel-consumer#427.
 
 **What changed for you.** In `PERIODIC_TRANSACTIONAL_PRODUCER` mode, a commit interval you set
 explicitly is now always kept - including

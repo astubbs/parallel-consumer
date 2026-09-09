@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
@@ -46,9 +47,23 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * and lives here, so that a new rejection or outage scenario is a subclass rather than another copy of the
  * wiring.
  * <p>
- * Assertions are deliberately <em>not</em> hoisted: each scenario keeps its own {@link Awaitility} block, with
- * its own timeout, in its own file. They are the point of the test, and their timeouts are scenario-specific
- * (they have to clear each scenario's simulated outage window).
+ * <b>Which assertions live here, and which do not.</b> This class originally hoisted none of them, on the
+ * grounds that they are the point of the test and that their timeouts are scenario-specific - each has to clear
+ * its own simulated outage window. <b>That is now narrowed rather than reversed, and the timeout half of it is
+ * kept intact:</b> every helper below takes its deadline as an explicit argument, so a scenario still states its
+ * own timeout in its own file, beside the assertion it bounds. What is hoisted is only the <em>await-and-read
+ * plumbing</em> that carries no scenario-specific judgement - "have all the records arrived", "has the broker
+ * recorded this offset", "did PC survive" - which three commit scenarios had copied verbatim down to the
+ * {@code Collections.singleton(topicPartition)} lookup, and which the duplicate-code check flagged twice on
+ * astubbs/parallel-consumer#470.
+ * <p>
+ * The line is: <b>a helper owns how to look; the scenario still owns what it expects and how long it waits.</b>
+ * Each one takes the expected value and the deadline as arguments, and calling it at all is the scenario's
+ * choice - so a scenario's discriminating assertion is still stated in its own file, and no helper below can
+ * weaken one. Where the scenarios genuinely disagree about the <em>shape</em> of an assertion the code stays
+ * written out at each site rather than growing a predicate argument: the commit-attempt count is the worked
+ * example, asserted as climbing past a floor by the two rejection/withholding families and as standing still
+ * over a quiet period by the synchronous control, which is precisely the distinction those tests exist to draw.
  *
  * @author Antony Stubbs
  * @see LongPollingMockConsumer
@@ -254,6 +269,52 @@ abstract class MockConsumerTestBase {
 
     private ConsumerRecord<String, String> recordAt(int offset) {
         return new ConsumerRecord<>(topic, topicPartition.partition(), offset, "key", "value-" + offset);
+    }
+
+    /**
+     * Waits until the user function has been handed exactly {@code expected} records - "the backlog drained", the
+     * precondition almost every scenario here needs before it can read anything else.
+     *
+     * @param expected how many records {@link #processedRecords} must hold
+     * @param timeout  the scenario's own deadline: it has to clear whatever outage the scenario simulates
+     */
+    protected void awaitAllRecordsProcessed(int expected, Duration timeout) {
+        Awaitility.await().atMost(timeout).untilAsserted(() ->
+                assertThat(processedRecords).hasSize(expected));
+    }
+
+    /**
+     * Waits until the <b>broker side</b> - the mock consumer's own committed-offset store - reports
+     * {@code expected} for {@link #topicPartition}.
+     * <p>
+     * This is the assertion that cannot be satisfied by PC merely believing something. A commit scenario that
+     * inferred success from its own attempt count, or from no exception escaping, would pass against the very
+     * defect it is named for; asking the broker is what makes it discriminating. The scenario supplies the offset
+     * it expects, so this helper decides nothing.
+     *
+     * @param expected the committed offset the broker must end up holding
+     * @param timeout  the scenario's own deadline
+     */
+    protected void awaitBrokerCommittedOffset(long expected, Duration timeout) {
+        Awaitility.await().atMost(timeout).untilAsserted(() -> {
+            var committed = mockConsumer.committed(Collections.singleton(topicPartition)).get(topicPartition);
+            assertThat(committed).isNotNull();
+            assertThat(committed.offset()).isEqualTo(expected);
+        });
+    }
+
+    /**
+     * Asserts that PC is still running and ended with no failure cause - the exact property the chaos suite
+     * asserts, namely that no instance ends with an unclassified cause.
+     * <p>
+     * For the scenarios whose whole point is that a rejected, withheld or dropped commit is a <em>deferral</em>:
+     * a deferral that quietly killed the control thread would satisfy every offset assertion above it and still
+     * be a regression. Not for a scenario that expects PC to close or fail - {@code MockConsumerEarlyCloseTest}
+     * asserts the opposite and says so itself.
+     */
+    protected void assertParallelConsumerStillRunningWithNoFailureCause() {
+        assertThat(parallelConsumer.getFailureCause()).isNull();
+        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
     }
 
 }

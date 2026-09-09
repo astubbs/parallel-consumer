@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-vetted: 2026-09-07 - re-read both halves at HEAD: `PCModule.parallelEoSStreamProcessor` is still a plain field behind an unguarded Lombok `@Setter`, and `AbstractParallelEoSStreamProcessor`s constructor still calls `module.setParallelEoSStreamProcessor(this)` before `module.brokerPoller(this)`, whose `brokerPollSystemOwner != pc` check is the throw that arrives too late. astubbs#322 is MERGED and its owner guards (`shardManagerOwner`, `brokerPollSystemOwner`) are present; the setter is still outside them -->
 
 <!-- post-merge: checked-begin -->
 **Open, pre-existing, and the mirror image of the owner guard added by

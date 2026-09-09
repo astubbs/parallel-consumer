@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
+<!-- inflight-vetted: 2026-09-07 - the settled halves are still settled (upstream-map.yaml carries branch_accounting with branch_accounting_checked: 2026-08-20) but everything under "What this wants" is still unbuilt: bin/ has no ref-enumeration check (only check-branch-self-reference.sh, which is a different thing) and docs/upstream.mds "Orphan branches never attached to a PR" entry still names five branches without saying which remote it covered, which is the over-claim this note asks to fix -->
 
 Opened 2026-08-20 by the owner's question, on finding that the code behind the project's
 most-linked artifact sits on a branch named in no ledger: *"How can a branch be invisible to every

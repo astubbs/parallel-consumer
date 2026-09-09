@@ -81,3 +81,31 @@ NullAway lane.
 Until both are answered, this stays parked. The mechanism it guards is documented in
 `PartitionState#epochIsStale`'s three-checkpoint javadoc, which also records why re-checking per
 record or consulting the live epoch closes nothing.
+
+## 2026-09-03: a fourth fixture, found by a harness rather than by the prototype
+
+Added beside the text above rather than over it - the decision is unchanged, its evidence is not.
+
+`ShardManagerLincheckTest` reached `ProcessingShard.isWorkContainerStale`'s unguarded deref of
+`PartitionStateManager.getPartitionState` and reported `NullPointerException` in CI. It is the same
+shape as the three fixtures named above - a harness driving a `PCModuleTestEnv` whose partition was
+never assigned - and it had simply never taken the branch before: the branch needs an arrival to find
+a RESIDENT at its offset, and while every revoke sweep removed the resident and, under KEY ordering,
+the empty shard with it, every add was an insertion into nothing. A sweep that DECLINES leaves the
+resident in place, so the next add takes the branch.
+
+<!-- Correction 2026-09-08: astubbs/parallel-consumer#431 is CLOSED as superseded - the defect it
+     addressed was fixed by taking the poll thread off the retry queue entirely rather than by a declining
+     sweep (`ShardManager.purgeDepartedRetryEntries`), so no declining sweep is coming and the reach below
+     stays unavailable on master. The datum itself is UNAFFECTED and is why this paragraph stands: it is
+     about this note's question, not that PR's outcome. See
+     ../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md -->
+**The sighting was on astubbs/parallel-consumer#431's branch, which was open at the time**, and the
+declining sweep is what that PR adds - so the reach is not yet available on `master`, and
+`ShardManagerLincheckTest` was re-measured green here without the fixture change. Recorded now rather
+than when that PR lands, because the datum is about this note's question and does not depend on its
+outcome: the unguarded call is reachable from a *state the product deliberately creates*, not only
+from a test shortcut, which is a datum for the second bullet under "The decision needed".
+
+Fixed as a fixture - the harness now assigns its partition, which is what its own constructor claims
+to model - so this note's policy question is untouched.

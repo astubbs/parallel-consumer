@@ -72,14 +72,16 @@ document. This section is the detail behind it.
   catch-all defined by subtraction; see
   ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). It also carries two
   batched jobs: **`static: analysis`** - Infer then SpotBugs, the cheaper signal first - and
-  **`scan: repo`** - the two duplication scanners, dependency vulnerability review, the whole-tree
-  CVE scan, and PR-scoped mutation testing (PIT) dead last, the two builds after the three
-  no-build tools. In both, each step keeps the name of the job it used
+  **`scan: repo`** - the two duplication scanners and dependency vulnerability review, no build.
+  In both, each step keeps the name of the job it used
   to be (`static: infer`, `static: spotbugs`; `dups: clones`, `dups: similarity`,
-  `deps: vulnerabilities`, `deps: whole-tree CVE scan`, `Mutation Tests (PIT, PR-scoped)`), so a red
-  step still reads the way the red check did. The PIT steps are the only ones in either job carrying
-  `continue-on-error` - the lane was an advisory *job* before the fold, and `scan: repo` is required,
-  so the flag is what stops the fold promoting it to a gate. Both batched jobs guard their `if:`
+  `deps: vulnerabilities`), so a red
+  step still reads the way the red check did. **`deps: whole-tree CVE scan` was folded into
+  `scan: repo` too and came back out on 2026-09-09** - it is its own job and its own check again,
+  deliberately not required: see the not-required table below. **`Mutation Tests (PIT, PR-scoped)` was folded into
+  `scan: repo` too and had to be pulled back out** - see
+  ["A required check must not wait on a non-gating lane"](#a-required-check-must-not-wait-on-a-non-gating-lane).
+  It is a job again, `continue-on-error` on its two steps rather than on the job. Both batched jobs guard their `if:`
   with `!cancelled()` rather than leaning on the implicit `success()`, because each one `needs:
   prepare-deps` and a **required check that is skipped waits forever** instead of going red - so a
   transient cache failure would otherwise wedge every PR. The batched steps still run, fall back to
@@ -104,8 +106,8 @@ document. This section is the detail behind it.
   [`docs/solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md`](solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md)
   for the class.
 - **The PR-body gates** - formerly the `PR Checklist` job in `pr-checklist.yml`, now the tail of
-  `repo: hygiene` in `repo-hygiene.yml` (folded 2026-09-07; the old context is a removal owed to the
-  ruleset, see below): the template checklist (rule in AGENTS.md, PR Discipline), the
+  `repo: hygiene` in `repo-hygiene.yml` (folded 2026-09-07; the old context has since been removed
+  from the ruleset, see below): the template checklist (rule in AGENTS.md, PR Discipline), the
   changelog-citation gate (`changelog-ref-gate.js`, see [`docs/releasing.md`](releasing.md)), the
   issue-reference gate (`issue-ref-gate.js`, see [`docs/issue-references.md`](issue-references.md)),
   the file-reference gate (`file-ref-gate.js`, see [`docs/citations.md`](citations.md)), which fails
@@ -195,10 +197,10 @@ document. This section is the detail behind it.
   **is in the required list** as of the live check on 2026-09-07 -
   `gh api repos/astubbs/parallel-consumer/rules/branches/master` enumerates every required context
   by name. The four contexts retired into it that day - `Copyright header check`,
-  `quarantine: audit`, `docs data: audit`, `PR Checklist` - are the removals currently owed to the
-  ruleset;
-  [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md) owns
-  that edit. Confirm against the live ruleset rather than assuming this paragraph is current.
+  `quarantine: audit`, `docs data: audit`, `PR Checklist` - were removed from the ruleset in turn;
+  the 2026-09-07 vetting sweep confirmed none of them is still required.
+  [`docs/inflight/ci-fewer-jobs-ruleset-edits.md`](inflight/ci-fewer-jobs-ruleset-edits.md) records
+  that edit, closed. Confirm against the live ruleset rather than assuming this paragraph is current.
   - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
     exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
     (retiring them needs someone else to act, on no timetable we control) and *temporary* (the
@@ -318,7 +320,8 @@ every other PR) and not after (nothing merges). The live instance of this is
 
 | Check | Why not |
 |---|---|
-| `Mutation Tests (PIT, PR-scoped)` | **There is no such check any more, and requiring it would have been vacuous anyway.** The lane is now the last two steps of `scan: repo`, each carrying its own `continue-on-error: true` - so a PIT verdict still cannot fail a check, exactly as when the flag sat on its own job. Requiring the old context is now impossible (nothing produces it) rather than merely pointless. The property worth gating is that the lane could not measure anything, which `bin/ci-mutation-test.sh` signals through its own exit codes rather than by finding survivors. Gating that still means removing `continue-on-error` first, which is a code change, not a ruleset edit - and it would now make `scan: repo` red on a mutation verdict, which is the decision to argue |
+| `Mutation Tests (PIT, PR-scoped)` | **Requiring it would be vacuous, and there is now a second, independent reason it must stay out.** *Vacuous:* both steps of the job carry `continue-on-error: true`, so a PIT verdict cannot fail the check whatever the ruleset says. The property worth gating is that the lane could not measure anything, which `bin/ci-mutation-test.sh` signals through its own exit codes rather than by finding survivors; gating that means removing `continue-on-error` first, which is a code change, not a ruleset edit. *Runtime:* PIT is bimodal - about 11 seconds when nothing in scope changed, up to ~20 minutes when it mutates - and a required check blocks the merge until the job it belongs to finishes. A lane whose outcome is deliberately advisory must not gate with its runtime either, which is why it is its own job again rather than steps of `scan: repo` (see ["A required check must not wait on a non-gating lane"](#a-required-check-must-not-wait-on-a-non-gating-lane)) |
+| `deps: whole-tree CVE scan` | **Deliberately not required since 2026-09-09.** A finding must show as a red check without blocking a merge nothing in the PR can fix; the fix is an `excludeVulnerabilityIds` entry with a retirement condition or a dependency change, on its own PR. It came out of `scan: repo` for that reason: a job emits one check, and a step under `continue-on-error` reports green, which hides the finding rather than surfacing it. The scheduled lane in `dependency-audit.yml` still fails on a finding |
 | `Performance (optional)` | The self-hosted lane is dispatch-only, so this context is never produced on a PR. Requiring it would block every PR permanently |
 | `compat: kafka 4.x (experimental)` | Disabled with `if: false` |
 | `full build (master)` | Push-only; never produced on a PR |
@@ -561,17 +564,22 @@ runner count rather than about this workflow:
   globally would mean six-plus scans per PR from one account: it is switched on
   (`-Dossindex.skip=false`) in **exactly two places, whose triggers cannot both fire for one
   event** - this workflow on **dispatch and weekly on a schedule**, and the identically-named
-  `deps: whole-tree CVE scan` **step** of `maven.yml`'s `scan: repo` on every PR. Everything below
+  `deps: whole-tree CVE scan` **job** of `maven.yml` on every PR (its own, non-required check). Everything below
   is true of both; they are the same steps in two files, and changing one means changing the other.
   The schedule catches what no PR can, an unchanged tree acquiring a new advisory. (The one
   deliberate exception to "there is almost no scheduled build" below; it re-runs no suite the gate
   already covers.) The PR half skips for fork and Dependabot PRs, which receive no Actions secrets
   and would 401 forever.
-  - **Findings fail it.** astubbs/parallel-consumer#281 retired the standing backlog into
-    `excludeVulnerabilityIds` entries in the root pom, each carrying a stated retirement condition,
-    so a finding that reaches the gate is by construction an advisory nobody has looked at.
-    PR-time rather than the schedule alone because a solo maintainer will not read a scheduled
-    alert - the PR gate is the only channel with reliable attention.
+  - **Findings fail it - and on a PR, that red does not block the merge.**
+    astubbs/parallel-consumer#281 retired the standing backlog into `excludeVulnerabilityIds`
+    entries in the root pom, each carrying a stated retirement condition, so a finding that reaches
+    either lane is by construction an advisory nobody has looked at, and both lanes go red on one.
+    Since 2026-09-09 (owner decision) the PR job's check is **not in the master ruleset**: a new
+    advisory against an unchanged dependency had turned every open PR red at once on a required
+    context, and a check that blocks a merge nothing in the PR can fix protects nothing. The red
+    stays in the PR's checks list where the maintainer sees it; the scheduled lane is unchanged.
+    The reasoning this overrides - that the PR gate is the only channel a solo maintainer reliably
+    reads - is kept in `bin/check-ossindex-audit.sh`'s header and named in the job's comment.
   - **Two different reds, and they stay distinguishable.** Exit 1: the scan could not be proven to
     have run, so the *check* is broken and nothing was learned about the tree. Exit 2: the scan ran
     and found something, so the *tree* needs triage. Separate headings in the job summary. When both
@@ -1099,13 +1107,17 @@ skipped rather than handed an empty `files:`, because empty is what re-opens the
 `build` job collects the two halves into separate outputs, since one half per flag is the split these
 gates compare.
 
-**It is not proven, and it could not be proven before merging.** The comparison exists only on the
-server, and only once both sides have re-uploaded under real file lists, so the first clean per-flag
-comparison after master has run the `build` job is the evidence. Inside that window a PR is still
-compared against a base assembled the old way, so **a red per-flag gate there is the old defect being
-measured, not a regression**. Tracked in
+**It could not be proven before merging, and it has since been proven on the server.** The
+comparison exists only there, and only once both sides have re-uploaded under real file lists, so the
+first clean per-flag comparison after master has run the `build` job was the evidence - and it
+arrived: master's own two flags now report different figures rather than the identical one that told
+us both held the same data, and astubbs#475, a pull request with no `.java` in its diff, showed
+`codecov/project/unit` and `codecov/project/integration` both green. Inside the window before that a
+PR was still compared against a base assembled the old way, so **a red per-flag gate there was the
+old defect being measured, not a regression**; a PR whose merge-base still predates the change can
+land inside the tail of it. The record is
 [`docs/inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md`](inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md),
-which owns the outstanding proof and the condition for closing it.
+now closed, which carries the measurements and the files-count tell below.
 
 **A second, independent cause reads the same from the check list**: a master run cancelled before it
 uploaded, which leaves Codecov with no report for that base commit and every PR comparing against
@@ -1158,9 +1170,29 @@ never run on our own hardware.
   on-demand benchmark nobody dispatched, so it was not worth a file. Read it at
   `git show 5ae0cbfe4:.github/workflows/pr-highcpu-fast-feedback.yml`.
 - `mutation-full-sweep.yml` - **nightly plus dispatch**: the whole-project PIT sweep
-  (`bin/ci-mutation-test.sh -Dverbose=true -Dthreads=N`). The PR-scoped mutation steps in
-  `maven.yml`'s `scan: repo` only cover classes changed against the base; this is its exhaustive
-  counterpart.
+  (`bin/ci-mutation-test.sh -Dverbose=true -Dthreads=N`). `maven.yml`'s
+  `Mutation Tests (PIT, PR-scoped)` job only covers classes changed against the base; this is its
+  exhaustive counterpart.
+
+### A required check must not wait on a non-gating lane
+
+`Mutation Tests (PIT, PR-scoped)` is its own job. It spent
+astubbs/parallel-consumer#457 as the last two steps of `scan: repo` and came back out in
+astubbs/parallel-consumer#463, because a **job emits one check run and that check does not report
+until the whole job finishes**. Folding an advisory lane into a required check therefore hands it a
+gate it was never supposed to hold - not over the merge *verdict*, which `continue-on-error` still
+protects, but over the *time* the verdict takes to arrive.
+
+PIT's runtime is bimodal: about **11 seconds** when no in-scope class changed, and up to **~20
+minutes** when it actually mutates. There is nothing in between. On job `101622402881` every other
+step of `scan: repo` - both duplication scanners, dependency review and the whole-tree CVE audit -
+was finished 3m29s into the job, and PIT alone held the required context for the remaining ~17
+minutes.
+
+The rule the fold broke, and the one to apply next time: **batch fast, bounded, gating work.** A
+lane that is slow, bimodal, or deliberately non-gating is the one shape that must not go into a
+required job. The other folds in that run - the two static analysers, the three no-build scanners,
+the CVE audit - are all fast, bounded and gating, and remain correct.
 
 ### A green mutation tick usually means "measured nothing" - read the exit code
 
@@ -1169,8 +1201,8 @@ never run on our own hardware.
 producing no statistics / zero mutants), **3** nothing in scope. Measured over the last 40
 `maven.yml` PR runs: 40 passes, zero mutants scored - the lane is correctly narrow, not broken. Only
 a **0** is evidence about test quality. `bin/test-ci-mutation-test.sh` guards the contract and runs
-in the lane ahead of it - and, since the lane became two steps of `scan: repo`, non-advisory inside
-`repo: hygiene`'s `bin/check-all.sh --with-tests` sweep as well. The scope, the exclusions and the ranked widening list are in
+in the lane ahead of it - advisory there, and non-advisory inside `repo: hygiene`'s
+`bin/check-all.sh --with-tests` sweep as well. The scope, the exclusions and the ranked widening list are in
 [`docs/inflight/ci-mutation-testing.md`](inflight/ci-mutation-testing.md); whether a skip should
 render grey rather than green is an open decision in
 [`docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md`](inflight/ci-mutation-lane-skip-reads-as-a-pass.md).
@@ -1210,3 +1242,15 @@ it, so the lane reports nothing at all and looks merely quiet.
 **Beware: `performance` names two unrelated things.** It is the *test suite*
 (`bin/performance-test.sh`, the required **Performance Tests** check, on every PR from `maven.yml`,
 `ubuntu-latest`). It is **not** a runner label - the only self-hosted label is `highcpu`.
+
+**Not every `@Tag("performance")` test runs in that required check.** Since 2026-09-07 a test may
+also carry `@Tag("capacity")`, which `bin/performance-test.sh` excludes
+(`-Dexcluded.groups=quarantined,capacity`) while the experiment runners, passing an empty exclusion,
+still select it. That is for tests whose output is a pass **rate** over many runs rather than an
+outcome - `MultiInstanceRebalanceTest`'s three churn profiles - and it exists because a required
+check that fails one run in fifteen for a reason no change to PC can move blocks merges while saying
+nothing about the change being merged. `MultiInstanceRebalanceTest#CAPACITY_TAG` and
+[`docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md`](inflight/test-largenumberofinstances-cannot-gate-a-merge.md)
+own the reasoning. **A lane that selects nothing passes**, so when either side of that split changes,
+read what the lane actually ran - `bin/performance-test.sh`'s own `NOT MEASURED` / `NONE FOUND`
+report is there for exactly this.

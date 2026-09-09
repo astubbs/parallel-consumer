@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-read every open item against the tree and all still hold: the `.claude/*|local agent-harness configuration, not shipped` exemption row is still in `EXEMPT_PATHS`; `syntax_violation()` still inspects only `HDR_LINES[\$NOTICE_IDX]`; `wc -l AGENTS.md` is 632, well past its own ~400 backstop; `bin/lib/shell-corpus.sh` still has exactly one consumer (`bin/check-shell-hazards.sh`) while `bin/check-shell-lint.sh` resolves the same claimed corpus with a git pathspec; and `.github/scripts/file-ref-gate.js`'s `CITING_FILE` is still `md|adoc|txt|html|java` with no `.sh` -->
 
 <!-- post-merge: checked-begin -->
 `bin/check-copyright-headers.sh` used to look only at Java, and reported `255 java files, 0

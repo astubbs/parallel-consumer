@@ -1,11 +1,15 @@
 # `ChaosRevokeUnderWork*` sightings - the variants whose mode permits astubbs#29's cycle <!-- post-merge: checked -->
 
 <!-- inflight-type: register -->
+<!-- inflight-vetted: 2026-09-07 - register re-read and two stale lines fixed in place. (1) The header said no ChaosRevokeUnderWork* variant overrides commitMode; ChaosRevokeUnderWorkTransactionalIT has since been added and overrides it to PERIODIC_TRANSACTIONAL_PRODUCER, so that is now named. (2) Experiment 1 described CLASS2_STALL as gating the run; ProgressProbe now raises CLASS2_STALL/LAG_STAGNATION through observe() (demoted 2026-08-25), so the consequence is dated rather than current - the measurement is untouched. Everything else holds: AbstractRevokeUnderWorkScenario.commitMode() still returns PERIODIC_CONSUMER_SYNC, LAG_STAGNATION_BOUND is still 150s, and the instrumentation hole is closed - both branches of tryCommitOffsetsOnRevoke log at INFO -->
 
-**Commit mode: `PERIODIC_CONSUMER_SYNC`** - inherited from `AbstractRevokeUnderWorkScenario`, which
+**Commit mode: `PERIODIC_CONSUMER_SYNC`** - the default on `AbstractRevokeUnderWorkScenario`, which
 every `ChaosRevokeUnderWork*` variant extends: the eager and cooperative arms, both of their drain
-variants, and the key-order one. Verified in source - none of them overrides `commitMode`, so the
-mode is a property of the family rather than of the two arms this file was opened for.
+variants, and the key-order one. Verified in source - none of those overrides `commitMode`, so the
+mode is a property of the family rather than of the two arms this file was opened for. One variant
+added since does override it, deliberately and to measure something else:
+`ChaosRevokeUnderWorkTransactionalIT` runs `PERIODIC_TRANSACTIONAL_PRODUCER`, so it is outside every
+sighting recorded below.
 
 <!-- post-merge: checked -->
 That makes these **the only sightings in the family whose mode permits astubbs#29's AB-BA cycle to
@@ -13,9 +17,11 @@ close** - the cycle's second edge lives in `ConsumerOffsetCommitter`, constructe
 consumer-commit modes, and among those only the *sync* arm blocks. The scenario's own javadoc says
 the mode was chosen to maximise revoke-path vs commit-path lock contention.
 
-Mode-compatible is not the same as attributed. **Two seeds have now been replayed, and the result
-<!-- post-merge: checked -->
-is bad for astubbs#29: the fix does not close this stall** - see "The first replays" below. Of five
+Mode-compatible is not the same as attributed. This once read *"two seeds have now been replayed,
+and the result is bad for astubbs#29: the fix does not close this stall"*. **WITHDRAWN 2026-09-08:
+that grid was not a one-term A/B, and its outcome flips on a processor cap with the code held
+constant** - "The first replays" below carries the correction, and `bug-857-family.md`'s
+`## A fourth open item` section owns the numbers. Of five
 sightings four carry a reproducer; two of those four have been run. The third sighting has no probe
 verdict at all; the fourth's seed was recorded as lost and then recovered, see its own correction. Compare `test-857-churn-storm-async-stalls.md`, whose
 sightings are in a mode where the cycle cannot close.
@@ -30,9 +36,11 @@ consumed=252421/250000 violations=53 done=true      <- await SUCCEEDED, zero Con
 ```
 
 - Storm ended `57:08`; every expected key was consumed by `01:49`. **Legitimate recovery took 281s.**
-- The probe declares `CLASS2_STALL` at **150s** of per-partition stagnation, and the gating run's
-  `failFast` kills the wait at the first violation - around 154s. So the run is destroyed at ~154s
-  while the workload needs ~281s to finish honestly.
+- The probe declares `CLASS2_STALL` at **150s** of per-partition stagnation, and at the time of this
+  experiment the gating run's `failFast` killed the wait at the first violation - around 154s. So the
+  run was destroyed at ~154s while the workload needs ~281s to finish honestly. (This is what the
+  demotion on 2026-08-25 acted on: `CLASS2_STALL/LAG_STAGNATION` now goes through `observe`, so it no
+  longer gates. The measurement below stands; the consequence no longer applies to a run today.)
 - 53 partitions eventually tripped the bound (49 by the time of the first poll, 4 more while
   legitimately draining) and **all of them recovered** - `done=true` requires every expected key.
 - Duplicates were 2,421 over 250,000, ~1%, which is at-least-once working, not loss.
@@ -218,6 +226,27 @@ fingerprint identity as seed identity.**
 **Evidence**, outside the repo because it is 96MB compressed: `/home/astubbs/pc/evidence/857-replay-2026-08-18/`
 - `results.log` (the ledger), `autopsy-blocks.txt` (226 extracted verdicts), `reports/` (gzipped
   failsafe XMLs), and the driver scripts so the experiment can be re-run.
+
+### CORRECTED 2026-09-08: this grid was not a one-term A/B, and its outcome flips on the processor cap it dismissed
+
+**Do not read the table above as a comparison of astubbs#29's lock change.** Two separate findings,
+either alone enough to spend it; `bug-857-family.md`'s `## A fourth open item` section **owns the
+numbers and the reasoning**, and this is the part that belongs with the grid itself.
+
+- **The arms differed in a second place.** `ConsumerManager.poll` refreshes the pause cache at ENTRY
+  and at exit on the DEFECT arm (`438b09d9b`); on the FIXED arm (`b8a335b05`) only the exit refresh
+  is there. Exit-only is the shape
+  [`paused-poll-wakeup-lost-to-stale-pause-cache-2026-09-01.md`](../solutions/performance-issues/paused-poll-wakeup-lost-to-stale-pause-cache-2026-09-01.md)
+  owns, fixed two weeks after this grid ran by a commit that is not an ancestor of `b8a335b05`. A
+  controlled revert of it on today's tree did **not** reproduce the symptom, so it explains the
+  fixed-worse-than-defect asymmetry no better than astubbs#29 does - what it establishes is that the
+  grid was never measuring one term.
+- **The confound bullet above dismisses the wrong suspect.** *"the controls passing under the same
+  cap argue it does not manufacture the stall"* - seed B replayed on today's master fires no
+  observation at the box's own twelve processors and fires at `-XX:ActiveProcessorCount=8`, two runs
+  each, code and seed held constant. The cap is exactly what manufactures it.
+
+Every replay in the 2026-09-08 set drained to `inFlight=0` with full key coverage, crossing or not.
 
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed
@@ -499,5 +528,14 @@ logged at DEBUG while only the decline was at INFO, so at default verbosity "the
 contended" and "the revoke path never ran" were indistinguishable - and the decline is precisely
 what does not arrive when the window stays shut. Both branches of that fork now log at INFO, so a
 future replay can show whether the window opened instead of inferring it from an absence.
+
+**That hole-closing paid off on 2026-09-08, and the answer was the unwelcome one.** Two of the
+family's six `BLOCKED`-on-monitor capture seeds were replayed at `6aab3ff5a`; both passed, and the
+INFO logging showed one of the two had **zero declines** - void by the same standard as this section,
+now visible rather than inferred. One void in two is the base rate this method has.
+[`bug-857-family.md`](bug-857-family.md)'s `## 2026-09-08` section owns the table, and the finding
+that supersedes the whole approach: the signature those captures ask about cannot be produced at any
+head carrying astubbs#29, so the seeds were never able to answer the question. The verification came
+from a one-term control arm on `Rebalance857CommitSyncDeadlockProbeIT` instead.
 
 <!-- post-merge: checked-end -->

@@ -70,7 +70,7 @@ public class OffsetMapCodecManager<K, V> {
 
     public static final Charset CHARSET_TO_USE = UTF_8;
 
-    private final PCModule module;
+    private final PCModule<K, V> module;
 
     private Timer offsetEncodingTimer;
 
@@ -220,13 +220,45 @@ public class OffsetMapCodecManager<K, V> {
         assignment.stream()
                 .filter(topicPartition -> !partitionStates.containsKey(topicPartition))
                 .forEach(topicPartition -> {
-                    var psm = module.workManager().getPm();
-                    var epoch = psm.getEpochOfPartition(topicPartition);
+                    long epoch = epochOfPartitionBeingAssigned(topicPartition);
                     PartitionState<K, V> defaultEntry = new PartitionState<>(epoch, module, topicPartition, HighestOffsetAndIncompletes.of());
                     partitionStates.put(topicPartition, defaultEntry);
                 });
 
         return partitionStates;
+    }
+
+    /**
+     * The epoch {@link PartitionState} is built with on assignment - and the one place
+     * {@link bz.stub.parallelconsumer.state.PartitionStateManager#epochOfPartitionIfAssigned} is narrowed to a
+     * {@code long} with a throw rather than a skip.
+     * <p>
+     * <b>Suspected (Infer, {@code NULLPTR_DEREFERENCE}, and the note that outlived the ratchet line): the epoch is
+     * documented "or null if not yet assigned", and this class unboxed it into a primitive at two sites.</b> Cleared
+     * 2026-09-05 by reading the only production caller: {@code PartitionStateManager.onPartitionsAssigned} writes
+     * every partition's epoch - {@code incrementPartitionAssignmentEpoch}, unconditional, same thread - before it
+     * calls {@link #loadPartitionStateForAssignment} with the same collection, and nothing ever removes an epoch.
+     * Both sites only look up partitions from that collection: {@code Consumer.committed(Set)} returns keys drawn
+     * from the set it was given, and the default-entry pass iterates the assignment itself. So a null here is not
+     * a partition that is "not yet assigned"; it is a caller that reached this class without going through the
+     * assignment, which the message says.
+     * <p>
+     * <b>What would reopen it:</b> reordering {@code onPartitionsAssigned} so the load precedes the epoch write, or
+     * a new caller of this class that skips the state manager. Neither is caught by a gate; both are caught by
+     * this guard, at the site, naming the ordering - which is why the contract is narrowed here rather than made
+     * lenient. Fail-open (default the epoch) would silently build state at an epoch the fencing does not know
+     * about, and the accessor returns an {@link Optional} because {@code EpochAndRecordsMap} legitimately consumes
+     * the absence: a poll can return records for a partition before its assignment callback fires, and that reader
+     * skips them. The type puts the skip-or-throw decision at each call site; this site throws.
+     */
+    private long epochOfPartitionBeingAssigned(TopicPartition tp) {
+        return module.workManager().getPm().epochOfPartitionIfAssigned(tp)
+                .orElseThrow(() -> new NullPointerException(msg("No assignment epoch recorded for partition {}: "
+                                + "partition state is only built inside PartitionStateManager.onPartitionsAssigned, "
+                                + "after incrementPartitionAssignmentEpoch has run for the same partitions. Reaching "
+                                + "OffsetMapCodecManager for a partition the state manager was never told about "
+                                + "breaks that ordering.",
+                        tp)));
     }
 
     /**
@@ -323,8 +355,11 @@ public class OffsetMapCodecManager<K, V> {
     PartitionState<K, V> decodePartitionState(TopicPartition tp, OffsetAndMetadata offsetData) throws OffsetDecodingError {
         HighestOffsetAndIncompletes incompletes = decodeOffsetMapForPartition(tp, offsetData);
         log.debug("Loaded incomplete offsets from offset payload {}", incompletes);
-        var epoch = module.workManager().getPm().getEpochOfPartition(tp);
-        return new PartitionState<>(epoch, module, tp, incompletes);
+        long epoch = epochOfPartitionBeingAssigned(tp);
+        // The committed offset travels with the decoded map: PartitionState checks the map's claim against the
+        // partition itself at the first batch, and falls back to this offset when the claim turns out to be one no
+        // partition could have produced - see PartitionState#maybeVerifyLoadedOffsetMapAgainstThePartition.
+        return new PartitionState<>(epoch, module, tp, incompletes, offsetData.offset());
     }
 
     public String makeOffsetMetadataPayload(long baseOffsetForPartition, PartitionState<K, V> state) throws NoEncodingPossibleException {

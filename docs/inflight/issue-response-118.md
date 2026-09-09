@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
+<!-- inflight-vetted: 2026-09-07 - unposted: the three comments on astubbs#118 are the earlier paper trail, not this draft; astubbs#207 merged, the default really is IGNORE in ParallelConsumerOptions, and the FAIL-path note it cites is still open -->
 <!-- post-merge: checked-begin - every astubbs#207 reference below is past tense, which stays true
      once that PR has landed; the draft itself is addressed to the issue, not to the branch -->
 

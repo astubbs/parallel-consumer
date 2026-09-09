@@ -239,6 +239,7 @@ code:
 | **Per-key ORDERING and concurrency** | `KeyOrderLedger` | a key's offsets going backwards, or two deliveries of one key in flight at once |
 | **A stalled instance** | `InstanceStallProbeIT`, `ProgressProbe` | a member present and heartbeating while making no progress |
 | Lag stagnation (Class 2) - **reports, never gates** | `ProgressProbe` observations | a committed offset frozen while lag grows, group STABLE. **A timing measurement: crossing the bound does not fail the run** - see below |
+| **A commit that never lands** | `UncommittedCompletionDetector`, `WedgedPartitionRedControlIT`, `UncommittedCompletionProbeIT` | a partition whose completed work is not reaching the broker, while the instance's other shards keep completing - the half of the per-shard gap closed on 2026-09-09 |
 | **Watching a stall instead of killing it** | `-Dchaos.diagnoseStallRecovery=true` | keeps a stalled run alive so its state can be read |
 
 **Class 2 lag stagnation reports, and only reports - read its findings as speed, never as a verdict.**
@@ -262,13 +263,37 @@ owns the detail, including why the budget is not established for W1's continuous
 Class 2 observes and `INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT`
 guards the routing; it is untagged deliberately, so it gates every default integration build.
 
-**The demotion REDUCED per-shard coverage, and that is a known gap rather than a relocation.**
-`INSTANCE_STALL` is per-INSTANCE, so one wedged shard on an instance whose other shards keep
-completing fires nothing that gates - and the correctness ledger does not close it either, because it
-counts records processed rather than offsets durably committed. What is uncovered, and the correlated
-gate that would close it (with the red control it must have first), is tracked in
-[`test-per-shard-liveness-has-no-gate.md`](inflight/test-per-shard-liveness-has-no-gate.md). Do not
-read "Class 2 was demoted" as "that case is covered elsewhere".
+**How literally "speed" should be taken: the crossing flips on `-XX:ActiveProcessorCount` alone.** One
+seed on one tree fired no observation at the box's own processor count and fired at eight, two runs
+each, every run draining to `inFlight=0` with full key coverage. So a Class 2 finding tells you about
+the machine before it tells you anything about the code, and a crossing that appears on a loaded
+runner and not on a laptop is the expected behaviour rather than a non-reproduction.
+[`bug-857-family.md`](inflight/bug-857-family.md)'s `## A fourth open item` section **owns those
+runs**, including the ledger entry they withdrew.
+
+**The demotion REDUCED per-shard coverage. Half of that is closed as of 2026-09-09; the other half
+is still open.** `INSTANCE_STALL` is per-INSTANCE, so one wedged shard on an instance whose other
+shards keep completing fires nothing that gates - and the correctness ledger does not close it
+either, because it counts records processed rather than offsets durably committed.
+
+- **Closed: a commit that never lands.** `UNCOMMITTED_COMPLETIONS/COMMIT_NOT_LANDING` gates on the
+  DIFFERENCE between a member's own next-offset-to-commit for a partition and what the group has
+  actually committed, held across consecutive samples with the committed offset not moving and the
+  group STABLE. It is not the demoted bound renamed: the quantity is two positions rather than an
+  elapsed time, and the Class 2 false positive is excluded structurally, because an incomplete
+  record pins `offsetHighestSequentialSucceeded` at exactly the offset the broker holds and the
+  difference is then zero. `UncommittedCompletionDetector` owns the rule.
+- **Still open: a shard that will never be dispatched again.** The signal above reads a PARTITION,
+  and any incomplete offset in it pins the local watermark too - so a wedged key-order shard inside
+  a partition still gates nothing.
+
+The red control is `WedgedPartitionRedControlIT` (a real engine, broker-free, one partition's
+commits answered and dropped; every existing gating detector shown green on it and the new one shown
+red), and `UncommittedCompletionProbeIT` pins the re-arm rules. Both are untagged deliberately, so
+they gate every default integration build.
+[`test-per-shard-liveness-has-no-gate.md`](inflight/test-per-shard-liveness-has-no-gate.md) stays
+open for the half that remains. Do not read "Class 2 was demoted" as "that case is covered
+elsewhere".
 
 **Recorded but not yet analysed - reach for this before adding instrumentation.** The ledger is an
 event register: it writes down facts and lets the end-of-run assessment decide what they mean. So
@@ -332,6 +357,46 @@ is why the chaos job summary prints the peak rather than a verdict - read it as 
   record landed on one key, and KEY ordering serialised the whole tail onto one shard. Its scenario
   javadoc carries the arithmetic, and `heavyRecordsMustNotAllShareOneKey` is the check - the pattern to
   copy is turning the conclusion into an assertion rather than a comment.
+
+## Soak lane (`@Tag("soak")`) - hours-long hunts for a named field report, in no suite at all
+
+A soak is a scenario that runs for **tens of minutes to hours** against one hypothesis, usually a
+field report nobody has reproduced. It shares the chaos suite's scaffolding (`ChaosScenarioBase`,
+`ManagedPCInstance`, `ChaosSeed`, the ambient probe) but not its job: the chaos scenarios are
+*calibrated detectors that gate every PR*, and a soak is an *experiment you run on purpose*. The tag
+is separate for exactly that reason - `soak` sits in `pom.xml`'s `excluded.groups` default, so a
+soak is in no default suite, no gating lane, and **not the chaos shards** (those select classes by
+name through `CHAOS_SCENARIOS`, so a new chaos-tagged class would be invisible to them anyway, but a
+30-minute class in the chaos tag would still be picked up by the local `-Dincluded.groups=chaos`
+recipe above).
+
+- **Run one** - always name the class, because a lane whose members run for half an hour each is not
+  something to select by tag alone:
+  `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=soak -Dexcluded.groups= -Dit.test=<Name> -Dfailsafe.failIfNoSpecifiedTests=false`
+  The last flag is required rather than optional - `-am` builds the parent module first, the named
+  class is not in it, and failsafe fails the reactor there before core is reached (the trap
+  `bin/chaos-test.sh`'s header owns for the chaos lane). It buys that at the price of a run selecting
+  nothing exiting 0, so **read the scenario's own banner and summary lines out of the log before
+  recording a green** - see "A SHARD THAT RAN NOTHING MUST NOT READ AS A PASS" in
+  `bin/ci-integration-test.sh` for the same hazard in the gating lane.
+- **This lane is not `bin/soak-test.sh`.** That script is unrelated: it repeats a *short* test many
+  times under deliberate CPU contention to measure a flake **rate**. The `soak` tag is one long run
+  of one scenario. The word does two jobs in this repo; say which you mean.
+- **CI**: none, deliberately. A soak's result is a *rate under conditions*, and a lane that runs one
+  repetition per PR would report a number nobody can read.
+- **The result goes in a ledger, not in a verdict.** "Zero findings in one 30-minute run" is a
+  sighting-ledger entry: it says the shape did not reproduce once, never that it cannot. Record the
+  runs, the duration, the load shape, the seed, the broker image and the machine, in the
+  `docs/inflight/` note that owns the question - and record the same summary in the scenario's own
+  `Calibration status` javadoc block, the same convention the chaos scenarios use.
+- **Name the arms you did not run.** A soak's value is mostly in what the *next* run should vary, so
+  its javadoc lists the alternative arms in priority order, each changing one term - including the
+  control arm that removes the term under suspicion and nothing else.
+
+Members today: `CommitResponseTimeoutSoakIT` - the reproduction attempt for astubbs#175
+(`Timeout waiting for commit response`), built from the workload shape of the now-closed astubbs#177
+report; its question, candidate mechanisms and discriminator are owned by
+[`bug-177-commit-response-timeout-unreproduced.md`](inflight/bug-177-commit-response-timeout-unreproduced.md).
 
 ## Lincheck lane (`@Tag("lincheck")`) - scheduler-controlled concurrency testing, never gates
 
@@ -426,6 +491,8 @@ answer it.
 | Does that failure rate move with SCALE? | `bin/exp-sweep-large-instances-scale.sh` | **open** - rate rising with scale points at the group coordinator, flat points at PC | anywhere |
 | Does the `NO_PROGRESS` detector MISS real failures? | `bin/exp-audit-stall-detector-silence.sh [n]` | **open, reopened 2026-08-31** - a detector that stays quiet on a real failure is worse than an absent one, because the suite goes green on its silence | anywhere |
 | Did the async stall drain or wedge? | **RETIRED 2026-09-01 - answered** | the backlog drained on all six firings collected; method and discriminator in [`solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md`](solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md) |
+| How often do `cooperativeStickyRebalanceShouldNotStall` and `gentleChaosRebalance` fail? | `bin/exp-measure-capacity-profiles-failure-rate.sh [n]` | **open** - both moved off the required `Performance Tests` gate onto `@Tag("capacity")` 2026-09-07 and had run nowhere since; this is their sampler, on the same weekly cadence as `largeNumberOfInstances` | anywhere |
+| Is a seed that replays clean on an idle box a WEDGE under CPU load? | `bin/exp-instance-stall-load-versus-idle.sh <seed>...` | **answered 2026-09-08 for the `INSTANCE_STALL` line of `ChaosChurnStormIT` - no.** Six runs, three seeds, two load levels: zero `INSTANCE_STALL` dumps and zero violations, every accused member busy in user code (`docs/inflight/bug-857-family.md`, "2026-09-08: the load arm"). **Open, and this is what keeps the runner: the `ZOMBIE_MEMBER` arm** - its only two recorded seeds, `7731567379755737438` and `1053013618367208111` in `docs/inflight/test-857-churn-storm-async-stalls.md`, were not in that grid and have only ever been replayed idle - **and the busy-observation threshold**, since `-Dchaos.instanceStallDumpAfterSeconds=20` arms the window rather than calibrating what a busy count means. The dose-response is *not* one of them: its stated half was refuted, and re-asking it needs a quiet machine, not a new instrument. **Retire when both are settled** - method to `docs/solutions/`, script deleted; `bin/lib/cpu-load.sh` stays regardless, `bin/soak-test.sh` shares it | anywhere, but a dose-response arm needs an otherwise idle box |
 | All of the above, unattended, one tally | `bin/exp-batch-857.sh` | a batch of whatever was outstanding when it was written - read its header before trusting its scope | local only |
 
 **"Local only" is enforced, not advisory.** Those two compare this tree against sibling worktrees
@@ -444,16 +511,18 @@ that work lands, and add the link then.
 - Replaying a known schedule to see a failure again -> `bin/chaos-test.sh` with `CHAOS_SEED`.
 - Running one scenario once while you change code -> the IT directly, or the chaos lane.
 - Asking how often, at what rate, or whether a number moves -> an experiment runner.
+- Hunting a field report nobody has reproduced, over tens of minutes -> the soak lane above.
 
 The distinction that matters is that a rate needs N runs. A single run gives a pass or a fail, which
 is not a rate, and no lane in this repo aggregates results across runs.
 
 **The single-tree ones can be dispatched instead of run locally.** `.github/workflows/experiments.yml`
 offers each of those as a `workflow_dispatch` choice on the high-CPU runner, which is where the
-expensive ones belong - a ten-iteration batch is a runner-hour, not a desk-hour. The `largeNumberOfInstances` rate also
-runs weekly on a schedule, alone, because its question is open and a rate nothing samples stays
-unmeasured. **Nothing here runs on push and nothing gates**; that workflow's header carries the
-reasoning, including why gating on a rate would need a threshold nobody has the spread to choose.
+expensive ones belong - a ten-iteration batch is a runner-hour, not a desk-hour. The `largeNumberOfInstances`
+rate and the other two capacity profiles' rate each also run weekly on their own schedule slot, because a
+rate nothing samples stays unmeasured. **Nothing here runs on push and nothing gates**; that workflow's
+header carries the reasoning, including why gating on a rate would need a threshold nobody has the
+spread to choose.
 
 **When a question in that table is ANSWERED, the row and the script both go**, and the method moves
 to [`docs/solutions/`](solutions/). [`bin/AGENTS.md`](../bin/AGENTS.md) owns that lifecycle; this

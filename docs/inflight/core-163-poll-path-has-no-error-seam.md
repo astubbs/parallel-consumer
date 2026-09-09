@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: crash -->
+<!-- inflight-vetted: 2026-09-07 - every claim re-checked against the tree: `ConsumerManager` still catches only `SaslAuthenticationException` (bounded retry) and `WakeupException` (`correctPollWakeups++`), `BrokerPollSystem#supervise` still wraps the death in `PCInternalRuntimeException` and its "Unknown error" catch still calls `notifyPollerDied` before rethrowing, and `maybeCloseConsumer` is still gated on `isResponsibleForCommits()` (`committer instanceof ProducerManager`) so consumer-commit modes send no LeaveGroup. `gh issue view` says 163/148/153/149/141 are all still OPEN and 163 has no comments, so the draft answer is still unposted. Removed the delete-when section per docs/inflight/AGENTS.md; its condition (answer posted, policy decided) is unmet -->
 
 [astubbs#163](https://github.com/astubbs/parallel-consumer/issues/163) (confluentinc#550) asks whether
 PC has an exception handler, and then asks the question that was never answered: *"is there a plan to
@@ -70,6 +71,16 @@ so a control thread blocked in `ConsumerOffsetCommitter#commitAndWait` is releas
 of waiting out `offsetCommitTimeout`. The thread still dies and PC still closes; only the reporting
 improved.
 
+**"PC then closes the whole instance" now includes the Kafka consumer, in every commit mode - it did
+not until September 2026.** `maybeCloseConsumer` in `internal/AbstractParallelEoSStreamProcessor.java`
+was gated on the transactional committer alone, so a poller death in the consumer-commit modes sent no
+LeaveGroup and the member's partitions stayed assigned to it until `max.poll.interval.ms` expired. It
+has a second arm for a poll thread that ended without closing the consumer:
+`docs/solutions/logic-errors/a-duty-assigned-by-role-is-unassigned-when-the-role-holder-dies-2026-09-08.md`.
+That removes the group-level consequence, and leaves this note's subject untouched - **the poll thread
+still dies, and PC still terminates.** A seam that let the poll loop *continue* is what would change
+that; one that terminates the instance would not.
+
 **The death is wrapped twice** - `void supervise()` in `internal/BrokerPollSystem.java` into
 `PCInternalRuntimeException`, then `failureReason = new RuntimeException` in
 `internal/AbstractParallelEoSStreamProcessor.java` into a bare one. That is the complaint in
@@ -104,8 +115,3 @@ Skipping Records sections describe only the processing path.
 Recommended disposition for astubbs#163 itself: post the answer, correct the stale poll-is-unguarded
 claim in the body, then close it as a duplicate of astubbs#153 with astubbs#148 as the contained step.
 Answering before closing matters - the reporter asked in 2023 and has never had a fork answer.
-
-## Delete this file when
-
-The answer is posted and the poll-path policy is decided - either implemented, or recorded as
-deliberately-not-offered in `docs/refactoring.md` with the README documenting the `byte[]` route.

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-vetted: 2026-09-07 - still true: gh issue view 178 -R astubbs/parallel-consumer is still OPEN and still labelled "wait for info", and no quiet/no-disturbance scenario exists in the chaos suite -->
 
 **This is the only route left to settling astubbs#178** (mirror of confluentinc#843, "record being
 picked up by multiple threads simultaneously"). That issue offers two ways forward and one of them is

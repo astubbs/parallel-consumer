@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: config-lie -->
+<!-- inflight-vetted: 2026-09-07 - one option still bounds both jobs at HEAD: `ParallelConsumerOptions.offsetCommitTimeout` is still `Duration.ofSeconds(10)`, `ConsumerOffsetCommitter.commitAndWait` still blocks the control thread on `commitResponseQueue.poll(commitTimeout...)`, and `ConsumerManager.commitSync` still uses the same value as its retry budget (`elapsed.toMillis() <= offsetCommitTimeout.toMillis()`, throwing `OffsetCommitBudgetExceededException`). astubbs#204 is MERGED and is the notes premise - it reports the one-attempt case rather than fixing it. None of the three options has been chosen -->
 
 
 Open after astubbs#204. That PR made the option mean "the whole commit" rather than "one attempt",

@@ -309,6 +309,40 @@ worse than a broken one.
 The register is read from the baseline's blob, never your working tree, and is never written: its
 value is the reasoning attached to the order, which no computed scheme carries.
 
+## Vetting the notes - which to re-read first, and what looks stale about each
+
+```bash
+node bin/inflight.mjs vet
+node bin/inflight.mjs vet --area bug
+node bin/inflight.mjs vet --all
+```
+
+Every open note on the baseline, split by whether it carries an `inflight-vetted` marker
+([`docs/inflight/AGENTS.md`](inflight/AGENTS.md) -> "Vetting a note" owns the marker and the five
+outcomes), in the index's group order and then **oldest first** by the date the note was first added
+on any ref - `git log` dates the last edit, and after the package rename that is the same day for
+nearly every file. Each row carries the cheap signals a script can see:
+
+```
+  data-loss
+      bug-run-length-plausibility-ceiling.md
+          "A structurally valid but implausibly large run length is still accepted"
+          first added 2026-09-03, bug
+          all-cited-numbers-settled: cites one fork number and it is settled: astubbs#207 MERGED (pull-request)
+          bin/inflight.mjs docs show docs/inflight/bug-run-length-plausibility-ceiling.md
+```
+<!-- file-refs: N/A - sample vet output recorded on 2026-09-07; the note it shows was retired by astubbs#480, and the sample is kept as the shape of the output, not as a citation -->
+
+**A signal is a reason to open the note, never a verdict.** That note may cite astubbs#207 because
+that pull request is where the defect was found, or because it fixed it - the row cannot tell, and
+does not pretend to. The four signals: every fork number the note cites is merged or closed; the
+number in its filename is settled; a cited path or symbol (in backticks) no longer resolves on the
+baseline; the note states its own delete-when condition, printed so it can be judged on sight.
+
+`--area <prefix>` is how a sweep is split between agents; deferred and closed notes are counted, not
+listed, unless `--all` asks. Exit 2 when a signal could not fire - `gh` down, a git read failed -
+because an unvetted list with no signals reads exactly like one where nothing is stale.
+
 ## Locating a note you can only half-name
 
 ```

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - re-read `bin/ci-mutation-test.sh`: the survivor table is still built into `\$SURVIVORS` and written only to `\${GITHUB_STEP_SUMMARY:-/dev/null}` - no stdout echo, no `upload-artifact`, no `::warning file=` annotations - and `bin/check-pr-analysis-surfaces.sh` still lists the PIT survivor table under "SURFACES THIS SCRIPT CANNOT READ". None of the three fixes is implemented -->
 
 **The lane now works and produces a real survivor table - and that table is written only to
 `$GITHUB_STEP_SUMMARY`, which the REST API does not expose.** So the one output worth acting on is

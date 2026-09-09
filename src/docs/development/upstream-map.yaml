@@ -1004,19 +1004,27 @@ entries:
   - id: sweep-2023-broker-disconnect-commit
     group: rebalance-stability
     summary: Async offset-commit errors after broker downtime are logged and dropped
-    fork: {branches: [], prs: [], fork_issues: [248], status: none}
+    fork: {branches: [fix/async-commit-success-waits-for-ack], prs: [470], fork_issues: [248], status: pr-open}
     upstream: {repo: confluentinc/parallel-consumer, issues: [203], prs: [345], related: [185], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
       nioertel, 2022-03; never reproduced (reporter did not answer three diagnostic
       questions), so this closure was the one arguably defensible on merits -- though
-      "completed" is still wrong. PARTIALLY addressed since: commitDeferringOnRebalance()
-      now defers RebalanceInProgress/CommitFailed instead of throwing or swallowing.
-      NOT addressed: PERIODIC_CONSUMER_ASYNCHRONOUS still only log.errors the callback
-      exception, with "// todo keep work in limbo until async response is received?"
-      still in source -- which matches the reported symptom exactly. Before any fix,
-      try to reproduce with the swept ChaosBroker harness: PR #345
-      astubbs/bugs/broker-disconnect @bc620f3b8.
+      "completed" is still wrong. Addressed in two steps. First:
+      commitDeferringOnRebalance() defers RebalanceInProgress/CommitFailed instead of
+      throwing or swallowing. Second, astubbs/parallel-consumer#470: the async path no
+      longer marks offsets clean when the request is SENT, so a callback carrying an
+      exception -- the reporter's RetriableCommitFailedException, verbatim -- leaves the
+      offsets dirty and the next cycle re-commits them, instead of logging into a state
+      with nothing left to retry. The "todo keep work in limbo until async response is
+      received?" marker that entry #248 quotes is deleted by that PR. Mechanism and
+      control arms:
+      docs/solutions/logic-errors/an-async-commit-was-recorded-on-send-not-on-acknowledgement-2026-09-07.md.
+      STILL OPEN, and why this is not closed: the reporter's actual symptom was a
+      throughput collapse with endless retries, and nothing here reproduced that -- the
+      fix removes the silent-loss path the report exposed, not necessarily the reported
+      slowdown. The reproduction attempt with the swept ChaosBroker harness is still the
+      deciding experiment: PR #345 astubbs/bugs/broker-disconnect @bc620f3b8.
 
   - id: sweep-2023-topic-priority
     group: features
@@ -1240,8 +1248,8 @@ entries:
 
   - id: bug-546-bootstrap-truncation-warning
     group: rebalance-stability
-    summary: The "Truncating state" warning on assignment - three defects behind one string, only one of them fixed
-    fork: {branches: [], prs: [], fork_issue: 162, status: none}
+    summary: The "Truncating state" warning on assignment - three defects behind one string; one fixed upstream, one refuted here, one live
+    fork: {branches: [fix/162-offset-reset-replay-branch], prs: [484], fork_issue: 162, status: merged}
     upstream: {repo: confluentinc/parallel-consumer, issues: [546], prs: [563], related: [489, 545], status: open, last_checked: 2026-08-20}
     adoc_anchor: null
     notes: >
@@ -1249,16 +1257,20 @@ entries:
       commit) is ALREADY IN this tree, guarded in OffsetRunLength and recorded in the
       changelog. It does not close the issue: users reported the same warning on 0.5.2.7,
       after that fix shipped, which is the most important fact in the upstream thread and
-      is absent from the mirror body. Two paths remain at HEAD. First,
+      is absent from the mirror body. Of the two paths that remained, one is now REFUTED.
+      The below-expected reset branch is not a defect PC can reach on its own - the client
+      resolves an initializing partition's fetch position AFTER the rebalance listener
+      runs, so PC's own committed() read can never be the newer of the two, and the
+      proposed race yields the above-expected branch instead; and a commit PC writes
+      decodes back to exactly the offset it was filed under, which
+      PartitionStateBootstrapTruncation162Test now pins over four commit shapes alongside
+      both branches. What remains live is the first path:
       PartitionState.maybeTruncateBelowOrAbove never checks whether commit data existed,
       so a partition with no committed offset reports expecting 0 from loaded commit data
       and truncates nothing - also the landing point for astubbs#217's metadata-decode
-      recovery, so a normal new consumer group gets a false warning. Second, the
-      below-expected reset branch was never diagnosed upstream; the untested hypothesis
-      is a commit and position read race at cooperative handoff. Neither is covered by
-      any test - nothing in the tree asserts on the warning at all. astubbs#106,
-      astubbs#306 and astubbs#207 touch this code and address neither. Detail in
-      docs/inflight/bug-162-offset-state-truncation.md.
+      recovery, so a normal new consumer group gets a false warning. That one still has no
+      test. astubbs#106, astubbs#306 and astubbs#207 touch this code and do not address it.
+      Detail in docs/inflight/bug-162-offset-state-truncation.md.
 
   - id: reactor-scheduler-rationale
     group: features

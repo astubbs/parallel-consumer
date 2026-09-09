@@ -1,8 +1,8 @@
 # The detector fires; what is still open is whether it catches anything the deadline would miss
 
 <!-- inflight-type: task -->
-<!-- inflight-state: open - the validation it was opened for is DONE (the red/black ran); what remains is the under-the-ceiling experiment described at the foot -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - still open work (the under-the-ceiling experiment has not been run), and MIS-TAGGED: it carried `inflight-state: open - ...`, which the index and bin/inflight.mjs read as "carries a state that is neither deferred nor parked" and filed with closed/blocked, hiding it from the session index - absent means open, and its first two paragraphs already say everything the state line said, so the line is deleted rather than reworded -->
 
 **The validation this note was opened for is COMPLETE** - the red/black ran in CI, the detector fired,
 and the numbers are at the foot. It stays open for a different and smaller item, named in the last

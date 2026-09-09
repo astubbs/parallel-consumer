@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: config-lie -->
+<!-- inflight-vetted: 2026-09-07 - all three shapes still reachable: `batchSize` is still `@Builder.Default private final Integer batchSize = 1` with no `@NonNull` and no bound, `ParallelConsumerOptions.validate()` still checks only the consumer, the producer/producerConfig pair, transaction-mode consistency and the load-factor ordering, and every main-code reference is still a read. `isUsingBatching()` still tests `getBatchSize()` against 1 and `getTargetAmountOfRecordsInFlight()` is still `getMaxConcurrency() * getBatchSize()`, so zero silently requests nothing; `PCModule.initDynamicLoadFactor()` still divides by it behind its `messageBufferSize` guard. astubbs#311 is OPEN and the sibling note is deferred after v6. The delete-when condition is unmet -->
 
 
 Tracked as astubbs#311, alongside the arithmetic defect in

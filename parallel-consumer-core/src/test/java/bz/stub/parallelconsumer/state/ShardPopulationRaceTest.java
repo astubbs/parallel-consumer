@@ -5,13 +5,13 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentMatchers;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -19,7 +19,6 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static java.util.Objects.requireNonNull;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
 
 /**
@@ -27,30 +26,17 @@ import static org.mockito.Mockito.spy;
  * reconciles it against the shards it describes - so every drift is permanent and silent. These are the
  * interleavings that produce one, each driven deterministically rather than raced for.
  * <p>
- * Two of the three seams are placed by making a collaborator do something on the way past, which is what lets
- * a single-threaded test land another thread's action at an exact instruction:
- * {@link PartitionStateManager#getPartitionState(WorkContainer)} for the two inside
- * {@link ProcessingShard#addWorkContainer} and {@link ProcessingShard#removeStaleWorkContainersFromShard},
- * and {@link ConsumerRecord#offset()} for the one between {@link ShardManager} choosing a shard and writing
- * to it. The seam is a stand-in for the other thread, not a fixture the product knows about; if any of these
- * calls stops happening where the test assumes, the test stops exercising its window and must be rewritten
- * rather than left silently passing - each one asserts its own precondition for that reason.
+ * Two of the three seams are the shared staleness-check seam in {@link ShardSeamTestBase}, which owns why a
+ * collaborator doing something on the way past is what lets a single-threaded test land another thread's action at
+ * an exact instruction. The third is local: {@link ConsumerRecord#offset()}, between {@link ShardManager} choosing
+ * a shard and writing to it. Each asserts its own precondition that its seam fired, because a seam that stops
+ * being reached leaves the test passing vacuously rather than failing.
  *
  * @author Antony Stubbs
  * @see RecordPopulation
  * @see ProcessingShard
  */
-class ShardPopulationRaceTest {
-
-    private static final String TOPIC = "topic";
-
-    private static final TopicPartition TP = new TopicPartition(TOPIC, 0);
-
-    private final ModelUtils mu = new ModelUtils();
-
-    private final PCModuleTestEnv module = mu.getModule();
-
-    private final WorkManager<String, String> wm = module.workManager();
+class ShardPopulationRaceTest extends ShardSeamTestBase {
 
     /**
      * An insertion that only <em>looked</em> like a replacement still has to be admitted.
@@ -212,7 +198,7 @@ class ShardPopulationRaceTest {
                     var thread = new Thread(() -> sm.removeShardIfEmpty(ShardKey.ofKey(this)), "shard-collector");
                     collector.set(thread);
                     thread.start();
-                    joinQuietly(thread, 500);
+                    ThreadUtils.joinQuietly(thread, Duration.ofMillis(500));
                 }
                 return super.offset();
             }
@@ -233,37 +219,4 @@ class ShardPopulationRaceTest {
                 .that(sm.getWorkIfAvailable(10)).hasSize(1);
     }
 
-    /**
-     * Makes the collaborator run {@code action} the next time the shard asks it whether a container is stale,
-     * and only then - the sweeps the action drives ask the same question themselves.
-     */
-    private void onNextStalenessCheck(PartitionStateManager<String, String> seam, Runnable action) {
-        var armed = new AtomicBoolean(true);
-        doAnswer(invocation -> {
-            Object state = invocation.callRealMethod();
-            if (armed.compareAndSet(true, false)) {
-                action.run();
-            }
-            return state;
-        }).when(seam).getPartitionState(ArgumentMatchers.<WorkContainer<String, String>>any());
-    }
-
-    private ProcessingShard<String, String> shardWith(PartitionStateManager<String, String> pm,
-                                                      RecordPopulation population,
-                                                      ConsumerRecord<String, String> record) {
-        return new ProcessingShard<>(ShardKey.of(record, module.options().getOrdering()),
-                module.options(), pm, population);
-    }
-
-    private ConsumerRecord<String, String> recordAt(long offset) {
-        return new ConsumerRecord<>(TOPIC, 0, offset, "a-key", "value-" + offset);
-    }
-
-    private static void joinQuietly(Thread thread, long millis) {
-        try {
-            thread.join(millis);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
 }
