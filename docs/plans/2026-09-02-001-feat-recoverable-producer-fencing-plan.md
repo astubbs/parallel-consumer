@@ -12,6 +12,8 @@ execution: code
 # Recoverable Producer Fencing - Plan
 
 > **Re-cut into a stack, 2026-09-03.** The producer-ownership half of this plan ships in stages rather than in one PR: `producerConfig` with the default constructor is the base rung (astubbs/parallel-consumer#426); recovery (astubbs/parallel-consumer#410) stacks on that rung alone and rebuilds under the `transactional.id` the caller sets; the derived prefix-free id, the `ProducerFactory` and its contract, configuration redaction, and the deprecation of the instance option with the example migration are astubbs/parallel-consumer#420, stacked above recovery. Where the text below says the factory or the derived id is what recovery rebuilds through, read: the same configuration, id included - the mechanisms and decisions are unchanged, only the order they land in.
+>
+> **Decision, 2026-09-03 (owner):** the `Producer`-instance option is **not** deprecated. R16's "marked deprecated", R21, AE5's WARN, the removal queue and the "stays, deprecated" decision below are superseded: both ways of supplying a producer are peers, and what needs PC to build the producer - `producerFactory`, and the recovery it exists for - refuses a finished instance at validation instead. The instance path still gets no recovery (R19 stands).
 
 ## Goal Capsule
 

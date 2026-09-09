@@ -6,8 +6,9 @@ package bz.stub.parallelconsumer.examples.vertx;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
+import bz.stub.parallelconsumer.ProducerFactory;
 import bz.stub.parallelconsumer.vertx.JStreamVertxParallelStreamProcessor;
+import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
@@ -17,6 +18,7 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import pl.tlinkowski.unij.api.UniMaps;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 
@@ -35,6 +37,21 @@ public class VertxApp {
         return new KafkaProducer<>(new Properties());
     }
 
+    /**
+     * The configuration PC builds its own producer from - what you would otherwise hand to
+     * {@code new KafkaProducer<>(config)}. No {@code transactional.id}: PC derives one.
+     */
+    Map<String, Object> getProducerConfig() {
+        return new HashMap<>();
+    }
+
+    /**
+     * How PC turns that configuration into a producer; the test for this example overrides it to substitute a mock.
+     */
+    ProducerFactory<String, String> getProducerFactory() {
+        return ProducerFactory.kafkaProducer();
+    }
+
     JStreamVertxParallelStreamProcessor<String, String> parallelConsumer;
 
     Thread resultConsumer;
@@ -42,11 +59,11 @@ public class VertxApp {
 
     void run() {
         Consumer<String, String> kafkaConsumer = getKafkaConsumer();
-        Producer<String, String> kafkaProducer = getKafkaProducer();
         var options = ParallelConsumerOptions.<String, String>builder()
                 .ordering(ParallelConsumerOptions.ProcessingOrder.KEY)
                 .consumer(kafkaConsumer)
-                .producer(kafkaProducer)
+                .producerConfig(getProducerConfig())
+                .producerFactory(getProducerFactory())
                 .build();
 
         this.parallelConsumer = JStreamVertxParallelStreamProcessor.createEosStreamProcessor(options);

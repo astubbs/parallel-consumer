@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.integrationTests;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.ProducerFactory;
 import bz.stub.parallelconsumer.ProvesClaim;
 import bz.stub.parallelconsumer.TransactionalClaim;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
@@ -33,7 +34,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.UUID;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -77,8 +77,7 @@ class ProducerFencingRecoveryIT extends BrokerIntegrationTest<String, String> {
     private final Map<String, AtomicInteger> runsByKey = new ConcurrentHashMap<>();
     private Consumer<String, String> pcConsumer;
     private final List<KafkaProducer<String, String>> rogues = new ArrayList<>();
-    /** The id PC builds - and rebuilds - its producer under, set here so the rogue can fence it. */
-    private final String transactionalId = "pc-it-" + UUID.randomUUID();
+    private volatile String derivedTransactionalId;
 
     @BeforeEach
     void setUp() {
@@ -97,11 +96,14 @@ class ProducerFencingRecoveryIT extends BrokerIntegrationTest<String, String> {
      *                       completed work is still uncommitted when the fence lands and the replay runs on the wire
      */
     private void startPc(Duration commitInterval) {
-        Map<String, Object> producerConfig = new HashMap<>(getKcu().transactionalProducerConfig(new Properties()));
-        producerConfig.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId);
+        ProducerFactory<String, String> capturingFactory = config -> {
+            derivedTransactionalId = (String) config.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+            return new KafkaProducer<>(config);
+        };
         var options = ParallelConsumerOptions.<String, String>builder()
                 .consumer(pcConsumer)
-                .producerConfig(producerConfig)
+                .producerConfig(getKcu().transactionalProducerConfig(new Properties()))
+                .producerFactory(capturingFactory)
                 .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
                 .ordering(ParallelConsumerOptions.ProcessingOrder.KEY)
                 .batchSize(1)
@@ -147,14 +149,16 @@ class ProducerFencingRecoveryIT extends BrokerIntegrationTest<String, String> {
         // phase 0: healthy traffic read back at read_committed - the non-vacuity anchor
         allKeys.addAll(sendPhase(0));
         awaitResultsFor(allKeys);
-        log.info("Phase 0 read back; PC's transactional.id is {}", transactionalId);
+        assertWithMessage("the id PC derived has the documented shape pc-<L>-<group.id>-<uuid>")
+                .that(derivedTransactionalId).matches("pc-\\d+-.+-[0-9a-f-]{36}");
+        log.info("Phase 0 read back; PC's transactional.id is {}", derivedTransactionalId);
 
         for (int fence = 1; fence <= FENCES; fence++) {
             double recoveriesBefore = recoveries();
             // a rogue under PC's id: its initTransactions bumps the epoch, and PC's producer is fenced from then on
-            KafkaProducer<String, String> rogue = rogueUnder(transactionalId);
+            KafkaProducer<String, String> rogue = rogueUnder(derivedTransactionalId);
             rogue.initTransactions();
-            log.info("Fence {}: rogue initialised under {}", fence, transactionalId);
+            log.info("Fence {}: rogue initialised under {}", fence, derivedTransactionalId);
 
             allKeys.addAll(sendPhase(fence));
             await("recovery " + fence + " to complete").atMost(SETTLE).until(() -> recoveries() >= recoveriesBefore + 1);
@@ -185,7 +189,7 @@ class ProducerFencingRecoveryIT extends BrokerIntegrationTest<String, String> {
         // phase 0: the first commit is immediate, whatever the interval, so this phase lands and is read back
         allKeys.addAll(sendPhase(0));
         awaitResultsFor(allKeys);
-        log.info("Phase 0 read back; PC's transactional.id is {}", transactionalId);
+        log.info("Phase 0 read back; PC's transactional.id is {}", derivedTransactionalId);
 
         // phase 1: processed and produced into the open transaction, which the 10 s interval keeps uncommitted
         List<String> phaseOne = sendPhase(1);
@@ -196,9 +200,9 @@ class ProducerFencingRecoveryIT extends BrokerIntegrationTest<String, String> {
                 .that(resultsByKey.keySet()).containsNoneIn(phaseOne);
 
         double recoveriesBefore = recoveries();
-        KafkaProducer<String, String> rogue = rogueUnder(transactionalId);
+        KafkaProducer<String, String> rogue = rogueUnder(derivedTransactionalId);
         rogue.initTransactions();
-        log.info("Fence with a non-empty ledger: rogue initialised under {}", transactionalId);
+        log.info("Fence with a non-empty ledger: rogue initialised under {}", derivedTransactionalId);
 
         await("the recovery to complete").atMost(SETTLE).until(() -> recoveries() >= recoveriesBefore + 1);
         awaitResultsFor(allKeys);

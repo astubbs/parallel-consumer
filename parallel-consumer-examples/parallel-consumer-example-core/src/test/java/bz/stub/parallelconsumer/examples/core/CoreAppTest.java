@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.examples.core;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ProducerFactory;
 import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import lombok.SneakyThrows;
@@ -84,6 +85,12 @@ class CoreAppTest {
         Producer<String, String> getKafkaProducer() {
             var stringSerializer = Serdes.String().serializer();
             return new MockProducer<>(true, stringSerializer, stringSerializer);
+        }
+
+        @Override
+        ProducerFactory<String, String> getProducerFactory() {
+            // the example hands PC configuration; the test substitutes the producer PC builds from it
+            return config -> getKafkaProducer();
         }
 
         @Override

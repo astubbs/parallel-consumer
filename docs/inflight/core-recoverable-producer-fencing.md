@@ -21,8 +21,9 @@
 - astubbs/parallel-consumer#410 - recovery itself: detection on both paths, the replacement with backoff,
   worker deferral, observability, the broker IT. Stacked on astubbs#474.
 - astubbs/parallel-consumer#420 - the rest of producer ownership: a derived prefix-free
-  `transactional.id`, a `ProducerFactory` with an enforced contract, configuration redaction, deprecating
-  the instance option, migrating the examples. Stacked on astubbs#410.
+  `transactional.id`, a `ProducerFactory` with an enforced contract, configuration redaction, the
+  validation that refuses an instance where PC must build the producer, migrating the examples. Stacked on
+  astubbs#410.
 <!-- post-merge: checked-end -->
 
 <!-- post-merge: checked -->

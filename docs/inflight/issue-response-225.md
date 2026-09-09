@@ -23,8 +23,9 @@ the shape to copy, but it is not the "abort, then rejoin" this issue described.
 **"Rejoin" was not the hard part; the producer was.** Recovery needs a *new* producer, and PC cannot
 build one: `ParallelConsumerOptions` holds a finished `Producer` instance, and a `KafkaProducer`'s
 configuration cannot be read back out of it. So the change is an ownership change — PC takes producer
-configuration and builds the producer itself, the shape of Kafka Streams' `KafkaClientSupplier` — not an
-exception swap. The producer-instance option stays, without recovery.
+configuration and builds the producer through an overridable factory, Kafka Streams' `KafkaClientSupplier`
+shape — not an exception swap. The producer-instance option stays, without recovery; what needs PC to
+build the producer refuses an instance at validation.
 
 **"Whether rejoin is expressible in PC's lifecycle" — the part this issue said to investigate first —
 is answered, and no state-machine addition is needed.** The produce/commit lock pair already gives the

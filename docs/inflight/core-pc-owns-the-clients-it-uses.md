@@ -2,11 +2,16 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: reliability -->
+<!-- post-merge: checked-begin - a dated vetting record written on master before the producer half merged; it names
+     what was open on that date, and stays true as a record once this rung lands -->
 <!-- inflight-vetted: 2026-09-07 - the consumer half is still untaken: `ParallelConsumerOptions` still takes a `consumer` instance with no supplier or factory, while `ThreadConfinedConsumer` and `ConsumerOwnership` still enforce ownership at runtime only, which is the asymmetry the note argues from. `origin/client-factory` still exists as the 2022 draft, and astubbs#420 (the producer half) is still OPEN, so the pair is still unanswered -->
+<!-- post-merge: checked-end -->
 
+<!-- post-merge: checked-begin - names the producer half by its PR; true as a record once it has landed -->
 astubbs/parallel-consumer#420 makes PC build its **producer** from configuration through a factory it
 enforces, instead of taking a finished instance. The same argument applies to the **consumer**, it was
 drafted in 2022, and nothing tracks it.
+<!-- post-merge: checked-end -->
 
 ## The consumer half already has a draft
 
@@ -24,8 +29,10 @@ hands it one.
 
 The two halves answer the same question - *who owns the client PC uses* - and answering it for the
 producer alone leaves the API asymmetric: configuration in for one, instance in for the other.
+<!-- post-merge: checked-begin -->
 astubbs#420's own reasoning (a producer PC built belongs to PC, and is closed rather than leaked when
 construction fails) transfers directly.
+<!-- post-merge: checked-end -->
 
 ## What it costs
 
@@ -37,4 +44,5 @@ apply - it predates the ownership lifecycle it would now be built on.
 ## Not started
 
 Unowned. Recorded 2026-09-03 while reading every pre-fork branch, because the idea had no tracker at
+<!-- post-merge: checked - how the idea was found, a record -->
 all: astubbs#420 reaches it only through a line in `docs/refactoring.md`'s idea bank.

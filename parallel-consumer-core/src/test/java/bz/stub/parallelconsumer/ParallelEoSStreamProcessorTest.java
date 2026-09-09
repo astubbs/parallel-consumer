@@ -175,7 +175,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     }
 
     /**
-     * Covers AE5, the produce-path half: the deprecated instance path still closes on a synchronous
+     * Covers AE5, the produce-path half: the instance path still closes on a synchronous
      * {@link InvalidPidMappingException}, as confluentinc#839 made it.
      */
     @Test
