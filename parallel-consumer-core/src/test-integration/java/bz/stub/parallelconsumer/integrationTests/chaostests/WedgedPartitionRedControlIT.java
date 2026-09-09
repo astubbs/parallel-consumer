@@ -453,11 +453,9 @@ class WedgedPartitionRedControlIT {
 
             @Override
             public OptionalLong localOffsetToCommit(TopicPartition tp) {
-                var state = parallelConsumer.getWm().getPm().getPartitionState(tp);
-                if (state == null || state.isRemoved()) {
-                    return OptionalLong.empty();
-                }
-                return OptionalLong.of(state.getOffsetHighestSequentialSucceeded() + 1);
+                // through the shared helper, not a second copy of the arithmetic - the automated
+                // review on astubbs#491 flagged this pair, and the quantity is the detector's premise
+                return InstanceProgressView.localOffsetToCommitOf(parallelConsumer.getWm(), tp);
             }
         };
     }
