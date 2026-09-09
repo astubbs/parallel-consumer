@@ -248,8 +248,23 @@ public class PartitionState<K, V> {
      * state, which is the control thread inside {@code PartitionStateManager#onPartitionsAssigned}.
      * <p>
      * Note that {@link #initStateFromOffsetData} is also called by the reset branch of
-     * {@link #maybeTruncateBelowOrAbove}, and deliberately does NOT touch this: it answers what the ASSIGNMENT
-     * carried, which a later reset cannot change, and by then the bootstrap phase is over anyway.
+     * {@link #maybeTruncateBelowOrAbove}, and by
+     * {@link #maybeVerifyLoadedOffsetMapAgainstThePartition} when it refuses a map - and deliberately does NOT
+     * touch this in either case. It answers what the ASSIGNMENT carried, which neither a later reset nor a
+     * refused map can change: a refused map still leaves a real committed offset to bootstrap against
+     * (astubbs/parallel-consumer#480 falls back to exactly that), so the truncation branches stay correct for it.
+     * <p>
+     * <b>Cleared suspicion, 2026-09-09: this is NOT redundant with
+     * {@link #committedOffsetTheMapWasLoadedAgainst}</b>, which the next reader will suspect because
+     * {@link #NO_OFFSET_MAP_WAS_LOADED} is the same sentinel again. The discriminator is that field's own
+     * javadoc: it is also what "any caller that did not load this state from a committed offset map" passes,
+     * which includes every test that builds a state directly. Measured rather than argued - substituting
+     * {@code committedOffsetTheMapWasLoadedAgainst == NO_OFFSET_MAP_WAS_LOADED} for this field fails six
+     * assertions across three classes, including both genuine truncation branches in
+     * {@code PartitionStateBootstrapTruncation162Test} and two arms of
+     * {@code PartitionStateCommittedOffsetTest}, because those partitions DID load commit data and would go
+     * quiet. What would reopen it: the four-argument constructor gaining the committed offset, at which point
+     * the two facts really would be one and this field should be deleted rather than kept in sync.
      *
      * @see <a href="https://github.com/astubbs/parallel-consumer/issues/162">astubbs#162</a>
      */
