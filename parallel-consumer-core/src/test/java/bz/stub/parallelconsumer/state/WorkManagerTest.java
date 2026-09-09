@@ -5,8 +5,10 @@ package bz.stub.parallelconsumer.state;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import ch.qos.logback.classic.Level;
 import com.google.common.truth.Truth;
 import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
+import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import bz.stub.parallelconsumer.internal.utils.Range;
 import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
@@ -1038,6 +1040,217 @@ public class WorkManagerTest {
                         + "behind a blocked head still holds its selection claim, so drain() - which gates the "
                         + "transition to closing on this - would wait on work no worker can reach")
                 .isTrue();
+    }
+
+    /**
+     * A paused-partition count no other test would pass, so this class can read its own lines out of a logger every
+     * {@link WorkManager} in the JVM shares - the second obligation
+     * {@link bz.stub.parallelconsumer.internal.utils.LogCapture} places on its callers. Its only role is to be
+     * distinctive; the report treats it as an opaque number.
+     */
+    private static final int LATCH_TEST_PAUSED_PARTITIONS = 4242;
+
+    private static final String LATCH_TEST_MARKER = "pausedPartitions=" + LATCH_TEST_PAUSED_PARTITIONS;
+
+    /**
+     * <b>The intake latch is reported once, not per pass.</b> The gate reading loaded across
+     * {@link WorkManager#LATCHED_PASSES_BEFORE_WARNING} consecutive control-loop passes with nothing retiring is the
+     * astubbs#119 (confluentinc#857) intake stall, and before this line the only export was the paused-partition
+     * gauge.
+     *
+     * @see WorkManager#isSufficientlyLoadedReportingLatch(int)
+     */
+    @Test
+    void theIntakeLatchIsReportedOnceAtWarnWithTheGatesOperands() {
+        setupLoadedInstance();
+
+        try (var logs = LogCapture.of(WorkManager.class, Level.INFO)) {
+            drivePassesWithNothingRetiring(WorkManager.LATCHED_PASSES_BEFORE_WARNING - 1);
+
+            assertWithMessage("one pass short of the threshold, nothing is reported - the count is the whole trigger")
+                    .that(logs.messagesAt(Level.WARN, LATCH_TEST_MARKER))
+                    .isEmpty();
+
+            drivePassesWithNothingRetiring(1);
+
+            var warnings = logs.messagesAt(Level.WARN, LATCH_TEST_MARKER);
+            assertWithMessage("the latch is reported the moment the count is reached")
+                    .that(warnings).hasSize(1);
+            assertWithMessage("the report names the operands an operator has to act on")
+                    .that(warnings.get(0))
+                    .contains("inShards=400 parkedForRetry=0 workable=400 vs target(1)*loadingFactor(2)=2");
+
+            drivePassesWithNothingRetiring(WorkManager.LATCHED_PASSES_BEFORE_WARNING * 5);
+
+            assertWithMessage("and then it goes quiet - a line per pass would be the loudest thing in the log")
+                    .that(logs.messagesAt(Level.WARN, LATCH_TEST_MARKER))
+                    .hasSize(1);
+        }
+    }
+
+    /**
+     * The control arm on the second clause of the trigger: an instance just as loaded, for three times as many
+     * passes, whose records <em>retire</em>. Loaded is not the defect - loaded with nothing coming out is.
+     */
+    @Test
+    void aLoadedInstanceWhoseRecordsRetireNeverTripsTheIntakeLatch() {
+        setupLoadedInstance();
+
+        try (var logs = LogCapture.of(WorkManager.class, Level.INFO)) {
+            for (int pass = 0; pass < WorkManager.LATCHED_PASSES_BEFORE_WARNING * 3; pass++) {
+                var taken = wm.getWorkIfAvailable(1);
+                assertThat(taken).hasSize(1);
+                succeed(taken.get(0));
+
+                assertWithMessage("the gate is loaded on every one of these passes, so only the retirements differ")
+                        .that(wm.isSufficientlyLoadedReportingLatch(LATCH_TEST_PAUSED_PARTITIONS))
+                        .isTrue();
+            }
+
+            assertWithMessage("a healthy loaded instance is never reported, however long it stays loaded")
+                    .that(logs.messagesAt(Level.WARN, LATCH_TEST_MARKER))
+                    .isEmpty();
+        }
+    }
+
+    /**
+     * The other half of "once, then quiet": the clear is worth exactly one line too, and it re-arms the report so a
+     * second latch is not silent.
+     */
+    @Test
+    void theIntakeLatchLogsItsRecoveryAtInfoAndReArms() {
+        setupLoadedInstance();
+
+        try (var logs = LogCapture.of(WorkManager.class, Level.INFO)) {
+            drivePassesWithNothingRetiring(WorkManager.LATCHED_PASSES_BEFORE_WARNING);
+            assertWithMessage("latched")
+                    .that(logs.messagesAt(Level.WARN, LATCH_TEST_MARKER)).hasSize(1);
+            assertWithMessage("nothing is said about recovery while it is still latched")
+                    .that(logs.messagesAt(Level.INFO, LATCH_TEST_MARKER)).isEmpty();
+
+            var taken = wm.getWorkIfAvailable(1);
+            succeed(taken.get(0));
+            boolean ignoredLoaded = wm.isSufficientlyLoadedReportingLatch(LATCH_TEST_PAUSED_PARTITIONS);
+
+            var cleared = logs.messagesAt(Level.INFO, LATCH_TEST_MARKER);
+            assertWithMessage("one record retiring is the whole of the recovery condition")
+                    .that(cleared).hasSize(1);
+            assertWithMessage("and it must NOT read as an all-clear: the gate is still loaded here, so the poller "
+                    + "is still paused, and an operator told intake had resumed would stop watching")
+                    .that(cleared.get(0))
+                    .contains("the gate still reads loaded, so the broker poller stays paused");
+
+            // The count has to go back to ZERO, not merely re-arm the flag. Driving one pass short first is what
+            // separates the two: with the flag reset but the count left standing, the very next latched pass is
+            // already over the threshold and the second WARN arrives immediately. Asserting only the cumulative
+            // count after a full batch cannot see that - it is satisfied either way. Found by review.
+            drivePassesWithNothingRetiring(WorkManager.LATCHED_PASSES_BEFORE_WARNING - 1);
+            assertWithMessage("the second latch is counted from zero: one pass short, and there is still only the "
+                    + "first WARN - a recovery that re-armed the flag without clearing the count would have "
+                    + "fired again on its very first pass")
+                    .that(logs.messagesAt(Level.WARN, LATCH_TEST_MARKER)).hasSize(1);
+
+            drivePassesWithNothingRetiring(1);
+
+            var warnings = logs.messagesAt(Level.WARN, LATCH_TEST_MARKER);
+            assertWithMessage("a second latch after a recovery is reported again, not swallowed by the first")
+                    .that(warnings).hasSize(2);
+            assertWithMessage("and the second report is a fresh reading, not a replay of the first - it counts "
+                    + "its own hundred passes and names the population as it now stands")
+                    .that(warnings.get(1))
+                    .contains("gated shut for " + WorkManager.LATCHED_PASSES_BEFORE_WARNING
+                            + " consecutive control loop passes");
+
+            // Drain below the threshold with no observation in between, so the next pass is the FIRST to see an
+            // unloaded gate - the other of the two clear conditions, and the only one that is really an all-clear.
+            for (var remaining = wm.getWorkIfAvailable(1000); !remaining.isEmpty(); remaining = wm.getWorkIfAvailable(1000)) {
+                succeed(remaining);
+            }
+            boolean ignoredUnloaded = wm.isSufficientlyLoadedReportingLatch(LATCH_TEST_PAUSED_PARTITIONS);
+
+            var resumed = logs.messagesAt(Level.INFO, LATCH_TEST_MARKER, "Record intake has resumed");
+            assertWithMessage("an unloaded gate is the clear that really is an all-clear, and says so")
+                    .that(resumed).hasSize(1);
+        }
+    }
+
+    /**
+     * <b>A revocation clears the latch, and the report must not call that a recovery.</b> The trigger reads
+     * {@link RecordPopulation#getRetiredTotal()}, which rises when a record leaves a shard <em>by any route</em> -
+     * success, revocation, or a stale container being swept. For the trigger that is right: a revocation really
+     * does drain the shards. For the operator-facing line it is not, and this is the reachable case that makes it
+     * matter, because revoking is what an operator or the group coordinator does <em>to</em> a stalled instance -
+     * so a line reading "intake has resumed" here would be an all-clear delivered at the exact moment somebody is
+     * intervening, with nothing having succeeded.
+     *
+     * @see WorkManager#observeLoadGateLatch
+     */
+    @Test
+    void aRevocationClearsTheLatchWithoutTheReportClaimingRecovery() {
+        setupLoadedInstance();
+
+        try (var logs = LogCapture.of(WorkManager.class, Level.INFO)) {
+            drivePassesWithNothingRetiring(WorkManager.LATCHED_PASSES_BEFORE_WARNING);
+            assertWithMessage("latched, with nothing having succeeded")
+                    .that(logs.messagesAt(Level.WARN, LATCH_TEST_MARKER)).hasSize(1);
+            assertWithMessage("and nothing has succeeded - the arm's premise")
+                    .that(successfulWork).isEmpty();
+
+            wm.onPartitionsRevoked(UniLists.of(topicPartitionOf(0)));
+            boolean ignoredLoaded = wm.isSufficientlyLoadedReportingLatch(LATCH_TEST_PAUSED_PARTITIONS);
+
+            var cleared = logs.messagesAt(Level.INFO, LATCH_TEST_MARKER);
+            assertWithMessage("the revocation retired every held record, so the latch clears")
+                    .that(cleared).hasSize(1);
+            assertWithMessage("but not one of them succeeded, so the line must not say processing recovered - it "
+                    + "reports what was measured, records leaving the shards, and names revocation as one of the "
+                    + "ways that happens")
+                    .that(cleared.get(0))
+                    .contains("Records leave the shards by SUCCESS, by REVOCATION or by a stale container being swept");
+        }
+    }
+
+    /**
+     * A buffer far above the gate's threshold, so the gate reads loaded without anything else being arranged:
+     * {@code maxConcurrency(1)} puts the target at one record and the initial loading factor doubles it, against 400
+     * records held.
+     */
+    private void setupLoadedInstance() {
+        setupWorkManager(ParallelConsumerOptions.builder()
+                .ordering(UNORDERED)
+                .maxConcurrency(1)
+                .build());
+        registerRecords(0, 400);
+
+        assertWithMessage("the arm's premise: the gate reads loaded before a single pass is driven")
+                .that(wm.isSufficientlyLoaded()).isTrue();
+    }
+
+    private void drivePassesWithNothingRetiring(int passes) {
+        long retiredBefore = wm.getSm().getRecordPopulation().getRetiredTotal();
+        for (int pass = 0; pass < passes; pass++) {
+            assertWithMessage("the gate must read loaded on every pass, or the arm is not what it claims")
+                    .that(wm.isSufficientlyLoadedReportingLatch(LATCH_TEST_PAUSED_PARTITIONS))
+                    .isTrue();
+        }
+        assertWithMessage("and nothing retired across them - the other half of the trigger")
+                .that(wm.getSm().getRecordPopulation().getRetiredTotal())
+                .isEqualTo(retiredBefore);
+    }
+
+    /**
+     * As {@link #registerSomeWork(int)}, but for an arbitrary number of records on one partition, each under its own
+     * key - so no shard head can block another and the count in the shards is the count registered.
+     */
+    private void registerRecords(int partition, int count) {
+        assignPartition(partition);
+
+        var records = new ArrayList<ConsumerRecord<String, String>>(count);
+        for (int i = 0; i < count; i++) {
+            records.add(makeRec(String.valueOf(i), "key-" + i, partition));
+        }
+        var recs = new ConsumerRecords<>(UniMaps.of(topicPartitionOf(partition), records));
+        wm.registerWork(new EpochAndRecordsMap(recs, wm.getPm()));
     }
 
     /**

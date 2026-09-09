@@ -1853,7 +1853,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private void maybeWakeupPoller() {
         if (state == RUNNING) {
-            if (!wm.isSufficientlyLoaded() && brokerPollSubsystem.isSubscriptionsPausedForBackPressure()) {
+            // ONE gate reading for the pass, shared by the wakeup decision and the latch report, so the report can
+            // never describe an evaluation this decision was not made on. The paused count is read first because the
+            // report needs the number and this decision only needs "any" - it is the same volatile cache either way.
+            int pausedPartitions = brokerPollSubsystem.getPausedPartitionCountForBackPressure();
+            if (!wm.isSufficientlyLoadedReportingLatch(pausedPartitions) && pausedPartitions > 0) {
                 if (log.isDebugEnabled()) {
                     long inShards = wm.getNumberOfWorkQueuedInShardsAwaitingSelection();
                     long outForProcessing = wm.getNumberRecordsOutForProcessing();
