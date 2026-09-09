@@ -799,31 +799,72 @@
                              Vert.x 5 lands (docs/inflight/deps-deferred-majors.md). -->
                         <excludeVulnerabilityId>CVE-2026-59903</excludeVulnerabilityId>
 
-                        <!-- io.micrometer:micrometer-core. Real, but there is no publicly available
-                             fix: the advisory's 1.13.x/1.14.x patches ship only in the commercial
-                             repository, and Central stops at 1.13.15 / 1.14.14, both affected. The
-                             minimum public fix is 1.15.12. Not reachable here either - the advisory
-                             scopes it to HTTP *server* instrumentation, and this project uses only
-                             Counter/Gauge/Timer/DistributionSummary/KafkaClientMetrics, with
-                             example-metrics serving over the JDK's own com.sun.net.httpserver.
-                             CVE-2026-59295 (5.9, CWE-400) is the same component, the same blocker and
-                             the same retire condition, so it shares this comment rather than repeating
-                             it. Unbounded memory growth in MicrometerHttpClientInterceptor when an
-                             instrumented Apache HttpAsyncClient request fails before a response.
-                             Unreachable here for a structural reason rather than a judgement call:
-                             neither MicrometerHttpClientInterceptor nor any Apache HttpAsyncClient
-                             appears anywhere in this repo's sources or poms, and the micrometer
-                             surface actually used is metric primitives plus KafkaClientMetrics,
-                             ExecutorServiceMetrics and CompositeMeterRegistry. Re-check that if this
-                             project ever instruments an HTTP client: grep the sources and poms for
-                             MicrometerHttpClientInterceptor and for HttpAsyncClient, and re-argue
-                             this entry if either appears.
+                        <!-- io.micrometer:micrometer-core. Three real Spring/VMware advisories against
+                             the 1.13.15 we hold, none of them reachable here, and none of them
+                             fixable without the prometheus migration. Each is a *different* defect
+                             with a different reason for being unreachable, so each is argued below
+                             rather than waved at as "the micrometer ones".
+
+                             THE FIX TABLE IS THE THING TO READ, and it is why they share an entry.
+                             Spring publishes some patches to Central and some only to the commercial
+                             repository, so "a fixed version exists" and "we can have it" are
+                             different questions. Per spring.io/security, OSS availability is:
+
+                               CVE-2026-40984  fixed OSS in 1.15.12 and 1.16.6
+                               CVE-2026-59295  fixed OSS in 1.16.7 and 1.17.1 only
+                               CVE-2026-59296  fixed OSS in 1.16.7 and 1.17.1 only
+
+                             The 1.13.x, 1.14.x and (for the latter two) 1.15.x patches are
+                             Enterprise Support Only, and Central stops at 1.13.15 / 1.14.14 /
+                             1.15.12 - every one of them affected. So the minimum publicly available
+                             version clearing all three is 1.16.7. There is no security-only bump on
+                             the 1.13 line and there never will be.
+
+                             CVE-2026-40984 (8.7, DoS) - GHSA-g3pr-3p32-fp23 scopes it to HTTP
+                             *server* instrumentation, where a crafted request inflates URI tag
+                             cardinality. This project uses only metric primitives plus
+                             KafkaClientMetrics / ExecutorServiceMetrics / CompositeMeterRegistry, and
+                             example-metrics serves over the JDK's own com.sun.net.httpserver - no
+                             Micrometer HTTP binder anywhere.
+
+                             CVE-2026-59295 (5.9, CWE-401) - unbounded memory growth in
+                             MicrometerHttpClientInterceptor when an instrumented Apache
+                             HttpAsyncClient request fails before a response. Unreachable for a
+                             structural reason rather than a judgement call: neither
+                             MicrometerHttpClientInterceptor nor any Apache HttpAsyncClient appears
+                             anywhere in this repo's sources or poms. Re-check if this project ever
+                             instruments an HTTP client - grep for MicrometerHttpClientInterceptor and
+                             for HttpAsyncClient, and re-argue this entry if either appears.
+
+                             CVE-2026-59296 (5.9, CWE-117) - newline injection into newline-delimited
+                             metric output. The advisory names three preconditions that must ALL hold,
+                             and two of them fail here independently:
+                               * the emitter must be micrometer-registry-statsd on the Datadog or Etsy
+                                 flavor, or LoggingMeterRegistry. Neither exists in this tree:
+                                 micrometer-registry-statsd is not a dependency of any module, and
+                                 LoggingMeterRegistry is never constructed - the registries used are
+                                 SimpleMeterRegistry, CompositeMeterRegistry and (example-metrics)
+                                 PrometheusMeterRegistry;
+                               * the meters must be instrumented with user-controlled, unvalidated
+                                 input as metric names, tag keys or tag values. Every tag value PC
+                                 itself emits is structurally incapable of carrying \n or \r: Kafka
+                                 topic names (broker-validated to [a-zA-Z0-9._-]), partition numbers,
+                                 an offset-encoding enum name, and a UUID.
+                             Note this one is only half PC's call, because a caller supplies the
+                             registry through ParallelConsumerOptions.meterRegistry and supplies
+                             commonTags. An application that hands PC a StatsD or logging registry AND
+                             passes attacker-controlled strings as commonTags is vulnerable - but that
+                             is the advisory's own antipattern, committed in the application, and
+                             1.16.7 would be the fix for it there too. Re-argue this entry if PC ever
+                             starts deriving a tag value from record keys, headers or payloads.
 
                              RETIRE WHEN: the io.micrometer.prometheus -> prometheusmetrics package
-                             rename is migrated, which is what unblocks 1.15.x - and it retires BOTH
-                             ids below, since 1.15.12 is past each of them. -->
+                             rename is migrated and the family moves to >= 1.16.7, which retires all
+                             three ids at once. NOT 1.15.x - that clears only CVE-2026-40984 and
+                             leaves the other two standing. -->
                         <excludeVulnerabilityId>CVE-2026-40984</excludeVulnerabilityId>
                         <excludeVulnerabilityId>CVE-2026-59295</excludeVulnerabilityId>
+                        <excludeVulnerabilityId>CVE-2026-59296</excludeVulnerabilityId>
 
                         <!-- com.fasterxml.jackson.core:jackson-databind (example-streams only). False
                              positive: GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and
