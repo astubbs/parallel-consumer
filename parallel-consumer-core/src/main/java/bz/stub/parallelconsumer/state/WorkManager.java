@@ -13,6 +13,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Tag;
 import lombok.Getter;
+import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -68,6 +69,50 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     @Getter
     private int numberRecordsOutForProcessing = 0;
+
+    /**
+     * How many consecutive control-loop passes the record-intake gate must read loaded, with nothing retiring in
+     * between, before {@link #observeLoadGateLatch} reports the latch.
+     * <p>
+     * <b>Chosen from the loop's two cadences, not from a target wall-clock time.</b> When nothing retires the loop's
+     * pass rate is set by how long {@code processWorkCompleteMailBox} blocks, and that differs by two orders of
+     * magnitude between the two states this number has to separate:
+     * <ul>
+     *     <li><b>Latched</b> - every held record fails on every attempt, so results arrive in the mailbox
+     *     continuously and each pass returns almost at once. astubbs#487's low-poison arm measured 6,201 gate
+     *     evaluations across a nine-minute unbroken latch, about 87ms a pass, so 100 passes is roughly nine seconds
+     *     - and the state it reports is permanent, so being a few seconds late costs nothing.</li>
+     *     <li><b>Healthy, inside a long user function</b> - the mailbox is empty, so the pass blocks for
+     *     {@code getTimeToBlockFor()}, bounded by the commit interval
+     *     ({@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL}, five seconds). 100 passes is then over eight
+     *     minutes in which not one record anywhere in the instance retired.</li>
+     * </ul>
+     * A pass count therefore grants the healthy case roughly fifty times the wall-clock grace it gives the state it
+     * is hunting, which no single elapsed-time bound can do. Eight minutes of a fully-loaded instance retiring
+     * nothing at all is beyond any workload this project has seen, and PC puts no ceiling on a user function - which
+     * is why the report is a WARN and not an exception.
+     */
+    static final int LATCHED_PASSES_BEFORE_WARNING = 100;
+
+    /**
+     * {@link RecordPopulation#getRetiredTotal()} as of the previous control-loop pass, so that "did anything retire
+     * during this pass" is a comparison rather than another counter. Control-thread state - see
+     * {@link #observeLoadGateLatch}, which owns the confinement argument for this and the two fields below.
+     */
+    private long retiredTotalAtLastGateObservation = 0;
+
+    /**
+     * How many consecutive passes the gate has read loaded with nothing retiring. Reset the moment either clause
+     * stops holding.
+     */
+    private int consecutiveLatchedPasses = 0;
+
+    /**
+     * Whether the WARN for the current run of latched passes has already been emitted - what makes the report fire
+     * once rather than once per pass, and what re-arms it after a recovery.
+     */
+    private boolean latchReported = false;
+
     private PCModule<K, V> module;
     /**
      * Useful for testing. Register with {@link #addSuccessfulWorkListener}.
@@ -348,14 +393,42 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *         should be downloaded (or pipelined in the Consumer)
      */
     public boolean isSufficientlyLoaded() {
-        // ONE read of the shards, and the log line below prints the very values it returned. Re-reading for
-        // the diagnostic would let it print an equation that never held - and telling a real stall apart
-        // from counter drift is the entire point of the line.
+        return readLoadGate().isLoaded();
+    }
+
+    /**
+     * As {@link #isSufficientlyLoaded()}, but it also observes whether the gate has <em>latched</em> - read loaded
+     * across {@link #LATCHED_PASSES_BEFORE_WARNING} consecutive control-loop passes with no record retiring in
+     * between - and reports that once, at {@code WARN}, when it has.
+     * <p>
+     * <b>The reading is taken once and used for both</b>, so the report can never describe an evaluation the
+     * poller-wakeup decision was not made on. Nothing about the decision changes: this returns exactly what
+     * {@link #isSufficientlyLoaded()} would have returned on the same pass.
+     * <p>
+     * <b>Control thread only</b> - see {@link #observeLoadGateLatch}, which owns the confinement argument for the
+     * three counters it keeps. The broker-poll thread's route into the gate is {@link #shouldThrottle()}, which
+     * still calls {@link #isSufficientlyLoaded()} and observes nothing.
+     *
+     * @param pausedPartitions how many partitions the poller last saw Kafka holding paused - the other half of the
+     *                         operator's picture, and the only operand this class cannot read for itself
+     * @see AbstractParallelEoSStreamProcessor
+     */
+    public boolean isSufficientlyLoadedReportingLatch(int pausedPartitions) {
+        LoadGateReading reading = readLoadGate();
+        observeLoadGateLatch(reading, pausedPartitions);
+        return reading.isLoaded();
+    }
+
+    /**
+     * One evaluation of the record-intake gate, with the operands the decision was made on.
+     * <p>
+     * ONE read of the shards, and the log line below prints the very values it returned. Re-reading for the
+     * diagnostic would let it print an equation that never held - and telling a real stall apart from counter drift
+     * is the entire point of the line.
+     */
+    private LoadGateReading readLoadGate() {
         var records = sm.getWorkableRecords();
-        long workable = records.getWorkable();
-        int loadingFactor = getLoadingFactor();
-        long threshold = (long) options.getTargetAmountOfRecordsInFlight() * loadingFactor;
-        boolean loaded = workable > threshold;
+        var reading = new LoadGateReading(records, options.getTargetAmountOfRecordsInFlight(), getLoadingFactor());
         // Silent-stall diagnostic (confluentinc#857): this gates the broker-poller pause/resume. If it stays true while
         // no records are actually flowing, the poller never resumes and the PC stalls. Because the figure below is
         // derived by conservation, "stays true with nothing flowing" now means records really are being held and not
@@ -363,10 +436,109 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
         if (log.isDebugEnabled()) {
             log.debug("isSufficientlyLoaded={} (inShards={} - parkedForRetry={} = {} vs target({})*loadingFactor({})={})",
-                    loaded, records.getInShards(), records.getParkedForRetry(), workable,
-                    options.getTargetAmountOfRecordsInFlight(), loadingFactor, threshold);
+                    reading.isLoaded(), records.getInShards(), records.getParkedForRetry(), reading.getWorkable(),
+                    reading.getTarget(), reading.getLoadingFactor(), reading.getThreshold());
         }
-        return loaded;
+        return reading;
+    }
+
+    /**
+     * The record-intake gate's decision for one pass, together with the operands it was made from.
+     * <p>
+     * The gate and the latch report need the same numbers, and a second read of the shards to render them would let
+     * the report print an equation the decision was never made on - the trap
+     * {@link ShardManager#getWorkableRecords()} already exists to close for the {@code DEBUG} line.
+     */
+    @Value
+    public static class LoadGateReading {
+
+        ShardManager.WorkableRecords records;
+
+        /**
+         * @see ParallelConsumerOptions#getTargetAmountOfRecordsInFlight()
+         */
+        int target;
+
+        /**
+         * @see DynamicLoadFactor#getCurrentFactor()
+         */
+        int loadingFactor;
+
+        public long getWorkable() {
+            return records.getWorkable();
+        }
+
+        public long getThreshold() {
+            return (long) target * loadingFactor;
+        }
+
+        public boolean isLoaded() {
+            return getWorkable() > getThreshold();
+        }
+    }
+
+    /**
+     * Report the latch once when it arrives, once more when it clears, and nothing in between.
+     * <p>
+     * <b>What it reports.</b> The intake gate reading loaded across {@link #LATCHED_PASSES_BEFORE_WARNING}
+     * consecutive control-loop passes with <em>no record retiring</em> in any of them. That is the astubbs#119
+     * (confluentinc#857) intake stall as it looks from inside: the poller is paused because the gate says the buffer
+     * is full, and the buffer never empties because the records in it are being retried forever. Nothing is thrown,
+     * throughput is zero, and until this line the only export was the paused-partition gauge.
+     * <p>
+     * <b>Why consecutive passes and not elapsed time.</b> A timing bound would be a threshold argument nobody can
+     * win - see
+     * {@code docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md}
+     * - and it would need a clock this class does not otherwise read. Counting passes also gets the asymmetry the
+     * right way round, which is the real argument for it: a latched instance is woken constantly by failure results
+     * arriving in the mailbox, so its passes are fast, while a healthy instance inside a long user function has an
+     * empty mailbox and blocks for its whole commit interval. The same pass count is therefore a short wait in the
+     * state being reported and a long one in the state that must not be.
+     * <p>
+     * <b>"Nothing retired" is read, not counted.</b> {@link RecordPopulation#getRetiredTotal()} is already
+     * maintained on the admission/retirement path, monotonic, and is the exact figure "no record left a shard, by
+     * any route" needs. Nothing new is counted for this.
+     * <p>
+     * <b>Thread confinement.</b> The three counters below are written and read only from here, and this method's
+     * only production caller is the control loop's once-per-pass
+     * {@code AbstractParallelEoSStreamProcessor#maybeWakeupPoller}. They are deliberately <b>not</b>
+     * {@code @ThreadConfined} with a runtime assertion, which is this repo's usual pairing: the harness drives
+     * {@code controlLoop} from more than one thread within a single test (see {@code BlockedThreadAsserter} use in
+     * {@code ProducerManagerTest}), so an owning-thread assertion would fire on a legitimate caller - and a
+     * diagnostic that can kill the consumer is a worse trade than a diagnostic that can miscount. The worst a
+     * foreign caller could do here is emit or miss one WARN; no decision reads these fields.
+     */
+    private void observeLoadGateLatch(LoadGateReading reading, int pausedPartitions) {
+        long retiredTotal = sm.getRecordPopulation().getRetiredTotal();
+        boolean somethingRetired = retiredTotal != retiredTotalAtLastGateObservation;
+        retiredTotalAtLastGateObservation = retiredTotal;
+
+        if (reading.isLoaded() && !somethingRetired) {
+            consecutiveLatchedPasses++;
+            if (consecutiveLatchedPasses >= LATCHED_PASSES_BEFORE_WARNING && !latchReported) {
+                latchReported = true;
+                // Scalars only - no collection is interpolated, so the line cannot be truncated past the point
+                // where it stops identifying the event. docs/inflight/bug-unbounded-log-lines.md owns that rule.
+                log.warn("Record intake has been gated shut for {} consecutive control loop passes with no record " +
+                                "retiring: inShards={} parkedForRetry={} workable={} vs target({})*loadingFactor({})={}, " +
+                                "pausedPartitions={}. The broker poller stays paused until held records retire, so this " +
+                                "instance has stopped fetching while still looking alive. The usual cause is records " +
+                                "failing on every attempt and being retried forever; bound the failures (a retry limit " +
+                                "or a dead-letter path) rather than the buffer.",
+                        consecutiveLatchedPasses, reading.getRecords().getInShards(),
+                        reading.getRecords().getParkedForRetry(), reading.getWorkable(),
+                        reading.getTarget(), reading.getLoadingFactor(), reading.getThreshold(), pausedPartitions);
+            }
+        } else {
+            if (latchReported) {
+                log.info("Record intake has resumed after {} gated control loop passes: workable={} vs " +
+                                "target({})*loadingFactor({})={}, pausedPartitions={}.",
+                        consecutiveLatchedPasses, reading.getWorkable(), reading.getTarget(),
+                        reading.getLoadingFactor(), reading.getThreshold(), pausedPartitions);
+            }
+            consecutiveLatchedPasses = 0;
+            latchReported = false;
+        }
     }
 
     /**

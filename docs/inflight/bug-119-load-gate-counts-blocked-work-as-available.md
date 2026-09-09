@@ -3,7 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-state: open - mechanism settled and the latch point derived; waiting on astubbs#149 for the real fix -->
+<!-- inflight-state: open - mechanism settled, latch point derived, and the latch now reports itself (astubbs/parallel-consumer#495); waiting on astubbs#149 for the real fix -->
 
 **The filename carries astubbs#119, the fork mirror of confluentinc#857**, per this directory's rule
 that a note's number is always the fork's. `bug-857-family.md` carries an upstream number because it
@@ -149,12 +149,16 @@ direction already: `docs/data/roadmap.yaml`'s `dead-letter-queue` entry says in 
 "retrying forever is the only built-in answer today, and it is the wrong one for a poison record"
 (astubbs#149, confluentinc#310). Until that lands:
 
-- **Make the latch loud.** The state is exported as the `NUM_PAUSED_PARTITIONS` gauge and says nothing
-  in the log. A gate that has read `true` across many consecutive ticks while nothing retired is a
-  report an operator can act on, it changes no semantics, and it needs nothing else settled first.
-  It is the cheapest available improvement and the one worth taking first - and arm 4 is the argument
-  for it: an instance can be 78% idle, look healthy, and be permanently stopped, and today the only
-  thing that would tell an operator is a gauge nobody is alerting on.
+- **Make the latch loud - DONE, astubbs/parallel-consumer#495.** The state was exported as the
+  `NUM_PAUSED_PARTITIONS` gauge and said nothing in the log; a gate reading `true` across
+  `LATCHED_PASSES_BEFORE_WARNING` consecutive control-loop passes with nothing retiring is now a WARN
+  naming the operands, once, with an INFO when it clears. No semantics changed - the gate's decision,
+  the poller's pausing, the retry service and every counter are untouched. Arm 4 is the argument that
+  made it first: an instance can be 78% idle, look healthy, and be permanently stopped, and until
+  then the only thing that would tell an operator was a gauge nobody is alerting on. **The count is
+  passes, not elapsed time**, and `WorkManager#LATCHED_PASSES_BEFORE_WARNING`'s javadoc owns the
+  derivation - the two cadences it separates and the fifty-fold grace the count gives the healthy
+  one.
 - **Do not** raise the default buffer, add a "selectable" count, or special-case the ordered shard
   head. The arms above show what each of those buys.
 

@@ -464,6 +464,18 @@ cosmetic - see the last bullet.*
     could be, because the iterator holds a read lock only its opener can release.
     SpotBugs reads no confinement annotation and will keep reporting it; do not "fix" it
     with `volatile`, which would assert a sharing that does not exist.
+    **`WorkManager`'s three intake-latch counters are plain on purpose and carry NO
+    `@ThreadConfined`.** They are `retiredTotalAtLastGateObservation`,
+    `consecutiveLatchedPasses` and `latchReported`, written and read only by
+    `observeLoadGateLatch`, whose one production caller is the control loop's
+    once-per-pass `maybeWakeupPoller`. The usual pairing here - `@ThreadConfined` plus
+    an owning-thread assertion - is deliberately *not* applied: the harness drives
+    `controlLoop` from more than one thread inside a single test (`BlockedThreadAsserter`
+    in `ProducerManagerTest`), so the assertion would fire on a legitimate caller, and a
+    diagnostic that can kill the consumer is a worse trade than one that can miscount. No
+    decision reads these fields; the worst a foreign caller costs is one emitted or missed
+    WARN. Do not "fix" them with `volatile` either - see the field javadoc, which owns the
+    argument.
   - **`PartitionState`'s commit-window pair shares one lifecycle - declare the confinement on both or
     on neither.** The pair is `offerLastMadeForCommit` (astubbs#470) and `completionCountBeingCommitted`
     (astubbs#469): both written by `getCommitDataIfDirty()` where a commit window opens, both read by
