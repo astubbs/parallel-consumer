@@ -151,11 +151,12 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   first poll batch against a watermark read without blocking from the consumer's own position and
   lag, so no broker round trip sits inside the rebalance callback. Promoted from the
   owner's-decision list on 2026-09-08.
-- [ ] **The `batchSize` validation bound** (no PR yet; decided 2026-09-09) - `batchSize(0)` silently
-  processes nothing and a negative value fails obscurely; one `validate()` bound in the options,
-  in the style of its neighbours, closes every shape the note names (astubbs#311, the validation
-  half only - the over-request arithmetic stays deferred). The sweep's "cheapest real fix in the
-  set"; a startup exception where there was silence, so the release note names it.
+- [x] **The `batchSize` validation bound** (astubbs#496, merged 2026-09-09) - `batchSize(0)` silently
+  processed nothing and a negative value failed obscurely; one `validate()` bound in the options,
+  in the style of its neighbours, now rejects zero, a negative and null (astubbs#311, the
+  validation half only - the over-request arithmetic stays deferred, so the issue stays open). A
+  startup exception where there was silence, so it carries `!` and the release note names it under
+  breaking.
 - [ ] **The gate-latch warning** (no PR yet; decided 2026-09-09) - a WARN when the record-intake
   load gate has read loaded across many consecutive control-loop ticks while nothing retired: the
   state astubbs#487 measured, today exported only as a paused-partition gauge and logged nowhere.
