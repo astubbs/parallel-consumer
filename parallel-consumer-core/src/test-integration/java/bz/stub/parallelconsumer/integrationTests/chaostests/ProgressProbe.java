@@ -79,6 +79,23 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
 
     /** Fleet-wide consumption must advance at least this often while work remains. */
     public static final Duration NO_PROGRESS_WINDOW = Duration.ofSeconds(30);
+    /**
+     * The widened watermark for scenarios whose OWN churn legitimately pauses the whole fleet for
+     * longer than {@link #NO_PROGRESS_WINDOW} - see {@link #withNoProgressWindow(Duration)}. Named
+     * rather than repeated, because two scenarios now reach for the same number for two different
+     * mechanisms and a future re-calibration must move both or neither:
+     * <ul>
+     *   <li>W4 ({@code AbstractRevokeUnderWorkScenario}): a storm-phase rebalance can pause much of
+     *   the fleet for up to the eviction horizon, all of it under the eager assignor.</li>
+     *   <li>W1 ({@code ChaosChurnStormIT}): the 45s heavy tail is redelivered by every eager
+     *   revoke, so the fleet can sit wholly inside {@code HEAVY_SLEEP} with nothing completing while
+     *   every member is working - the firings and their drain trajectories are in
+     *   {@code docs/inflight/test-no-progress-window-may-not-transfer-to-w1.md}.</li>
+     * </ul>
+     * <b>It is a re-calibration, not a disabling</b>, and that is asserted rather than argued:
+     * {@code NoProgressWindowIT} fires the detector at this bound on a fleet that genuinely stops.
+     */
+    public static final Duration CHURN_NO_PROGRESS_WINDOW = Duration.ofSeconds(60);
     /** Max continuous group-rebalancing dwell. Empirically calibrated (2026-07-30, seed 424242, same
      * schedule on both arms): healthy peak 6.7s (drainer participates, rebalance completes mid-drain) vs
      * defect peak 20.1s (protocol-absent drainer blocks the join until its LeaveGroup - the whole freeze
@@ -264,6 +281,15 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
 
     private long lastCount = -1;
     private Instant lastAdvance = Instant.now();
+    /**
+     * The sampler's clock, so {@code NoProgressWindowIT} can drive {@link #sampleProgress} without
+     * spending wall time. Production reads {@link Instant#now()} and nothing else changes: the field
+     * exists because the ONLY thing that can catch the sampler ceasing to consult
+     * {@link #recordFleetProgress} is a test that runs the sampler, and every other test here drives
+     * the decision method directly - a gap two independent reviews of astubbs/parallel-consumer#499
+     * found at the same time.
+     */
+    private volatile Supplier<Instant> clock = Instant::now;
     private Instant rebalanceDwellStart = null;
     /**
      * The group state the dwell sampler last read, handed to {@link UncommittedCompletionDetector} so
@@ -372,7 +398,25 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * @param topic   only appears in violation text; no topic is read
      */
     static ProgressProbe forSeamTest(String groupId, String topic) {
-        return new ProgressProbe(null, groupId, topic, () -> 0L, 0);
+        return forSeamTest(groupId, topic, 0);
+    }
+
+    /**
+     * As {@link #forSeamTest(String, String)}, for a seam whose decision depends on the backlog size
+     * - {@link #recordFleetProgress}'s {@link #TAIL_SLACK} term reads it, so a zero total makes every
+     * consumed count look like the tail and the detector silent for reasons the test never intended.
+     */
+    static ProgressProbe forSeamTest(String groupId, String topic, long expectedTotal) {
+        return forSeamTest(groupId, topic, expectedTotal, () -> 0L);
+    }
+
+    /**
+     * As above, with a live consumed-count supplier - for a test that drives {@link #sampleProgress}
+     * itself rather than {@link #recordFleetProgress}, which is the only way to catch the sampler
+     * ceasing to consult the decision at all.
+     */
+    static ProgressProbe forSeamTest(String groupId, String topic, long expectedTotal, LongSupplier totalConsumed) {
+        return new ProgressProbe(null, groupId, topic, totalConsumed, expectedTotal);
     }
 
     /** Observer mode never gates - violations are autopsy material only (ambient flight recorder). */
@@ -471,20 +515,61 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         }
     }
 
-    private void sampleProgress() {
+    /**
+     * Package-private, not private, so a test can run the sampler itself - see {@link #clock}. Called
+     * only from {@link #sampleLoop} in production.
+     */
+    void sampleProgress() {
         long now = totalConsumed.getAsLong();
         if (now != lastCount) {
             lastCount = now;
-            lastAdvance = Instant.now();
+            lastAdvance = clock.get();
             return;
         }
-        boolean workRemains = now < expectedTotal - TAIL_SLACK;
-        Duration stalled = Duration.between(lastAdvance, Instant.now());
-        if (workRemains && stalled.compareTo(noProgressWindow) > 0) {
-            violate("NO_PROGRESS: fleet consumed count stuck at " + now + "/" + expectedTotal
-                    + " for " + stalled.getSeconds() + "s (bound " + noProgressWindow.getSeconds() + "s)");
-            lastAdvance = Instant.now(); // re-arm so a genuine stall reports once per window, not per sample
+        if (recordFleetProgress(now, Duration.between(lastAdvance, clock.get()))) {
+            lastAdvance = clock.get(); // re-arm so a genuine stall reports once per window, not per sample
         }
+    }
+
+    /** Test seam for {@link #clock} - see that field for why it exists. */
+    ProgressProbe withClock(Supplier<Instant> testClock) {
+        this.clock = testClock;
+        this.lastAdvance = testClock.get();
+        return this;
+    }
+
+    /**
+     * The window this probe is actually configured with. Exists so a test can assert that a SCENARIO
+     * wired the bound it meant to, rather than re-applying the constant to a probe of its own and
+     * asserting about that - the second half of the same gap {@link #clock} names.
+     */
+    Duration noProgressWindow() {
+        return noProgressWindow;
+    }
+
+    /**
+     * The NO_PROGRESS decision, split from its sampler so {@code NoProgressWindowIT} can drive it
+     * with no broker and no wall clock - the {@link #recordRebalanceDwell} seam again, for the same
+     * reason and under the same thread rule: this touches only the volatile window and the
+     * synchronized violations list, never the sampler-confined clock fields, which is why the CALLER
+     * re-arms rather than this method. Keep it that way or those tests become a data race.
+     * <p>
+     * Both terms are guards, and which one a re-calibration should move is not interchangeable.
+     * {@link #TAIL_SLACK} excuses the tail; the window excuses the pause. Widening the slack far
+     * enough to cover a churn scenario's firings would blind the detector to the "stall with
+     * THOUSANDS remaining" its own javadoc names as the defect signature, so the window is the term
+     * that moves - see {@link #CHURN_NO_PROGRESS_WINDOW}.
+     *
+     * @return whether a violation fired, i.e. whether the caller should re-arm the progress clock
+     */
+    boolean recordFleetProgress(long consumed, Duration stalled) {
+        boolean workRemains = consumed < expectedTotal - TAIL_SLACK;
+        if (!workRemains || stalled.compareTo(noProgressWindow) <= 0) {
+            return false;
+        }
+        violate("NO_PROGRESS: fleet consumed count stuck at " + consumed + "/" + expectedTotal
+                + " for " + stalled.getSeconds() + "s (bound " + noProgressWindow.getSeconds() + "s)");
+        return true;
     }
 
     /**

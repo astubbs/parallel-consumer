@@ -25,6 +25,7 @@ opt_in:
   mechanism: Set batchSize and use a batch processing API.
   isolated_from_stable_modules: false
 boundaries:
+  - batchSize must be at least 1, which is also the default and the non-batching configuration; ParallelConsumerOptions.validate() rejects zero, a negative and null with an IllegalArgumentException at construction. Before that bound, zero was accepted and the consumer started cleanly and processed nothing.
   - Single-record PollContext accessors and normal processing APIs are invalid while batching is configured.
   - An exception returns every record in the batch to retry; the next attempt need not contain the same batch grouping.
 references:
