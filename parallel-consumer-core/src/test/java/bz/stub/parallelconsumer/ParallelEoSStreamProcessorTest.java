@@ -298,11 +298,13 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     @SneakyThrows
     public void inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode commitMode) {
         AtomicBoolean interrupted = new AtomicBoolean(false);
+        AtomicBoolean inFlight = new AtomicBoolean(false);
         CountDownLatch latch = new CountDownLatch(1);
         setupParallelConsumerInstance(getBaseOptionsKeyOrdered(commitMode, Duration.ofSeconds(1)));
         primeFirstRecord();
 
         parallelConsumer.poll((ignore) -> {
+            inFlight.set(true);
             try {
                 latch.await();
                 ThreadUtils.sleepQuietly(100);
@@ -312,8 +314,18 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
             }
         });
 
-        // let it process
-        awaitForSomeLoopCycles(2);
+        // Wait for the record to actually BE in flight - which is the state this test is named for - rather
+        // than for two turns of the control loop. `awaitForSomeLoopCycles` counts CONTROL thread iterations,
+        // and the record is delivered by the POLL thread and dispatched to a worker; nothing orders the two,
+        // so under load the loop can turn twice before the user function has been entered. close() then has
+        // no in-flight work to complete, nothing is committed, and the assertion below reports [] - a red
+        // that says nothing about the behaviour under test. MEASURED red under a loaded box before this
+        // change. Same defect class as processInKeyOrder's input sanity check, named as an outstanding
+        // instance by the commit that fixed that one (astubbs#29, `551f40011`).
+        //
+        // This is a STRONGER precondition, not a looser deadline: with the record proven in flight, a []
+        // here now means close() genuinely failed to complete and commit it, which is a product signal.
+        awaitUntilTrue(inFlight::get);
 
         latch.countDown();
         parallelConsumer.close();

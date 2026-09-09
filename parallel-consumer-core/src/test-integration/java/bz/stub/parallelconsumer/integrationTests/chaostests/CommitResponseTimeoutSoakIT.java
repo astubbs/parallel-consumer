@@ -96,7 +96,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * covers the poll thread, and the remaining question ("what is the control thread doing, and who holds
  * what") needs every thread.
  *
- * <h2>Calibration status</h2>
+ * <h2>Calibration status, 2026-09-07 - two runs that measured the experiment rather than the defect</h2>
  * <b>2026-09-07, two runs, zero timeouts - and NEITHER is a sighting-ledger entry, because in both
  * the assertion was unfalsifiable for all but the first minute.</b> Common to both: 30 min, single
  * instance, {@code KEY}/{@code PERIODIC_CONSUMER_SYNC} at a 1s interval, {@value #KEY_SPACE} keys
@@ -142,17 +142,152 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * BEHIND a blocked shard head - records that can never be worked - while only the failing head itself
  * is {@code parkedForRetry}. A shard set full of unworkable queued records therefore reads as
  * "sufficiently loaded", the broker poller stays paused, and nothing ever arrives to change it. That
- * is the silent-stall shape the gate's own comment names against confluentinc#857. <b>It is a
- * hypothesis, not a result</b> - the gate logs {@code isSufficientlyLoaded=} with its own operands at
- * DEBUG precisely so this can be settled, and no run has yet read it.
+ * is the silent-stall shape the gate's own comment names against confluentinc#857. <b>It was a
+ * hypothesis, and the three runs below settle it: half right.</b>
+ *
+ * <h2>Calibration status, 2026-09-08 - the load gate IS what stops intake, it does NOT need
+ * head-of-line blocking, and it does NOT need a high failure rate</h2>
+ * Four arms, each differing from the first by exactly one term, six minutes rather than thirty
+ * because the stall is reached in the first second (the fourth runs ten, because its whole question
+ * is <em>when</em> the latch arrives). Same seed {@code 3747722682837130843}, same
+ * {@code failureFraction} 0.5, same 1000 keys over {@value #PARTITIONS} partitions,
+ * {@code maxConcurrency} 14, 100ms user function, 1000 records every {@value #BURST_INTERVAL_SECONDS}s,
+ * the suite's Testcontainers Kafka on Docker, maintainer's macOS arm64 workstation under 5-13 load
+ * average. {@code WorkManager} at DEBUG throughout ({@code -Dpc.loadgate.log.level=debug}), and the
+ * config that carried it verified in the log by {@code OnConsoleStatusListener} rather than assumed.
+ * <ul>
+ *   <li><b>Arm 1, the experimental arm - {@code KEY}.</b> Reproduced astubbs#471's thirty-minute
+ *   result in six minutes and at the same number: succeeded froze at <b>451</b>, failed 47,977. The
+ *   gate read {@code true} on 37,356 of 37,360 evaluations - the four {@code false} ones are the
+ *   first 800ms, before the first fetch landed - and all 20 partitions were paused at every sample.
+ *   It latched at {@code inShards=500 vs target(14)*loadingFactor(2)=28}, i.e. on the FIRST fetch,
+ *   0.8s in, and never unlatched. {@code inShards} then pinned at <b>549 = 1000 - 451</b> for 36,749
+ *   of the samples: one burst arrived, the non-poisoned part of it succeeded, and nothing was ever
+ *   fetched again.</li>
+ *   <li><b>Arm 2, the control on ORDERING - {@code UNORDERED}, everything else identical.</b> Under
+ *   {@code UNORDERED} no shard head can block anything behind it, so every held record is genuinely
+ *   selectable. <b>It stalled the same way</b>: gate {@code true} on 39,689 of 39,693 evaluations, 20
+ *   partitions paused throughout, and successes crawling 232 -> 314 across six minutes on the
+ *   records already in the buffer rather than on anything new.</li>
+ *   <li><b>Arm 3, the control on the GATE ITSELF - {@code -Dsoak.messageBufferSize=20000}</b>, which
+ *   moves the threshold from 42 to 20,006 and moves nothing else. <b>The outcome flips</b>: the gate
+ *   read {@code false} on all 35,652 evaluations, <b>zero</b> partitions were paused at any sample,
+ *   {@code inShards} climbed monotonically 549 -> 17,103 tracking the producer, and successes reached
+ *   897 rather than freezing at 451.</li>
+ *   <li><b>Arm 4, the control on the POISON RATE - {@code -Dsoak.failureFraction=0.01}</b>, ten
+ *   minutes, ~10 poisoned records per 1000-record burst against a healthy stream of ~50/s. This is
+ *   the arm that says the stall is not an artefact of the reporter's 50% rate. <b>The gate OSCILLATED
+ *   and then stopped</b> - 264 {@code false} readings interleaved with {@code true}, against exactly
+ *   four in each of arms 1 and 2, all of those at startup. Successes rose 992 -> 1,971 -> 2,946 ->
+ *   3,902 while it oscillated, then froze at <b>3,902 for the remaining nine minutes</b>. The last
+ *   {@code false} reads {@code inShards=71 - parkedForRetry=29 = 42 vs target(14)*loadingFactor(3)=42}
+ *   - the boundary exactly - and the final unbroken {@code true} run is <b>8m57s</b>.</li>
+ * </ul>
+ * <b>Verdict, part one - what stops intake.</b> Arm 3 is the positive control: changing only the
+ * gate's threshold changes only whether intake stops, so <b>the gate is what stops intake</b>. Arm 2
+ * kills the stated mechanism: the stall is identical with no ordering constraint at all. Arm 1's own
+ * arithmetic says the same thing more directly - 549 records over 1000 distinct keys, from ONE burst,
+ * is at most one record per key, so <b>nothing was queued behind any blocked head</b>.
  * <p>
- * <b>Arms not run, re-ordered by what these two runs established.</b> Each changes ONE term:
+ * <b>Verdict, part two - the latch point, and why it is reached by any instance that runs long
+ * enough.</b> The gate fires on {@code inShards - parkedForRetry > target * loadingFactor}, and
+ * {@code parkedForRetry} is not a property of the population: by Little's law it is
+ * {@code retry throughput * retryDelay}. So with {@code P} permanently-failing records held,
+ *
+ * <pre>{@code
+ *   unparked  =  P - (retry throughput * retryDelay)
+ *   latch when  unparked > targetAmountOfRecordsInFlight * loadingFactor
+ * }</pre>
+ *
+ * {@code P} only grows under retry-forever while the subtracted term is BOUNDED - retry throughput
+ * cannot exceed {@code maxConcurrency / userFunctionDuration}, so the parked term cannot exceed
+ * {@code maxConcurrency * retryDelay / userFunctionDuration}, which at these defaults is
+ * {@code 14 * 1000/100 = 140}. <b>The latch is therefore an eventual certainty for any instance with
+ * retry-forever and any poison at all</b>, at a computable ceiling of {@code 140 + 42 = 182} held
+ * poison records here. The two addends are different units on purpose: 140 bounds the parked share,
+ * and <b>the 42 is the gate's own threshold term</b>, {@code target(14) * loadingFactor(3)} read off
+ * the arms' gate lines, not a second measured population. {@code loadingFactor} is
+ * {@link bz.stub.parallelconsumer.internal.DynamicLoadFactor#getCurrentFactor()}, which starts at 2
+ * and steps up one at a time, so arm 1 latched against a threshold of 28 before it had stepped at
+ * all. {@code docs/inflight/bug-119-load-gate-counts-blocked-work-as-available.md} owns why a factor
+ * that had stepped further would latch later rather than never - the step-up is conditioned on the
+ * work request being fulfilled, which the latch is precisely what prevents.
+ * <p>
+ * <b>Measured, not asserted, and the measurement beats the bound.</b> {@code parkedForRetry} has
+ * median 135 and hard max <b>140</b> in arms 1, 2 and 3 while {@code inShards} ranges over 549 to
+ * 17,103 - a 31x population change with an unchanged parked count, which is only possible if parked
+ * is set by throughput rather than population. Arm 1's predicted {@code unparked} of
+ * {@code 549 - 140 = 409} is exactly its observed minimum. But <b>the bound is not the arrival</b>:
+ * arm 4 latched at {@code inShards} <b>98</b>, about 64 seconds in, and 182 was never approached.
+ * That is because its retry throughput settled at 30.6/s, so its parked term was ~30 rather than 140,
+ * and {@code 98 - 30} already cleared the threshold. <b>A SLOWER retry service latches the gate
+ * SOONER</b>, because fewer records are in back-off and more therefore read as workable - which is
+ * the opposite of the intuition, and it is why 182 is a ceiling rather than an estimate.
+ * <p>
+ * <b>Saturation is NOT a precondition, and this is the correction worth carrying.</b> At arm 4's
+ * latch the pool was doing 30.6 failures/s = about 3 of its 14 workers, <b>22% utilisation</b> -
+ * against arm 1's 95%. The instance stopped fetching from the broker while it was 78% idle. Whatever
+ * limits the retry cadence to ~3.2s per record against a static 1s
+ * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#defaultMessageRetryDelay} (confirmed static
+ * - no provider is set and there is no progressive backoff) is NOT measured here, and it is the first
+ * arm below.
+ * <p>
+ * <b>Where head-of-line blocking DOES bite - a role it has, and a role it does not.</b> It is not
+ * what latches the gate (arm 2). It is what stops the residue draining afterwards: arm 4's
+ * {@code inShards} fell 103 -> 98 and then sat at exactly 98 for 6,201 consecutive evaluations,
+ * nothing retiring for nine minutes. Its 98 residents are ~40 poison plus ~58 healthy records queued
+ * behind poisoned heads on their own keys - at 1% over four bursts a key holds several records, where
+ * arm 1's single burst gave each key exactly one. So eleven idle workers sat beside 58 deliverable
+ * records they were not allowed to reach.
+ * <p>
+ * <b>Why no threshold and no counting rule fixes this.</b> Arm 3 lifts the intake bound and throughput
+ * still dies: successes doubled and plateaued by minute three while {@code inShards} climbed linearly.
+ * Removing the buffer bound converts a hard stall into an unbounded-memory slow starve. <b>The fix has
+ * to bound the FAILURES rather than the buffer</b> - astubbs#149's dead letter queue. Full write-up,
+ * the operator-visible shape and the interim mitigation:
+ * {@code docs/inflight/bug-119-load-gate-counts-blocked-work-as-available.md}.
+ *
+ * <h2>Confirmation, 2026-09-09 - the latch now reports itself, and this arm is what proved it</h2>
+ * The interim mitigation named above shipped in astubbs/parallel-consumer#497: a WARN on
+ * {@code WorkManager}'s logger once the intake gate has read loaded across
+ * {@code LATCHED_PASSES_BEFORE_WARNING} consecutive control-loop passes with no record retiring, and
+ * a line when that clears. One confirming run of arm 1's shape - same seed
+ * {@code 3747722682837130843}, {@code KEY}, {@code failureFraction} 0.5, on the same workstation,
+ * shortened to {@code -Dsoak.duration=PT4M} because the latch arrives in the first second and this run
+ * is a confirmation rather than a re-derivation, with {@code -Dpc.loadgate.log.level=info} so the
+ * report is visible without the per-tick DEBUG equation.
+ * <ul>
+ *   <li><b>The arm reproduced.</b> {@code succeeded=451}, arm 1's number and astubbs#471's
+ *   thirty-minute number, in four minutes.</li>
+ *   <li><b>Exactly ONE WARN in the whole run</b>, about ten seconds after the run banner - the
+ *   hundred passes at the measured latched cadence, as designed - and no clear line, because the
+ *   latch never cleared. "Once, then quiet" holds over roughly forty times the reporting window.</li>
+ *   <li><b>Its operands agree with the arms that derived them:</b>
+ *   {@code inShards=549 parkedForRetry=138 workable=411 vs target(14)*loadingFactor(3)=42,
+ *   pausedPartitions=20}. 549 is arm 1's pinned population, 138 sits inside the parked band arms 1-3
+ *   measured, and every partition is paused.</li>
+ * </ul>
+ * <b>And one correction to the wording above, not to its measurements.</b> The verdict block says
+ * "retry-forever and any poison at all", which overstates it: a <em>single</em> record that never
+ * succeeds is one held minus one parked against a threshold of tens, so it never crosses, its offset
+ * map encodes one gap compactly, and the instance runs indefinitely with it retrying under a healthy
+ * stream. What latches the gate is a non-zero <em>fraction</em> of a live stream that never succeeds -
+ * healthy records retire and these do not, so their share of what is held rises while the stream
+ * keeps arriving. Every arm above ran a fraction (0.5, then 0.01), so nothing measured changes; only
+ * the claim drawn from it narrows. The earlier text is left as it was written -
+ * {@code docs/inflight/bug-119-load-gate-counts-blocked-work-as-available.md} carries the correction
+ * in full.
+ * <p>
+ * <b>Still eliminated, re-measured on all four arms:</b> offset-encoding back pressure. Neither
+ * {@code Offset map data too large} nor {@code not allow further messages} appears once in any of the
+ * four logs.
+ * <p>
+ * <b>Arms not run, re-ordered by what these four runs established.</b> Each changes ONE term:
  * <ol>
- *   <li><b>Re-run either arm with {@code WorkManager} at DEBUG and read the
- *   {@code isSufficientlyLoaded=(inShards=... - parkedForRetry=... vs target(...)*loadingFactor)}
- *   line at the moment successes freeze.</b> It either confirms the load gate is latched by
- *   unworkable queued records or eliminates it, and until it is read every other arm is guesswork.
- *   This costs one run and settles the question the other arms are built on.</li>
+ *   <li><b>Why is the retry cadence ~3.2s when the configured delay is 1s?</b> Arm 4's pool sat at 22%
+ *   with ready records waiting, so something between "delay passed" and "dispatched" is rate-limiting,
+ *   and it is what decides how early the latch arrives. Instrument the dispatch path rather than the
+ *   gate. This is now the most valuable arm, because the latch point is a function of this number.</li>
  *   <li><b>Per-ATTEMPT failure instead of per-record</b>, so records eventually succeed, the shards
  *   drain, and the instance keeps committing for the whole run. On this evidence it is the only shape
  *   that keeps the commit path alive indefinitely, which promotes it from "a different mechanism" to
@@ -165,9 +300,10 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *   {@code docs/inflight/upstream-175-sporadic-commit-timeouts.md} no longer nominates it as a WEDGE
  *   candidate - astubbs#29 merged 2026-09-02 and closed the AB-BA cycle for that report - so this arm
  *   buys the configuration, not the cycle.</li>
- *   <li>{@code -Dsoak.failureFraction=0} - the control arm, and worth less than it looked: with no
- *   poisoning this is a plain throughput soak, and the two runs above have already shown the
- *   interesting axis is intake, not the poisoned share.</li>
+ *   <li><s>{@code -Dsoak.failureFraction=0}</s> - <b>withdrawn, superseded by arm 4.</b> It was
+ *   proposed as the control that removes the poison entirely, but arm 4 answers the question it was
+ *   aimed at with a live workload rather than an empty one: the poisoned share is not the axis, and
+ *   1% reaches the same terminal state as 50% - later, and with successes flowing until it does.</li>
  * </ol>
  * <b>The stall may be the more interesting lead than the timeout.</b> confluentinc#833's reporter
  * showed {@code pc_processed_records_total} FLAT across the window in which their timeout fired -
@@ -238,7 +374,7 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
      * thread dump and a parked thread is only interesting while it is still parked. */
     private static final Duration WATCH_INTERVAL = Duration.ofSeconds(5);
 
-    private static final Duration PROGRESS_LOG_INTERVAL = Duration.ofSeconds(60);
+    private static final Duration DEFAULT_PROGRESS_LOG_INTERVAL = Duration.ofSeconds(60);
 
     /** The half of the timeout message that means the poller is WEDGED BUT ALIVE - the defect nobody owns. */
     static final String COMMIT_RESPONSE_TIMEOUT = "Timeout waiting for commit response";
@@ -257,9 +393,12 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
         ChaosSeed seed = resolveSeed();
         Duration duration = resolveDuration();
         double failureFraction = resolveFailureFraction();
+        ProcessingOrder ordering = resolveOrdering();
+        int messageBufferSize = resolveMessageBufferSize();
         log.info("=== SOAK astubbs#177/astubbs#175 commit-response timeout: seed={} duration={} "
-                        + "failureFraction={} keys={} partitions={} (replay: {} -Dsoak.duration={}) ===",
-                seed.getValue(), duration, failureFraction, KEY_SPACE, PARTITIONS,
+                        + "failureFraction={} ordering={} messageBufferSize={} keys={} partitions={} "
+                        + "(replay: {} -Dsoak.duration={}) ===",
+                seed.getValue(), duration, failureFraction, ordering, messageBufferSize, KEY_SPACE, PARTITIONS,
                 seed.replayCommand().replace("-Dincluded.groups=chaos", "-Dincluded.groups=soak"), duration);
 
         String topic = getClass().getSimpleName() + "-" + RandomUtils.nextInt();
@@ -267,10 +406,11 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
 
         ManagedPCInstance.Config config = ManagedPCInstance.Config.builder()
                 .commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)
-                .order(ProcessingOrder.KEY)
+                .order(ordering)
                 .inputTopic(topic)
                 .pollDelayMs(POLL_DELAY_MS)
                 .maxConcurrency(MAX_CONCURRENCY)
+                .messageBufferSize(messageBufferSize)
                 .build();
 
         ManagedPCInstance instance = new ManagedPCInstance(config, getKcu(), (incarnationId, context) -> {
@@ -319,7 +459,8 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
      */
     private List<String> watchUntil(ManagedPCInstance instance, Instant deadline) throws InterruptedException {
         List<String> findings = new ArrayList<>();
-        Instant nextProgressLog = Instant.now().plus(PROGRESS_LOG_INTERVAL);
+        Duration progressInterval = resolveProgressInterval();
+        Instant nextProgressLog = Instant.now().plus(progressInterval);
         while (Instant.now().isBefore(deadline)) {
             ParallelEoSStreamProcessor<String, String> pc = instance.getParallelConsumer();
             if (pc != null) {
@@ -338,14 +479,50 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
                 }
             }
             if (Instant.now().isAfter(nextProgressLog)) {
-                log.info("Soak progress: remaining={} produced={} succeeded={} failed={}",
+                log.info("Soak progress: remaining={} produced={} succeeded={} failed={} {}",
                         Duration.between(Instant.now(), deadline), produced.get(), succeeded.get(),
-                        failed.get());
-                nextProgressLog = Instant.now().plus(PROGRESS_LOG_INTERVAL);
+                        failed.get(), describeIntake(pc));
+                nextProgressLog = Instant.now().plus(progressInterval);
             }
             Thread.sleep(WATCH_INTERVAL.toMillis());
         }
         return findings;
+    }
+
+    /**
+     * The intake gate's state, on the progress line, so a run that freezes says WHY in the same place it
+     * says it froze.
+     * <p>
+     * The two runs of 2026-09-07 recorded a total intake stall and could not name what stopped intake,
+     * because the only figures on the progress line were the counters that had stopped moving. These are
+     * the gate's own operands - the same ones {@code WorkManager#isSufficientlyLoaded} prints at DEBUG,
+     * read from the same {@code getWorkableRecords()} accessor - plus Kafka's paused-partition count,
+     * which is what a latched gate actually DOES. A frozen success count beside
+     * {@code loaded=true pausedPartitions=<all of them>} is the gate holding the poller down; a frozen
+     * success count beside {@code loaded=false pausedPartitions=0} is something else entirely, and the
+     * point of the line is that those two are no longer indistinguishable after the fact.
+     * <p>
+     * At INFO deliberately: it is one line per progress tick, it is the harness narrating rather than the
+     * product, and the DEBUG stream it duplicates is behind {@code -Dpc.loadgate.log.level=debug} because
+     * it fires per control-loop tick. This one is always in the log of every soak that ever runs.
+     */
+    private static String describeIntake(ParallelEoSStreamProcessor<String, String> pc) {
+        if (pc == null) {
+            return "intake=UNAVAILABLE (no PC yet)";
+        }
+        try {
+            var wm = pc.getWm();
+            var records = wm.getSm().getWorkableRecords();
+            return String.format("intake(loaded=%s workable=%d = inShards=%d - parkedForRetry=%d; target=%d; "
+                            + "pausedPartitions=%d)",
+                    wm.isSufficientlyLoaded(), records.getWorkable(), records.getInShards(),
+                    records.getParkedForRetry(), wm.getOptions().getTargetAmountOfRecordsInFlight(),
+                    pc.getPausedPartitionSize());
+        } catch (RuntimeException e) {
+            // Never let the narration take down the soak it is narrating - the same rule captureThreadDump
+            // below follows.
+            return "intake=UNAVAILABLE (" + e.getClass().getSimpleName() + ": " + e.getMessage() + ")";
+        }
     }
 
     /**
@@ -477,5 +654,48 @@ class CommitResponseTimeoutSoakIT extends ChaosScenarioBase {
     private static double resolveFailureFraction() {
         String property = System.getProperty("soak.failureFraction");
         return property == null ? 0.5d : Double.parseDouble(property);
+    }
+
+    /**
+     * {@code -Dsoak.ordering=UNORDERED} is the control arm for the head-of-line half of the intake-stall
+     * hypothesis, and {@code KEY} - the reporter's - is the default.
+     * <p>
+     * It is a knob rather than a second test class because the two arms must differ by exactly ONE term:
+     * same seed, same poisoned set, same key space, same burst clock. Under {@code UNORDERED} no shard
+     * head can block anything queued behind it, so every record the shards hold is genuinely selectable
+     * and {@code inShards} is an honest count of workable records. If the stall survives that, what
+     * stops intake is the buffer filling with permanently-failing records, not head-of-line blocking -
+     * which is a different defect with a different fix.
+     */
+    private static ProcessingOrder resolveOrdering() {
+        String property = System.getProperty("soak.ordering");
+        return property == null ? ProcessingOrder.KEY : ProcessingOrder.valueOf(property);
+    }
+
+    /**
+     * {@code -Dsoak.messageBufferSize=20000} raises the record-intake gate's threshold and NOTHING else - the
+     * decisive control arm on the gate itself, and 0 (leave the dynamic load factor alone) by default.
+     * <p>
+     * The gate is {@code inShards - parkedForRetry > targetAmountOfRecordsInFlight * loadingFactor}, which at
+     * {@code maxConcurrency} 14 and the initial factor of 2 is a threshold of <b>28</b> - about a eighteenth of
+     * the poisoned records a single 1000-record burst leaves permanently resident. If the gate is what stops
+     * intake, a threshold set above what the run can accumulate keeps the instance taking work for the whole
+     * run; if the instance stalls anyway, the gate is not the mechanism.
+     */
+    private static int resolveMessageBufferSize() {
+        String property = System.getProperty("soak.messageBufferSize");
+        return property == null ? 0 : Integer.parseInt(property);
+    }
+
+    /**
+     * {@code -Dsoak.progressInterval=PT5S}; ISO-8601, like {@code soak.duration}, and 60s by default.
+     * <p>
+     * A knob because the interval that suits a thirty-minute run is the wrong one for reading the moment
+     * intake freezes - which the 2026-09-07 runs put inside the first sixty seconds, i.e. inside a single
+     * sample. A short diagnostic run wants several samples across the freeze.
+     */
+    private static Duration resolveProgressInterval() {
+        String property = System.getProperty("soak.progressInterval");
+        return property == null ? DEFAULT_PROGRESS_LOG_INTERVAL : Duration.parse(property);
     }
 }

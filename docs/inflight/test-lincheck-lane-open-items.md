@@ -451,6 +451,70 @@ author's call rather than a review fix.
   success while its transformer failed per-class would have made every calibration verdict read
   "not found".
 
+## The lane's job timeout was raised to 60, and the cause of the crossings was runner speed, 2026-09-09
+
+**Sighting.** The `Lincheck` job hit its `timeout: 20` in `.github/workflows/maven.yml` and GitHub
+reported it as *cancelled* - the only non-success job in an otherwise wholly green run on a branch
+that touches no code this lane compiles
+([job 102324330280](https://github.com/astubbs/parallel-consumer/actions/runs/34306516342/job/102324330280),
+22m13s). Successful runs on other branches over the same hours sat at 14m49s, 12m55s and 19m58s, the
+last clearing the cap by two seconds.
+
+**Diagnosed: ordinary hosted-runner speed variance against a fixed, uninterruptible budget.** Nearly
+all of this lane is `WorkManagerLincheckTest`'s checkpoint-three tear stress arm - a fixed
+iterations-times-invocations budget that cannot stop early, so its wall clock is a function of runner
+CPU speed and nothing else. Across every successful `maven.yml` run on 2026-09-08 and 2026-09-09, on
+every branch, the job sat at roughly 5-8.5 minutes until about 01:00 UTC on 2026-09-09, then 12-20
+minutes until about 04:00 UTC - **on every branch, docs-only ones included** - then back to 7-8
+minutes on the first runs after 04:00. Codecov records the same single test between 292s and 720s on
+commits an hour apart. A change that appears on branches sharing no code, and reverses itself on a
+clock rather than on a commit, is not the code: `ubuntu-latest` ran at about half speed for a few
+hours. Reproduce rather than trusting a table here, since both go stale:
+
+    gh run list -R astubbs/parallel-consumer --workflow maven.yml --limit 60 --json databaseId,headBranch,createdAt
+    gh run view <id> -R astubbs/parallel-consumer --json jobs   # the Lincheck leg's started/completed
+    bin/inflight.mjs codecov test stressMustNotRediscoverTheCheckpointThreeTear
+
+**Why the cap was the wrong size for that.** 20 minutes was 2.6x the 7m42s the matrix entry priced
+the lane at, which sounds generous and is not: variance of the magnitude above exceeds it, and
+`Lincheck` is a REQUIRED merge context, so the overflow lands as a red on whichever unrelated PR was
+running at the time. **Owner ruling, 2026-09-09: the cap is 60 minutes**, sized so ordinary variance
+of that size no longer fails a required check rather than sized to the lane's cost.
+
+**The budget is not the lever, and that is not a preference.** `WorkManagerLincheckTest`'s own
+comment records how its bound was priced - a deliberately starved `iterations(25)` arm run to a hit
+count, 48 runs on one machine - and re-pricing it means running that procedure again, not lowering a
+number because CI was slow. The confirming run is already in: with the cap at 60 the lane **passed at
+20m8s** on the branch that raised it
+([job 102334638957](https://github.com/astubbs/parallel-consumer/actions/runs/34309813133/job/102334638957)),
+eight seconds past the old cap, on a green run that the old cap would have killed and reported as a
+failure of a PR changing nothing this lane compiles.
+
+**What raising it costs, since nothing else says so:** `bin/lincheck-test.sh` has no internal cap, so
+this job timeout is the only backstop against a genuine hang, and the runner minutes a hang can burn
+go from 20 to 60.
+
+<!-- post-merge: checked-begin - the sightings below name astubbs/parallel-consumer#497 rather than
+     a branch, and read in the past tense, which is how they are meant to read once it has landed -->
+### Corroborating sightings from astubbs/parallel-consumer#497, same afternoon
+
+Recorded here rather than as a second diagnosis - the section above owns the cause and the ruling.
+These are four more data points from one branch, and what makes them worth keeping is that they are
+**the same branch on both sides of the bound**:
+
+- Cancelled at the 20-minute cap **three times**, each in a run where every other job was green.
+- **Passed at 19m57s** in between, with nothing changed that the lane can see.
+
+Same harnesses, same diff, opposite outcomes - which is the runner-speed diagnosis above stated from
+one branch instead of across many. Ruled out for that PR specifically, so the possibility was
+eliminated rather than assumed: no harness in the lane reaches the code it changed -
+`WorkManagerLincheckTest`'s operations are `handleFutureResult` and the revoke/reassign pair, and no
+harness mentions the record-intake gate at all.
+
+The decision this sighting left open - larger budget, smaller `iterations(...)`, or split the suite -
+was settled by the ruling above, and by the same reasoning: the budget is not the lever.
+<!-- post-merge: checked-end -->
+
 ## Disproven, recorded so it is not re-raised
 
 The claim that core's `<argLine>@{argLine} ${lincheck.jvm.args}</argLine>` feeds a literal

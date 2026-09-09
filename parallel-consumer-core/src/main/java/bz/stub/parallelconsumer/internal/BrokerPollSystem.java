@@ -89,7 +89,16 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * resumed costs nothing. Do not use it to decide whether to pause or resume.
      */
     public boolean isSubscriptionsPausedForBackPressure() {
-        return consumerManager.getPausedPartitionSize() > 0;
+        return getPausedPartitionCountForBackPressure() > 0;
+    }
+
+    /**
+     * As {@link #isSubscriptionsPausedForBackPressure()}, but the count rather than the predicate - what an
+     * operator-facing report needs in order to say how far back-pressure has actually gone, rather than only that it
+     * has. Same cache, same staleness, same restriction on what it may be used to decide.
+     */
+    public int getPausedPartitionCountForBackPressure() {
+        return consumerManager.getPausedPartitionSize();
     }
 
     private final AbstractParallelEoSStreamProcessor<K, V> pc;
@@ -331,8 +340,11 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
         log.debug("Poll completed");
 
-        // build records map
-        return new EpochAndRecordsMap<>(poll, wm.getPm());
+        // Build the records map, and take the fetch's own high watermark with it while we are still on the thread
+        // that owns the consumer - see ConsumerManager#logEndOffsetIfKnownWithoutBlocking. The control thread cannot
+        // ask this question later: the consumer is confined here, and by then the answer would belong to a different
+        // fetch.
+        return new EpochAndRecordsMap<>(poll, wm.getPm(), consumerManager::logEndOffsetIfKnownWithoutBlocking);
     }
 
     private void checkStateForPausingSubscriptions() {

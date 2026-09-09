@@ -61,7 +61,7 @@ This is a community-maintained fork of https://github.com/confluentinc/parallel-
 // namespace they are moving OFF, and a summary that names only the destination cannot say that.
 // rename-packages.sh would otherwise rewrite it into a package that moves to itself.
 // rename-packages: freeze-begin(fork-summary)
-*Behaviour* is a drop-in replacement for upstream 0.5.x: the API is source-compatible, and the committed offset format is unchanged, so an existing consumer group upgrades in place without resetting or migrating offsets.
+*Behaviour* is a drop-in replacement for upstream 0.5.x for most users: the committed offset format is unchanged, so an existing consumer group upgrades in place without resetting or migrating offsets, and the API changes are the short list under Breaking in the link:CHANGELOG.adoc[changelog].
 Two identifiers do change in 0.6.0.0, and both are mechanical: the Maven `groupId` becomes `bz.stub.parallelconsumer`, and the Java packages *move* with it, from `io.confluent.parallelconsumer.*` to `bz.stub.parallelconsumer.*`.
 See <<upgrading-from-upstream,Upgrading from upstream 0.5.x>> for the steps.
 // rename-packages: freeze-end(fork-summary)
@@ -80,15 +80,6 @@ TIP: If you like this project, please ⭐ Star it in GitHub to show your appreci
 
 NOTE: This is a community-maintained project with no commercial support.
 See the <<Support and Issues>> section for more information.
-
-[[trademarks]]
-[NOTE]
-.Trademarks
-====
-KAFKA is a registered trademark of The Apache Software Foundation and has been licensed for use by Antony Stubbs and contributors. Antony Stubbs and contributors have no affiliation with and are not endorsed by The Apache Software Foundation.
-
-See <<Attribution>> for the other Apache marks referenced in this document.
-====
 
 [[when-to-use]]
 == When to use this library (vs KIP-932 Share Groups)
@@ -695,9 +686,10 @@ find . -name '*.java' -exec sed -i 's/io\.confluent\.parallelconsumer/bz.stub.pa
 NOTE: That `sed -i` is GNU syntax. On macOS or BSD, use `sed -i '' -e 's/…/…/g'` instead -- BSD `sed` reads the argument after `-i` as a backup-file suffix.
 // rename-packages: freeze-end(upgrade-instructions)
 
-Nothing else changes.
-The API is source-compatible, so beyond the import lines no source edit is needed, and most codebases reference only a handful of types.
-Committed offset metadata is unchanged too, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
+For most codebases nothing else changes: they reference only a handful of types, and none of those moved beyond the package.
+The exceptions are the Breaking section of the link:CHANGELOG.adoc[changelog], and it is short: a commit that exhausts its budget throws `OffsetCommitBudgetExceededException` instead of Kafka's bare exception, the JStream result stream now blocks until close, `InternalRuntimeException` is renamed `PCInternalRuntimeException`, `RecordContext` equality is now identity, and two narrowings of the internal controller's subclass surface.
+Read it once before you upgrade.
+Committed offset metadata is unchanged, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
 The library's shared internal utilities moved with the rest, into `bz.stub.parallelconsumer.internal.utils` -- they were always plumbing, they are not part of the published API, and they are now named as such.
 
 === From 0.4 to 0.5
@@ -1694,7 +1686,7 @@ So it's very efficient.
 
 == Attribution
 
-KAFKA is a registered trademark of The Apache Software Foundation and has been licensed for use by Antony Stubbs and contributors. Antony Stubbs and contributors have no affiliation with and are not endorsed by The Apache Software Foundation.
+KAFKA is a registered trademark of The Apache Software Foundation. Parallel Consumer for Apache Kafka is an independent, community-maintained library that works with Apache Kafka. It has no affiliation with, and is not endorsed by, The Apache Software Foundation.
 
 http://www.apache.org/[Apache®], http://kafka.apache.org/[Apache Kafka], and http://kafka.apache.org/[Kafka®] are either registered trademarks or trademarks of the http://www.apache.org/[Apache Software Foundation] in the United States and/or other countries.
 

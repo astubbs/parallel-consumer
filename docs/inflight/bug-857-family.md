@@ -3,7 +3,8 @@
 <!-- inflight-type: register -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: stall -->
-<!-- inflight-vetted: 2026-09-08 - applied: retyped as a register, which is what it describes itself as; the revoke-path deadlock's mechanism section retired per this file's own criterion now that astubbs#29 has merged, the reproducer section replaced with what the rewritten test and its new sibling probe establish, and the fifth item's `withDiagnostic` claim corrected; checked: astubbs#29 is MERGED with its fix in `AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke` (`commitLock.tryLock()`), `Rebalance857CommitSyncDeadlockProbeIT` exists, `RebalanceEoSDeadlockTest`'s javadoc documents its transactional mode as deliberate (it guards confluentinc#541), `MultiInstanceRebalanceTest` passes a `describeFleet(allPCRunners)` supplier to `withDiagnostic`, and astubbs#119 plus the fourth item are still open. Re-vetted later the same day after the capture replays: PROPOSED closed for the revoke-path deadlock LINE only (not the register, and not astubbs#119) - its verification is now measured at `6aab3ff5a` by a one-term control arm on `Rebalance857CommitSyncDeadlockProbeIT`, and its instrument gates on every PR; checked `commitLock.tryLock()` and `commitOnRevokeViaTheControlThread` live in `AbstractParallelEoSStreamProcessor`, and `PollThreadStallDiagnosis` on the timeout path in `ConsumerOffsetCommitter`. Applied in the same pass: the six capture sections' closing "not replayed / still Unproven" claims, each of which was false in two directions. Also PROPOSED closed, separately, the FIFTH item only: both of the claims that made it read as blocked are false against this tree - `withDiagnostic` IS wired, and the stall has been reproduced repeatedly since, most recently 4 in 60 with the coordinator loggers raised. Its mechanism is measured in the solutions write-up astubbs#473 promoted, `large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md`, and is the consumer-group protocol, not PC. Checked further that no PC-side hold survives on today's master: `ClosingMemberRebalanceIT` 5/5 green, and 5/5 red under a one-term sabotage, so the green is not vacuous -->
+<!-- post-merge: checked - the marker names astubbs#478 as the PR that withdrew the fourth item, which stays true after it lands -->
+<!-- inflight-vetted: 2026-09-08 - applied: retyped as a register, which is what it describes itself as; the revoke-path deadlock's mechanism section retired per this file's own criterion now that astubbs#29 has merged, the reproducer section replaced with what the rewritten test and its new sibling probe establish, and the fifth item's `withDiagnostic` claim corrected; checked: astubbs#29 is MERGED with its fix in `AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke` (`commitLock.tryLock()`), `Rebalance857CommitSyncDeadlockProbeIT` exists, `RebalanceEoSDeadlockTest`'s javadoc documents its transactional mode as deliberate (it guards confluentinc#541), `MultiInstanceRebalanceTest` passes a `describeFleet(allPCRunners)` supplier to `withDiagnostic`, and astubbs#119 plus the fifth item are still open; the fourth item is withdrawn by astubbs#478 as a timing bound the processor count crosses, not a defect. Re-vetted later the same day after the capture replays: PROPOSED closed for the revoke-path deadlock LINE only (not the register, and not astubbs#119) - its verification is now measured at `6aab3ff5a` by a one-term control arm on `Rebalance857CommitSyncDeadlockProbeIT`, and its instrument gates on every PR; checked `commitLock.tryLock()` and `commitOnRevokeViaTheControlThread` live in `AbstractParallelEoSStreamProcessor`, and `PollThreadStallDiagnosis` on the timeout path in `ConsumerOffsetCommitter`. Applied in the same pass: the six capture sections' closing "not replayed / still Unproven" claims, each of which was false in two directions. Also PROPOSED closed, separately, the FIFTH item only: both of the claims that made it read as blocked are false against this tree - `withDiagnostic` IS wired, and the stall has been reproduced repeatedly since, most recently 4 in 60 with the coordinator loggers raised. Its mechanism is measured in the solutions write-up astubbs#473 promoted, `large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md`, and is the consumer-group protocol, not PC. Checked further that no PC-side hold survives on today's master: `ClosingMemberRebalanceIT` 5/5 green, and 5/5 red under a one-term sabotage, so the green is not vacuous -->
 <!-- post-merge: checked-begin - every astubbs#29 mention below states what its fix DOES (the AB-BA pair it replaces, the modes its cycle can close in, what its reproducer cannot settle), not that it is open; the three state claims that were here have been rewritten -->
 
 
@@ -92,7 +93,12 @@ This file keeps only the shape, so that a reader arriving here is not told the o
 established:
 
 - The fleet-scoped `NO_PROGRESS` firings are a **timing proxy** - the backlog drains every time the
-  detector fires. Its `## ANSWERED, 2026-08-28` and `## CONFIRMED, 2026-08-28` sections.
+  detector fires. Its `## ANSWERED, 2026-08-28` and `## CONFIRMED, 2026-08-28` sections. **Acted on
+  2026-09-09**: nine firings across four seeds, all drained, and `ChaosChurnStormIT`'s window widened
+  to 60s -
+  [`test-no-progress-window-may-not-transfer-to-w1.md`](test-no-progress-window-may-not-transfer-to-w1.md)
+  owns the verdict and the replay grid. **The five `NO_PROGRESS` seeds recorded in this file below
+  were part of that grid** - do not replay them again expecting news.
 - The per-instance `INSTANCE_STALL/NO_WORK_COMPLETED` firings are **a different line from the
   fleet-scoped one and must not be read with it**: one member stays live, keeps taking work, and
   returns nothing while the fleet finishes around it. What that member's workers are doing is the
@@ -200,7 +206,7 @@ that cannot occur in that mode. Mode is the discriminator:
 **Record the commit mode with every future sighting.** It is one line and it is what makes a sighting
 decidable.
 
-## A fourth open item: an eager stall the astubbs#29 fix does not close
+## A fourth open item: an eager stall the astubbs#29 fix does not close - WITHDRAWN 2026-09-08
 
 Added 2026-08-18, from the first seed replays (`test-857-revoke-under-work-sightings.md` holds the
 grid and the confounds). Mode-compatibility was the best evidence this file had for attributing the
@@ -218,6 +224,86 @@ partition committed-frozen for 100s of the *quiet* phase against ~40s of legitim
 **The mode table above still stands** - it says which defect *can* explain a sighting, and the
 replay changes nothing about the code paths. What the replay establishes is that "can" was doing
 work it could not support: mode-compatibility narrows the candidates and never attributes.
+
+### CORRECTED 2026-09-08: the symptom is a timing bound that flips on a CPU knob, and the grid that opened this item was not a one-term A/B
+
+**Neither half of this item survives, and the two halves fail for unrelated reasons.** The evidence
+was `test-857-revoke-under-work-sightings.md`'s replay grid - two recorded seeds reproducing
+`CLASS2_STALL/LAG_STAGNATION` six of six on "the arm carrying the fix". That file owns the grid and
+carries the detail; what is here is what the finding means for this item.
+
+**1. The crossing tracks available PROCESSORS, with the code and the seed held constant.** Seed
+`4709156528562690268` - the grid's seed B, and the one seed of the two that no recovery diagnostic
+had ever been run against - replayed on `745b1f6a5` (master plus everything through astubbs#466),
+`ChaosRevokeUnderWorkIT`, `-Dchaos.diagnoseStallRecovery=true`, one term changed between the arms:
+
+| processors | Class 2 observations | peak lag stagnation | quiet-phase drain | outcome |
+|---|---|---|---|---|
+| 12 (the box's own count) | none | 134.5s, under the 150s bound | 102.7s | PASS, `inFlight=0`, every key |
+| 12, repeated | none | 125.2s | 90.4s | PASS, `inFlight=0`, every key |
+| 8 (`-XX:ActiveProcessorCount=8`) | eight | crossed | 133.5s | PASS, `inFlight=0`, every key |
+| 8, repeated | two | crossed | 106.7s | PASS, `inFlight=0`, every key |
+
+Same tree, same seed, same test sources, byte-identical invocation apart from `JAVA_TOOL_OPTIONS`.
+Two of two at eight processors, none of two at twelve: the processor count alone decides whether
+this item's symptom appears at all - and all four arms drained completely with no loss. **The peak
+is only a measurement in the runs that did NOT fire**: `recordLagStagnation` re-arms the partition
+it fires on, so a crossing run's peak is the bound plus sampler cadence and carries no severity,
+which is the same arithmetic the 2026-08-25 entry below records about the ~154s constant. The two
+12-processor peaks are real, and they sit fifteen to twenty-five seconds under. That is the sharpest instance this family has of
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md),
+and it means "reproduces every time" was a statement about the box the replays ran on. **The grid's
+own confound list already named that box's `-XX:ActiveProcessorCount=8` and dismissed it** - *"the
+controls passing under the same cap argue it does not manufacture the stall"* - which is the reading
+these two runs reverse.
+
+**2. The grid's two arms differed by more than astubbs#29's lock change.** `ConsumerManager.poll`
+refreshes the pause cache at ENTRY and again at exit on the grid's DEFECT arm (plain master,
+`438b09d9b`); on its FIXED arm (astubbs#29's branch, `b8a335b05`) the entry call is absent and only
+the exit refresh remains. Exit-only is the shape
+[`paused-poll-wakeup-lost-to-stale-pause-cache-2026-09-01.md`](../solutions/performance-issues/paused-poll-wakeup-lost-to-stale-pause-cache-2026-09-01.md)
+owns, and its fix `d2690c57f` landed two weeks after the grid ran - `git merge-base --is-ancestor
+d2690c57f b8a335b05` is false. So the grid measured astubbs#29's lock change *plus* a second,
+unrelated, since-fixed difference in the very subsystem that governs how fast a backlog is
+re-fetched.
+
+**That second term was then tested, and it is NOT sufficient to produce this item's symptom - a
+refuted prediction, recorded because it was the more interesting one.** The prediction was that
+restoring exit-only refresh would push the 12-processor arm over the bound. Reverting `d2690c57f`'s
+entry call on today's tree and replaying seed B at 12 processors gave a peak of 125.2s and a 90.4s
+drain - *lower* than the unpatched arm's 134.5s and 102.7s - with no observations. The negative
+control is what makes that readable: with the entry call removed,
+`ConsumerManagerPauseCacheTest#pausedPartitionCacheIsFreshDuringThePollItDescribes` fails and with it
+restored it passes, so the patch really did restore the defect. The 4-10x collapse that solution doc
+measured was in `PERIODIC_TRANSACTIONAL_PRODUCER`; it does not reach this eager
+`PERIODIC_CONSUMER_SYNC` recovery at this shape. **Finding 2 therefore names an uncontrolled second
+term in the grid's arms - which is enough to stop the grid being evidence of anything about
+astubbs#29 - without explaining the grid's fixed-worse-than-defect asymmetry. That asymmetry is
+still unexplained, and finding 1 is what makes it uninteresting.**
+
+**What this does NOT establish.** Non-reproduction is the weak direction and this is a handful of
+runs on one laptop, where the grid ran on a 32-core box capped to 8; a chaos seed fixes the
+conductor's schedule and never the poll-versus-control interleaving, which is why the deadlock itself
+was settled on a deterministic probe rather than by replay. What IS established is that this item's
+symptom is produced by the machine, and that the tree it was attributed on differed from its control
+in a second place. Neither leaves a defect for this item to be about.
+
+**Consequence: this is not a fourth open defect, and the "still open" count above does not need it.**
+What remains true and worth keeping is the sentence the grid was reaching for and could not support -
+`INSTANCE_STALL` is per-instance, so a watermark frozen by a commit that never landed, on an instance
+whose other shards keep completing, is covered by nothing that gates.
+[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md) **owns that gap**,
+including the red control a replacement detector must have first. Every run recorded here drained to
+`inFlight=0` with full key coverage, which is what that gap's shape predicts a false positive looks
+like.
+
+> **2026-09-09, and it narrows the sentence above rather than rewriting it.** The COMMIT half of that
+> gap now gates: `UNCOMMITTED_COMPLETIONS/COMMIT_NOT_LANDING` reads the difference between a member's
+> own next-offset-to-commit and the group's committed offset, with `WedgedPartitionRedControlIT` as
+> the red control this entry asked for. So "a watermark frozen by a commit that never landed" is no
+> longer covered by nothing. What still is: a key-order SHARD that will never be dispatched again
+> inside a partition whose local watermark is pinned anyway. The owning note carries both halves and
+> records that the two replay seeds were argued rather than re-run.
 
 ## A fifth item, 2026-09-01, RESOLVED 2026-09-05: a rebalance stall the astubbs#29 fix does not close either - and neither does any PC change
 
@@ -1508,7 +1594,9 @@ nothing that gates - `INSTANCE_STALL` is re-armed by any returned work result, a
 records processed rather than offsets durably committed. **So the demotion reduced per-shard liveness
 coverage; it did not relocate it**, and an earlier version of this entry said otherwise. Tracked, with
 the correlated gate that would close it and the red control that gate must have first, in
-[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md).
+[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md) - which since
+2026-09-09 records that gate as LANDED for the commit half, with its red control, and still open for
+the shard-dispatch half.
 <!-- post-merge: checked-begin -->
 It was raised by the cross-model adversarial reviewer on astubbs#354, the PR that demoted the bound;
 three in-process reviewers on that same diff missed it, which is the clearest argument this file
@@ -2670,6 +2758,83 @@ still binds, and this register still holds open items that reproduce on trees ca
 Owner-gated: this is a `stall` register, so an owner makes the call. The proposal is recorded in
 this file's `inflight-vetted` marker, which is where
 [`AGENTS.md`](AGENTS.md) -> "Vetting a note" says a proposal goes.
+
+## 2026-09-08: the load arm the "clean on idle" replays never had - every accused member reads BUSY, at every load level
+
+**What was open, and it was not the mechanism.** The instance-stall line was diagnosed on
+2026-09-07 as worker saturation by redelivered heavy dwells -
+[`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md), `## DIAGNOSED`,
+**owns that** and this section adds no reading of its own to it. What that section and
+`ChaosChurnStormIT`'s calibration javadoc both leave explicitly open is the other direction: *the
+seed reproduces the frozen shape every time and does not reproduce the firing*, because the run
+finishes about 46s into the freeze against a 150s bound. Every replay on record ran on an idle box,
+and **"clean on idle" is the weak direction** - a load-shaped stall by definition needs the load, so
+a green idle replay is consistent with starvation AND with a wedge.
+
+**The experiment.** `bin/exp-instance-stall-load-versus-idle.sh`, three seeds, two arms each, one
+machine, same tree (`fd3f91360` plus the runner itself), same seed, differing by one term:
+whether [`bin/lib/cpu-load.sh`](../../bin/lib/cpu-load.sh)'s burners run. Every run sets
+`-Dchaos.instanceStallDumpAfterSeconds=20`, because the dump defaults to the bound - so a run whose
+freeze ends first prints nothing and its green is **vacuous**, indistinguishable from one where the
+window never opened. `armed` below is that check, not an assumption.
+
+| seed | arm | burners | loadavg after | outcome | armed | busy dumps | STALL dumps | busy obs | STALL viol | peak | elapsed |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `6077035105695` | idle | 0 | 26.3 | passed | yes | 4 | **0** | 2 | **0** | 0ms | 304.9s |
+| `6077035105695` | loaded | 10 | 52.6 | passed | yes | 6 | **0** | 2 | **0** | 0ms | 300.0s |
+| `1630088991107806597` | idle | 0 | 15.5 | passed | yes | 3 | **0** | 0 | **0** | 0ms | 109.8s |
+| `1630088991107806597` | loaded | 10 | 44.8 | passed | yes | 4 | **0** | 0 | **0** | 0ms | 110.6s |
+| `5650361238717170909` | idle | 0 | 7.8 | FAILED | yes | 11 | **0** | 2 | **0** | 0ms | 531.6s |
+| `5650361238717170909` | loaded | 10 | 23.6 | passed | yes | 4 | **0** | 0 | **0** | 0ms | 136.5s |
+
+**The result, and it is the only claim this section makes: no arm produced the wedge signature.**
+Zero `INSTANCE_STALL` early dumps and zero `INSTANCE_STALL/NO_WORK_COMPLETED` violations in six
+runs. The discriminator armed in all six. The firing CONDITION was reproduced four times - a live
+member holding work with its completion count frozen **past the 150s bound**, which is exactly the
+state that raised every gating firing on CI - and each time the detector read the accused member's
+stacks and reported it non-gating:
+
+    INSTANCE_BUSY_IN_USER_CODE: instance 0 has held work (queued=0, outForProcessing=47) for 150s
+    with 10 worker(s) running user code
+
+Every dump is the 2026-09-07 signature verbatim: workers `TIMED_WAITING` in `Thread.sleep` at
+`ChaosScenarioBase.lambda$newInstance$1` beneath `UserFunctions.carefullyRun` - asleep **inside user
+code** - with `pc-broker-poll-PC-<id>` healthy in `Selector.select`.
+
+**THE STATED PREDICTION WAS HALF REFUTED, and that half is recorded here rather than quietly
+dropped.** The prediction was: *if starvation, the LOADED arm reproduces the firing while the IDLE
+arm stays clean*. The wedge half is refuted - nothing showed an accused member with a free worker
+and no progress. **But the idle arm did not stay clean either**, and the dose-response the
+prediction assumed is simply not in this data: seed `6077035105695` crossed the bound in BOTH arms;
+seed `1630088991107806597` crossed it in neither; and **the one FAILED run is the LOWEST-load arm of
+the six** (loadavg 7.8), whose own loaded twin passed in a quarter of the time. So these runs do
+**not** establish that load reproduces the firing. What they establish is narrower and is the
+question that was actually asked: **at every load level tested, the accused member was busy in user
+code, never wedged.**
+
+**Why the dose-response could not be read, stated so nobody re-runs this expecting one.** This is a
+shared desktop and the ambient load fell monotonically during the experiment as other sessions
+finished - the idle arms read 26.3, 15.5 and 7.8 in the order they ran. The burners were therefore
+not the only term that varied between the first pair and the last, which is precisely the confound
+the runner's own header warns about. A dose-response arm needs a quiet machine, and this one was not
+available. **The wedge/starvation verdict does not depend on it**, because the discriminator is
+evaluated per run and read the same way in all six.
+
+**A confound checked rather than waved past.** `InstanceProgressView`'s `BUSY_WORKERS_UNKNOWN` is
+`-1`, which fails `busy > 0` and falls into the **accusing** branch - so a `Thread.getAllStackTraces`
+walk that throws under contention would manufacture a violation that looks exactly like a wedge, and
+load is when that is most likely. No run produced a `thread dump unreadable` marker, so no reading
+here was manufactured that way.
+
+**Read `maxInstanceStall=0ms` as the finding, not a dead instrument.** `InstanceStallDetector` only
+advances `peakInstanceStallMs` on the nobody-in-user-code branch; a busy member re-arms the clock
+every sample. A `0ms` peak beside ten busy workers is the starvation reading stated positively.
+
+**What this does NOT touch.** No violation of any kind fired on five of the six runs, so the
+`ZOMBIE_MEMBER` arm was **never exercised** and nothing here bears on it - its current readings stay
+astubbs#486 and the churn note's 2026-09-07 sighting. The sixth run's single violation was
+fleet-scoped `NO_PROGRESS`, a different detector, recorded as a sighting in the churn note rather
+than read here.
 
 ## Delete when
 
