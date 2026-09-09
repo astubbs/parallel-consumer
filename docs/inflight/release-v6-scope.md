@@ -3,18 +3,12 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: release-gate -->
 
-**Deliberately its own file, not a section inside
-[`release-0.6.0.0.md`](release-0.6.0.0.md).** A section is invisible until someone opens that file;
-a note gets its own line in the session-start index. The scope decision needs to be *met*, not
-looked up - so it is filed where an agent trips over it. Named `release-when-is-v6-good-enough.md`
-until 2026-09-08, when it stopped being a question.
-
-[`release-0.6.0.0.md`](release-0.6.0.0.md) is the content and the breaking-change record, and
-answers "is it ready?". **This one asks "is it enough?"** - and, since 2026-09-08, it also carries
-the burn-down that gets from here to the tag, because the answer to "is it enough" turned out to be
-"yes, once the fixes already built are merged", and that is a list. The artefact-correctness
-register that was `release-0600-blockers.md` is folded in below as the tag-day checks, so the
-release has one note to burn down rather than three.
+**The source of truth for 0.6.0.0**: the owner's decisions, the burn-down to the tag, every open
+question, and the tag-day checks. [`release-0.6.0.0.md`](release-0.6.0.0.md) holds the published
+wording and answers "is it ready?"; this note answers "is it enough?" and, since the answer came
+back "yes, once the fixes already built are merged", carries the list. Its own file rather than a
+section, so it sits in the session-start index where an agent trips over it. Named
+`release-when-is-v6-good-enough.md` until 2026-09-08, when it stopped being a question.
 
 ## Every v6 note, and what each one owns
 
@@ -30,7 +24,8 @@ and points here; nothing is maintained on the issue. Everything else below owns 
 | [`release-three-mirrors-label-undecided.md`](release-three-mirrors-label-undecided.md) | Three closed mirrors that may belong under the `0.6.0.0` label - owner's call |
 | [`release-groom-1-0-train-issue.md`](release-groom-1-0-train-issue.md) | The 1.0 train issue, groomed against the roadmap data after v6 ships |
 | [`release-experimental-module-records.md`](release-experimental-module-records.md) | Feature records for the modules that do NOT ship in v6 (deferred, 2026-09-07 decision) |
-| [`process-candidate-ranking.md`](process-candidate-ranking.md) | Candidate ranking; its "what gates v6" section is a pointer here |
+| [`process-candidate-ranking.md`](process-candidate-ranking.md) | Candidate ranking, the vetting sweep's reading of what gates v6, and the dated disposition of every open bug note |
+| [`upstream-items-with-no-fix-and-no-response.md`](upstream-items-with-no-fix-and-no-response.md) | The survey of upstream items nothing addresses yet; after the tag |
 | [`bug-857-family.md`](bug-857-family.md) | The register the release note's confluentinc#857 wording is read from |
 | [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) | The flake register - a tag needs a green master |
 | [`docs/releasing.md`](../releasing.md) | The mechanics: strip `-SNAPSHOT`, merge, `publish.yml` deploys and tags, `release.yml` cuts the GitHub release from the curated changelog section |
@@ -40,27 +35,10 @@ and points here; nothing is maintained on the issue. Everything else below owns 
 | `release-v6-announcement.md` (on astubbs#446, not on master) | The announcement theme and plan; follows v6 |
 | `release-v6-merge-order.md`, `release-0600-blockers.md` (deleted) | Folded into this file on 2026-09-08; `git show 2c874ecac:docs/inflight/release-0600-blockers.md` for the history |
 
-**What astubbs#197's body carried before it was shed, and where each item now lives** - kept so
-nothing on the issue was lost:
-
-- Its two "blocking" artefact claims - the changelog saying the Kafka client stays on 3.9.1, and the
-  README roadmap pointing readers at upstream's tracker - are fixed on master; the tag-day checks
-  below carry the recheck.
-- Its "not blocking" list: the permanent load-factor warning is closed (astubbs#155); the MDC item
-  was refuted by the astubbs#476 sweep, below; the unknown-magic-byte hazard was fixed twice
-  (astubbs#217, astubbs#207); `release.yml` tries to publish the curated changelog section as the
-  GitHub release body but its exact heading match misses `== 0.6.0.0 (unreleased)` on master, so the
-  body is posted by hand on the day (tier 3) and astubbs#199, which fixes the match, follows.
-- Its after-it-ships list is in the tag-day section below, with one addition it held that this file
-  did not: one announcing comment each on upstream confluentinc#880, confluentinc#885 and
-  confluentinc#907 - the deliberate exception to one-backlink-per-issue, because a shipped artefact
-  is actionable. Nothing is downloadable until then: no Maven Central artefact, no tag, no GitHub
-  release, and astubbs#186 and astubbs#195 are asking where to get it (astubbs#188 is closed).
-- Its six-mirror triage is the ranking note's content, absorbed below under the astubbs#476 sweep:
-  astubbs#155, astubbs#169 and astubbs#170 merged; astubbs#161 and astubbs#181 are decisions listed
-  below; astubbs#177 is closed.
-- Its one comment records that astubbs#207's squash closed the issue by mistake on 2026-09-02 and
-  it was reopened; it closes with the tag and not before.
+**astubbs#197's body was shed to a pointer on 2026-09-09.** Everything it carried is either done on
+master (its two artefact claims, its not-blocking list) or in the tiers and the tag-day list below
+(the after-it-ships sweep, including the announcing comments on the three upstream threads that
+asked for a release). The old body is in the issue's edit history.
 
 ## The decisions - 2026-09-07 by the owner, confirmed and extended 2026-09-08
 
@@ -327,32 +305,18 @@ box means the v6 action for that line is done, not that the defect is closed:
   and joins tier 1 as its own item, still to be built. astubbs#487 itself is merged; the
   retry-cadence arm is what remains of the measurement.
 
-**Resolved or reassigned since this list was written - kept so the release note can say what was ruled out:**
+**Resolved or reassigned - one line each, so the release note can say what was ruled out:**
 
-- ~~An eager-mode (`PERIODIC_CONSUMER_SYNC`) stall that reproduces on trees carrying astubbs#29's
-  fix (the family note's "fourth open item")~~ - **withdrawn 2026-09-08, astubbs#478 (merged).** Four replays
-  of the recorded seed on today's master all drained completely with zero loss; the "stall" was the
-  Class 2 timing bound, whose crossing flips with the processor count at a fixed seed and tree. The
-  grid the item was opened on was also never a one-term A/B. What survives from this line is the
-  per-shard liveness gap, already tracked and deferred with a stated bar - a blind spot to name,
-  not a bug to fix before cutting.
-- ~~A rebalance stall in async unordered mode from `MultiInstanceRebalanceTest` (the "fifth open
-  item"), blocked on progress-tracker instrumentation that does not exist yet~~ - **attributed
-  2026-09-08, astubbs#486: the consumer-group protocol, not PC, and it was never blocked.** The
-  progress-tracker diagnostic has been wired since astubbs#444 and the mechanism was already
-  measured (a join phase the coordinator holds open, during which `poll()` returns nothing to any
-  member, then recovers - the write-up astubbs#473 promoted to master); the family note's section
-  had two claims that were false against master, which is why the item kept being picked up. The
-  freeze is real and fleet-wide but it recovers, no work is stranded, and no instance stays wedged;
-  what reads as red is the detector's no-progress window closing inside a real protocol freeze. The
-  PC half - that PC holds nothing during it - was re-verified with a one-term control arm on
-  `ClosingMemberRebalanceIT` after astubbs#451, astubbs#466 and astubbs#468 moved the revoke and close seam. Not a
-  defect; the release note need not name it. One new fact worth keeping: the
-  `ZOMBIE_MEMBER/REBALANCE_BLOCKED` probe line does not discriminate a PC-side hold from a
-  coordinator holding its join phase open, so a future sighting is told apart by what the closing
-  members' threads are in. astubbs#486 merged 2026-09-08.
-- A dead broker-poll thread leaving the consumer open in consumer-commit modes, no LeaveGroup until
-  `max.poll.interval.ms` - **fixed in the queue, astubbs#477, tier 1.**
+- The eager-mode stall on trees carrying astubbs#29's fix - **withdrawn, astubbs#478 (merged):** a
+  timing bound crossing that flips with the processor count; the grid it was opened on was never a
+  one-term A/B. What survives is the per-shard liveness gap, narrowed by astubbs#491.
+- The async-unordered rebalance stall, the family's fifth item - **the group protocol, astubbs#486
+  (merged):** a join phase the coordinator holds open, during which every member's poll returns
+  nothing, then recovers; PC holds nothing during it (control arm). The `ZOMBIE_MEMBER` line does
+  not discriminate a PC hold from the coordinator, so a sighting is told apart by the closing
+  members' threads.
+- A dead broker-poll thread leaving the consumer open in consumer-commit modes - **fixed,
+  astubbs#477 (merged).**
 
 ## What v6 must say about data loss and duplicates
 
@@ -434,200 +398,39 @@ a v6 gate; the note must simply not claim more than the suite or the code can sh
 
 ## Unknowns made known, 2026-09-08
 
-**Every item here was a known unknown at the start of 2026-09-08 and was pursued by its own agent on
-its own branch (owner's instruction).** Code-shaped questions ran in parallel; the replay-shaped
-ones ran one at a time, because several replay agents on one machine produce exactly the starvation
-artefacts they are meant to rule out. The replay queue is drained into PRs: the eager-mode stall
-(withdrawn, astubbs#478), the six deadlock captures (proven by control arm, astubbs#485), the
-async-unordered rebalance stall (the group protocol, astubbs#486), the `INSTANCE_STALL` load arm
-(astubbs#488), and the intake stall (astubbs#487) - the last two are tracked in the "Still open"
-list above. Kept here so the release note can say what was asked and how it was settled.
+Each was a known unknown at the start of 2026-09-08 and was pursued by its own agent on its own
+branch; the replay-shaped ones ran one at a time on one machine. One line each; the PR and its
+solutions write-up hold the evidence.
 
-- ~~Whether the six deadlock captures that verified astubbs#29's mechanism ever replay clean with
-  the fix applied~~ - **known, 2026-09-08, astubbs#485: the question was unanswerable by replay, and
-  the fix is proven another way.** The captures identify the defect as the poll thread `BLOCKED` on
-  an `AtomicBoolean` monitor; astubbs#29 replaced that monitor with a `ReentrantLock`, and a thread
-  waiting on a lock parks rather than blocks - so a clean replay would have said "no BLOCKED frame"
-  with or without the deadlock, and the family note's own header already warned that replaying
-  captured seeds does not reproduce it. Proven instead with a control arm on the deterministic
-  probe: with the fix, both assignors pass every run; with the deadlock deliberately restored
-  (`tryLock` back to `lock`), every run fails and every dump shows the waiting frame. Merged to
-  master 2026-09-08. The solutions doc's "Unproven" section is superseded in place, and the
-  deadlock line carries a `PROPOSED
-  closed` marker for the owner. Two side findings worth keeping: the JVM's deadlock detector cannot
-  see this cycle (its other edge is a queue poll, not a lock), and one replay in two was VOID
-  because the window never opened - check the discriminator fired before banking a green.
-- ~~Whether the shard-displacement orphan window is reachable in production~~ - **known,
-  2026-09-08, astubbs#483 (merged): unreachable**, with a four-arm regression test, one per ordering mode plus a same-key cross-partition case, and an ablation that goes
-  red only when both sweeps are removed. The caveat is the finding: the last leg of the proof is a
-  Kafka property, not this engine's - the consumer's fetch position never goes backwards within a
-  generation - so an in-generation replay of an offset whose resident was **fenced but not swept**
-  would reopen the window and nothing goes red. Narrower than it first read: a non-stale resident
-  makes the replayed record dropped, not displaced (`addWorkContainer` returns on "already exists"),
-  and astubbs#484 showed PC's own bootstrap truncation path cannot produce such a replay - it runs
-  only inside `onPartitionsAssigned`, after the stale sweep has emptied the shards and the queue. A
-  backwards `seek` on a running assignment is the remaining route, and main has none today.
-  astubbs#481's controller purge bounds any such orphan to one control-loop tick, so the cost would
-  be misdirection, not a stall. The sweep for the
-  same shape found two more by-key removals (`ProcessingShard.onSuccess`, the revoke sweep in
-  `ShardManager.removeWorkFromShardFor`), left for astubbs#468 whose identity-`equals` change is
-  what makes conditional removal possible. Not a v6 gate; astubbs#483 stacked on astubbs#481 and merged after it.
-- ~~Whether "rejoin" after producer fencing is expressible in PC's lifecycle~~ - **known,
-  2026-09-08, by a read of the astubbs#472/#474/#410 diffs against the engine's ownership rules:**
-  it is, and the stack expresses it, with the correction that the question dissolves - PC's
-  instance never leaves the group (no file in the stack touches the consumer, the poll system or
-  the subscription), so "rejoin" reduces to aborting the open transaction under the write lock,
-  building and adopting a replacement producer on the control thread, and restoring the
-  completed-but-uncommitted records for replay, drain-then-replay inside the same lock. All five
-  broker invalidation conditions are covered on both the commit and produce paths; the
-  `@GuardedBy` ledger, thread confinement and the produce/commit lock pair are respected and
-  asserted. What the stack does not answer is astubbs#420's territory (the derived
-  `transactional.id`, redaction), one wire-level test nobody wrote (a fence induced by real
-  consumer-generation loss; both ITs use a rogue producer under the same id), and the plan's one
-  open question - whether recovery should decline the write lock while a rebalance is in progress,
-  which astubbs#410 does not check and the measurement meant to settle was not taken. Bounded, and
-  review-sized; it does not change the tier 2 decision.
-- ~~Which of the flakes in `test-untracked-ci-flakes.md` are load-shaped and which are real - the
-  three module `simpleBatchTest` failures have the most sightings and no diagnosis~~ - **known,
-  2026-09-08, astubbs#482: neither a flake nor a defect.** The test computed its expected batch
-  count from the record count while drawing keys with replacement; under KEY ordering a shard
-  yields one record per retrieval round, so a three-way key collision deterministically forces a
-  fourth batch - the `2+1+1+1` shape every sighting carried, at about the rate the sightings
-  showed, and only on the KEY parameter, which a contention reading could never explain. Reproduced
-  red with a forced collision, green with keys drawn without replacement; the exact assertion is
-  kept, and a new core test covers the collision case the old one can no longer reach. The other
-  rows of [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) are untouched by this. The
-  automated review found nothing blocking; astubbs#482 squash-merged 2026-09-08.
+- Whether the six deadlock captures ever replay clean with astubbs#29's fix - **unanswerable by
+  replay, and proven another way, astubbs#485 (merged):** the fix replaced the monitor the captures
+  identify the defect by, so a clean replay would say nothing; the control arm on the deterministic
+  probe passes with the fix and fails every run with it restored. PROPOSED close for the owner.
+- Whether the shard-displacement orphan window is reachable - **unreachable, astubbs#483 (merged):**
+  four-arm test, one per ordering mode plus same-key cross-partition; the one caveat is an
+  in-generation replay, which no main code produces and astubbs#481 bounds to misdirection.
+- Whether "rejoin" after producer fencing is expressible - **yes, by reading the astubbs#472,
+  astubbs#474 and astubbs#410 diffs:** the instance never leaves the group, so rejoin reduces to
+  abort, rebuild the producer, replay under the write lock. The one open question, declining the
+  lock during a rebalance, stays with tier 2.
+- Which flakes are load-shaped and which real - **the batch test's own key draw, astubbs#482
+  (merged),** and the rest of the register worked by astubbs#490 (merged).
 
-## What the astubbs#476 vetting sweep read as gating
+## What the vetting sweep read, and every open bug note's disposition - moved out
 
-Moved here from `process-candidate-ranking.md` on 2026-09-08 (it was written by the six-agent sweep
-on 2026-09-07 and is the agents' reading, with their stated confidence - not the owner's decision).
-Where it disagrees with the tiers above, the tiers say so: the poisoned-transaction pair (the sweep:
-not gating; the owner named it the second exception on 2026-09-09), the transactional revoke wait (the sweep read
-astubbs#466 as having replaced the unbounded wait, which is right, and astubbs#408 as owning the
-bound), and the `batchSize` validation bound (the sweep: cheapest real fix; the triage had filed
-it as 0.6.0.x, and the owner moved it into tier 1 on 2026-09-09). Item 2 in its list, the dead poll thread, is
-astubbs#477, merged.
+Two records that were here until 2026-09-09 now live in
+[`process-candidate-ranking.md`](process-candidate-ranking.md): the astubbs#476 vetting sweep's
+reading of what gates v6, and the disposition of every open `bug-` note against the bar as of
+2026-09-08. Both are dated agent readings, not decisions, and the tiers above are what overrode them
+where they disagree. What this note kept from them is already in the tiers: the poisoned-transaction
+wedge as the second exception, the `batchSize` bound and the gate-latch warning in tier 1, the
+withdrawn eager stall, the false-truncation warning on astubbs#494. Re-derive the open-bug list
+before the tag rather than trusting either copy: `ls docs/inflight/bug-*.md`, and the state and
+impact markers each note carries.
 
-The bar above is "the bugs that are already open". Six area sweeps each named what they read as gating (the owner's pass over
-the sweep's proposals is done - [`process-inflight-vet-sweep.md`](process-inflight-vet-sweep.md)
-records it); this is the union,
-ordered by user-visible consequence, with the confidence each agent stated. The mechanical gate
-comes first because nothing else matters until it clears.
-
-- ~~**The quarantine registry is non-empty, and every entry is unowned.**~~ *The sweep's reading on
-  2026-09-07; the registry is empty on master (astubbs#80 emptied it and nothing has joined since),
-  which this note says in its tag-day checks.* `release.yml` refuses the cut while
-  [`docs/quarantined-tests.md`](../quarantined-tests.md) lists anything; read that file, not this
-  line.
-- **Verified defects, in the code as written today:**
-  1. `bug-857-transactional-revoke-wait.md` - was the unbounded wait inside the revoke callback,
-     with a user report carrying upstream's verified-bug label. astubbs#466 (merged the day the sweep
-     ran) replaced the spin with a wait bounded by `commitLockAcquisitionTimeout`; whether that bound
-     is right is what is left, and astubbs#408 holds it. The sweep also read
-     `core-revoke-commit-skips-the-work-mailbox-drain.md` as gating - a deterministic exactly-once
-     break with C9 refuted - and the same commit fixed it; the note is gone and the record is in
-     `docs/solutions/logic-errors/`.
-  2. A dead poll thread holding its partitions for `max.poll.interval.ms` in the default commit
-     mode - read as gating, traced end to end but untested and unfixed when the sweep ran. Now
-     tested and fixed by astubbs#477 (merged): `maybeCloseConsumer` gained an arm for a poll thread
-     that ended without closing the consumer; the note is gone and the record is in
-     `docs/solutions/logic-errors/`.
-  3. `pr-431-must-pair-its-queue-removal-with-the-shard-removal.md` with
-     `bug-retry-queue-write-lock-on-the-rebalance-path.md` - the retry-queue orphan window; master
-     is still shard-first and astubbs#431 is a draft. *(Since overtaken: astubbs#431 closed as
-     superseded by the owner's astubbs#481, ready and green, which is what tier 1 lists.)*
-  4. `bug-unvalidated-batchsize.md` - `batchSize(0)` silently processes nothing; one `validate()`
-     bound closes all three shapes (astubbs#311). The cheapest real fix in the set.
-  5. `bug-max-failure-history-is-inert.md` - a public option that does nothing; removing it is
-     breaking, so it is settled before the major or carried forever.
-  6. `bug-offset-commit-timeout-does-two-jobs.md` - the default makes a retry unreachable; the fix is
-     a design choice among three.
-  7. `bug-162-offset-state-truncation.md` - a WARN operators alert on, firing falsely for every new
-     group; decision 5 in the section above.
-  8. `bug-unbounded-log-lines.md` - record keys and values printed at WARN on a line that asks to be
-     pasted into a public issue; cheap to fix.
-- **Contract and compatibility, where a major is the only window:**
-  `core-bytearray-encodings-have-no-codec.md` (two magic bytes),
-  `core-pc-owns-the-clients-it-uses.md` (the consumer-instance option). The sweep also listed
-  `core-139-public-api-thread-safety-contract.md` here; the owner ruled astubbs#139 out of v6 scope
-  on 2026-09-08 and the note is deferred after v6.
-- **Instruments the release decision is read through, currently lying or unproven:**
-  `test-chaos-autopsy-omits-fleet-violations.md` (a clean autopsy after a fleet-violation kill,
-  confirmed in code), `test-perf-lane-asserts-a-deadline-on-a-varying-machine.md` (a required check
-  that fails on arithmetic), `test-no-progress-window-may-not-transfer-to-w1.md` (sightings at the
-  bound, none replayed), `ci-codecov-flags-not-like-for-like.md` (proposal 9),
-  `ci-broker-container-exit-126-is-undiagnosable.md`.
-- **Decisions, not engineering:** the astubbs#161 and astubbs#181 replies (items 1 and 2 at the top
-  of this file); the "is it enough?" call, whose own target date has passed; and astubbs#257's
-  changelog wording, which has one window because the section is generated from the log.
-- **Read as not gating, by the agent that vetted each:** the new modules (astubbs#271, astubbs#269,
-  astubbs#268 - capabilities, not defects); the `deps-` majors; every `issue-response-*` draft; the
-  `static-` registers (advisory lanes); the `branch-` notes; the `test-debt` and feature notes; the
-  unfenced `PartitionState` booleans and the plain-int counter (real, unmeasured, possibly absorbed
-  by the shared-nothing rework); and the poisoned-transaction pair, where today's behaviour is
-  strictly better than what it replaced.
-
-## Open defects with no PR - each one's disposition against the bar
-
-The sweep's reading above agrees with the look-at items below and added one this section had filed
-as 0.6.0.x: `batchSize(0)` silently processes nothing, and the sweep calls the `validate()` bound
-"the cheapest real fix in the set" (astubbs#311) - now in tier 1 by the owner's 2026-09-09 decision. Its list of instruments the release decision is
-read through that are currently lying or unproven is worth reading before trusting a green.
-
-"Gate on open bugs" only works if every open bug has a disposition, so this is every `bug-` note on
-master that no queue PR addresses (`ls docs/inflight/bug-*.md` is the list; the impact tag on each
-is the sort key). Re-derive it before the tag rather than trusting it: a note can gain a PR or lose
-its subject at any merge.
-
-**Look at before the tag - these contradict the release claim if left silent:**
-
-- ~~The eager-mode stall that reproduces with the fixes applied~~ - **withdrawn, astubbs#478 (merged)**
-  (2026-09-08): not a defect, a timing bound crossing on processor count. Nothing to ship or name.
-- ~~Poller death leaves the consumer open in consumer-commit modes~~ - **now astubbs#477 in tier 1**
-  (2026-09-08). The fix was as small as the note proposed, and its defect-class sweep - cleanup gated
-  on "am I the role-holder?" where the holder may be dead - found no other instance across the four
-  modules' `close()` paths.
-
-**Owner's decision - taken 2026-09-08: in v6, as astubbs#480 (tier 1).**
-
-- ~~Run-length plausibility ceiling~~ - a readable but absurd run length marked a vast range complete
-  and PC silently skipped it; data-loss class, reachable only through a corrupt or foreign payload,
-  which is why astubbs#207 did not cover it. astubbs#480 bounds every decoded run and bitset by the
-  partition's log end offset - the one bound that cannot reject a real map, since PC only encodes
-  offsets it polled - routed through `invalidOffsetMetadataPolicy` with no parallel policy, failing
-  open with a warn if the broker will not answer. The same defect class was found and fixed in the
-  bitset decoder; the simple serialisation has no declared count and is clean. The inflight note is
-  retired into `docs/solutions/`.
-
-**0.6.0.x - open, real, not a gate for a bug release:**
-
-- Config lies: `maxFailureHistory` is read nowhere; `offsetCommitTimeout` bounds two different
-  waits; `batchSize`'s over-request arithmetic (astubbs#311's other half, deferred) - its validation
-  bound is in tier 1 since 2026-09-09.
-- Blind spots: the racy and uncalled pause API; no metric for a discarded offset map under the
-  default `IGNORE` policy; the worker future swallowing framework exceptions.
-- Misdirection: the plain-`int` out-for-processing counter; the module's processor reference
-  overwritten before the owner guard; the rest of the unbounded-log-lines class; the two 857 mirror
-  attributions never verified against the reporter's environment.
-- Deferred with a reason in the note, and outside a bug release: the shard's available-work
-  counter undercounting after a stale replacement
-  ([`bug-processing-shard-available-work-undercount.md`](bug-processing-shard-available-work-undercount.md)
-  - a gauge inaccuracy that loses no records; the decision is whether the counter is worth keeping);
-  the deferred-commit WARN naming no offsets
-  ([`bug-deferred-commit-warn-names-no-offsets.md`](bug-deferred-commit-warn-names-no-offsets.md) -
-  astubbs#352 owns the method and adds the field the fix needs); and batching requesting a full
-  extra in-flight target ([`bug-batch-quantity-over-request.md`](bug-batch-quantity-over-request.md)
-  - throughput only).
-- The shutdown teardown race; the test-only `close()` shadowing; and
-  [`bug-shared-collections-across-the-poll-boundary.md`](bug-shared-collections-across-the-poll-boundary.md),
-  which is mostly stale - the metrics set and the shared empty set it names are both fixed on master
-  and the note needs shrinking to whatever remains.
-
-**Not a bug note, but a signal - settled:** the `simpleBatchTest` failures across the Reactor,
-Mutiny and Vert.x modules were the test's own randomised key draw, not the batcher (astubbs#482,
-see the known-unknowns section). The register's most-sighted row is retired.
+The survey of upstream items with no fix PR and no prepared response is
+[`upstream-items-with-no-fix-and-no-response.md`](upstream-items-with-no-fix-and-no-response.md);
+it is research for after the tag, not scope.
 
 ## Tag-day artefact checks - are the things we publish true on the day we cut?
 
@@ -635,6 +438,12 @@ Folded in from the register that was `release-0600-blockers.md`. Scope: `CHANGEL
 `README.adoc` as published. Release mechanics stay in [`release-0.6.0.0.md`](release-0.6.0.0.md);
 the tracker is astubbs#197.
 
+- **Master must be green, and five lanes are known to lie or to fail on their own.** The autopsy
+  that omits fleet violations, the perf lane's wall-clock deadline, the churn scenario's
+  thirty-second no-progress window (being settled by replay on
+  `test/857-no-progress-window-replay`), the codecov flags that are not like-for-like, and the
+  broker container's undiagnosable exit. Each has its own note; read the flake register and those
+  notes before believing a red or a green on the day.
 - **The package rename shipped (astubbs#294); keep the release notes honest about it.** The
   `== 0.6.0.0` changelog section is rebuilt from the commit log when the tag is cut, and generation
   cannot notice that it dropped a claim the current text makes. After regenerating, confirm the
@@ -695,77 +504,6 @@ Context worth inheriting on the day:
 - **A dependency version in prose drifts silently.** The `3.9.1`/`3.9.2` mismatch came from a
   Dependabot group bump moving `kafka.version` after the note was written. Re-read the
   `=== Dependencies` section against `pom.xml` immediately before cutting, not weeks earlier.
-
-## Upstream items with no fix PR and no prepared response - surveyed 2026-09-08
-
-Every upstream open issue carries a fork reply from the 2026-08-05 mirror sweep pointing at its
-mirror, so nothing upstream is silent. What follows is what has **no fix PR, open or merged, and no
-draft response beyond that pointer**. Reproduce the survey rather than trusting this list: join
-`gh issue list -R confluentinc/parallel-consumer --state open`, the mirrors
-(`gh issue list -R astubbs/parallel-consumer --state all --label upstream-mirror`), fork PRs citing
-`confluentinc#N` (`gh pr list -R astubbs/parallel-consumer --state all --json title,body`), the
-manifest `src/docs/development/upstream-map.yaml`, and `scripts/upstream-sweep.sh --audit`.
-[`upstream-coverage-completeness.md`](upstream-coverage-completeness.md) owns the standing
-obligation; this section is one dated pass at it, kept here because the pre-release sweep is when
-these get answered.
-
-**Bugs with no fix PR:**
-
-- confluentinc#843 (astubbs#178) - same key on two threads across a rebalance. A contract question,
-  wait-for-info; [`core-178-key-order-across-a-rebalance.md`](core-178-key-order-across-a-rebalance.md).
-- confluentinc#546 (astubbs#162) - truncating state; the replay branch is refuted (astubbs#484, merged),
-  the false-truncation WARN is decided (INFO, no truncation branch) and being built on its own PR.
-- confluentinc#551 (astubbs#164) - batching not as expected; the fork verified the over-request as
-  astubbs#311, no PR.
-- confluentinc#887 (astubbs#189) - a poison record re-forms the identical batch on every retry;
-  manifest says none.
-- confluentinc#777 (astubbs#173) - settled as by-design; the documentation reply and the grace-period
-  decision are what remain.
-- confluentinc#597 (astubbs#166, mirror closed as fixed) - the poller-death residual above.
-- confluentinc#803 (astubbs#44) - has astubbs#408, addressed on paper only until it merges.
-
-**Feature requests with nothing behind them** (no branch, PR or note beyond the mirror):
-
-- API surface: confluentinc#78 executor customisation, confluentinc#170 `CompletableFuture`,
-  confluentinc#520 safe consumer-API exposure, confluentinc#782 seek to offset, confluentinc#860
-  managed-executor params, confluentinc#879 no-commit option.
-- Error handling: confluentinc#304, confluentinc#391 and confluentinc#550 - deserialization failures,
-  the largest cluster of user asks with no design;
-  [`core-163-poll-path-has-no-error-seam.md`](core-163-poll-path-has-no-error-seam.md) confirms there
-  is no seam. confluentinc#718 terminate processing.
-- Batching and ordering: confluentinc#314 combine queues across partitions, confluentinc#560 min
-  batch plus max wait (roadmap: ideated), confluentinc#902 freshest record per key, confluentinc#321
-  large-message chunking.
-- Performance: confluentinc#322 disk-backed produce queue, confluentinc#394 least-loaded broker,
-  confluentinc#540 per-partition backpressure.
-- Docs and examples: confluentinc#171 Spring Boot example, confluentinc#178 fan-out with DLQ,
-  confluentinc#180 vert.x POST, confluentinc#115 tombstones javadoc.
-
-Two mirror labels overstate coverage: confluentinc#314 and confluentinc#394 carry `pr-available` on
-their mirrors, and no fork PR cites either.
-
-**Upstream open PRs with no fork action or comment:**
-
-- confluentinc#915 batch construction strategy - manifest none; the roadmap's batch-composition
-  decision is pending. A contributor is waiting on this one.
-- confluentinc#867 Vert.x 5 major - nothing in the fork.
-- confluentinc#908 virtual threads - the fork went its own way in astubbs#360 and replied on the
-  issue, never on the contributor's PR.
-- confluentinc#918, confluentinc#919, confluentinc#920, confluentinc#901 - each absorbed by fork work
-  (the log-noise fixes, `docs/building.md`, dropping the licence plugin), and none of the four PRs
-  has a comment saying so.
-
-**Unanswered conversations:**
-
-- confluentinc#894 got a follow-up on 2026-09-01 asking where interactive replay should live. Partly
-  vendor marketing; the only unanswered direct question upstream.
-- Upstream discussions with zero replies - `scripts/upstream-sweep.sh --audit` lists them;
-  [`upstream-discussions-unanswered.md`](upstream-discussions-unanswered.md) defers them to after v6.
-
-**Drafted and waiting, not gaps:** the `issue-response-*.md` drafts and the astubbs#337 drafts for
-confluentinc#894. [`upstream-tell-809-833-the-hang-is-fixed.md`](upstream-tell-809-833-the-hang-is-fixed.md)
-is stale in one respect: both reports already carry the 2026-08-05 fork reply, though neither has
-been told the fixes merged.
 
 ## Delete when
 
