@@ -71,10 +71,10 @@ March 2026 on.
 * *Coordinates and packages* (https://github.com/astubbs/parallel-consumer/pull/55[#55],
   https://github.com/astubbs/parallel-consumer/pull/294[#294]): the Maven groupId `io.confluent.parallelconsumer` is now
   `bz.stub.parallelconsumer`, and the Java packages `io.confluent.parallelconsumer.*` are now
-  `bz.stub.parallelconsumer.*`,
-  with the shared internal utilities under `bz.stub.parallelconsumer.internal.utils`.
-** Update the dependency, then find-and-replace the imports. The README's Upgrading section has the one-line `sed`.
-** The rename itself changes no signature; the rest of this list is what else can touch your code.
+  `bz.stub.parallelconsumer.*`, with the shared internal utilities under `bz.stub.parallelconsumer.internal.utils`.
+** For the rename itself, two changes are required: the dependency declaration, and the imports. Rewrite your imports
+   with the one-line `sed` in the README's Upgrading section.
+** The rename changes no signature; the rest of this list is what else can touch your code.
 * *A commit that exhausts its budget throws `OffsetCommitBudgetExceededException`*
   (https://github.com/astubbs/parallel-consumer/pull/204[#204];
   https://github.com/astubbs/parallel-consumer/issues/177[#177],
