@@ -587,12 +587,13 @@ the library is tested:
   the silent stalls behind upstream https://github.com/confluentinc/parallel-consumer/issues/857[#857]. Several of the
   fixes above were found or confirmed this way (https://github.com/astubbs/parallel-consumer/pull/83[#83],
   https://github.com/astubbs/parallel-consumer/pull/86[#86]).
-* *Scheduler-controlled concurrency testing as a standing lane.* Lincheck harnesses over the shard, retry-queue and
-  partition-state seams, calibrated by refinding most of the torn-read defects above unaided - and one nobody had
+* *Concurrency testing under a controlled scheduler, as standing lanes.* Lincheck harnesses over the shard, retry-queue
+  and partition-state seams, calibrated by refinding most of the torn-read defects above unaided - and one nobody had
   named - and a standalone jcstress module that measured the memory-model residuals on real hardware before they were
   fixed (https://github.com/astubbs/parallel-consumer/pull/347[#347],
   https://github.com/astubbs/parallel-consumer/pull/404[#404],
-  https://github.com/astubbs/parallel-consumer/pull/348[#348]).
+  https://github.com/astubbs/parallel-consumer/pull/348[#348]). Next in this lane is Fray, which explores thread
+  interleavings deterministically over the whole engine rather than a seam at a time.
 * *A machine-checked register of every documented transactional guarantee*, each with the test that proves it, which
   refuses to certify a run whose filters deselected its proofs
   (https://github.com/astubbs/parallel-consumer/pull/262[#262],
@@ -603,22 +604,55 @@ the library is tested:
   the tree is `@Disabled`
   (https://github.com/astubbs/parallel-consumer/pull/101[#101],
   https://github.com/astubbs/parallel-consumer/pull/264[#264]).
-* *Static analysis on by default*: SpotBugs over every module including tests, with fb-contrib, find-sec-bugs and the
-  SLF4J detectors; Error Prone with NullAway; javac's own lint; forbidden-apis; and an Infer ratchet - every disabled
-  rule registered with a reason and a re-enable trigger
+* *Static analysis on by default, as a required check.* SpotBugs over every module including tests, with fb-contrib,
+  find-sec-bugs and the SLF4J detectors; Error Prone with NullAway and its `@GuardedBy` lock-discipline check at
+  error level; Infer with every Java checker on - RacerD's race analysis among them - as a ratchet against a
+  known-findings set, so a new finding fails and an old one cannot silently return; javac's own lint; and
+  forbidden-apis. Every disabled rule is registered with a reason and a re-enable trigger
   (https://github.com/astubbs/parallel-consumer/pull/356[#356]).
+* *GitHub code scanning* (CodeQL) over the Java, the workflows and the tooling on every PR, and *dependency review*
+  on every dependency change.
 * *Mutation testing* on the classes a PR changes, as its own non-blocking check, plus a nightly whole-repo sweep; and
   forked-per-broker integration tests that removed a long-standing flake class
   (https://github.com/astubbs/parallel-consumer/pull/111[#111],
   https://github.com/astubbs/parallel-consumer/pull/463[#463],
   https://github.com/astubbs/parallel-consumer/pull/68[#68]).
+* *Coverage per suite, with history.* Unit and integration coverage are uploaded under separate flags with patch and
+  project checks on every PR, every master push uploads its base, and a query tool reads that history to say whether
+  a given test has ever failed and at which commit - a record that outlives any CI log.
+* *Throughput measured against master, not against a number in a file.* Every PR's performance test is compared with
+  recent master runs read from their artefacts, the run-to-run spread is reported beside the ratio so a reading is
+  not mistaken for a result, and a master-side baseline series exists for the first time
+  (https://github.com/astubbs/parallel-consumer/pull/401[#401]).
+* *Duplicate-code reports on every PR* from two engines cross-validating each other, gated on the increase against
+  the base branch rather than an absolute; and a file-similarity report for near-copies the line-level engines miss.
 * *A whole-tree CVE scan that can prove it ran*, on every PR and weekly, as its own check that goes red on a finding
   without blocking a merge; every exclusion carries its reasoning and a retirement condition in the pom
   (https://github.com/astubbs/parallel-consumer/pull/279[#279],
   https://github.com/astubbs/parallel-consumer/pull/489[#489]).
+* *Repository hygiene as a required check.* Every issue reference must name its repository, because the fork's issue
+  numbers overlap upstream's; every cited file path must exist; copyright headers, the documentation data's structure,
+  shell lint and the PR checklist are all gated; and a stacked PR cannot merge before its parents.
+* *Two reviews before a merge.* An automated code review is a required check and opens inline threads that block
+  the merge until resolved, and a human LGTM review is required on top of it.
+* *Releases are tag-as-truth.* A dispatch runs `release:prepare`, refuses if master's last CI run is not green, and
+  deploys exactly the commit it tagged; snapshots publish on every push to master. An earlier history-scanning
+  pipeline once re-released an ancient upstream commit, which is why
+  (link:docs/releasing.md[docs/releasing.md]).
 * *A self-hosted high-CPU lane* for the heavy suites, run on dispatch and on a schedule rather than per PR; the
   required merge gate stays on GitHub-hosted runners
   (link:docs/self-hosted-runner.md[docs/self-hosted-runner.md]).
+
+And how the project itself is run:
+
+* *Every open upstream issue has a mirror here.* Each carries labels for what it is and what shipped, and the
+  upstream thread carries one reply pointing at the mirror, so no report to the unmaintained repository is silent
+  (link:docs/upstream.md[docs/upstream.md]).
+* *Solved problems are written up where the next person will find them.* A searchable corpus of write-ups under
+  `docs/solutions/`, by category, each recording the mechanism, the experiment that settled it and the alternatives
+  rejected; the investigations in this release cite it and add to it.
+* *Dependencies move on their own.* Dependabot groups the routine bumps; the majors held back - Kafka 4, JUnit 6,
+  Testcontainers 2, Vert.x 5, Mutiny 3, WireMock 3 - are each recorded with the reason and what unblocks them.
 
 The detail behind each of these is in the commit log and `docs/solutions/`.
 
