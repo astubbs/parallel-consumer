@@ -5,8 +5,9 @@ package bz.stub.parallelconsumer.internal;
  */
 
 /**
- * What a producer replacement attempt did - the {@link ProducerManager#completeReplacement()} result the control
- * loop acts on. Its own file, beside {@link ProducerRecoveryPolicy}, because it holds no lock and no producer.
+ * What a producer replacement attempt did - the result the control loop acts on, returned by the manager's
+ * {@code completeReplacement()}, which lands with the recovery rung above this one. Its own file, beside
+ * {@link ProducerRecoveryPolicy}, because it holds no lock and no producer.
  */
 @lombok.Value
 public class ReplacementOutcome {

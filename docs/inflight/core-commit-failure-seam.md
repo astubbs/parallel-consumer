@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: crash -->
+<!-- inflight-vetted: 2026-09-07 - `gh issue view 317 -R astubbs/parallel-consumer` is OPEN, so the seam is still unbuilt; the gap is still in the tree - `OffsetCommitBudgetExceededException` is thrown from `ConsumerManager`, escapes `controlLoop`, and `supervisorLoop` records it into `failureReason` for `getFailureCause()` with no application decision point. astubbs#177 is CLOSED/COMPLETED, which is what the note already says does not close this. Removed the delete-when section per docs/inflight/AGENTS.md; astubbs#317 has not landed -->
 
 
 **Priority: high.** Ranked top of `process-candidate-ranking.md`. The demand signal is not a request in a
@@ -53,7 +54,3 @@ astubbs#177 is the reported *defect* - a commit timeout reporting the wrong caus
 behind it - addressed by astubbs#204 (reporting, retry budget) and astubbs#29 (the AB-BA deadlock).
 Even with a correct, honestly-reported commit failure, PC still terminates and the application still
 has no say. That is what `ndqvinh2109` was patching around, and it survives both fixes.
-
-## Delete this file when
-
-astubbs/parallel-consumer#317 lands, or is closed as won't-do with the reasoning recorded there.

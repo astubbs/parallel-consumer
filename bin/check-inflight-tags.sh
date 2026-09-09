@@ -66,7 +66,7 @@ for f in docs/inflight/*.md; do
     # valid. Introduced exactly that way - merging a branch whose notes predated a state reword
     # appended the stale block underneath the corrected one rather than replacing it, and the gate
     # said "83 note(s) valid" over a note that was both `deferred - parked` and `parked - deferred`.
-    for tag in type impact state labels; do
+    for tag in type impact state labels vetted; do
         # No `|| echo 0`: grep -c PRINTS 0 and exits 1 on no match, so the fallback appends a
         # second line and the numeric test below errors on "0\n0".
         n=$(grep -c "<!-- inflight-$tag:" "$f" 2>/dev/null); n=${n:-0}
@@ -135,6 +135,27 @@ for f in docs/inflight/*.md; do
     # A state must say WHY, or a reader cannot tell a decision from an abandonment.
     if [ -n "$state" ] && ! grep -q ' - ' <<<"$state"; then
         note "$f \"$(note_title "$f")\": inflight-state '$state' has no reason. Use '<state> - <why>'"
+    fi
+
+    # THE VETTED MARKER IS A DATE AND WHAT WAS CHECKED, or it is not one. `bin/inflight.mjs vet`
+    # reads it with VETTED_RE in bin/lib/inflight-tags.mjs, which requires exactly `YYYY-MM-DD - <what>`;
+    # a marker that regex cannot parse reads there as "never vetted" - silently undoing the vet it
+    # records - so the shape is refused here, in front of whoever wrote it. The date is not checked
+    # against a calendar: a typo in the day is a wrong record, which no script can tell from a
+    # right one, but a marker with no date at all is a marker that says nothing.
+    # THE MARKER FORM ONLY, `<!-- inflight-vetted:` - not the bare field name, which appears in prose
+    # whenever a note quotes the grep that lists PROPOSED markers. The first cut matched the bare
+    # name and failed the sweep's own working note for citing the command; the duplicate check above
+    # already keys on the comment opener, and this follows it.
+    vetted=$(sed -n 's/.*<!-- inflight-vetted:[[:space:]]*\([^>]*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
+    # A '>' INSIDE THE MARKER IS THE SAME DEFECT THE STATE CHECK ABOVE GUARDS: VETTED_RE in
+    # bin/lib/inflight-tags.mjs is `[^>]*` too, so `fixed by X -> Y` parses as empty here and as
+    # "never vetted" there. Five markers hit this on the first sweep and were reported as "not
+    # YYYY-MM-DD", which sent the writer looking at the date. Name the actual cause.
+    if grep -q '<!-- inflight-vetted:' "$f" && [ -z "$vetted" ] && grep -q '<!-- inflight-vetted:.*>.*-->' "$f"; then
+        note "$f \"$(note_title "$f")\": inflight-vetted text contains '>' - VETTED_RE in bin/lib/inflight-tags.mjs cannot parse that marker and \`bin/inflight.mjs vet\` would list the note as never vetted. Reword without '>'"
+    elif grep -q '<!-- inflight-vetted:' "$f" && ! grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} - .+' <<<"$vetted"; then
+        note "$f \"$(note_title "$f")\": inflight-vetted '$vetted' is not 'YYYY-MM-DD - <what was checked>'. docs/inflight/AGENTS.md -> \"Vetting a note\" owns the marker"
     fi
 done
 

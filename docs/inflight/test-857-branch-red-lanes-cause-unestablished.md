@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: throughput -->
 <!-- inflight-labels: concurrency -->
+<!-- inflight-vetted: 2026-09-07 - still true: what remains open is the last bullet and it is unchanged - WorkManager.numberRecordsOutForProcessing is still a plain int with no fence, and the describeProgress coherence flag is still unarmed and has still never fired. Both cited solution write-ups and bug-number-records-out-for-processing-is-a-plain-int.md still resolve; ConsumerManagerPauseCacheTest still holds the pause-cache contract. astubbs#336 and astubbs#335 have since MERGED (astubbs#361 direct pull is still OPEN), so the counter-rebuild caveat now reads against landed code -->
 
 **The question this note was opened on is answered.** The filename predates the answer and is kept
 so citations keep resolving; read the title, not the name. The full diagnosis, differential
@@ -70,7 +71,8 @@ an ENTRY refresh (before `pollingBroker` is set, preserving the CME fix);
 
   **All three profiles were re-enabled on 2026-09-01** (operator decision) and the lane gates on them;
   `largeNumberOfInstances` has failed once since, with a rebalance stall that the control-loop fix does
-  NOT address - `test-largenumberofinstances-residual-failures-measured-not-explained.md` owns it.
+  NOT address - `../solutions/test-flakiness/large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md`
+  owns it (measured and classified 2026-09-05: the protocol's join phase under churn, not PC).
   What follows described the state while they were held out, and the question of where
   a test whose own documentation says a single run is not a verdict can live given the lane is a
   **required check**, is `handoff/enable-large-number-of-instances`.

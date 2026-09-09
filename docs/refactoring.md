@@ -98,42 +98,15 @@ These change the public, user-visible surface, so they still may not be folded i
 patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
 refactors below, which are non-breaking and can land at any point in any line.
 
-- **DONE, landed in astubbs/parallel-consumer#267: `InternalRuntimeException` renamed to
-  `PCInternalRuntimeException`.** A user-visible break - it is what arrives from
-  `getFailureCause()`, and it is the type named in upstream's own report text
-  (`...internal.InternalRuntimeException: Timeout waiting for commit response PT30S`,
-  confluentinc#833). Renamed because the old name reads like a JDK type: in a stack trace or an IDE
-  exception picker that prints simple names, `InternalRuntimeException` could belong to anything, and
-  the `PC` prefix says whose it is at a glance. Recorded here rather than only in the commit, because
-  this section is what the release notes are assembled from.
-  [`docs/inflight/core-exception-hierarchy-cleanup.md`](inflight/core-exception-hierarchy-cleanup.md)
-  owns the rest of the naming work - `InternalException` and the two spellings of the PC prefix are
-  untouched, so a later pass will be a second break unless it is done in this same release.
-- **DONE, landing with astubbs/parallel-consumer#201: an inverted `initialLoadFactor` /
-  `maximumLoadFactor` pair is rejected instead of accepted.**
-  `ParallelConsumerOptions#validate()` now throws `IllegalArgumentException` naming both options and
-  both values. A break only for a configuration that never did what it said - today an initial factor
-  above the maximum is accepted and pinned at the initial value, surfacing at best as an inverted
-  `100/10` in the rate-limited saturation warning, so an application carrying the typo starts and
-  runs; after this it fails at construction. Small blast radius, but "started yesterday, will not
-  start today" is what a `=== Breaking` bullet exists for. Recorded here rather than only in the
-  commit, because this section is what the release notes are assembled from.
+**An entry is deleted in the PR that lands it**, because the commit message carries the release-note
+content and this section only lists what is still queued.
+
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
   (`public void setCommitInterval`, `private final Duration defaultMessageRetryDelay`,
   `isUsingTransactionalProducer`) **and retire the temporary Kafka-compat work-around flag**
   (`ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck`) - `ParallelConsumerOptions.java`.
-- **DONE, landing with astubbs/parallel-consumer#116: the `Stream` returned by
-  `pollProduceAndStream` / `vertxHttpReqInfoStream` now blocks until the processor closes.** It used
-  to return almost immediately, because the queue-to-`Stream` bridge ended the stream on the first
-  momentarily-empty poll - which is what `Spliterator.tryAdvance` returning `false` means, and it is
-  the confluentinc#912 OOM: results produced afterwards piled up behind a consumer that had already
-  walked away. A caller that collected on the calling thread and read a size got whatever had been
-  produced so far; the same caller now waits for close. **No compatibility path is offered and none
-  should be** - the old shape did not deliver the caller's results, so there is no correct behaviour
-  to preserve. Callers consume on their own thread, as the Vert.x example now shows. Recorded here
-  rather than only in the commit, because this section is what the release notes are assembled from.
 - ~~**Remove the JStream API** (deprecate first)~~ - **WITHDRAWN 2026-09-03, owner's call.** The
   removal was queued while the API was broken in the way above; deprecating something because it does
   not work is a different argument from deprecating something that does. It works now, so it stays,
@@ -457,16 +430,53 @@ cosmetic - see the last bullet.*
     `onPartitionsAssigned(Collection<TopicPartition> partitions)` and
     `onPartitionsLost(Collection<TopicPartition> partitions)`) and `ConsumerManager`'s
     `noWakeups`, `erroneousWakups`, `correctPollWakeups` counters.
-  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (2) - primitive written in one thread may not
-    be visible to another: `ConsumerManager.commitRequested`, `RetryQueue.closed`.
-    Was 3: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` is now
-    `volatile` (astubbs#201), and SpotBugs no longer reports it.
-    **`RetryQueue.closed` is now a FALSE POSITIVE and stays listed for that reason.** The
+  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` - primitive written in one thread may not
+    be visible to another. **Re-derive the membership, do not trust a list here**:
+    `./mvnw --batch-mode -Pci test-compile spotbugs:spotbugs spotbugs:check -Dspotbugs.failOnError=false`
+    and read `parallel-consumer-core/target/spotbugsXml.xml` for that bug type. **Run it exactly as
+    written - it is the `static: spotbugs` step's own command.** `spotbugs:spotbugs` on its own
+    analyses whatever bytecode happens to be under `target/` already: nothing on a clean checkout,
+    stale classes after an edit - and `test-compile` is what puts `target/test-classes` there, which
+    the `includeTests` setting needs. Narrowing with `-pl` and no `-am` reintroduces the missing
+    artefact trap [`docs/building.md`](building.md) owns. **No membership is written
+    here, deliberately** - an enumeration would be one more list to maintain, and the paragraph
+    below is the record of what that cost last time.
+    <!-- file-refs: N/A - the report path above is build output, written by the command on the line before it and absent from a clean checkout -->
+    **This entry was wrong about that membership for a month, in the direction that matters**:
+    it listed two fields and a count, while the analyser named six - three of them in
+    `PartitionState`, the class astubbs#349 was fencing at the time, and one
+    (`ProgressTracker.highestRoundCountSeen`) that no ledger anywhere carried. The signal was
+    present and the record was wrong about it, which is worse than the analyser having been
+    silent. The lane runs `spotbugs:check` with `-Dspotbugs.failOnError=false`, so it annotates
+    and never blocks, and nothing goes red when this paragraph rots - hence the reproduce
+    command above rather than a list to maintain.
+    Fixed and off the list since: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`
+    (`volatile`, astubbs#201), and `PartitionState.allowedMoreRecords` plus
+    `PartitionState.stateChangedSinceCommitStart` (astubbs#469 - the first `volatile` against a
+    jcstress FORBIDDEN arm, the second **not**: it was written by both threads, jcstress measured
+    that the modifier moves the anomaly by nothing, and it collapsed with `dirty` into a monotone
+    completion count. **`volatile` is the fix for a one-writer field, not for a shared one**).
+    `PartitionState.bootstrapPhase` remains, deliberately unwalked - an analyser row is not a
+    diagnosis, and nobody has scoped it.
+    **`RetryQueue.closed` is a FALSE POSITIVE and stays listed for that reason.** The
     iterator that owns it is `@ThreadConfined(ANY)` with a runtime guard
     (`assertOnOwningThread`), so there is no second thread to be stale for - it never
     could be, because the iterator holds a read lock only its opener can release.
     SpotBugs reads no confinement annotation and will keep reporting it; do not "fix" it
     with `volatile`, which would assert a sharing that does not exist.
+  - **`PartitionState`'s commit-window pair shares one lifecycle - declare the confinement on both or
+    on neither.** The pair is `offerLastMadeForCommit` (astubbs#470) and `completionCountBeingCommitted`
+    (astubbs#469): both written by `getCommitDataIfDirty()` where a commit window opens, both read by
+    `onOffsetCommitSuccess` where it closes. **`offerLastMadeForCommit`'s javadoc owns the thread model** -
+    which thread writes and reads it in each commit mode, the one `Consumer#close()` hand-over, and why
+    `completionCount`'s `incrementAndGet` being the fence is what keeps the rest plain; it is not restated
+    here, because two copies of a concurrency argument drift and the field is where a reader forms the
+    question. Their modifiers already differ, deliberately and for reasons each javadoc gives:
+    `offerLastMadeForCommit` is plain and **must not be "fixed" with `volatile`**, while
+    `completionCountBeingCommitted` is `volatile` because no single thread is correct to name across the
+    commit modes. What belongs on this list is only the work item: if anyone declares the confinement with
+    `@ThreadConfined` plus a runtime assertion (the `RetryQueue.closed` treatment above), **do the pair
+    together** - annotating one of two fields with the same lifecycle reads as a claim about the other.
   - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
     on the astubbs#119 branch:**
     `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
@@ -560,22 +570,6 @@ cosmetic - see the last bullet.*
 ### offsets/OffsetDecodingError.java
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
-
-### state/ProcessingShard.java
-
-- **`getWorkIfAvailable`'s inline stale removal orphans the `retryQueue` entry.** It does
-  `iterator.remove()` and decrements the counter, but never calls `retryQueue.remove` - whereas the
-  sweep does both, and says so: `// remove stale containers from both processingShards and retryQueue`
-  in `ShardManager.removeStaleContainers`, which maps `retryQueue::remove` over what the shard
-  returned. If the control thread's inline removal reaches a *failed* (retry-queue-resident) container
-  that has just gone stale before the poll thread's sweep does, that queue entry is orphaned
-  permanently, inflating `getQueueSizeAndNumberReadyToBeRetried` and therefore
-  `getNumberOfWorkQueuedInShardsAwaitingSelection`. Throttle-gate noise and a false "ready to retry"
-  signal - **not record loss**. Pre-existing and independent of astubbs#31.
-  **There is no test that would catch it**: the only retryQueue coverage is `ShardManagerTest`'s
-  `retryQueueOrdering`, `testRetryQueueOrdering` and `testRetryQueueOrderingMultipleTries`, all of
-  which test ordering only. Nothing asserts shard/retryQueue consistency after a stale removal by
-  either path.
 
 ### state/RetryQueue.java
 
@@ -872,9 +866,12 @@ Only the items needing a decision are listed here - do not restate the inventory
   `LoadTest` stays at 4,000: it is untagged, so it runs in the gating lane, and it is already a
   listed member of the load-tightness flake family at that volume.
 
-Not listed as work: `largeNumberOfInstances` stays in `docs/quarantined-tests.md` as an unowned entry -
-astubbs#29 merged on 2026-09-02 fixing one confluentinc#857 mechanism without lifting this quarantine, so it
-is tracked by the registry, not here. The three
+Not listed as work: `largeNumberOfInstances` **left the quarantine registry on 2026-09-07** and is not
+tracked here either. Its residual failures were measured as the consumer group protocol under the
+profile's churn rate, so it is a capacity measurement rather than a test that can be red - it carries
+`@Tag("capacity")`, which the required lane excludes and the scheduled `experiments` workflow runs
+([`docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md`](inflight/test-largenumberofinstances-cannot-gate-a-merge.md)).
+The three
 `@Timeout(60000L)` annotations (`MockConsumerEarlyCloseTest`, `MockConsumerSaslAuthenticationTest`,
 `MockConsumerCommitTimeoutTest`) are owned by open PR astubbs#206, which replaces them with
 `@Timeout(120)` on a shared `MockConsumerTestBase` and adds the assertion
@@ -967,6 +964,13 @@ rather than fixed there so the gate's scope stayed one decision.
   `SubmitWorkToPoolShutdownRaceTest` still builds its own twice (grep `new ListAppender` there); its
   `getThrowableProxy()` filtering is already covered by `LogCapture.events()`, so no widening of the
   helper is needed.
+
+### Test infrastructure - `RandomUtils.nextInt()` is deprecated, and every chaos topic name uses it
+
+- **Replace the deprecated `org.apache.commons.lang3.RandomUtils.nextInt()` used to make a unique
+  topic name.** Four call sites, all in `integrationTests/chaostests` (grep `RandomUtils.nextInt()`),
+  and `-Xlint:all` warns on each. Do all four together or none: fixing one leaves a file that reads
+  as the odd one out, which is why the soak scenario that surfaced the warning deliberately did not.
 
 ### Cross-module test clones (the file-similarity backlog behind astubbs#40)
 

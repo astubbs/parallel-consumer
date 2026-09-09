@@ -5,8 +5,10 @@
 # Does the largeNumberOfInstances failure rate MOVE WITH SCALE?
 #
 # The experiment astubbs#a8b4e196e's own commit body proposes, and the one
-# test-largenumberofinstances-residual-failures-measured-not-explained.md is about: is the residual failure the
-# group coordinator failing to converge, or a PC defect?
+# docs/solutions/test-flakiness/large-instances-residual-is-a-join-phase-held-open-by-churn-2026-09-05.md
+# answered for the single-event case: is the residual failure the group coordinator failing to
+# converge, or a PC defect? (Answer: the protocol's join phase under churn, not PC - this sweep asks
+# whether that residual's RATE moves with scale, which the mechanism write-up left untested.)
 #
 #   rate RISES with scale  -> consistent with the coordinator struggling at size. Kafka's problem.
 #   rate FLAT across scale -> hard to explain as "Kafka cannot converge at this size". Points at PC.

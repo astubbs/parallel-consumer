@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: release-gate -->
+<!-- inflight-vetted: 2026-09-07 - the question is still unanswered and all three "Still open" items are live; the 2026-08-26 target has passed with no release (pom 0.6.0.0-SNAPSHOT, no v0.6.0.0 tag, quarantine registry non-empty), recorded as a dated line rather than by rewriting the decision -->
 
 **Deliberately its own file, not a section inside
 [`release-0.6.0.0.md`](release-0.6.0.0.md).** A section is invisible until someone opens that file;
@@ -50,6 +51,14 @@ be declined.
 A date makes the failure mode concrete. Until now the risk was never shipping, with each addition
 individually justified; with a date the risk becomes shipping the date and quietly dropping the
 announcement or the roadmap, which are the parts that make the release cost less than it looks.
+
+**2026-09-07: the date passed and nothing shipped.** Recorded rather than rewritten, because the
+paragraph above is what was decided on 2026-08-24 and the failure it names is the one that happened.
+Twelve days after the target the pom is still `0.6.0.0-SNAPSHOT`, there is no `v0.6.0.0` tag, the
+quarantine registry is non-empty so `release.yml`'s guard would refuse the cut anyway, and the
+roadmap announcement the date was really for has not gone out. The call this note asks for is
+therefore still unmade, and it is now unmade *past* its own deadline - which is evidence for the
+note's own thesis, not against it.
 
 ## Still open
 

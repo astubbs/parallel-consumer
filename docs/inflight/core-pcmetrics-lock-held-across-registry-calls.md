@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: refactor -->
+<!-- inflight-vetted: 2026-09-07 - re-read `PCMetrics`: `close()`, the private `removeMeter(Meter.Id)` and `removeMetersByPrefixAndCommonTags` are still all `@Synchronized("metersLock")` and still call `removeQuietly`/`Search.in(meterRegistry)` with the lock held, while the public `removeMeter(Meter)` is still unsynchronised. All three never-throws guards the note says must not be undone are still present -->
 
 The private `removeMeter(Meter.Id)`, `close` and `removeMetersByPrefixAndCommonTags` are all
 `@Synchronized("metersLock")` and all call `remove(Meter.Id)` or `getMeters()` with that lock held.

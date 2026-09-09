@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - every branch in the table still exists and all eight PRs (astubbs#379, astubbs#388, astubbs#389, astubbs#391, astubbs#394, astubbs#395, astubbs#396, astubbs#398) are still OPEN DRAFTS, as are astubbs#271 and the reconciled integration branch's containment; `git show abcc811e6:docs/inflight/branch-ks-streams-handover.md` still resolves. `KafkaClientSupplier` appears nowhere on master, which is the note's own point rather than a stale citation. Corrected the package-rename bullet - every branch in the table now carries `bz/`, so the cluster is renamed. Replaced the merge-keyed delete-when with the content condition -->
 
 
 A signpost, not a handover. None of this work is on `master` - not the
@@ -52,10 +53,11 @@ code it describes.
 
 Two things worth knowing without opening any of it:
 
-- **The cluster predates the package rename.** Its sources are still `io.confluent.*`, while
-  astubbs#271's own head has been renamed. Each branch runs `bin/rename-packages.sh` *before*
-  merging master - the rule in [`AGENTS.md`](../../AGENTS.md), and this is the largest set of
-  branches it still applies to.
+- **The rename has been through this cluster.** It predated `bin/rename-packages.sh` and was the
+  largest set of branches the sweep had to carry, but every branch in the table above now has
+  `parallel-consumer-core/src/main/java/bz/`, as does astubbs#271's own head. The rule in
+  [`AGENTS.md`](../../AGENTS.md) - run the script before merging master - no longer has anything to
+  do here.
 - **It does not gate 0.6.0.0**, settled. Whatever state it is in when the release cuts is what
   ships. Merging is cheap to reverse - it is a leaf module - and publishing is not.
 
@@ -63,6 +65,8 @@ Two things worth knowing without opening any of it:
 on one classpath, which is a coordinates problem rather than a fork problem. Parked, with the
 options recorded in the plan on the branch.
 
-## Delete when
+## When this stops earning its place
 
-astubbs#271 merges - which brings its own handover onto master, and that supersedes this file.
+This file is a way in, and it is superseded the moment `docs/inflight/branch-ks-streams-handover.md`
+exists on master - the branch's own handover, which says all of this from beside the code. Check for
+that file rather than for a merge.

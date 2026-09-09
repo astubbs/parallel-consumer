@@ -2,6 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - checked every `Bug pattern` entry in `config/spotbugs-exclude.xml` against this file: all 26 have an entry here, including the pair written as `IPU_IMPROPER_PROPERTIES_USE` + `_SETPROPERTY`, so the registry's own first rule still holds. `.spotbugs-baseline.xml` is gone from the tree, `includeTests` is still true, and the lane still runs `spotbugs:spotbugs spotbugs:check -Dspotbugs.failOnError=false`, so it still REPORTS rather than blocks. The `MockSomething` anchor warning is a false positive - it is an illustrative name in prose, not a symbol -->
 
 **Consult this before suppressing a SpotBugs finding, and before asking why a rule is not firing.**
 Every rule this repo switches off is listed here with a reason and a re-enable trigger. A rule that

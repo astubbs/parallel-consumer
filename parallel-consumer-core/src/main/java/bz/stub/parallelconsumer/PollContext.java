@@ -184,6 +184,11 @@ public class PollContext<K, V> implements Iterable<RecordContext<K, V>> {
     /**
      * @return a {@link Map} of {@link TopicPartition} to {@link RecordContext} {@link Set}, which wrap the {@link
      * ConsumerRecord}s in this result set
+     * @implNote The {@link Collectors#toSet()} below de-duplicates by {@link RecordContext#equals}, which since
+     *         astubbs/parallel-consumer#468 is identity - the contexts are freshly constructed here, so it now
+     *         removes nothing. That changes no observable result: a poll set holds at most one record per offset,
+     *         because each is taken from a shard that holds at most one container per offset, so no two elements
+     *         were ever equal under the previous coordinate-based equality either.
      */
     public Map<TopicPartition, Set<RecordContext<K, V>>> getByTopicPartitionMap() {
         return this.records.entrySet().stream()

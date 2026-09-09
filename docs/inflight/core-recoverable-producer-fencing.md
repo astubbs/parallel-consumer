@@ -2,7 +2,10 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: crash -->
-
+<!-- post-merge: checked-begin - a dated vetting record written on master before this rung merged; it names what
+     was open on that date, and stays true as a record once the rung lands -->
+<!-- inflight-vetted: 2026-09-07 - the behaviour the note describes is unchanged at HEAD: `ProducerManager#commitOffsets` still catches `ProducerFencedException` from `sendOffsetsToTransaction` and rethrows it wrapped in `PCInternalRuntimeException`, which still ends the instance, and astubbs#225 is still OPEN. One rung of the dated 2026-09-03 stack header has since moved - astubbs#426 is MERGED and `producerConfig` is on `ParallelConsumerOptions` - while astubbs#410 and astubbs#420 are still OPEN, which is why the plan document and `ProducerFactory` still do not resolve on master -->
+<!-- post-merge: checked-end -->
 
 ## In flight as a stack of five rungs, one of them landed (2026-09-07)
 
