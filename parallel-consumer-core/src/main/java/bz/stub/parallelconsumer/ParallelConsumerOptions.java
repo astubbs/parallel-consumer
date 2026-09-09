@@ -507,6 +507,11 @@ public class ParallelConsumerOptions<K, V> {
      * If we have enough, then we actively manage pausing our subscription so that we can continue calling {@code poll}
      * without pulling in even more messages.
      * <p>
+     * <b>Must be at least 1</b>, which is the default and is also the non-batching configuration. Zero, a negative
+     * and (the field being boxed) null are all reachable through this builder, and {@link #validate()} rejects all
+     * three with an {@link IllegalArgumentException} at construction. Unbounded, the same wrong value used to be
+     * silent, fatal, or an NPE depending on settings that have nothing to do with batch size - the bound's own
+     * javadoc, beside {@code loadFactorValidation}, records which and why (astubbs#311).
      *
      * @see ParallelConsumerOptions#getBatchSize()
      */
@@ -539,6 +544,7 @@ public class ParallelConsumerOptions<K, V> {
         producerSourceValidation();
         transactionsValidation();
         loadFactorValidation();
+        batchSizeValidation();
     }
 
     /**
@@ -592,6 +598,47 @@ public class ParallelConsumerOptions<K, V> {
                     initialLoadFactor,
                     Fields.maximumLoadFactor,
                     maximumLoadFactor));
+        }
+    }
+
+    /**
+     * {@link #batchSize} is the maximum number of records handed to your function at once, so one - the default - is
+     * the smallest value that asks for any work at all. Below that the same misconfiguration failed in whichever of
+     * three ways the <em>rest</em> of the configuration happened to decide, and none of them named the option:
+     * <ul>
+     *     <li><b>Silently</b>, on an otherwise default configuration. {@link #isUsingBatching()} is false at zero, so
+     *     nothing divides - but {@link #getTargetAmountOfRecordsInFlight()} is {@code maxConcurrency * 0}, the
+     *     in-flight delta is never positive, and no work is ever requested. The consumer starts cleanly, logs nothing
+     *     unusual, and processes nothing forever. A negative behaves the same way.</li>
+     *     <li><b>As a bare {@link ArithmeticException} at construction</b>, but only if {@link #messageBufferSize} is
+     *     set: {@code PCModule}'s load-factor initialisation divides by that same zeroed in-flight target. The
+     *     division is guarded by {@code messageBufferSize > 0}, so the default path never reaches it.</li>
+     *     <li><b>As a {@link NullPointerException}</b> on null - the field is boxed - unboxing inside
+     *     {@link #isUsingBatching()}.</li>
+     * </ul>
+     * One misconfiguration being silent, fatal, or an NPE depending on unrelated settings is the argument for
+     * validating it rather than documenting it (astubbs#311).
+     * <p>
+     * Null is rejected here rather than by a Lombok {@code @NonNull} on the field, for the reason
+     * {@link #getCommitInterval()} already states about a null commit mode: a misconfiguration is
+     * {@link #validate()}'s to reject, at the point that can name the option and the bound it broke.
+     * {@code @NonNull} would fail at {@code build()} with "batchSize is marked non-null but is null" - a message that
+     * names the field but not the bound - and would split one bound across two exception types and two points in the
+     * lifecycle.
+     */
+    private void batchSizeValidation() {
+        if (batchSize == null) {
+            throw new IllegalArgumentException(msg("Cannot set {} to null - it must be at least 1, which is also the "
+                            + "default: it is the maximum number of records passed to your function at once",
+                    Fields.batchSize));
+        }
+        if (batchSize < 1) {
+            throw new IllegalArgumentException(msg("Cannot set {} ({}) below 1 - it must be at least 1, which is also "
+                            + "the default: it is the maximum number of records passed to your function at once, so "
+                            + "anything below one asks for no work at all and the consumer would start cleanly and "
+                            + "then process nothing",
+                    Fields.batchSize,
+                    batchSize));
         }
     }
 

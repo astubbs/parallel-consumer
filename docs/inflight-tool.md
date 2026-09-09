@@ -331,6 +331,7 @@ nearly every file. Each row carries the cheap signals a script can see:
           all-cited-numbers-settled: cites one fork number and it is settled: astubbs#207 MERGED (pull-request)
           bin/inflight.mjs docs show docs/inflight/bug-run-length-plausibility-ceiling.md
 ```
+<!-- file-refs: N/A - sample vet output recorded on 2026-09-07; the note it shows was retired by astubbs#480, and the sample is kept as the shape of the output, not as a citation -->
 
 **A signal is a reason to open the note, never a verdict.** That note may cite astubbs#207 because
 that pull request is where the defect was found, or because it fixed it - the row cannot tell, and
