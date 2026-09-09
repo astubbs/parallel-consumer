@@ -11,7 +11,7 @@ availability:
   since: 0.4.0.0
   evidence:
     tag: 0.4.0.0
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Listed as content of this release - the Project Reactor non-blocking threading adapter module.
 readme_anchor: project-reactor
 summary: Process records with Reactor publishers while Parallel Consumer coordinates ordering and commits.

@@ -11,7 +11,7 @@ availability:
   since: 0.5.0.0
   evidence:
     tag: 0.5.0.0
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Added PollContext as the processing API's central record-set and metadata view.
 summary: Receive a PollContext in processing callbacks to access a single record or a configured batch plus record metadata.
 use_this_when:

@@ -1,6 +1,6 @@
 # Releasing, and generating the release notes
 
-How a release is cut, and how `CHANGELOG.adoc`'s section for it is written. AGENTS.md carries the
+How a release is cut, and how `CHANGELOG.md`'s section for it is written. AGENTS.md carries the
 one rule every agent needs - **a PR never adds a changelog entry** - because that one binds work
 that has nothing else to do with releasing. Everything else is here.
 
@@ -38,7 +38,7 @@ Workflows: `release.yml` (release), `publish.yml` (snapshot-only).
 
 ## What state a changelog section is in
 
-`CHANGELOG.adoc` holds the release notes. **Nothing about it is a per-PR chore.**
+`CHANGELOG.md` holds the release notes. **Nothing about it is a per-PR chore.**
 **Release-time generation is in effect now, and it covers `0.6.0.0` itself.** "Frozen" below is a
 statement about *text already written in the file* - leave it alone - and never a claim that some
 release's published notes are settled. What state a section is in follows from whether its release
@@ -93,7 +93,7 @@ work is pending; add the version label when it lands. At release time the versio
 search - the relative ones move as releases cut, so they cannot tell you what a *past* release
 contained.
 
-This is a convenience, not the record. `CHANGELOG.adoc` and the commit log remain the source of
+This is a convenience, not the record. `CHANGELOG.md` and the commit log remain the source of
 truth, and a missing label never makes a release wrong - it makes it harder to audit.
 
 ## Groom the notes before you decide what the release waits on
@@ -146,14 +146,14 @@ it - and a human should re-apply it before freezing:
   tested, with the detail left to the log.
 - **Sections:** `=== Breaking`, `=== Improvements`, `=== Fixes`, `=== Dependencies`, `=== Examples`,
   `=== Build & CI`.
-- **Reference convention inside `CHANGELOG.adoc` only:** a bare `#NN` is this fork, `upstream #NN`
+- **Reference convention inside `CHANGELOG.md` only:** a bare `#NN` is this fork, `upstream #NN`
   is confluentinc; make issue links explicit (`.../issues/NN[#NN]`), since GitHub numbers issues and
   PRs from one sequence. The file is in the issue-reference gate's `EXEMPT_PATHS` for this reason -
   everywhere else, [`docs/issue-references.md`](issue-references.md) applies.
 
 ## The `repo: hygiene` changelog gate is a different, narrower check
 
-`.github/scripts/changelog-ref-gate.js` fails a human PR that adds a `CHANGELOG.adoc` bullet under
+`.github/scripts/changelog-ref-gate.js` fails a human PR that adds a `CHANGELOG.md` bullet under
 `Breaking`, `Improvements`, `Fixes` or `Examples` without an explicit `/issues/NN` link. **Do not
 read a green gate as compliance with the no-entries rule** - it is neither a subset nor a superset
 of it, and it is not dormant:
@@ -166,7 +166,7 @@ of it, and it is not dormant:
   is what `changelog-ref: N/A - <reason>` on its own line in the PR body is for; the workflow names
   this case explicitly.
 - PRs **do** still touch the file. astubbs#51, astubbs#57, astubbs#105 and astubbs#106 were all open
-  before this policy landed and all modify `CHANGELOG.adoc`; every PR predating the policy is in the
+  before this policy landed and all modify `CHANGELOG.md`; every PR predating the policy is in the
   same position.
 
 So the gate enforces the *citation convention* on entries, and a human author and reviewer enforce

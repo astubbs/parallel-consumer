@@ -59,7 +59,7 @@ astubbs#201 and is no longer tracked here; what is left has no issue of its own.
   That is silent record loss, it is present in **every released 0.5.x line**, and no bug report
   describes it because nobody could have noticed it. A note phrased only as "offset accuracy on
   assignment" would understate it to exactly the users who need to read it.
-  **Settled 2026-09-09:** the `== 0.6.0.0` section of `CHANGELOG.adoc` opens its *Records lost or
+  **Settled 2026-09-09:** the `== 0.6.0.0` section of `CHANGELOG.md` opens its *Records lost or
   duplicated with nothing in the logs* list with this one, naming both modes.
   Mechanism, preconditions (it needs all four, so it is uncommon to trigger and persistent once
   triggered) and the evidence:
@@ -75,7 +75,7 @@ astubbs#201 and is no longer tracked here; what is left has no issue of its own.
 ## Breaking changes that have already landed
 
 Two, both from astubbs#296 (`fix(core) astubbs#209`, commit `79a7b6c62`, whose body carries the full
-reasoning). They are written down here because `CHANGELOG.adoc`'s `=== Breaking` section is
+reasoning). They are written down here because `CHANGELOG.md`'s `=== Breaking` section is
 regenerated from the commit log when the tag is cut - until then the log is the only record, and a
 release note is not something to discover by reading commits.
 
@@ -218,7 +218,7 @@ Evidence is in `docs/data/testing-evidence.yaml`; the checks to run are in
 `docs/data/module-maturity.yaml` under `release_validation`. If a check fails, amend the claim rather
 than waive the item.
 
-**The claim as published (settled 2026-09-09 in `CHANGELOG.adoc`'s `== 0.6.0.0` section).** Two
+**The claim as published (settled 2026-09-09 in `CHANGELOG.md`'s `== 0.6.0.0` section).** Two
 known critical defects are outside 0.6.0.0's scope by the owner's decisions of 2026-09-07 and
 2026-09-09, both in `PERIODIC_TRANSACTIONAL_PRODUCER` mode only, and the notes name each under
 *Known limitations* rather than claiming "every known critical defect": the transactional revoke wait

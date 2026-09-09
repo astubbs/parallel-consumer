@@ -11,7 +11,7 @@ availability:
   since: 0.5.2.8
   evidence:
     tag: 0.5.2.8
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Added message-buffer configuration options for direct control of buffered work.
 summary: Set a concrete upper bound for buffered work instead of relying only on the adaptive load-factor controls.
 use_this_when:

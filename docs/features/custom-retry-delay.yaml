@@ -11,7 +11,7 @@ availability:
   since: 0.3.2.0
   evidence:
     tag: 0.3.2.0
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Added a custom retry-delay provider for failed records.
 summary: Calculate a retry delay from each record's context instead of using one fixed delay for every failure.
 use_this_when:

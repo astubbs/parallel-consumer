@@ -11,7 +11,7 @@ availability:
   since: 0.5.1.0
   evidence:
     tag: 0.5.1.0
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Listed as content of this release - pause and resume without unsubscribing from topics.
 readme_anchor: features-list
 summary: Pause new work submission across the processor without unsubscribing from its topics, then resume when the application is ready.
