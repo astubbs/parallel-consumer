@@ -451,12 +451,17 @@ Folded in from the register that was `release-0600-blockers.md`. Scope: `CHANGEL
 `README.adoc` as published. Release mechanics stay in [`release-0.6.0.0.md`](release-0.6.0.0.md);
 the tracker is astubbs#197.
 
-- **Master must be green, and five lanes are known to lie or to fail on their own.** The autopsy
-  that omits fleet violations, the perf lane's wall-clock deadline, the churn scenario's
-  thirty-second no-progress window (being settled by replay on
-  `test/857-no-progress-window-replay`), the codecov flags that are not like-for-like, and the
-  broker container's undiagnosable exit. Each has its own note; read the flake register and those
-  notes before believing a red or a green on the day.
+- **Master must be green, and several lanes are known to lie or to fail on their own.** The
+  autopsy that omits fleet violations, the perf lane's wall-clock deadline, the codecov flags that
+  are not like-for-like, and the broker container's undiagnosable exit. The churn scenario's
+  thirty-second no-progress window was settled by replay and widened to the measured 60s in
+  astubbs#499 (every firing watched past detection drained; the 60s value is borrowed from the
+  revoke scenario and its sufficiency was measured on one desktop, not the runner), and the same
+  sweep left one survivor of that class armed on that scenario, the rebalance-dwell bound, which has
+  fired on a docs-only commit. The Lincheck lane's job timeout went from 20 to 60 minutes in the
+  same PR: its cost is a fixed budget that cannot stop early, and hosted-runner speed varied twofold
+  on a clock rather than a commit. Each has its own note; read the flake register and those notes
+  before believing a red or a green on the day.
 - **The package rename shipped (astubbs#294); keep the release notes honest about it.** The
   `== 0.6.0.0` changelog section is rebuilt from the commit log when the tag is cut, and generation
   cannot notice that it dropped a claim the current text makes. After regenerating, confirm the
