@@ -48,8 +48,9 @@ nothing on the issue was lost:
   below carry the recheck.
 - Its "not blocking" list: the permanent load-factor warning is closed (astubbs#155); the MDC item
   was refuted by the astubbs#476 sweep, below; the unknown-magic-byte hazard was fixed twice
-  (astubbs#217, astubbs#207); `release.yml` now publishes the curated changelog section as the
-  GitHub release body.
+  (astubbs#217, astubbs#207); `release.yml` tries to publish the curated changelog section as the
+  GitHub release body but its exact heading match misses `== 0.6.0.0 (unreleased)` on master, so the
+  body is posted by hand on the day (tier 3) and astubbs#199, which fixes the match, follows.
 - Its after-it-ships list is in the tag-day section below, with one addition it held that this file
   did not: one announcing comment each on upstream confluentinc#880, confluentinc#885 and
   confluentinc#907 - the deliberate exception to one-backlink-per-issue, because a shipped artefact
@@ -114,8 +115,9 @@ a first release whose job is to make "actively maintained" credible should ship 
 first two tiers have all merged. **The 2026-09-08 decision overrides its tiers three, seven and
 eight**: new surface and new modules are not defects, so they do not gate a bug release, and the
 announcement plan carries the "maintained, and past where upstream stopped" claim instead. Two of
-its points survive unchanged and are in tier 3 below: astubbs#199 is the one item that cannot be
-applied after the tag, and astubbs#197's body reads as more blocked than it is. Its open question
+its points survive: astubbs#197's body reads as more blocked than it is (since shed to a pointer), and
+astubbs#199 - which it called the one item that cannot follow the tag - can, because the release
+page body is posted by hand on the day (tier 3) and astubbs#199 only automates that. Its open question
 of which modules v6 publishes is moot under this decision, since no module PR is in the queue.
 <!-- file-refs: N/A - the merge-order note was merged and removed by astubbs#475; the path is cited as history -->
 <!-- post-merge: checked-end -->
@@ -128,9 +130,9 @@ against it below, because that is the part `gh` cannot say.
 
 ## Proposed cut-off and order of work
 
-**Proposal, for the owner to confirm or amend:** the merge queue closes today. Nothing joins it that
-is not already a fix for an open defect with a PR. Anything astubbs#471's soak or a chaos lane finds
-after today is a 0.6.0.x unless it is data loss on a default configuration, and then it joins tier 1.
+**Confirmed by the owner, 2026-09-09: the merge queue is closed as of today.** Nothing joins it that
+is not already a fix for an open defect with a PR. Anything a soak or a chaos lane finds after
+2026-09-09 is a 0.6.0.x unless it is data loss on a default configuration, and then it joins tier 1.
 Tag when tier 3 is done, not when the "can follow" list is empty.
 
 The order is chosen so that every merge is independently shippable - if the queue stops anywhere,
@@ -149,8 +151,9 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
 - [x] **astubbs#468** - merged 2026-09-08. `WorkContainer` equality is identity, so the stale
   sweep removes only the container it inspected, never a fresh replacement racing in from the
   controller. Marked breaking (`fix(core)!`) for the equality change; the release note carries it.
-  The two further by-key removals astubbs#483 found were left for astubbs#468's identity-`equals`
-  change to make fixable - check that PR's body for whether it took them.
+  Of the two further by-key removals astubbs#483 found, astubbs#468 dismissed one
+  (`ProcessingShard.onSuccess` - the third staleness checkpoint drops a stale result first) and
+  astubbs#492 fixed the other, the revoke sweep, merged 2026-09-09.
 - [x] **astubbs#469** - merged 2026-09-08. The two remaining `PartitionState` flags that cross
   threads, measured and then fenced or redesigned; the follow-on astubbs#349 deliberately left.
 - [x] **astubbs#481** - merged 2026-09-08. The poll thread never touches the retry queue; the
@@ -170,6 +173,10 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   first poll batch against a watermark read without blocking from the consumer's own position and
   lag, so no broker round trip sits inside the rebalance callback. Promoted from the
   owner's-decision list on 2026-09-08.
+- [ ] **The gate-latch warning** (no PR yet; decided 2026-09-09) - a WARN when the record-intake
+  load gate has read loaded across many consecutive control-loop ticks while nothing retired: the
+  state astubbs#487 measured, today exported only as a paused-partition gauge and logged nowhere.
+  A log line, no semantic change; the last item to join the queue before it closed.
 - [x] **astubbs#477** - merged 2026-09-08. A dead broker-poll thread now closes the consumer in
   the consumer-commit modes, the shipped default among them, so the group rebalances at once instead
   of after `max.poll.interval.ms`. One derived predicate and one condition, proven red on every
@@ -194,27 +201,29 @@ astubbs#225), astubbs#434 (abort a transaction poisoned by a terminal send failu
 reds, and it must now resolve the `tryCommitOffsetsOnRevoke` collision with the merged
 astubbs#466), then astubbs#420 (producer-ownership polish, after v6 in any case).
 
-**One thing the 2026-09-07 decision did not name, and the owner should:** the poisoned-transaction
-wedge ([`bug-poisoned-transaction-not-aborted-while-running.md`](bug-poisoned-transaction-not-aborted-while-running.md),
+**Decided 2026-09-09: the poisoned-transaction wedge is the second named exception**, beside
+astubbs#44 in `release-0.6.0.0.md`; astubbs#434 stays in tier 2. The wedge ([`bug-poisoned-transaction-not-aborted-while-running.md`](bug-poisoned-transaction-not-aborted-while-running.md),
 which astubbs#476's vetting sweep merged its sibling note into)
-is fixed by astubbs#434, which also stacks on astubbs#410. If the stack is outside v6, the claim
-has two named exceptions, not one - a single oversized record stops its partition for the life of
-the process in transactional mode. Either name it beside astubbs#44 in `release-0.6.0.0.md`, or
-carry a smaller standalone abort for v6. The astubbs#476 vetting sweep read the pair as **not
-gating** ("today's behaviour is strictly better than what it replaced"); that is an agent's reading,
-recorded in the sweep's list below, and the call is still the owner's.
+is fixed by astubbs#434, which also stacks on astubbs#410. With the stack outside v6 the claim
+has two named exceptions: a single oversized record stops its partition for the life of the
+process in transactional mode. The astubbs#476 vetting sweep read the pair as **not gating**
+("today's behaviour is strictly better than what it replaced"); the owner named it anyway rather
+than carry a standalone abort.
 
 ### Tier 3 - release plumbing, then tag
 
-- [ ] **astubbs#199** - publish the curated changelog section as the GitHub Release body. Without it
-  the release page is empty.
+- [ ] **Post the release page body by hand.** `release.yml` tries to build the notes from the
+  `CHANGELOG.adoc` section, but its heading match is exact and the section is headed
+  `== 0.6.0.0 (unreleased)`, so on master it matches nothing and falls back to generated notes.
+  On the day: convert the curated section and `gh release edit v0.6.0.0 --notes-file <file>`
+  after `release.yml` has cut the release. astubbs#199 fixes the match and can follow.
 - [ ] **astubbs#446** - lift the announcement plan onto master, so the announcement is not being
   written from a branch nobody merges.
 - [ ] The tag-day artefact checks in the section of that name below.
 - [ ] Amend the release claim, not the standard, for what is still open. `release-0.6.0.0.md`
-  already names astubbs#44 as the exception (2026-09-07); add the poisoned-transaction wedge if the
-  owner confirms it is the second, and say which confluentinc#857 mechanisms are closed and which
-  sightings remain unattributed.
+  already names astubbs#44 as the exception (2026-09-07) and the poisoned-transaction wedge as the
+  second (2026-09-09); say which confluentinc#857 mechanisms are closed and which sightings remain
+  unattributed.
 - [ ] Post the drafted issue responses (`ls docs/inflight/issue-response-*.md` and
   [`release-0.6.0.0-issue-response-drafts.md`](release-0.6.0.0-issue-response-drafts.md)) in the
   pre-release sweep [`docs/releasing.md`](../releasing.md) describes.
@@ -223,7 +232,8 @@ recorded in the sweep's list below, and the call is still the owner's.
 ### Can follow - finished or nearly, and deliberately not v6
 
 Named so nobody re-argues them in: the producer-recovery stack in tier 2 (by the 2026-09-07
-decision, unless reopened); astubbs#352 (commit-failure seam - a feature, even though
+decision, unless reopened); astubbs#199 (the changelog heading match in `release.yml` - the release
+page body is posted by hand on the day, so this follows the tag); astubbs#352 (commit-failure seam - a feature, even though
 confluentinc#833's reporter patched the library for it), astubbs#226 (health check), astubbs#306
 (offset density), astubbs#360 (virtual threads), astubbs#405 (the torture harness - test
 infrastructure; astubbs#471's soak has merged and its finding is in the confluentinc#857 list), astubbs#479 (the
@@ -304,11 +314,13 @@ box means the v6 action for that line is done, not that the defect is closed:
   eventually, silently, and for good: the latch is exported only as a paused-partition count and
   logged nowhere, and no poller wakeup is ever attempted because the wakeup is itself gated on the
   same reading. That is the best explanation yet for confluentinc#809 and confluentinc#833's flat
-  processed-records counters. A draft question for those reporters is in the session scratchpad,
-  unposted. One thing the arms did not explain, flagged as the next arm: the observed retry cadence
-  is about three times the configured delay, and the latch point is a function of it. Owner's
-  calls: whether to ask those reporters, and whether the cheap interim - a warning when the gate
-  latches with nothing retiring, no semantic change - is v6-sized. Merged; the retry-cadence arm and the interim warning are what remain.
+  processed-records counters. The owner decided on 2026-09-09 not to ask those reporters (assume
+  no reply); the drafted question stays unposted. One thing the arms did not explain, flagged as the
+  next arm: the observed retry cadence is about three times the configured delay, and the latch
+  point is a function of it. **Decided 2026-09-09: the interim warning is v6-sized** - a WARN when
+  the gate has read loaded across many consecutive ticks while nothing retired, no semantic change -
+  and joins tier 1 as its own item. Merged; the retry-cadence arm is what remains of the
+  measurement.
 
 **Resolved or reassigned since this list was written - kept so the release note can say what was ruled out:**
 
@@ -339,7 +351,7 @@ box means the v6 action for that line is done, not that the defect is closed:
 ## What v6 must say about data loss and duplicates
 
 - **Fixed on master, 2026-09-08:** the async-commit acknowledgement (astubbs#470).
-- **Fixed on a branch outside v6 scope, and needing a named exception or an owner decision:** the
+- **Fixed on a branch outside v6 scope, and named as the second exception (2026-09-09):** the
   poisoned-transaction wedge (astubbs#434, stacked on the producer-recovery work) - see tier 2.
 - **Fixed on master:** the revoke-path transaction omitting offsets (astubbs#466); the torn-read family
   ([`bug-torn-read-family.md`](bug-torn-read-family.md) - astubbs#337, astubbs#344, astubbs#345,
@@ -486,7 +498,7 @@ list above. Kept here so the release note can say what was asked and how it was 
 Moved here from `process-candidate-ranking.md` on 2026-09-08 (it was written by the six-agent sweep
 on 2026-09-07 and is the agents' reading, with their stated confidence - not the owner's decision).
 Where it disagrees with the tiers above, the tiers say so: the poisoned-transaction pair (the sweep:
-not gating; the owner's call is still open in tier 2), the transactional revoke wait (the sweep read
+not gating; the owner named it the second exception on 2026-09-09), the transactional revoke wait (the sweep read
 astubbs#466 as having replaced the unbounded wait, which is right, and astubbs#408 as owning the
 bound), and the `batchSize` validation bound (the sweep: cheapest real fix; the triage below filed
 it as 0.6.0.x - it could ride in tier 1). Item 2 in its list, the dead poll thread, is
@@ -498,9 +510,11 @@ records it); this is the union,
 ordered by user-visible consequence, with the confidence each agent stated. The mechanical gate
 comes first because nothing else matters until it clears.
 
-- **The quarantine registry is non-empty, and every entry is unowned.** `release.yml` refuses the
-  cut while [`docs/quarantined-tests.md`](../quarantined-tests.md) lists anything; read that file,
-  not this line.
+- ~~**The quarantine registry is non-empty, and every entry is unowned.**~~ *The sweep's reading on
+  2026-09-07; the registry is empty on master (astubbs#80 emptied it and nothing has joined since),
+  which this note says in its tag-day checks.* `release.yml` refuses the cut while
+  [`docs/quarantined-tests.md`](../quarantined-tests.md) lists anything; read that file, not this
+  line.
 - **Verified defects, in the code as written today:**
   1. `bug-857-transactional-revoke-wait.md` - was the unbounded wait inside the revoke callback,
      with a user report carrying upstream's verified-bug label. astubbs#466 (merged the day the sweep
@@ -591,6 +605,15 @@ its subject at any merge.
 - Misdirection: the plain-`int` out-for-processing counter; the module's processor reference
   overwritten before the owner guard; the rest of the unbounded-log-lines class; the two 857 mirror
   attributions never verified against the reporter's environment.
+- Deferred with a reason in the note, and outside a bug release: the shard's available-work
+  counter undercounting after a stale replacement
+  ([`bug-processing-shard-available-work-undercount.md`](bug-processing-shard-available-work-undercount.md)
+  - a gauge inaccuracy that loses no records; the decision is whether the counter is worth keeping);
+  the deferred-commit WARN naming no offsets
+  ([`bug-deferred-commit-warn-names-no-offsets.md`](bug-deferred-commit-warn-names-no-offsets.md) -
+  astubbs#352 owns the method and adds the field the fix needs); and batching requesting a full
+  extra in-flight target ([`bug-batch-quantity-over-request.md`](bug-batch-quantity-over-request.md)
+  - throughput only).
 - The shutdown teardown race; the test-only `close()` shadowing; and
   [`bug-shared-collections-across-the-poll-boundary.md`](bug-shared-collections-across-the-poll-boundary.md),
   which is mostly stale - the metrics set and the shared empty set it names are both fixed on master
@@ -630,7 +653,8 @@ the tracker is astubbs#197.
   the `CHANGELOG.adoc` section (astubbs#72) - the 2026-09-07 vet of the old blockers note was right
   that "the body is empty" was never the whole story - but its heading match is exact and the
   section is headed `== 0.6.0.0 (unreleased)`, so it matches nothing and falls back to generated
-  notes; astubbs#199 fixes the match (tier 3). The rest of astubbs#197's triage list has been picked
+  notes - so the body is posted by hand on the day (tier 3), and astubbs#199, which fixes the match,
+  follows the tag. The rest of astubbs#197's triage list has been picked
   up: the magic-byte hazard in astubbs#217, the load-factor WARN in astubbs#201, and MDC in
   astubbs#205 (`MdcPropagation` on master captures and restores the caller's context; the
   2026-09-08 vet that called the gap "real" grepped for a name the class does not use). The

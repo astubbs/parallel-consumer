@@ -221,7 +221,11 @@ note says "bounded, not yet declined" rather than "unbounded" - detail in
 astubbs#408, which depends on producer-fencing recovery (astubbs#410) by design, and the owner has
 placed that work after v6 for now. So the published sentence is not "every known critical defect",
 it is "every known critical defect except this one, which is named, reproduced, and fixed on a
-branch". The standard is unchanged; the claim is what moved, which is the order this paragraph asks
+branch". **Amended again 2026-09-09: a second named exception, the poisoned-transaction wedge** -
+in `PERIODIC_TRANSACTIONAL_PRODUCER` mode a single record the producer rejects as too large is
+never aborted while the instance runs, so its partition stops for the life of the process; fixed
+by astubbs#434 on the same stack, outside 0.6.0.0 by the same decision, and named beside
+astubbs#44 rather than carried as a standalone abort. The standard is unchanged; the claim is what moved, which is the order this paragraph asks
 for. If astubbs#410 lands before the tag, delete this paragraph.
 
 **Deliberately not in this release:** virtual threads, micro-batching and the dead letter queue. These
