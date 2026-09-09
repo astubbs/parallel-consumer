@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.state;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
@@ -237,7 +238,7 @@ class PartitionStateAbsentCommitData162Test {
                 // base64 of "Zunreadable-by-this-build": 'Z' is a magic byte no OffsetEncoding claims, which is
                 // the forward-compatibility case the policy exists for
                 "WnVucmVhZGFibGUtYnktdGhpcy1idWlsZA==",
-                bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE);
+                InvalidOffsetMetadataHandlingPolicy.IGNORE);
 
         assertWithMessage("IGNORE keeps the committed offset, so this is NOT the absent-commit-data case")
                 .that(decoded.getHighestSeenOffset()).isEqualTo(Optional.of(committedOffset - 1));
