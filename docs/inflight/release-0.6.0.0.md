@@ -20,14 +20,13 @@ is written. Release = strip `-SNAPSHOT` and merge to `master`; `publish.yml` run
 deploys via the `maven-central` profile, tags `v<version>` and cuts a GitHub release
 ([`docs/releasing.md`](../releasing.md)).
 
-**Still blocked by the quarantine guard.** astubbs#80 did empty the registry when it merged, and this
-block used to stop there - but the registry has not stayed empty.
-[`docs/quarantined-tests.md`](../quarantined-tests.md) is not empty today, so that file's rule 5 - a
-release is blocked while the list is non-empty - still bites and `release.yml`'s "no release while
-tests are quarantined" gate does not pass. Which tests, and what each is quarantined on, is the
-registry's to say and deliberately not repeated here: it is the enforced copy, the gate reads it,
-and a list copied into this note is wrong the first time one is re-enabled. The "no disabled tests"
-gate below is a **separate** one, and it being met says nothing about this.
+**No longer blocked by the quarantine guard (2026-09-08, astubbs#473).** astubbs#80 emptied the
+registry once and it did not stay empty; astubbs#473 emptied it again by fixing what the last entries
+were about, so [`docs/quarantined-tests.md`](../quarantined-tests.md) is empty and `release.yml`'s
+"no release while tests are quarantined" gate passes. Which tests are quarantined is always the
+registry's to say, never this note's: it is the enforced copy, the gate reads it, and a list copied
+here is wrong the first time one is re-enabled. The "no disabled tests" gate below is a **separate**
+one.
 
 ## Bugs found while triaging the upstream mirrors (2026-08-05)
 
@@ -60,6 +59,8 @@ astubbs#201 and is no longer tracked here; what is left has no issue of its own.
   That is silent record loss, it is present in **every released 0.5.x line**, and no bug report
   describes it because nobody could have noticed it. A note phrased only as "offset accuracy on
   assignment" would understate it to exactly the users who need to read it.
+  **Settled 2026-09-09:** the `== 0.6.0.0` section of `CHANGELOG.adoc` opens its *Records lost or
+  duplicated with nothing in the logs* list with this one, naming both modes.
   Mechanism, preconditions (it needs all four, so it is uncommon to trigger and persistent once
   triggered) and the evidence:
   [`docs/solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md`](../solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md).
@@ -128,11 +129,16 @@ worth.
 At release, when the changelog section is regenerated, check both survived into `=== Breaking`:
 generation reads the commit log, so they are only as findable as those commit bodies. The rename side
 of that same check is in [`release-v6-scope.md`](release-v6-scope.md), under the tag-day artefact checks.
+**Checked 2026-09-09, on regeneration:** all three survived - the `setupWorkerPool` and `setState`
+narrowings share one `=== Breaking` bullet that opens by saying only subclasses of the internal
+controller are affected, and the `getSuccessfulWorkListeners()` removal sits in the astubbs#267 bullet
+beside the exception rename. The rename bullet names both the groupId and the packages.
 
 ## Public API change landing with astubbs#204: the commit give-up exception
 
 Not a breaking change to a *subclass* surface like the two above - this one is visible to every user
-of `PERIODIC_CONSUMER_SYNC`, so it needs its own line in the notes.
+of `PERIODIC_CONSUMER_SYNC`, so it needs its own line in the notes. **It has one (2026-09-09):** the
+`=== Breaking` bullet on `OffsetCommitBudgetExceededException` carries all three behaviour changes.
 
 **`ConsumerManager.commitSync` no longer rethrows Kafka's bare `TimeoutException` /
 `SaslAuthenticationException` when a commit exhausts its budget.** It throws
@@ -212,21 +218,20 @@ Evidence is in `docs/data/testing-evidence.yaml`; the checks to run are in
 `docs/data/module-maturity.yaml` under `release_validation`. If a check fails, amend the claim rather
 than waive the item.
 
-**The claim is amended, 2026-09-07: one known critical defect is outside 0.6.0.0's scope, and the
-release notes must name it.** The transactional revoke wait - astubbs#44, upstream's only
-verified-bug label, `PERIODIC_TRANSACTIONAL_PRODUCER` only; **bounded since astubbs#466 by
-`commitLockAcquisitionTimeout`, not yet declined** (astubbs#408 measures that bound and holds the decline seam; astubbs#466 refuted declining as the fix, so it is only the deadline fallback), so the release
-note says "bounded, not yet declined" rather than "unbounded" - detail in
-[`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md) - has its fix in
-astubbs#408, which depends on producer-fencing recovery (astubbs#410) by design, and the owner has
-placed that work after v6 for now. So the published sentence is not "every known critical defect",
-it is "every known critical defect except this one, which is named, reproduced, and fixed on a
-branch". **Amended again 2026-09-09: a second named exception, the poisoned-transaction wedge** -
-in `PERIODIC_TRANSACTIONAL_PRODUCER` mode a single record the producer rejects as too large is
-never aborted while the instance runs, so its partition stops for the life of the process; fixed
-by astubbs#434 on the same stack, outside 0.6.0.0 by the same decision, and named beside
-astubbs#44 rather than carried as a standalone abort. The standard is unchanged; the claim is what moved, which is the order this paragraph asks
-for. If astubbs#410 lands before the tag, delete this paragraph.
+**The claim as published (settled 2026-09-09 in `CHANGELOG.adoc`'s `== 0.6.0.0` section).** Two
+known critical defects are outside 0.6.0.0's scope by the owner's decisions of 2026-09-07 and
+2026-09-09, both in `PERIODIC_TRANSACTIONAL_PRODUCER` mode only, and the notes name each under
+*Known limitations* rather than claiming "every known critical defect": the transactional revoke wait
+(astubbs#44, upstream's only verified-bug label; bounded by `commitLockAcquisitionTimeout` since
+astubbs#466, not yet declined; fix astubbs#408, stacked on producer-fencing recovery astubbs#410) and
+the poisoned-transaction wedge (a single terminal send failure leaves the transaction open and its
+partition stopped for the life of the process; fix astubbs#434, same stack). The same section names
+what the suite cannot see (a single wedged key-order shard), the retry-forever intake stall
+astubbs#487 measured with its two workarounds and its dead-letter-queue fix (astubbs#149), that a
+fenced producer still terminates the instance (astubbs#225), that the commit-response timeout reports
+were never reproduced, and that a revocation redelivers in-flight work by design. The standard is
+unchanged; the claim is what moved. If astubbs#410 and its stack land before the tag, delete the two
+transactional bullets from the changelog and this paragraph together.
 
 **Deliberately not in this release:** virtual threads, micro-batching and the dead letter queue. These
 are new capabilities rather than known-defect exceptions, so deferring them does not weaken the gate.
@@ -285,6 +290,10 @@ Full write-up, including every sighting with its commit mode and replay seed:
 `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
 
 ## Say plainly that the experimental modules cannot affect plain PC
+
+**2026-09-09: neither module ships in 0.6.0.0** (owner decision of 2026-09-07; both moved to the
+`next-0x` horizon in `docs/data/roadmap.yaml`), and the release note names them only as what follows
+on the roadmap. Nothing below applies to this release; it stands for the release that ships them.
 
 If 0.6.0.0 ships new experimental modules - the Kafka Streams one (astubbs#255) and the Connect one -
 the release notes, README and any announcement must make it **obvious to an existing PC user that
