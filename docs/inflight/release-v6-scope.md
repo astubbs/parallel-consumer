@@ -324,8 +324,8 @@ box means the v6 action for that line is done, not that the defect is closed:
   next arm: the observed retry cadence is about three times the configured delay, and the latch
   point is a function of it. **Decided 2026-09-09: the interim warning is v6-sized** - a WARN when
   the gate has read loaded across many consecutive ticks while nothing retired, no semantic change -
-  and joins tier 1 as its own item. Merged; the retry-cadence arm is what remains of the
-  measurement.
+  and joins tier 1 as its own item, still to be built. astubbs#487 itself is merged; the
+  retry-cadence arm is what remains of the measurement.
 
 **Resolved or reassigned since this list was written - kept so the release note can say what was ruled out:**
 
@@ -353,6 +353,7 @@ box means the v6 action for that line is done, not that the defect is closed:
   members' threads are in. astubbs#486 merged 2026-09-08.
 - A dead broker-poll thread leaving the consumer open in consumer-commit modes, no LeaveGroup until
   `max.poll.interval.ms` - **fixed in the queue, astubbs#477, tier 1.**
+
 ## What v6 must say about data loss and duplicates
 
 - **Fixed on master, 2026-09-08:** the async-commit acknowledgement (astubbs#470).
