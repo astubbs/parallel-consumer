@@ -80,7 +80,7 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 - R1. A consumer is defined from connection properties and started to obtain a handle; the user constructs no Kafka client objects. Supplying pre-built clients remains possible through the old door only.
 - R2. A route binds one topic, or under R5 a set of topics, to one processing function; registering a second route for a topic already routed is refused at definition time.
 - R3. A route declares its own key and value types for consumed records and, when it produces, separate key and value types for produced records. The processing function returns zero or more produced records, each naming its destination topic; zero records on a normal return is success (R7), and the filtered value (R8) carries no output.
-- R4. A route's deserialisers are applied per record inside the facade and, when the route declares produced types, its serialisers are applied to produced records before they reach the produce path; the consumer and the producer are both configured for raw bytes by the facade, never by the user. Deserialiser settings supplied in the connection properties are refused at definition time with a message naming the setting and the route that supersedes it; the remaining properties are passed to each route deserialiser's configuration.
+- R4. A route declares its deserialisers through the general form, consumed with a key and a value deserialiser, or through a format helper that resolves to the deserialiser already on the classpath for JSON, Avro or Protobuf, with the key defaulting to string; a format-named route, json, avro, protobuf or bytes with the topic, is sugar that desugars to the route form. A route's deserialisers are applied per record inside the facade and, when the route declares produced types, its serialisers are applied to produced records before they reach the produce path; the consumer and the producer are both configured for raw bytes by the facade, never by the user. Deserialiser settings supplied in the connection properties are refused at definition time with a message naming the setting and the route that supersedes it; the remaining properties are passed to each route deserialiser's configuration.
 - R5. A set of topics that share one function and one type pair may be declared as a single route.
 - R6. Dead-letter destination, commit mode and ordering mode are declared once per instance and apply to every route; declaring any of them on a route is refused at definition time. Concurrency limit, which is the route's admission target (CONCEPTS.md), retry limit, retry delay and park policy are per route: each route takes a copy of the instance default unless it declares its own. The declared admission target is a starting point, not a constant: the self-scaling work (astubbs#333 and the navigator rungs astubbs#392, astubbs#456) makes admission adaptive per route at runtime, and merges after this. The export fraction of R27 is an instance default, eighty percent unless declared, which a park policy may override.
 
@@ -127,14 +127,13 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 
 ### Illustrative surface
 
-Illustrative, not binding: the names are placeholders and the compiled README example decides the syntax (Outstanding Questions). What the examples fix is the shape the requirements imply: properties in, each route a closed block with its types and one `process` function, policy as data, a handle out. Type declarations borrow Kafka Streams' `Consumed.with` and `Produced.with` shape and its `Serdes` names, in this library's own package so no Streams dependency arrives; the chain grammar of the Streams DSL is deliberately not borrowed (KD3).
+Illustrative, not binding: the names are placeholders and the compiled README example decides the syntax (Outstanding Questions). What the examples fix is the shape the requirements imply: properties in, each route a closed block with its types and one `process` function, policy as data, a handle out. Type declarations borrow Kafka Streams' `Consumed.with` and `Produced.with` shape and its `Serdes` names, in this library's own package so no Streams dependency arrives; the chain grammar of the Streams DSL is deliberately not borrowed (KD3). A route is called a route, not a stream, because a stream in Streams is the start of a topology and this is a topic bound to one function. Format helpers such as `json(Order.class)` resolve to the deserialiser already on the classpath, and the format-named routes `json`, `avro`, `protobuf` and `bytes` are sugar for the route form.
 
 The shortest definition: one topic, nothing else declared. Failures retry ten times with the default delay, then park (R1, R2, R10, R11, R17):
 
 ```java
 try (var pc = ParallelConsumer.define(props)
-        .route("orders", r -> r
-            .consumed(Consumed.with(Serdes.String(), jsonSerde(Order.class)))
+        .json("orders", Order.class, r -> r
             .process(ctx -> { inventory.reserve(ctx.value()); return Outcome.succeeded(); }))
         .start()) {
     pc.awaitShutdown();
@@ -145,13 +144,12 @@ Two routes. They are siblings, not a pipeline: each route is a closed block, so 
 
 ```java
 ParallelConsumer.define(props)
-    .route("orders", r -> r
-        .consumed(Consumed.with(Serdes.String(), jsonSerde(Order.class)))
-        .produced(Produced.with(Serdes.String(), avroSerde(OrderEvent.class)))
+    .route("orders", r -> r                          // the general form; json("orders", Order.class, r -> ...) is its sugar
+        .consumed(Consumed.with(Serdes.String(), json(Order.class)))
+        .produced(Produced.with(Serdes.String(), avro(OrderEvent.class)))
         .process(ctx -> Outcome.produce(
             new ProducerRecord<>("order-events", ctx.key(), OrderEvent.from(ctx.value())))))
-    .route(Set.of("audit", "audit-replay"), r -> r
-        .consumed(Consumed.with(Serdes.ByteArray(), Serdes.ByteArray()))
+    .bytes(Set.of("audit", "audit-replay"), r -> r
         .concurrency(4)                      // this route only; the self-scaling controller may move it later
         .toConsole())                        // sink sugar: print the record and succeed
     .concurrency(100)                        // the default every route copies
@@ -319,6 +317,7 @@ Every capability the comparable library offers is listed with its disposition he
 | Homogeneous topic set sharing one route | In scope (R5) | Today's multi-topic subscribe, typed |
 | Separate produced key and value types | In scope (R3) | astubbs#243, non-breaking because it lives on the new door |
 | Per-route deserialisation, any format | In scope (R4) | Kafka's own deserialiser interface covers JSON, Avro, Protobuf and schema registries; no format modules of our own |
+| Format helpers and format-named routes | In scope (R4), Java-binding sugar | `json(Order.class)`, `avro(...)`, `protobuf(...)`, `string()`, `bytes()` resolve to the deserialiser already on the classpath, with optional compile-only dependencies and a definition-time failure naming the missing library; `json("orders", Order.class, r -> ...)` desugars to the route form |
 | Filter | In scope (R8) | As an outcome of the one function, not a second callback (KD3) |
 | Retry limit and delay | In scope (R6, R10), optional with a finite default | The delay function already exists; the limit is new |
 | Console sink | In scope, Java-binding sugar | A route whose function prints the record and succeeds; the first thing a README example needs |
@@ -364,6 +363,7 @@ Every capability the comparable library offers is listed with its disposition he
 **Deferred for later**
 
 - Everything marked Deferred in the disposition table.
+- Null-key records processed unordered under key ordering (astubbs#244): named here so the route policy leaves room for it, out of scope for a later phase; it is a shard-assignment change in the engine, tier large, and the multi-topic note records the safe form, keying the unordered case by offset behind an option.
 - A durable per-record attempt count, and progress on a poison record under the transactional mode with an unreachable dead-letter topic: both wait on engine work (R22's floor, and astubbs#225).
 - Per-route ordering mode, commit mode and dead-letter destination: instance-wide only (R6); ordering and commit mode are engine-level, and one destination keeps the export consumer simple.
 - Cross-topic key identity (astubbs#150) and topic priority (astubbs#236): stay with the multi-topic note.
