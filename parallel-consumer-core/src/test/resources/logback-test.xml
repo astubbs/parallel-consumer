@@ -71,10 +71,26 @@
          are verbose and perturb stall timing). See
          docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md -->
     <!--    <logger name="bz.stub.parallelconsumer.state.ShardManager" level="debug"/>-->
-    <!--    <logger name="bz.stub.parallelconsumer.state.WorkManager" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer.internal.BrokerPollSystem" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer" level="trace"/>-->
+
+    <!-- The record-intake load gate's equation, promoted from the commented-out line above to a FLAG,
+         because commenting a logger in is an edit that can be committed by accident and a flag cannot -
+         the same argument the pc.log.level block at the top of this file makes.
+
+         It gets a property of its OWN rather than riding pc.log.level for two reasons. It fires once
+         per control-loop tick, so it is far too loud to arrive with everything else pc.log.level
+         raises; and it is the single line that says whether a stalled instance stopped fetching
+         because the gate latched (workable still above the in-flight target while nothing flows) or
+         for some other reason, which is a question worth being able to ask on its own.
+
+             -Dpc.loadgate.log.level=debug -Dit.test=CommitResponseTimeoutSoakIT
+
+         THIS is the file an integration or soak run reads - see the profile note above - so the same
+         logger in logback-integration-test.xml would not have reached the run. Both files carry it,
+         each defaulting to its own file's level, so neither can lose it by being the one selected. -->
+    <logger name="bz.stub.parallelconsumer.state.WorkManager" level="${pc.loadgate.log.level:-warn}"/>
 
     <!-- ALWAYS ON despite the warn default: the tests' OWN narration, not the product's. What made the
          default noisy is product logging (one ParallelConsumerOptions toString per construction, the
