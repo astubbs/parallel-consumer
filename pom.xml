@@ -786,7 +786,13 @@
                              to upgrade to, and it is transitive so it is not independently upgradable
                              either. Not in GHSA, which is why Dependabot is silent.
                              RETIRE WHEN: LatencyUtils publishes a fixed release, micrometer-core drops
-                             the dependency, or the record is rejected/withdrawn. -->
+                             the dependency, or the record is rejected/withdrawn. The middle one has
+                             ALREADY HAPPENED and is now a named version rather than an open-ended
+                             hope: micrometer-core:1.17.0 removed the LatencyUtils dependency (it is
+                             still there in 1.16.7). So this id retires with the micrometer family
+                             bump below IF that bump goes to 1.17.x - which is the reason to prefer
+                             1.17.x over the 1.16.7 the three micrometer advisories alone would
+                             settle for. Verified by reading the published poms, 2026-09-09. -->
                         <excludeVulnerabilityId>CVE-2026-82596</excludeVulnerabilityId>
 
                         <!-- io.netty:netty-codec-http (via vertx-core). No public record exists: not
@@ -861,7 +867,9 @@
                              RETIRE WHEN: the io.micrometer.prometheus -> prometheusmetrics package
                              rename is migrated and the family moves to >= 1.16.7, which retires all
                              three ids at once. NOT 1.15.x - that clears only CVE-2026-40984 and
-                             leaves the other two standing. -->
+                             leaves the other two standing. Prefer 1.17.x when that migration
+                             happens: it also drops the LatencyUtils dependency and so retires
+                             CVE-2026-82596 above, making it four ids rather than three. -->
                         <excludeVulnerabilityId>CVE-2026-40984</excludeVulnerabilityId>
                         <excludeVulnerabilityId>CVE-2026-59295</excludeVulnerabilityId>
                         <excludeVulnerabilityId>CVE-2026-59296</excludeVulnerabilityId>
