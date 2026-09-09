@@ -392,7 +392,7 @@ a v6 gate; the note must simply not claim more than the suite or the code can sh
   stale sweep; this one was reported, not fixed. Cost is misdirection bounded to one control-loop
   tick by astubbs#481's purge, never loss. A small fix, not a v6 gate.
 - **The other rows of [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md)** - astubbs#482
-  closed the most-sighted row, and astubbs#490 (draft, green) worked the rest on 2026-09-09: the
+  closed the most-sighted row, and astubbs#490 (merged 2026-09-09) worked the rest: the
   `processInKeyOrder` sanity-check row was already fixed on master by astubbs#29's merge (every
   sighting predates it - the wait counted control-loop cycles while the poll thread fills the
   batch); a shutdown test whose "in flight" stand-in was two loop cycles is fixed with a control arm;
