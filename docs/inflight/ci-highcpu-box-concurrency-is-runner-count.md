@@ -2,16 +2,18 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-vetted: 2026-09-07 - the open decision is unchanged - nothing per-PR targets `highcpu`, and the hosted second arm is still in `mutation-full-sweep.yml`'s matrix at 4 threads against the box's 16. Corrected the stale opener: it said all three highcpu workflows are `workflow_dispatch` only while listing two, and the sweep now carries a `schedule:` cron, which this note's own next section already records; `experiments.yml` is the third -->
 
 **The question changed on 2026-08-26**, when the Chaos Pain Suite moved to the GitHub-hosted gate
 (measured no slower - [`ci.md`](../ci.md), "Chaos does not need the self-hosted box") and the
 per-PR lane followed it off the box.
 
-**Nothing runs here per-PR any more.** All three workflows targeting `highcpu` are
-`workflow_dispatch` only:
+**Nothing runs here per-PR any more.** The three workflows targeting `highcpu` reach it only by
+dispatch, with one exception - the sweep, which also runs nightly (below):
 
-- `chaos-pain.yml` - seeded chaos hunts.
-- `mutation-full-sweep.yml` - the whole-tree PIT sweep.
+- `chaos-pain.yml` - seeded chaos hunts, `workflow_dispatch` only.
+- `experiments.yml` - the experiment runners, `workflow_dispatch` only.
+- `mutation-full-sweep.yml` - the whole-tree PIT sweep, `schedule` plus `workflow_dispatch`.
 
 **The sweep is dispatched far too rarely to be a measurement of anything** - its run history is
 sparse enough that the whole-tree mutation score is effectively unmeasured. Check it rather than

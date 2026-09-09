@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: crash -->
+<!-- inflight-vetted: 2026-09-07 - `TransactionMarkersTest.close()` is still a package-private `@AfterEach` in the same package as `BrokerIntegrationTest.close()`, still calls only `pc.close()` and never `super.close()`, so `kcu.close()` still never runs for that class. The separately-named base `@AfterEach closeRegisteredTestClients()` is still there and still unshadowed, and a sweep of `void close()` across the integration suite finds no second shadowing subclass -->
 
 Found while checking all 29 `BrokerIntegrationTest` subclasses for collisions before hoisting a shared
 teardown into the base class. Not caused by that change, and not fixed by it.

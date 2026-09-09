@@ -2,6 +2,10 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: reliability -->
+<!-- post-merge: checked-begin - a dated vetting record written on master before the producer half merged; it names
+     what was open on that date, and stays true as a record once this rung lands -->
+<!-- inflight-vetted: 2026-09-07 - the consumer half is still untaken: `ParallelConsumerOptions` still takes a `consumer` instance with no supplier or factory, while `ThreadConfinedConsumer` and `ConsumerOwnership` still enforce ownership at runtime only, which is the asymmetry the note argues from. `origin/client-factory` still exists as the 2022 draft, and astubbs#420 (the producer half) is still OPEN, so the pair is still unanswered -->
+<!-- post-merge: checked-end -->
 
 <!-- post-merge: checked-begin - names the producer half by its PR; true as a record once it has landed -->
 astubbs/parallel-consumer#420 makes PC build its **producer** from configuration through a factory it

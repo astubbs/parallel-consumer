@@ -26,6 +26,7 @@ public class ProducerInvalidatedException extends PCInternalRuntimeException {
     }
 
     public ProducerInvalidatedException(Throwable condition) {
-        super("The transactional producer has been reported invalid by the broker and will be replaced: " + condition, condition);
+        super("The transactional producer has been reported invalid by the broker and will be replaced: " + condition,
+                condition);
     }
 }

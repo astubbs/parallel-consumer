@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - astubbs#269 is still an OPEN DRAFT on `feats/connect-on-pc-spike`, still based on `feats/ks-on-pc-spike` rather than master; `feats/connect-on-pc-spike-codex-version` and the 2022 `features/connect-in-pc` both still exist and the delete-or-keep question on the codex snapshot is still unanswered; the two `git show 64595129c:` blobs it cites both still resolve. Replaced the merge-keyed delete-when with the content condition -->
 
 
 A signpost, not a handover. Like the Streams workstream it points at
@@ -41,6 +42,8 @@ direction as a runnable example app, and it is what the upstream comment quoted 
 by "working hacks". The 2026 rejection of that direction was reasoned from source without opening
 it.
 
-## Delete when
+## When this stops earning its place
 
-astubbs#269 merges, bringing its own note onto master.
+This file is a way in, and it is superseded the moment `docs/inflight/pr-connect-on-pc.md` exists on
+master - the branch's own note, which says all of this from beside the code. Check for that file
+rather than for a merge.

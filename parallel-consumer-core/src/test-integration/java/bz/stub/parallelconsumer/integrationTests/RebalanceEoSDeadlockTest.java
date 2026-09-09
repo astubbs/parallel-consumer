@@ -6,7 +6,10 @@ package bz.stub.parallelconsumer.integrationTests;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.ProvesClaim;
+import bz.stub.parallelconsumer.TransactionalClaim;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.utils.TransactionalTopicVerifier;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import lombok.SneakyThrows;
@@ -24,7 +27,11 @@ import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -132,6 +139,13 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
      * happens well under a second after the callback returns.
      */
     static final long POST_REVOKE_PROCESSING_DELAY_MS = 500L;
+    /**
+     * How many records PC must have processed ON THE RETURNED PARTITIONS after they come back to it before the
+     * output topic is read for duplicates. Enough to cover the records a deferred duplicate would come from - the
+     * produced-but-undrained tail at the revocation, a handful at most - with margin; small enough that at
+     * {@link #POST_REVOKE_PROCESSING_DELAY_MS} per record the wait stays in seconds.
+     */
+    static final long RECORDS_PROCESSED_AFTER_THE_PARTITIONS_RETURN = 20L;
 
     Consumer<String, String> consumer;
     Producer<String, String> producer;
@@ -154,6 +168,10 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
 
     /** The input-topic partitions the first revocation revoked. */
     volatile Collection<TopicPartition> revokedPartitions;
+    /** Of those, the ones assigned back to PC after the second consumer left - the partitions a duplicate would come from. */
+    final Set<TopicPartition> returnedPartitions = ConcurrentHashMap.newKeySet();
+    /** Records processed on a returned partition after its return - the wait the duplicate check needs. */
+    final AtomicLong processedOnReturnedPartitions = new AtomicLong();
 
     volatile boolean slowProcessingAfterRevoke = false;
 
@@ -197,6 +215,19 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
                     ThreadUtils.sleepQuietly(CONTROL_COMMIT_DELAY_MS);
                 }
                 super.commitOffsetsThatAreReady();
+            }
+
+            @Override
+            public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+                super.onPartitionsAssigned(partitions);
+                var revoked = revokedPartitions;
+                if (revoked != null) {
+                    for (var tp : partitions) {
+                        if (revoked.contains(tp)) {
+                            returnedPartitions.add(tp);
+                        }
+                    }
+                }
             }
 
             @Override
@@ -276,6 +307,7 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
 
     @SneakyThrows
     @RepeatedTest(5)
+    @ProvesClaim(TransactionalClaim.RESULTS_EXACTLY_ONCE_UNDER_FAILURE)
     void noDeadlockOnRevoke() {
         var count = new AtomicLong();
 
@@ -285,6 +317,10 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
         pc.pollAndProduce((recordContexts) -> {
             ThreadUtils.sleepQuietly(slowProcessingAfterRevoke ? POST_REVOKE_PROCESSING_DELAY_MS : PROCESSING_DELAY_MS);
             count.getAndIncrement();
+            var record = recordContexts.getSingleConsumerRecord();
+            if (returnedPartitions.contains(new TopicPartition(record.topic(), record.partition()))) {
+                processedOnReturnedPartitions.incrementAndGet();
+            }
             log.debug("Processed record, count now {} - offset: {}", count, recordContexts.offset());
             return new ProducerRecord<>(outputTopic, recordContexts.key(), recordContexts.value());
         });
@@ -342,7 +378,60 @@ class RebalanceEoSDeadlockTest extends BrokerIntegrationTest<String, String> {
             // liveness: the control thread must still be committing and distributing work after the rebalance
             long countAtRevoke = count.get();
             await().timeout(Duration.ofSeconds(30)).untilAtomic(count, is(greaterThan(countAtRevoke)));
-            log.debug("Test finished - processing continued after the rebalance");
+            log.debug("Processing continued after the rebalance");
         }
+
+        // The second consumer has left, so the revoked partitions come back to PC, which resumes them from their
+        // committed offsets. This is where the transactional revoke defect became visible: a revoke-time commit that
+        // published a transaction whose offsets omitted records it contained leaves those inputs uncommitted, PC now
+        // reprocesses them, and their outputs are produced a second time - a duplicate a read_committed consumer of
+        // the output topic can see (astubbs#436 for the defect, and the fix that hands the revoke commit to the
+        // control thread so that it drains first). Every input value is unique, so a repeated output value is a
+        // duplicated result and nothing else.
+        // Counted on the RETURNED partitions specifically - the still-owned partition keeps processing throughout and
+        // would satisfy a total count on its own before the follow-up rebalance has even given the others back.
+        await("PC has been given the revoked partitions back and has reprocessed them past where a deferred " +
+                "duplicate would come from")
+                .timeout(Duration.ofSeconds(90))
+                .untilAtomic(processedOnReturnedPartitions, is(greaterThan(RECORDS_PROCESSED_AFTER_THE_PARTITIONS_RETURN)));
+        Assertions.assertFalse(returnedPartitions.isEmpty(), "no revoked partition came back to PC");
+        try (var output = TransactionalTopicVerifier.readCommitted(getKcu(), "output", outputTopic)) {
+            readToTheCommittedEnd(output);
+            List<String> duplicated = output.consumed().stream()
+                    .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()))
+                    .entrySet().stream()
+                    .filter(e -> e.getValue() > 1)
+                    .map(Map.Entry::getKey)
+                    .sorted()
+                    .collect(Collectors.toList());
+            Assertions.assertTrue(duplicated.isEmpty(),
+                    "exactly-once broken across the rebalance: " + duplicated.size() + " result(s) reached the " +
+                            "output topic twice, visible to a read_committed consumer, out of " +
+                            output.consumed().size() + " read. The revoke-time commit published output whose " +
+                            "source offset it did not commit, so the returned partitions reprocessed those inputs. " +
+                            "Duplicated values: " + duplicated);
+            log.info("No duplicated result among {} committed outputs read after the partitions returned",
+                    output.consumed().size());
+        }
+        log.debug("Test finished");
+    }
+
+    /**
+     * Polls the verifier until its position on every assigned partition has reached the committed end (the last
+     * stable offset, since it reads committed), so the duplicate check covers everything PC had committed by then.
+     */
+    private static void readToTheCommittedEnd(TransactionalTopicVerifier output) {
+        await("the output topic is read to its committed end")
+                .timeout(Duration.ofSeconds(60))
+                .until(() -> {
+                    output.poll();
+                    var consumer = output.consumer();
+                    var assigned = consumer.assignment();
+                    if (assigned.isEmpty()) {
+                        return false;
+                    }
+                    var ends = consumer.endOffsets(assigned);
+                    return assigned.stream().allMatch(tp -> consumer.position(tp) >= ends.get(tp));
+                });
     }
 }

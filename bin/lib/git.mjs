@@ -510,3 +510,46 @@ export function freshnessWarnings(base, refCount, { invalidatingOnly = false } =
     }
     return warnings
 }
+
+/**
+ * The date each path under `pathspec` was FIRST ADDED, on any ref - `YYYY-MM-DD`, one process.
+ *
+ * AGE IS FIRST-ADDED, NEVER LAST-TOUCHED. `git log -1 -- path` answers "when was this last
+ * edited", and on this repository that answer is the same for nearly every note: the package rename
+ * of 2026-08-26/27 rewrote all of them, so last-touched separates nothing. First-added is the age a
+ * reader means when asking which note has been waiting longest - and it is the one the rename sweep
+ * cannot move.
+ *
+ * `--all`, because a note is born on the branch that produced it and reaches the baseline later, so
+ * the baseline's own history dates the merge, not the note. `--diff-filter=A` keeps only the commits
+ * that added the path; the earliest wins across every ref. A path renamed keeps the date of its
+ * current name only - `--follow` is per-path and would be one process each, which this function
+ * exists to avoid; the notes directory forbids renames for its own reasons, so the miss is small.
+ *
+ * `{ok, dates}` for the reason every batch here carries the flag: a failed log and a pathspec that
+ * matches nothing both yield an empty map, and only one of them is an answer.
+ *
+ * @returns {{ok: boolean, dates: Map<string, string>}} path -> the earliest add date
+ */
+export function firstAddedDates(pathspec) {
+    const specs = Array.isArray(pathspec) ? pathspec : [pathspec]
+    // `-z` on the name list AND a NUL before the date, so a path containing a newline or a quote
+    // cannot be mistaken for a boundary - the same reason treeEntries reads `-z`.
+    const res = exec('git', ['log', '--all', '--diff-filter=A', '--name-only', '-z', '--format=%x00%cs', '--', ...specs])
+    if (!res.ok) return { ok: false, dates: new Map() }
+    const dates = new Map()
+    // With `-z` git ends the commit header with NUL and the name list with NUL, so the stream is
+    // `<NUL><date><NUL>\n<path><NUL>...` per commit: every NUL-separated token is either a date or a
+    // path with git's own leading newline, and a path can never look like a date. Read it as one
+    // token stream with the date carried forward, rather than guessing at record boundaries.
+    let current = null
+    for (const raw of res.out.split('\0')) {
+        const token = raw.replace(/^\n/, '')
+        if (!token) continue
+        if (/^\d{4}-\d{2}-\d{2}$/.test(token)) { current = token; continue }
+        if (current === null) continue
+        const seen = dates.get(token)
+        if (seen === undefined || current < seen) dates.set(token, current)
+    }
+    return { ok: true, dates }
+}

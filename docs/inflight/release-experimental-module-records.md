@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: release-gate -->
+<!-- inflight-vetted: 2026-09-07 - neither module is listed in the root pom.xml modules block and neither directory exists, so the records are still correctly held; docs/features/staging/kafka-streams-integration.yaml is present and the Connect record still arrives with astubbs#269 (open), astubbs#255 and astubbs#240 both open - delete-when unmet -->
 
 
 `docs/features/kafka-streams-experimental.yaml` and `kafka-connect-experimental.yaml` were written and

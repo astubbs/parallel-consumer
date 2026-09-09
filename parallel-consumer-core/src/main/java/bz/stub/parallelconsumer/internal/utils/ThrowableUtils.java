@@ -205,7 +205,11 @@ public class ThrowableUtils {
      * {@code UserFunctions.carefullyRun}, plus the user's rebalance listener in
      * {@code AbstractParallelEoSStreamProcessor.onPartitionsRevoked}. So it adds a name and no failure semantics of
      * its own. (Grep {@code new ExceptionInUserFunctionException} before trusting this - the claim is about all
-     * sites, so one new site that wraps something else falsifies it.)
+     * sites, so one new site that wraps something else falsifies it.) One caller of {@code carefullyRun} wraps
+     * something that is only user code when overridden: the replacement-producer build in
+     * {@code PCModule.replacementProducerWrap}, whose construction seam is protected. It is wrapped for the catch,
+     * not the name - an {@link Error} from a replacement build must not escape the recovery path - and the wrapper
+     * stays transparent for it because the cause is still the whole failure. The start-up build is not wrapped.
      * <p>
      * <b>{@link PCInternalRuntimeException} deliberately does NOT qualify</b>, though it reads like a wrapper. Its
      * message is how callers tell distinct internal failures apart - {@code "Error encoding offsets"},

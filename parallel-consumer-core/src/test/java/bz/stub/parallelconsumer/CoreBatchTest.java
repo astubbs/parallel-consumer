@@ -97,4 +97,13 @@ public class CoreBatchTest extends ParallelEoSStreamProcessorTestBase implements
         batchTestMethods.batchFailureTest(order);
     }
 
+    /**
+     * Core only - see {@link BatchTestMethods#keyOrderNeverBatchesTwoRecordsOfOneKey()} for why the wrapper
+     * modules do not repeat it.
+     */
+    @Test
+    public void keyOrderNeverBatchesTwoRecordsOfOneKey() {
+        batchTestMethods.keyOrderNeverBatchesTwoRecordsOfOneKey();
+    }
+
 }

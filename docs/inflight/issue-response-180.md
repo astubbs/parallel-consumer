@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-vetted: 2026-09-07 - unposted: astubbs#180 is still OPEN with no comments, so this is the only answer the reporter has waiting; docs/building.md exists and bin/build.sh usage example now carries -am, exactly as the draft says -->
 <!-- post-merge: exempt-file - a drafted issue reply, held until the pre-release sweep posts it.
      It deliberately outlives the PR that wrote it, so it cannot be written in post-merge terms. -->
 

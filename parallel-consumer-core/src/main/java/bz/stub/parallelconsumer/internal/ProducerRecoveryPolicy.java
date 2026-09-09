@@ -53,7 +53,8 @@ class ProducerRecoveryPolicy {
      * The failure with its stack trace but without its message, which for a configuration error carries the value.
      */
     static Throwable sanitised(Throwable failure) {
-        var copy = new RuntimeException(failure.getClass().getName() + " (message redacted: it may carry configuration values)");
+        var copy = new RuntimeException(failure.getClass().getName()
+                + " (message redacted: it may carry configuration values)");
         copy.setStackTrace(failure.getStackTrace());
         return copy;
     }

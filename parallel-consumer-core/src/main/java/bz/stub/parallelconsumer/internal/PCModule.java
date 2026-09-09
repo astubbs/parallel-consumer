@@ -115,10 +115,19 @@ public class PCModule<K, V> {
     }
 
     /**
-     * How a replacement producer is built after the broker invalidates the current one: present only where PC built
-     * the producer itself, because a caller's finished instance carries no configuration to rebuild from. Each call of
-     * the supplier resolves the same configuration - the same derived {@code transactional.id} included - and asks
-     * the factory for a new producer.
+     * The {@link ReplacementProducerSource} for this module, the seam a recovery replaces an invalidated producer
+     * through: present only where PC built the producer itself, because a caller's finished instance carries no
+     * configuration to rebuild from. Each call resolves the same configuration - the same derived
+     * {@code transactional.id} included, so that initialising the replacement fences the producer it replaces - and
+     * asks the factory for a new producer. The id travels with the source so a failure to build can name it.
+     * {@link ProducerRecovery} builds every replacement through it.
+     * <p>
+     * Only the builds this source makes run under {@link UserFunctions#carefullyRun}: the factory is the caller's,
+     * and an {@link Error} from it (a serializer's static initialiser failing, say) must surface as a failure of the
+     * build rather than escape every catch on the recovery path, leaving the instance RUNNING with its workers
+     * parked on the produce lock for good. The first producer, built by {@link #producerWrap()} at start-up, is not
+     * wrapped: its failures reach the caller constructing PC, and they keep the type and message the factory - the
+     * Kafka client, by default - gave them. The factory's contract is checked on both paths.
      */
     public Optional<ReplacementProducerSource<K, V>> replacementProducerWrap() {
         if (options().isProducerInstanceSupplied()) {
@@ -126,17 +135,32 @@ public class PCModule<K, V> {
         }
         // null in a non-transactional commit mode, where resolve() removes the key
         String transactionalId = (String) resolvedProducerConfig().get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
-        return Optional.of(new ReplacementProducerSource<>(this::buildProducerWrapperFromConfiguration, transactionalId));
+        return Optional.of(new ReplacementProducerSource<>(this::buildReplacementProducerWrapper, transactionalId));
     }
 
+    /** The start-up build: the factory's failure reaches whoever is constructing PC, as the factory threw it. */
     private ProducerWrapper<K, V> buildProducerWrapperFromConfiguration() {
+        return buildProducerWrapper(false);
+    }
+
+    /**
+     * A replacement build, on the recovery path inside the instance: the factory runs as user code, so an
+     * {@link Error} from it surfaces as a failure of the build rather than escaping every catch on that path.
+     */
+    private ProducerWrapper<K, V> buildReplacementProducerWrapper() {
+        return buildProducerWrapper(true);
+    }
+
+    private ProducerWrapper<K, V> buildProducerWrapper(boolean factoryRunsAsUserCode) {
         boolean transactional = options().isUsingTransactionCommitMode();
         // a copy per call: the map is the factory's to read, and a factory that mutates it must not mutate the memo
         Map<String, Object> resolved = new LinkedHashMap<>(resolvedProducerConfig());
-        // user code, wrapped as every other user function is: a factory that throws an Error (a serializer's static
-        // initialiser failing, say) would otherwise escape every catch on the recovery path, leaving the instance
-        // RUNNING with its workers parked on the produce lock for good
-        Producer<K, V> producer = UserFunctions.carefullyRun(options().effectiveProducerFactory()::create, resolved);
+        ProducerFactory<K, V> factory = options().effectiveProducerFactory();
+        // only the factory's own throw is wrapped as user code; the contract checks below are PC's verdict on what
+        // it returned, and keep their type on both paths
+        Producer<K, V> producer = factoryRunsAsUserCode
+                ? UserFunctions.carefullyRun(factory::create, resolved)
+                : factory.create(resolved);
         if (producer == null) {
             throw new ProducerFactoryContractException("The ProducerFactory returned null; every call must return a new Producer");
         }
