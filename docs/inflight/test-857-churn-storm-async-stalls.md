@@ -828,3 +828,27 @@ the hour every lane of a five-rung stack was pushed at once beside three other p
 the Lincheck lane on the same runner was timing out on every branch. Recorded, not replayed - the
 2026-09-08 entry above already established that a single replay of an outer-wait seed settles nothing.
 <!-- post-merge: checked-end -->
+
+## Sighting, 2026-09-09 - the `ZOMBIE_MEMBER` arm again, 5% over its bound, on the next head of the same rung
+
+<!-- post-merge: checked-begin - a dated CI sighting against a branch head, past tense -->
+The same shard on the same branch failed again on its next head, `2d9852cc6`
+([job 102347134907](https://github.com/astubbs/parallel-consumer/actions/runs/34313890090/job/102347134907)),
+which differs from the previous one by the sighting recorded above and nothing else - so the two
+failures are the same code, and two different arms.
+<!-- post-merge: checked-end -->
+
+    [chaos-probe] VIOLATION: ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-533492029' dwelling in
+    PreparingRebalance for 15s (bound 15s) - a member is not answering the rebalance
+    (protocol-unresponsive)
+    [chaos-probe] peaks: maxRebalanceDwell=15747ms maxDrainDuration=11377ms
+                         maxLagStagnation=44950ms maxInstanceStall=0ms maxUncommittedCompletions=0records
+
+**Replay seed `5641891022951229484`** (`CHAOS W1 churn storm: seed=5641891022951229484`), the run
+ending at 108.9s. The 2026-09-07 sighting's shape exactly: the rebalance dwell alone, over its bound
+by 747ms of 15000, `maxInstanceStall=0ms`, no member stalled holding work, and this time
+`maxUncommittedCompletions=0records` as well. The rung above this one, carrying the same code plus its
+own, passed the shard four times in the same window, and the runner was saturated throughout (the
+Lincheck lane timing out on every branch) - the tail shape the runner-load confound predicts. Two
+arms in two consecutive runs of one shard on one branch is worth a replay once the runner is quiet;
+recorded, not replayed yet.
