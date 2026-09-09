@@ -378,14 +378,22 @@ box means the v6 action for that line is done, not that the defect is closed:
 Each was surfaced by the work that resolved the items under "Unknowns made known" below, and none is
 a v6 gate; the note must simply not claim more than the suite or the code can show.
 
-- **A single wedged shard is invisible to everything that gates** - astubbs#478's surviving finding,
-  owned by [`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md)
-  (deferred: a new gate needs a red control before it can be trusted). `INSTANCE_STALL` is
-  per-instance, so a watermark frozen by a commit that never landed, on an instance whose other
-  shards keep completing, is caught by no chaos detector; every 857 replay this month drained with
-  full key coverage, which is what a false negative of that shape looks like. The release note
-  should say the suite cannot see it, not that no stall is known. Not a v6 gate: the gate is
-  test-suite work, and building it without the red control first is the trap the note names.
+- **A single wedged shard is invisible to everything that gates - narrowed to the shard half by
+  astubbs#491 (merged 2026-09-09).** astubbs#478's surviving finding, owned by
+  [`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md). The commit
+  half is closed: a red control (one partition's commits answered and dropped, every existing
+  gating detector shown green on it with an armed control so the silence is not vacuous) came
+  first, and the gate that came second compares two positions - a member's own next offset to
+  commit against what the group has committed - held across samples with the group stable, so the
+  demoted timing bound's false positive is excluded structurally. Both replay seeds the demotion
+  was argued from re-ran across the old bound with the new gate silent. The note's own prescription
+  was refuted on the way: "completions advancing" is instance-wide and does not discriminate. What
+  remains is the shard half: a key-order shard that will never be dispatched again inside an
+  otherwise healthy partition still gates nothing, any incomplete offset pins the local watermark,
+  and no red control exists for it - astubbs#483 found the nearest mechanism unreachable, so it is a
+  reachability question first. The release note says the suite cannot see that shape. One sibling
+  found by the sweep is recorded, not fixed: the ledger's duplicate allowance is fleet-wide while
+  redelivery is per-partition.
 - **One unconditional by-key shard removal remains on master** - the revoke sweep in
   `ShardManager.removeWorkFromShardFor`, the second of the two astubbs#483's defect-class sweep
   found. astubbs#468's identity-`equals` change made conditional removal possible and fixed the
