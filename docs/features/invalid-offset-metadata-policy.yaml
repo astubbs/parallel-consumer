@@ -11,7 +11,7 @@ availability:
   since: 0.5.2.6
   evidence:
     tag: 0.5.2.6
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Added an error policy for recognized non-Parallel-Consumer offset metadata on assignment.
 summary: Choose whether offset metadata this build cannot read stops the application or is discarded so processing resumes from the committed offset.
 use_this_when:

@@ -11,7 +11,7 @@ availability:
   since: 0.5.2.8
   evidence:
     tag: 0.5.2.8
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: The release that made the message buffer configurable added the two load-factor options in the same change.
 readme_anchor: ordering-guarantees
 summary: Set the starting and maximum multiple of the in-flight target that Parallel Consumer keeps buffered ahead of the worker pool.

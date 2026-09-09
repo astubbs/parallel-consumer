@@ -11,7 +11,7 @@ availability:
   since: 0.5.2.4
   evidence:
     tag: 0.5.2.4
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Added PCRetriableException to request a retry without error-log noise.
 summary: Signal an expected, retryable processing failure without treating it as an unexpected application error in the logs.
 use_this_when:

@@ -12,6 +12,6 @@ domain question all live there. This file stays only for the constraint below, w
 happening *now*; everything else about the site belongs in the issue.
 
 **Consequence to know about now:** `README_TEMPLATE.adoc` used to `include::` the whole of
-`CHANGELOG.adoc`, publishing every release note as a README chapter and making each changelog edit a
+`CHANGELOG.md`, publishing every release note as a README chapter and making each changelog edit a
 two-file change. That embed is being removed (astubbs#113); the site work removes the rest of the coupling.
 Don't build anything new that depends on the README embedding other documents.

@@ -117,7 +117,7 @@ a file in it is touched, rather than waiting to be opened.
 | **`docs/plans/`** | Dated plan and investigation documents for one piece of work | Durable reference - a plan goes stale once its work lands |
 | **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status; plus a cache of *frozen* upstream **issue** facts | Editorial opinion, and the live state of an upstream issue - that belongs to its fork mirror |
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when it and the manifest disagree, the manifest wins |
-| **`CHANGELOG.adoc`** | Release notes, regenerated at release time | Per-PR entries of any kind - see [Changelog](#changelog) |
+| **`CHANGELOG.md`** | Release notes, regenerated at release time | Per-PR entries of any kind - see [Changelog](#changelog) |
 
 Rule of thumb - and the axis is **weight**, not when the work happens:
 
@@ -129,7 +129,7 @@ Rule of thumb - and the axis is **weight**, not when the work happens:
   `inflight-state: deferred - <what it waits on>` and still belongs here. Deferred is a schedule, not
   an exile - and it is why "later → refactoring.md" was wrong.
 - **Already settled** → [`docs/solutions/`](docs/solutions/) for the knowledge. **Not
-  `CHANGELOG.adoc`** - see [Changelog](#changelog): a PR never adds an entry, the file is generated at
+  `CHANGELOG.md`** - see [Changelog](#changelog): a PR never adds an entry, the file is generated at
   release time from commit messages, so "put it in the changelog" is an instruction nobody may follow.
 
 **When a `refactoring.md` line outgrows a line or two - it needs a decision, has a blocker, or has
@@ -417,7 +417,7 @@ Unit tests are surefire (`src/test/java/`); integration tests are failsafe and n
 
 ## Changelog
 
-**In a PR the changelog is never added to.** No new entries, and no `== Unreleased` section - a
+**In a PR the changelog is never added to.** No new entries, and no `## Unreleased` section - a
 shipped section is finished, and the in-flight section belongs to the release-time generator. There
 is no window in which a PR contributes an entry, and **the `repo: hygiene` gate does not enforce
 this** - it checks citations, so it will happily pass an entry the policy forbids.
