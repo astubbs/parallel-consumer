@@ -163,10 +163,13 @@ Data-shaped and stall-shaped, no design question open, no stack. These are the r
   what they were about; `docs/quarantined-tests.md` is empty and the release guard no longer blocks
   on it. It also moved the capacity profiles behind a `capacity` tag with scheduled runners, so
   their pass rate is measured rather than gating.
-- [ ] **astubbs#480** - an offset map whose run or bitset extends past the partition's log end
+- [x] **astubbs#480** - merged 2026-09-09. An offset map whose run or bitset extends past the partition's log end
   offset is an unreadable payload, not a completed range. Silent skip of real records on a corrupt
   or foreign payload; proven red through the real assignment path, green with the guard, mutation
-  lane green on the bound. Promoted from the owner's-decision list on 2026-09-08.
+  lane green on the bound. Reworked off the wire before merge: the claim is settled lazily at the
+  first poll batch against a watermark read without blocking from the consumer's own position and
+  lag, so no broker round trip sits inside the rebalance callback. Promoted from the
+  owner's-decision list on 2026-09-08.
 - [x] **astubbs#477** - merged 2026-09-08. A dead broker-poll thread now closes the consumer in
   the consumer-commit modes, the shipped default among them, so the group rebalances at once instead
   of after `max.poll.interval.ms`. One derived predicate and one condition, proven red on every
@@ -255,14 +258,16 @@ box means the v6 action for that line is done, not that the defect is closed:
   "unbounded". astubbs#408's own probe still reads the callback over the poll-interval budget on
   today's master, which is the defect reproduced against the bounded design; its title and whether
   it still closes astubbs#44 are the owner's, after v6.
-- [ ] **astubbs#488 (draft)** - `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on
+- [x] **astubbs#488 (merged 2026-09-09)** - `INSTANCE_STALL` and `ZOMBIE_MEMBER` sightings that replay clean on
   idle runners, so they read as starvation rather than a wedge. The idle replay was the weak
   direction: a load-shaped stall needs the load. astubbs#488 ran the load arm - three seeds, idle
   and under CPU burners, one term differing - and on one seed both arms crossed the bound that raised
   every gating firing on CI, with the detector reporting the member busy in user code and no stall
   violation or dump in any arm, every window proven open. Starvation, confirmed from the load side.
   It proposes a PROPOSED close for the `INSTANCE_STALL` line only, owner-gated; the `ZOMBIE_MEMBER`
-  arm never fired, so nothing there moves. Box closes when astubbs#488 merges.
+  arm never fired, so nothing there moves; its two recorded seeds and the busy-observation
+  calibration are what the experiment runner stays for, and its retire condition is in the
+  runner's row. Merged.
 - [ ] **astubbs#487 (draft, arms run)** - **the intake stall under an always-failing key, found by
   astubbs#471's soak, is the load gate, and head-of-line blocking is not why.** Three arms, one
   term each, predictions written first, every one confirmed. Under KEY ordering with half the keys
