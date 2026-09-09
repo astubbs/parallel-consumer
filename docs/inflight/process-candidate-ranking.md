@@ -1,7 +1,7 @@
 # Next candidates, ranked
 
 <!-- inflight-type: register -->
-<!-- inflight-vetted: 2026-09-07 - all eight ranked decisions are still open issues awaiting the same reply (astubbs#161, astubbs#181, astubbs#163, astubbs#189, astubbs#162, astubbs#241, astubbs#173, astubbs#178) and every note they name is present, so the ranking stands unchanged; four settled lines removed instead - the astubbs#155/astubbs#169/astubbs#170 scheduling sentence and the logging-verbosity pick (merged as astubbs#203 and astubbs#428), the astubbs#40 dedup pick (astubbs#206), and confluentinc#906 out of the contributor-friction pick (astubbs#194 closed) -->
+<!-- inflight-vetted: 2026-09-09 - the astubbs#162 decision was made and shipped, so that line is removed and the ranking is seven; the rest are still open issues awaiting the same reply (astubbs#161, astubbs#181, astubbs#163, astubbs#189, astubbs#241, astubbs#173, astubbs#178) and every note they name is present. 2026-09-07: four settled lines removed - the astubbs#155/astubbs#169/astubbs#170 scheduling sentence and the logging-verbosity pick (merged as astubbs#203 and astubbs#428), the astubbs#40 dedup pick (astubbs#206), and confluentinc#906 out of the contributor-friction pick (astubbs#194 closed) -->
 
 
 ## Decisions waiting on the maintainer, ranked
@@ -35,18 +35,14 @@ named on each line owns it.
    the default retry delay. A small change, but it moves retry timing for every existing deployment,
    which is why it is a call rather than a commit. Nothing else in the poison-isolation ladder waits
    on the answer.
-5. **astubbs#162** (confluentinc#546), `bug-162-offset-state-truncation.md` - should absent commit
-   data warn at all? It is the normal state of a new group or an expired offset, so the honest
-   handling is a quieter distinct message and no truncation branch - against which operators alert on
-   the current line.
-6. **astubbs#241** (confluentinc#144), `core-241-tx-commit-failure-taxonomy.md` - agree the issue's
+5. **astubbs#241** (confluentinc#144), `core-241-tx-commit-failure-taxonomy.md` - agree the issue's
    stated premise died in confluentinc#355, then keep it open with a rewritten `## Fork status` and
    relabel `bug` to `feature`. No defect is demonstrated; what survives is a policy design.
-7. **astubbs#173** (confluentinc#777), `upstream-173-revocation-duplicate-processing.md` - should PC
+6. **astubbs#173** (confluentinc#777), `upstream-173-revocation-duplicate-processing.md` - should PC
    offer a revocation grace period at all? Upstream declined it. **If the answer is no, confluentinc#777
    is a documentation obligation rather than a defect** and the close is unblocked - at the cost of a
    README section and one chaos cell that must be run rather than predicted.
-8. **astubbs#178** (confluentinc#843), `core-178-key-order-across-a-rebalance.md` - is an undrained
+7. **astubbs#178** (confluentinc#843), `core-178-key-order-across-a-rebalance.md` - is an undrained
    old-epoch delivery a violation of the README's "strong ordering by key", or legitimate
    at-least-once? Last because it is the only one that needs a *bound* argued for rather than a
    yes/no, and `KeyOrderLedger`'s javadoc already says picking that number is the whole job.
@@ -91,8 +87,10 @@ comes first because nothing else matters until it clears.
      breaking, so it is settled before the major or carried forever.
   6. `bug-offset-commit-timeout-does-two-jobs.md` - the default makes a retry unreachable; the fix is
      a design choice among three.
-  7. `bug-162-offset-state-truncation.md` - a WARN operators alert on, firing falsely for every new
-     group; decision 5 in the section above.
+  7. A WARN operators alert on, firing falsely for every new consumer group - the bootstrap
+     truncation warning of astubbs#162. The decision it waited on was made (absent commit data
+     reports at INFO and takes no truncation branch); the note is gone and the record is in
+     `docs/solutions/logic-errors/absence-of-commit-data-was-inferred-from-a-sentinel-that-a-real-commit-shares-2026-09-09.md`.
   8. `bug-unbounded-log-lines.md` - record keys and values printed at WARN on a line that asks to be
      pasted into a public issue; cheap to fix.
 - **Contract and compatibility, where a major is the only window:**

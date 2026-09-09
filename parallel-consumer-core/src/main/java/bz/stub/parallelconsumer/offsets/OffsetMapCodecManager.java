@@ -155,6 +155,18 @@ public class OffsetMapCodecManager<K, V> {
             return new HighestOffsetAndIncompletes(Optional.of(highestSeenOffset), incompleteOffsets);
         }
 
+        /**
+         * <b>No commit data at all</b> - the assignment carried no committed offset for the partition, so there is
+         * nothing to decode and nothing to expect of the first poll.
+         * <p>
+         * The empty {@link #highestSeenOffset} IS that fact, and it is the only place the fact exists: it is
+         * built here and at no decode site, because every decode has a committed offset to be relative to. It
+         * cannot be recovered downstream from the offsets themselves - a real commit filed at offset 0 with no
+         * offset map decodes to a highest-seen of {@code -1}, the same
+         * {@code PartitionState#KAFKA_OFFSET_ABSENCE} sentinel this absence leaves behind, and computes the same
+         * bootstrap expectation of 0. {@code PartitionState} therefore records the distinction at construction
+         * rather than inferring it later; see its {@code commitDataWasLoadedOnAssignment}.
+         */
         public static HighestOffsetAndIncompletes of() {
             return new HighestOffsetAndIncompletes(Optional.empty(), new TreeSet<>());
         }

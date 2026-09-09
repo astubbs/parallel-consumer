@@ -224,6 +224,33 @@ public class PartitionState<K, V> {
     private long offsetHighestSucceeded = KAFKA_OFFSET_ABSENCE;
 
     /**
+     * Whether this partition was built from commit data the broker actually held, as opposed to
+     * {@code OffsetMapCodecManager}'s default entry for an assignment with no commit history.
+     * <p>
+     * <b>Recorded, not inferred.</b> The fact is known exactly once - at construction, where
+     * {@link OffsetMapCodecManager.HighestOffsetAndIncompletes#of()} hands over an empty highest-seen offset and
+     * every decode path hands over a present one - and it is unrecoverable afterwards. The tempting shorthand,
+     * {@code offsetHighestSucceeded == KAFKA_OFFSET_ABSENCE}, is WRONG: a real commit filed at offset 0 with no
+     * offset map decodes to a highest-seen of {@code 0 - 1}, which is that same sentinel, with commit data that
+     * genuinely existed and a bootstrap expectation of 0 that is genuinely meant. Reading the sentinel would
+     * suppress the truncation report for exactly the partition most likely to be caught by retention - the one
+     * that has processed nothing yet. This is the engine {@code AGENTS.md}'s collapse-parallel-state rule
+     * applied to a fact: keep the one the source knows, do not re-derive a weaker one at the point of use.
+     * <p>
+     * <b>Read only by {@link #maybeTruncateBelowOrAbove}, on the control thread, in the same statement that
+     * closes {@link #bootstrapPhase}</b> - the field is {@code final}, so its safe publication comes from the
+     * constructor's freeze and no thread model is needed. Written on whichever thread builds the partition
+     * state, which is the control thread inside {@code PartitionStateManager#onPartitionsAssigned}.
+     * <p>
+     * Note that {@link #initStateFromOffsetData} is also called by the reset branch of
+     * {@link #maybeTruncateBelowOrAbove}, and deliberately does NOT touch this: it answers what the ASSIGNMENT
+     * carried, which a later reset cannot change, and by then the bootstrap phase is over anyway.
+     *
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/162">astubbs#162</a>
+     */
+    private final boolean commitDataWasLoadedOnAssignment;
+
+    /**
      * If true, more messages are allowed to process for this partition.
      * <p>
      * If false, we have calculated that we can't record any more offsets for this partition, as our best performing
@@ -397,6 +424,8 @@ public class PartitionState<K, V> {
         this.tp = topicPartition;
         this.partitionsAssignmentEpoch = newEpoch;
         this.pcMetrics = module.pcMetrics();
+        // sampled BEFORE initStateFromOffsetData collapses the Optional into a sentinel - see the field
+        this.commitDataWasLoadedOnAssignment = offsetData.getHighestSeenOffset().isPresent();
         initStateFromOffsetData(offsetData);
         initMetrics();
         this.om = new OffsetMapCodecManager<>(pcModule);
@@ -760,12 +789,33 @@ public class PartitionState<K, V> {
      * Only runs if this is the first {@link ConsumerRecord} to be added since instantiation.
      * <p>
      * Can be caused by the offset reset policy of the underlying consumer.
+     * <p>
+     * <b>Neither branch applies when the assignment carried no commit data</b> - there is no expectation to
+     * compare against and nothing loaded to prune, so that case reports itself at INFO and returns. See
+     * {@link #commitDataWasLoadedOnAssignment} for why the absence is carried rather than read back out of the
+     * offsets, and {@code PartitionStateAbsentCommitData162Test} for the control arm that pins the difference.
      */
     private void maybeTruncateBelowOrAbove(long bootstrapPolledOffset) {
         if (bootstrapPhase) {
             bootstrapPhase = false;
         } else {
             // Not bootstrap phase anymore, so not checking for truncation
+            return;
+        }
+
+        if (!commitDataWasLoadedOnAssignment) {
+            // Nothing was committed for this partition, so there is no expectation to compare the first poll
+            // against and nothing loaded that could be truncated. Both truncation branches below would be
+            // reporting a comparison against an expectation of 0 that no commit ever asked for - the false
+            // warning of astubbs/parallel-consumer#162 / confluentinc/parallel-consumer#546, which fired on
+            // any first poll above offset 0 having pruned nothing. INFO, not WARN: a new consumer group
+            // starting is the normal case, not an event to alert on.
+            log.info("No committed offset for partition {} of topic {} - starting from the first polled offset {}. " +
+                            "Nothing was loaded, so nothing is being removed. Expected for a new consumer group, " +
+                            "or where the group's committed offset has aged out of the offsets topic.",
+                    this.tp.partition(),
+                    this.tp.topic(),
+                    bootstrapPolledOffset);
             return;
         }
 
