@@ -201,11 +201,11 @@ than carry a standalone abort.
 
 ### Tier 3 - release plumbing, then tag
 
-- [ ] **Finalise the `== 0.6.0.0` changelog section as the release notes** (astubbs#498, in
-  review). `docs/releasing.md` says the section is generated at release time, but there is no
-  generator in `bin/`, so astubbs#498 is that generation done by hand from the commit log and the
-  release document. Until it merges the section is working text; after it, the section is what
-  the release page carries.
+- [x] **Finalise the `== 0.6.0.0` changelog section as the release notes** (astubbs#498, merged
+  2026-09-10). `docs/releasing.md` says the section is generated at release time, but there is no
+  generator in `bin/`, so astubbs#498 was that generation done by hand from the commit log and the
+  release document. The section is now what the release page carries; astubbs#496 and astubbs#497
+  are already in it. The size-of-this-release table was dropped on this PR by owner decision.
 - [ ] **Post the release page body by hand.** `release.yml` tries to build the notes from the
   `CHANGELOG.adoc` section, but its heading match is exact and the section is headed
   `== 0.6.0.0 (unreleased)`, so on master it matches nothing and falls back to generated notes.
@@ -214,13 +214,12 @@ than carry a standalone abort.
 - [x] **astubbs#446** - merged 2026-09-09. Lift the announcement plan onto master, so the announcement is not being
   written from a branch nobody merges.
 - [ ] The tag-day artefact checks in the section of that name below.
-- [ ] Amend the release claim, not the standard, for what is still open (astubbs#498, in review,
-  carries it). `release-0.6.0.0.md` already names astubbs#44 as the exception (2026-09-07) and the
+- [x] Amend the release claim, not the standard, for what is still open (astubbs#498, merged
+  2026-09-10, carried it). `release-0.6.0.0.md` already names astubbs#44 as the exception (2026-09-07) and the
   poisoned-transaction wedge as the second (2026-09-09); astubbs#498 adds the "claim as published"
   paragraph there, and its changelog section on consumption stopping after a rebalance says which
   confluentinc#857 mechanisms are closed, each with its PR, and names the one arm still
-  unattributed: a member that stops answering the coordinator during a churn storm. Ticks when
-  astubbs#498 merges.
+  unattributed: a member that stops answering the coordinator during a churn storm.
 - [ ] Post the drafted issue responses (`ls docs/inflight/issue-response-*.md` and
   [`release-0.6.0.0-issue-response-drafts.md`](release-0.6.0.0-issue-response-drafts.md)) in the
   pre-release sweep [`docs/releasing.md`](../releasing.md) describes.
@@ -513,11 +512,10 @@ Context worth inheriting on the day:
 - **`README.adoc` is generated - never hand-edit it.** Edit `src/docs/README_TEMPLATE.adoc` and
   regenerate with `./mvnw -N asciidoc-template:build`. A PR that touches only the template has
   silently not changed the published README.
-- **`CHANGELOG.adoc`'s `== 0.6.0.0` section is working text until astubbs#498 merges** - that PR
-  rewrites it from the commit log as the release notes (tier 3), so until then do not quote it as
-  the release notes, and when agents work in parallel exactly one holds that file; it is the
-  highest-collision file in the repo. Anything that merges after astubbs#498 with a release-note
-  line has to be folded into the section by hand before the tag.
+- **`CHANGELOG.adoc`'s `== 0.6.0.0` section is the release notes since astubbs#498 merged** - it
+  was rewritten from the commit log by hand (tier 3), so anything that merges after it with a
+  release-note line has to be folded into the section by hand before the tag. When agents work in
+  parallel exactly one holds that file; it is the highest-collision file in the repo.
 - **The README's trademark wording claims nothing it does not have.** The 2026-08-11 branding
   rename put "KAFKA ... has been licensed for use by Antony Stubbs and contributors" at the top of
   the README and in the attribution section - the Foundation's boilerplate for a licence nobody
