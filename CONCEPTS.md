@@ -45,14 +45,24 @@ merely fetched: in-flight work is what a commit must wait for, and what a shutdo
 
 **Route**
 One topic bound to one processing function with its own consumed and produced key and value types.
-A route is the unit a user defines; policy such as the retry limit, the dead-letter destination,
-ordering and concurrency belongs to the instance and applies to every route on it. A topic has at
-most one route.
+A route is the unit a user defines; policy such as the retry limit, the dead-letter destination
+and ordering belongs to the instance and applies to every route on it, while the concurrency
+limit is each route's own, a copy of the instance default unless the route declares one. A topic
+has at most one route.
 
 **Record outcome**
 The terminal disposition of one record: succeeded, filtered (the processing function chose to drop
-it, and it commits like a success), or dead-lettered (retries exhausted and the record sent to the
-declared destination). Retry is not an outcome but a step towards one. The vocabulary is
+it, and it commits like a success), parked, or exported (copied to the declared dead-letter
+destination). Retry is not an outcome but a step towards one, and a stop request is not an
+outcome either: the record stays incomplete and the instance closes.
+
+**Parked**
+A record that has exhausted its attempts and stays where it is: incomplete in the offset map, holding
+no worker, not re-attempted until told to. The partition commits past it under key and unordered
+processing, so the source topic is the store and the map is the index. Parking is bounded by the
+commit-metadata cap; near it, parked records are exported oldest-first to the dead-letter
+destination when one is declared. Today's retry queue is the same state with the re-attempt
+scheduled; park is that state with the re-attempt withheld. The vocabulary is
 shared by the user-facing definition and the engine, so a behaviour first implemented above the
 engine can later be implemented inside it without changing what the user sees.
 
