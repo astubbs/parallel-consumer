@@ -43,6 +43,19 @@ mechanism governs the thread-pool and async engines alike.
 Records handed to the worker pool and not yet resolved as succeeded or failed. Distinct from records
 merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain.
 
+**Route**
+One topic bound to one processing function with its own consumed and produced key and value types.
+A route is the unit a user defines; policy such as the retry limit, the dead-letter destination,
+ordering and concurrency belongs to the instance and applies to every route on it. A topic has at
+most one route.
+
+**Record outcome**
+The terminal disposition of one record: succeeded, filtered (completed without a result and without
+error), dead-lettered (retries exhausted and the record sent to the declared destination), or
+exhausted with nowhere to go. Retry is not an outcome but a step towards one. The vocabulary is
+shared by the user-facing definition and the engine, so a behaviour first implemented above the
+engine can later be implemented inside it without changing what the user sees.
+
 **Commit frontier**
 The offset a partition would resume from if consumption restarted — the highest offset committed for
 it. It is *exclusive*: it names the next record expected to be polled, not the last one completed.
