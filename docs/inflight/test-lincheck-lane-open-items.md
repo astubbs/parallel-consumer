@@ -468,6 +468,13 @@ ever measured on the runner that runs it, which is the same question
 [`test-no-progress-window-may-not-transfer-to-w1.md`](test-no-progress-window-may-not-transfer-to-w1.md)
 answered for `NO_PROGRESS` by measuring the distribution instead of the crossings.
 
+**The very next run settled whether the raise was needed.** With the cap at 60, this lane PASSED at
+**20m8s** on the branch that raised it
+([job 102334638957](https://github.com/astubbs/parallel-consumer/actions/runs/34309813133/job/102334638957)) -
+eight seconds past the old cap, on a green run. Under the old 20 it would have been killed and read
+as a red on a PR that changes nothing this lane compiles, which is the exact failure the ruling below
+was made against.
+
 **Owner ruling, 2026-09-09: the cap is raised to 60 minutes, and the cost question stays open.**
 `Lincheck` is a REQUIRED merge context, so a cap sitting inside the lane's own run-time distribution
 fails unrelated PRs at random - a false red, which this repo treats as worse than no signal at all,
@@ -475,12 +482,20 @@ and it is not a price worth paying to keep a cost measurement in a place that re
 merges.
 
 **The evidence is not lost by raising it**, which is the objection this ruling has to answer. The
-durations above are recorded here, and `bin/inflight.mjs codecov slow` keeps this lane's wall clock
-per commit, so the drift stays readable without a required check going red to report it. **Why the
-lane got 2-3x slower is undiagnosed and stays open** - the first place its own matrix comment says to
-look is the machine-dependent stress hit rate two sections up, and the number nobody has is what this
-lane costs on the runner class that actually runs it. Whoever picks that up should read the drift
-from codecov rather than re-deriving it from job pages, which expire.
+job-level durations above are recorded here, and Codecov keeps per-test duration per commit for
+longer than a CI log survives - so the drift stays readable without a required check going red to
+report it. Read it there rather than from job pages, which expire:
+
+    bin/inflight.mjs codecov test stressMustNotRediscoverTheCheckpointThreeTear
+
+**And that command already narrows the question to one test.** `WorkManagerLincheckTest`'s stress
+arm - the one this lane's matrix comment names as "nearly all of it", because an inverted arm cannot
+stop early and always pays its full bound - was recorded between **292s and 720s** across six
+commits on 2026-09-09 alone, all passing. The upper end is most of the old 20-minute cap by itself,
+and the spread is 2.5x on a fixed bound, which is the machine-dependent stress hit rate this note
+already owns two sections up rather than a new mystery. **Why it varies that much is undiagnosed and
+stays open**; the number nobody has is what the arm costs on the runner class that actually runs it,
+which is the same prerequisite that section states.
 
 ## Disproven, recorded so it is not re-raised
 

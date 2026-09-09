@@ -59,14 +59,24 @@ import java.util.concurrent.atomic.AtomicLong;
  *   {@code [diagnose]} series rather than off the violation line (which can only ever say "the bound
  *   plus detection latency"). Across thirteen replays on one desktop the armed peak reached 32.1s,
  *   with three further runs at 28.2-30.1s that did not fire: the 30s bound sat inside the ordinary
- *   distribution and three passing runs missed it by under two seconds. 60s is ~1.9x the measured
- *   peak, the same ratio {@link ProgressProbe#REBALANCE_DWELL_BOUND} was calibrated at.</li>
+ *   distribution and three passing runs missed it by under two seconds. 60s is 1.9x that peak -
+ *   the same METHOD {@link ProgressProbe#REBALANCE_DWELL_BOUND} was sized by, a multiple of a
+ *   measured healthy peak, though at a smaller multiple than its 2.2x.</li>
  * </ul>
- * <b>The widening is not a disabling</b>, and that is asserted rather than argued -
- * {@code NoProgressWindowIT} fires the detector at the wider bound on a fleet that genuinely stops.
- * What it does NOT cover is the separate question of whether this detector MISSES real failures
- * ({@code docs/testing.md}, "Experiment runners"), which a wider window can only make more pressing.
- * The seeds, the trajectories and the per-run numbers are in
+ * <b>The widening is not a disabling</b>, and that is asserted rather than argued.
+ * {@code NoProgressWindowIT} fires the detector at the wider bound on a fleet that genuinely stops,
+ * pins the calibrated numbers as values so a later edit to them cannot pass silently, drives the
+ * SAMPLER rather than only the decision it calls, and asserts that this class's
+ * {@link #configureProbe} really applies the wider bound - each of those arms verified by a one-term
+ * sabotage that reddens it and nothing else.
+ * <p>
+ * <b>What it costs, stated rather than left to be discovered</b>: a genuine fleet-wide stall of 31
+ * to 60 seconds with work outstanding now passes this scenario. A real wedge does not stop at 60s,
+ * so what is lost is early detection rather than detection - and the finer cases the fleet-wide
+ * counter never covered (one wedged member, one wedged partition) have their own owners. The
+ * separate question of whether this detector MISSES real failures ({@code docs/testing.md},
+ * "Experiment runners") is untouched and a wider window can only make it more pressing. The seeds,
+ * the trajectories and the per-run numbers are in
  * {@code docs/inflight/test-no-progress-window-may-not-transfer-to-w1.md}.
  * <p>
  * <b>The instance-stall line - also answered, 2026-09-07, do not re-derive</b>: seed
@@ -141,6 +151,23 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
                 "the finding worth reporting is a run that stays FLAT. ===");
     }
 
+    /**
+     * This scenario's probe configuration, named so it can be ASSERTED rather than only run.
+     * {@code NoProgressWindowIT} calls it, so deleting the widening below turns a fast broker-free
+     * test red instead of quietly changing what a five-minute chaos run gates on - a run whose own
+     * replay data says the crossing fires roughly once in thirteen, so a regression here would
+     * otherwise hide for a long time.
+     * <p>
+     * This scenario's own churn crosses the 30s default while the fleet is merely slow: the eager
+     * assignor revokes the whole assignment every few seconds, so each 45s {@link #HEAVY_SLEEP} is
+     * redelivered before it ends and the fleet can sit wholly inside the heavy tail with nothing
+     * COMPLETING while every member is working. Widened on the evidence, not on the resemblance -
+     * see this class's "Calibration status" javadoc.
+     */
+    static ProgressProbe configureProbe(ProgressProbe probe) {
+        return probe.withNoProgressWindow(ProgressProbe.CHURN_NO_PROGRESS_WINDOW);
+    }
+
     @Test
     void churnStormMeetsSlosAndBalancesLedger() throws Exception {
         // The @Timeout clock starts here, so effectiveDiagnosticQuietCap's time-remaining sum must too.
@@ -165,13 +192,7 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
         AtomicLong totalStarted = fleet.getTotalStarted();
         Queue<String> allConsumed = fleet.getAllConsumed();
         Set<String> expectedKeys = fleet.getExpectedKeys();
-        ProgressProbe probe = fleet.getProbe()
-                // This scenario's own churn crosses the 30s default while the fleet is merely slow:
-                // the eager assignor revokes the whole assignment every few seconds, so each 45s
-                // HEAVY_SLEEP is redelivered before it ends and the fleet can sit wholly inside the
-                // heavy tail with nothing COMPLETING while every member is working. Widened on the
-                // evidence, not on the resemblance - see this class's "Calibration status" javadoc.
-                .withNoProgressWindow(ProgressProbe.CHURN_NO_PROGRESS_WINDOW);
+        ProgressProbe probe = configureProbe(fleet.getProbe());
 
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
                 .seed(seed.getValue())

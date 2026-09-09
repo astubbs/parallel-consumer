@@ -2,7 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
-<!-- inflight-vetted: 2026-09-09 - REPLAYED, and the widening has landed: ChaosChurnStormIT now calls withNoProgressWindow(ProgressProbe.CHURN_NO_PROGRESS_WINDOW), the 60s bound AbstractRevokeUnderWorkScenario already held, and NoProgressWindowIT fires the detector at that bound on a fleet that genuinely stops (three of its six tests go red under a one-term sabotage of recordFleetProgress, so the green is not vacuous). PROPOSED for the owner, and only this: whether the note is now CLOSED or kept open on the residue named in its 2026-09-09 verdict section - the demote-or-widen call was owner-gated on the misdirection impact, so the marker is not moved by the agent that ran the replays. The verdict itself is evidence, not judgement: thirteen replays of every seed in this table plus the five in bug-857-family.md, all with -Dchaos.diagnoseStallRecovery=true; one fired and DRAINED, twelve were VOID, none stayed flat. Nine firings across four seeds have now been watched past detection and nine drained -->
+<!-- inflight-vetted: 2026-09-09 - REPLAYED, and the widening has landed: ChaosChurnStormIT now calls withNoProgressWindow(ProgressProbe.CHURN_NO_PROGRESS_WINDOW), the 60s bound AbstractRevokeUnderWorkScenario already held, and NoProgressWindowIT fires the detector at that bound on a fleet that genuinely stops - its firing assertions go red under a one-term sabotage of recordFleetProgress (stub it to return false and re-run the class), so the green is not vacuous. PROPOSED for the owner, and only this: whether the note is now CLOSED or kept open on the residue named in its 2026-09-09 verdict section - the demote-or-widen call was owner-gated on the misdirection impact, so the marker is not moved by the agent that ran the replays. The verdict itself is evidence, not judgement: thirteen replays of every seed in this table plus the five in bug-857-family.md, all with -Dchaos.diagnoseStallRecovery=true; one fired and DRAINED, twelve were VOID, none stayed flat. Nine firings across four seeds have now been watched past detection and nine drained -->
 
 Two chaos detectors have now been found asserting a timing bound that the scenario's own disturbances
 legitimately cross - `CLASS2_STALL` (demoted to an observation) and `REBALANCE_DWELL` (disarmed in
@@ -108,7 +108,7 @@ at least one stays flat.
 | `2512758007437016849` | this table | VOID |
 | `8064312734196519950` | this table | VOID |
 | `8637977624689145046` | this table | VOID |
-| `3717713223451201639` | this table | VOID |
+| `3717713223451201639` | this table | VOID on this replay; its 2026-09-09 CI firing DRAINED - the last row of the sightings table above |
 | `5650361238717170909` | this table | VOID on this replay; it DRAINED on its 2026-09-08 one |
 | `2575991864395313898` | the row above said "not recorded" - it was | VOID |
 | `3086917415748208232` | `bug-857-family.md`, ninth sighting | VOID |
@@ -152,14 +152,49 @@ window**, and a long way past the slack. That distinction chooses the fix.
 
 **So the window moves, to the 60s W4 already holds** - `ProgressProbe#CHURN_NO_PROGRESS_WINDOW`,
 named rather than repeated now that two scenarios reach the same number by two different mechanisms.
-60s is ~1.9x the measured armed peak, the ratio `REBALANCE_DWELL_BOUND` was calibrated at.
+60s is 1.9x the measured armed peak - the same METHOD `REBALANCE_DWELL_BOUND` was sized by, a
+multiple of a measured healthy peak, though at a smaller multiple than the 2.2x its own javadoc
+records.
+
+**Be exact about where the 60 comes from, because it is the caveat on "does this fix it".** The
+VALUE is inherited from W4, which chose it for a different mechanism. What was measured on W1 is
+that 60s is *enough* for it - and measured on ONE DESKTOP, over thirteen replays, one of which
+fired. **The hosted runner's own distribution is unmeasured**, and it cannot be recovered from the
+sightings: every one of them reports `for 30s (bound 30s)`, which is the bound plus detection
+latency and says nothing about how long the pause would have run. So the expected outcome is that
+this lane stops failing on `NO_PROGRESS`, not that it is proven to. If it fires again at 60s, the
+number to take is the armed pause peak from a `-Dchaos.diagnoseStallRecovery=true` replay, not
+another guess.
 
 **It is a re-calibration and not a deletion, and that is asserted rather than argued.**
-`NoProgressWindowIT` fires the detector at the wider bound on a fleet that genuinely stops; three of
-its six tests go red under a one-term sabotage of `ProgressProbe#recordFleetProgress`, so its green
-is not vacuous. A replay-and-watch-it-go-green check was deliberately NOT used as the evidence -
+`NoProgressWindowIT` fires the detector at the wider bound on a fleet that genuinely stops, and
+pins the calibrated numbers themselves so a later edit to the constant cannot pass silently. Its
+firing assertions go red under a one-term sabotage of `ProgressProbe#recordFleetProgress` - stub it
+to `return false` and re-run the class - so its green is not vacuous. A replay-and-watch-it-go-green check was deliberately NOT used as the evidence -
 the crossing is probabilistic even on a fixed seed, and a window widened to infinity would produce
 the same green. That is `RebalanceDwellToggleIT`'s argument, reused rather than rediscovered.
+
+## What the widening now tolerates - the strongest argument against it, stated
+
+An independent cross-model review of the change put it plainly, and it is right: **a genuine
+fleet-wide stall of 31 to 60 seconds, with thousands of records outstanding and no other detector
+firing, now passes this scenario.** That is not a side effect - it is the change. The 30s bound
+bought that sensitivity and paid for it with a false red several times a day on a required lane, and
+the evidence above says every crossing anyone has watched was the false kind.
+
+Two things bound the risk, and neither removes it:
+
+- **A stall does not stop at 60 seconds.** Nine firings drained; the shape a real wedge would take is
+  flat forever, which crosses any finite window. What the widening loses is the ability to catch a
+  wedge *early*, not the ability to catch one.
+- **The fleet-wide counter was never the instrument for the finer cases anyway** - one wedged member
+  or one wedged partition hides behind healthy siblings in an aggregate count, whatever the window.
+  Those have their own owners: `INSTANCE_STALL` and
+  [`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md).
+
+**What would retire the caveat** is the measurement this change did not make: the benign pause
+distribution on the hosted runner class, with an armed deterministic real-stall control beside it.
+Until someone takes it, 60s rests on thirteen desktop replays.
 
 ## What this does NOT close
 
@@ -174,6 +209,27 @@ the same green. That is `RebalanceDwellToggleIT`'s argument, reused rather than 
 - **The autopsy still prints `violations (0)` beside a fleet-level firing** -
   [`test-chaos-autopsy-omits-fleet-violations.md`](test-chaos-autopsy-omits-fleet-violations.md),
   still live, and reproduced again on the runs above.
+- **Nothing fast asserts that a chaos scenario WIRES the probe it means to.** `NoProgressWindowIT`
+  pins the seam and the calibrated values; delete `ChaosChurnStormIT`'s
+  `.withNoProgressWindow(...)` line and only a real chaos run would notice - and the replays above
+  say the crossing fires roughly once in thirteen, so it could hide for a long time. This is not
+  this change's doing: every fast probe test in the suite
+  (`RebalanceDwellToggleIT`, `InstanceStallProbeIT`, `DiagnosticQuietCapIT`, `ChaosConductorPlanIT`)
+  drives a seam directly and none pins a scenario's configuration call. Named here because a review
+  found it and nothing else tracks it; the cheap options are an ArchUnit-style source assertion or a
+  package-private accessor a scenario-setup test can read.
+- **The defect-class sweep's one surviving candidate, on this same scenario: `REBALANCE_DWELL` is
+  still ARMED here.** W4 and W5 both disable it because their own churn crosses it with no member
+  being a zombie; W1 is where it stays armed, and it has fired here anyway - `ChaosChurnStormIT`
+  with `rebalanceDwell=15602ms` against a 15000ms bound, seed `989468380938115993`, on a
+  documentation-only commit
+  ([run 32321963226](https://github.com/astubbs/parallel-consumer/actions/runs/32321963226/job/96285796525)),
+  and again at `15392ms` and `15482ms` in
+  [`bug-857-family.md`](bug-857-family.md). Crossings of 2.6-4.0% are this class's whole signature.
+  **It is NOT settled by this note and is not touched by this change**, because the deciding
+  experiment is a different one - measure the dwell distribution on this scenario the way the pause
+  distribution was measured above, rather than reason from the resemblance. Recorded here because
+  nothing else tracks it; naming it is not a verdict on it.
 
 **That experiment no longer rests on a single seed - every row in the table above is one**, and the
 table is where the set lives, so a sentence here does not restate it (an earlier version of this

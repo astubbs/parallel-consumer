@@ -281,6 +281,15 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
 
     private long lastCount = -1;
     private Instant lastAdvance = Instant.now();
+    /**
+     * The sampler's clock, so {@code NoProgressWindowIT} can drive {@link #sampleProgress} without
+     * spending wall time. Production reads {@link Instant#now()} and nothing else changes: the field
+     * exists because the ONLY thing that can catch the sampler ceasing to consult
+     * {@link #recordFleetProgress} is a test that runs the sampler, and every other test here drives
+     * the decision method directly - a gap two independent reviews of astubbs/parallel-consumer#499
+     * found at the same time.
+     */
+    private volatile Supplier<Instant> clock = Instant::now;
     private Instant rebalanceDwellStart = null;
     /**
      * The group state the dwell sampler last read, handed to {@link UncommittedCompletionDetector} so
@@ -398,7 +407,16 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * consumed count look like the tail and the detector silent for reasons the test never intended.
      */
     static ProgressProbe forSeamTest(String groupId, String topic, long expectedTotal) {
-        return new ProgressProbe(null, groupId, topic, () -> 0L, expectedTotal);
+        return forSeamTest(groupId, topic, expectedTotal, () -> 0L);
+    }
+
+    /**
+     * As above, with a live consumed-count supplier - for a test that drives {@link #sampleProgress}
+     * itself rather than {@link #recordFleetProgress}, which is the only way to catch the sampler
+     * ceasing to consult the decision at all.
+     */
+    static ProgressProbe forSeamTest(String groupId, String topic, long expectedTotal, LongSupplier totalConsumed) {
+        return new ProgressProbe(null, groupId, topic, totalConsumed, expectedTotal);
     }
 
     /** Observer mode never gates - violations are autopsy material only (ambient flight recorder). */
@@ -497,16 +515,36 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         }
     }
 
-    private void sampleProgress() {
+    /**
+     * Package-private, not private, so a test can run the sampler itself - see {@link #clock}. Called
+     * only from {@link #sampleLoop} in production.
+     */
+    void sampleProgress() {
         long now = totalConsumed.getAsLong();
         if (now != lastCount) {
             lastCount = now;
-            lastAdvance = Instant.now();
+            lastAdvance = clock.get();
             return;
         }
-        if (recordFleetProgress(now, Duration.between(lastAdvance, Instant.now()))) {
-            lastAdvance = Instant.now(); // re-arm so a genuine stall reports once per window, not per sample
+        if (recordFleetProgress(now, Duration.between(lastAdvance, clock.get()))) {
+            lastAdvance = clock.get(); // re-arm so a genuine stall reports once per window, not per sample
         }
+    }
+
+    /** Test seam for {@link #clock} - see that field for why it exists. */
+    ProgressProbe withClock(Supplier<Instant> testClock) {
+        this.clock = testClock;
+        this.lastAdvance = testClock.get();
+        return this;
+    }
+
+    /**
+     * The window this probe is actually configured with. Exists so a test can assert that a SCENARIO
+     * wired the bound it meant to, rather than re-applying the constant to a probe of its own and
+     * asserting about that - the second half of the same gap {@link #clock} names.
+     */
+    Duration noProgressWindow() {
+        return noProgressWindow;
     }
 
     /**

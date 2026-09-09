@@ -195,12 +195,19 @@ jobs:
           # inside the lane's own run-time distribution fails unrelated PRs at random, which is the
           # false red this repo treats as worse than no signal. 60 is headroom, not a measurement.
           #
-          # RAISING IT DOES NOT DELETE THE COST EVIDENCE, which is the usual objection and the reason
-          # this comment exists: the drifted durations are recorded in
-          # docs/inflight/test-lincheck-lane-open-items.md, and codecov keeps this lane's wall clock
-          # per commit (bin/inflight.mjs codecov slow), so the drift stays readable without a
-          # required check going red to report it. WHY the lane got 2-3x slower is still
-          # undiagnosed and still open in that note.
+          # RAISING IT DOES NOT DELETE THE COST EVIDENCE, which is the usual objection and the
+          # reason this comment exists. Codecov records per-test duration per commit, for longer
+          # than a CI log is kept, so the drift stays readable without a required check going red to
+          # report it - and it names the cost rather than totalling it:
+          #   bin/inflight.mjs codecov test stressMustNotRediscoverTheCheckpointThreeTear
+          # That ONE test was recorded between 292s and 720s across six commits on 2026-09-09, which
+          # is most of the old 20-minute cap on its own. WHY it moves that much is undiagnosed and
+          # open in docs/inflight/test-lincheck-lane-open-items.md, which carries the job-level
+          # durations too.
+          #
+          # WHAT IT COSTS: bin/lincheck-test.sh has no internal cap, so this job timeout is the only
+          # backstop against a genuine hang, and the runner minutes a hang can burn go from 20 to 60.
+          # That is the trade being made, named rather than discovered later.
           - suite: lincheck
             name: "Lincheck"
             cmd: "bin/lincheck-test.sh"
