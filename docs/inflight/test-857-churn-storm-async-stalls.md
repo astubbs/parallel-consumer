@@ -231,6 +231,15 @@ if it did. That is the same error the Class 2 entries made for a year.
 
 ## ANSWERED, 2026-08-28: it DRAINS. This line is a timing proxy, not a wedge.
 
+> STATUS: **BEYOND ARGUMENT 2026-09-09, on this section's own terms.** It asked for "a second firing,
+> ideally on a different seed". There are now nine firings on four seeds, all drained, none flat - the
+> six below plus `5650361238717170909` (this file's 2026-09-08 sighting), `3717713223451201639` on the
+> hosted runner, and `87978223167568` replayed locally. The scenario's no-progress window was widened
+> to 60s on that verdict.
+> [`test-no-progress-window-may-not-transfer-to-w1.md`](test-no-progress-window-may-not-transfer-to-w1.md)
+> **owns the verdict, the replay grid and which term moved**; what is added here is only that this
+> section's stated bar was met.
+
 The discriminator ran, on the first firing. Consumed after the violation: flat at 94878 for three
 samples, then 99665, 100138, and on past the 100000 target - while inFlight fell from 114 to 67.
 **It stalled, held, recovered and completed.**
