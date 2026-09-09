@@ -210,10 +210,13 @@ than carry a standalone abort.
 - [x] **astubbs#446** - merged 2026-09-09. Lift the announcement plan onto master, so the announcement is not being
   written from a branch nobody merges.
 - [ ] The tag-day artefact checks in the section of that name below.
-- [ ] Amend the release claim, not the standard, for what is still open. `release-0.6.0.0.md`
-  already names astubbs#44 as the exception (2026-09-07) and the poisoned-transaction wedge as the
-  second (2026-09-09); say which confluentinc#857 mechanisms are closed and which sightings remain
-  unattributed.
+- [ ] Amend the release claim, not the standard, for what is still open (astubbs#498, in review,
+  carries it). `release-0.6.0.0.md` already names astubbs#44 as the exception (2026-09-07) and the
+  poisoned-transaction wedge as the second (2026-09-09); astubbs#498 adds the "claim as published"
+  paragraph there, and its changelog section on consumption stopping after a rebalance says which
+  confluentinc#857 mechanisms are closed, each with its PR, and names the one arm still
+  unattributed: a member that stops answering the coordinator during a churn storm. Ticks when
+  astubbs#498 merges.
 - [ ] Post the drafted issue responses (`ls docs/inflight/issue-response-*.md` and
   [`release-0.6.0.0-issue-response-drafts.md`](release-0.6.0.0-issue-response-drafts.md)) in the
   pre-release sweep [`docs/releasing.md`](../releasing.md) describes.
