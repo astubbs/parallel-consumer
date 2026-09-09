@@ -89,7 +89,16 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * resumed costs nothing. Do not use it to decide whether to pause or resume.
      */
     public boolean isSubscriptionsPausedForBackPressure() {
-        return consumerManager.getPausedPartitionSize() > 0;
+        return getPausedPartitionCountForBackPressure() > 0;
+    }
+
+    /**
+     * As {@link #isSubscriptionsPausedForBackPressure()}, but the count rather than the predicate - what an
+     * operator-facing report needs in order to say how far back-pressure has actually gone, rather than only that it
+     * has. Same cache, same staleness, same restriction on what it may be used to decide.
+     */
+    public int getPausedPartitionCountForBackPressure() {
+        return consumerManager.getPausedPartitionSize();
     }
 
     private final AbstractParallelEoSStreamProcessor<K, V> pc;

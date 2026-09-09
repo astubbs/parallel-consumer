@@ -494,6 +494,27 @@ failure of a PR changing nothing this lane compiles.
 this job timeout is the only backstop against a genuine hang, and the runner minutes a hang can burn
 go from 20 to 60.
 
+<!-- post-merge: checked-begin - the sightings below name astubbs/parallel-consumer#497 rather than
+     a branch, and read in the past tense, which is how they are meant to read once it has landed -->
+### Corroborating sightings from astubbs/parallel-consumer#497, same afternoon
+
+Recorded here rather than as a second diagnosis - the section above owns the cause and the ruling.
+These are four more data points from one branch, and what makes them worth keeping is that they are
+**the same branch on both sides of the bound**:
+
+- Cancelled at the 20-minute cap **three times**, each in a run where every other job was green.
+- **Passed at 19m57s** in between, with nothing changed that the lane can see.
+
+Same harnesses, same diff, opposite outcomes - which is the runner-speed diagnosis above stated from
+one branch instead of across many. Ruled out for that PR specifically, so the possibility was
+eliminated rather than assumed: no harness in the lane reaches the code it changed -
+`WorkManagerLincheckTest`'s operations are `handleFutureResult` and the revoke/reassign pair, and no
+harness mentions the record-intake gate at all.
+
+The decision this sighting left open - larger budget, smaller `iterations(...)`, or split the suite -
+was settled by the ruling above, and by the same reasoning: the budget is not the lever.
+<!-- post-merge: checked-end -->
+
 ## Disproven, recorded so it is not re-raised
 
 The claim that core's `<argLine>@{argLine} ${lincheck.jvm.args}</argLine>` feeds a literal
