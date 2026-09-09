@@ -197,6 +197,11 @@ than carry a standalone abort.
 
 ### Tier 3 - release plumbing, then tag
 
+- [ ] **Finalise the `== 0.6.0.0` changelog section as the release notes** (astubbs#498, in
+  review). `docs/releasing.md` says the section is generated at release time, but there is no
+  generator in `bin/`, so astubbs#498 is that generation done by hand from the commit log and the
+  release document. Until it merges the section is working text; after it, the section is what
+  the release page carries.
 - [ ] **Post the release page body by hand.** `release.yml` tries to build the notes from the
   `CHANGELOG.adoc` section, but its heading match is exact and the section is headed
   `== 0.6.0.0 (unreleased)`, so on master it matches nothing and falls back to generated notes.
@@ -496,9 +501,11 @@ Context worth inheriting on the day:
 - **`README.adoc` is generated - never hand-edit it.** Edit `src/docs/README_TEMPLATE.adoc` and
   regenerate with `./mvnw -N asciidoc-template:build`. A PR that touches only the template has
   silently not changed the published README.
-- **`CHANGELOG.adoc`'s `== 0.6.0.0` section is working text until the tag** - it is regenerated from
-  the commit log, so do not quote it as the release notes, and when agents work in parallel exactly
-  one holds that file; it is the highest-collision file in the repo.
+- **`CHANGELOG.adoc`'s `== 0.6.0.0` section is working text until astubbs#498 merges** - that PR
+  rewrites it from the commit log as the release notes (tier 3), so until then do not quote it as
+  the release notes, and when agents work in parallel exactly one holds that file; it is the
+  highest-collision file in the repo. Anything that merges after astubbs#498 with a release-note
+  line has to be folded into the section by hand before the tag.
 - **The README's trademark wording claims nothing it does not have.** The 2026-08-11 branding
   rename put "KAFKA ... has been licensed for use by Antony Stubbs and contributors" at the top of
   the README and in the attribution section - the Foundation's boilerplate for a licence nobody
