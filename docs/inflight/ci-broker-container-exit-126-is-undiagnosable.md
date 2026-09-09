@@ -35,12 +35,14 @@ is still held open for writing when the container execs it, so the entrypoint ne
 what exit 126 ("command cannot execute") is reporting. Grep the log for `Text file busy` before
 anything else; finding it settles the diagnosis without reading a stack trace.
 
+<!-- post-merge: checked-begin -->
 **Sightings.** astubbs#347, two heads, 2026-08-25 (the first record, above). astubbs#496,
 2026-09-09, GitHub-hosted `Integration Tests`, job `102314718122`: `Text file busy` then exit 126 at
 `BrokerIntegrationTest.<clinit>`, one class failing slowly and the rest instantly. The control arm
-held - the same lane had passed on that branch's previous head, and the delta was one merge of master
-whose only executable files were unrelated to the broker or the lane. Re-run of the failed job only.
-Add a line here rather than a count: what matters is which branches and which heads, not how many. Exit **126** is "command cannot execute", so the broker's entrypoint never ran - a
+held - that lane had passed on the PR's previous head, and the delta was one merge of master whose
+only executable files were unrelated to the broker or the lane. Re-run of the failed job only.
+Add a line here rather than a count: what matters is which PRs and which heads, not how many.
+<!-- post-merge: checked-end --> Exit **126** is "command cannot execute", so the broker's entrypoint never ran - a
 Docker/runner-level fault, not a Kafka configuration or product problem, and the wait-strategy
 timeout is a consequence of it rather than a second cause.
 
