@@ -310,8 +310,12 @@ box means the v6 action for that line is done, not that the defect is closed:
   resolves positions. The only PC-owned route to that branch was astubbs#337's defect, now pinned
   by a four-shape round-trip test. What remains under astubbs#162 is the **false-truncation WARN**:
   a new group, and every partition recovered through the foreign-metadata path, logs "truncating"
-  having truncated nothing. Misdirection operators may alert on; cheap once decided, and it wants
-  the owner's call on message and level. Name it in the release note; not a data risk.
+  having truncated nothing. Misdirection operators may alert on; not a data risk. **Decided
+  2026-09-09:** absent commit data does not warn - a distinct INFO line saying no committed offset
+  was found and the partition starts from the polled offset, no truncation branch taken, and the
+  WARN kept for the genuine truncation cases. An agent is building it red-first on its own PR
+  (branch `fix/162-absent-commit-data-warns`); it may close astubbs#162 if all three defects behind
+  the warning string are then settled.
 - **Never reproduced:** the commit-response timeout (confluentinc#809, confluentinc#833). astubbs#471
   (merged) is the first experiment that hunts it; its first runs could not reach the timeout because
   the instance stalled first - see the intake-stall item in the confluentinc#857 list above, which
@@ -606,7 +610,7 @@ these get answered.
 - confluentinc#843 (astubbs#178) - same key on two threads across a rebalance. A contract question,
   wait-for-info; [`core-178-key-order-across-a-rebalance.md`](core-178-key-order-across-a-rebalance.md).
 - confluentinc#546 (astubbs#162) - truncating state; the replay branch is refuted (astubbs#484, merged),
-  the false-truncation WARN is what remains and wants an owner decision.
+  the false-truncation WARN is decided (INFO, no truncation branch) and being built on its own PR.
 - confluentinc#551 (astubbs#164) - batching not as expected; the fork verified the over-request as
   astubbs#311, no PR.
 - confluentinc#887 (astubbs#189) - a poison record re-forms the identical batch on every retry;
