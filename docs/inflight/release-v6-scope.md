@@ -16,6 +16,51 @@ the burn-down that gets from here to the tag, because the answer to "is it enoug
 register that was `release-0600-blockers.md` is folded in below as the tag-day checks, so the
 release has one note to burn down rather than three.
 
+## Every v6 note, and what each one owns
+
+**This file is the source of truth for the release.** astubbs#197 is the tracking *handle* - the
+thing to link from PRs, mirrors and upstream threads - and since 2026-09-09 its body says only that
+and points here; nothing is maintained on the issue. Everything else below owns one thing:
+
+| Where | Owns |
+|---|---|
+| [`release-v6-scope.md`](release-v6-scope.md) (this file) | Scope, the burn-down, every open decision, the tag-day checks, the upstream survey |
+| [`release-0.6.0.0.md`](release-0.6.0.0.md) | The published wording: the release-note draft and the breaking-change record; "is it ready?" |
+| [`release-0.6.0.0-issue-response-drafts.md`](release-0.6.0.0-issue-response-drafts.md) | Issue replies held until the release note exists; posted in the after-it-ships sweep |
+| [`release-three-mirrors-label-undecided.md`](release-three-mirrors-label-undecided.md) | Three closed mirrors that may belong under the `0.6.0.0` label - owner's call |
+| [`release-groom-1-0-train-issue.md`](release-groom-1-0-train-issue.md) | The 1.0 train issue, groomed against the roadmap data after v6 ships |
+| [`release-experimental-module-records.md`](release-experimental-module-records.md) | Feature records for the modules that do NOT ship in v6 (deferred, 2026-09-07 decision) |
+| [`process-candidate-ranking.md`](process-candidate-ranking.md) | Candidate ranking; its "what gates v6" section is a pointer here |
+| [`bug-857-family.md`](bug-857-family.md) | The register the release note's confluentinc#857 wording is read from |
+| [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) | The flake register - a tag needs a green master |
+| [`docs/releasing.md`](../releasing.md) | The mechanics: strip `-SNAPSHOT`, merge, `publish.yml` deploys and tags, `release.yml` cuts the GitHub release from the curated changelog section |
+| [`docs/data/roadmap.yaml`](../data/roadmap.yaml), [`docs/data/module-maturity.yaml`](../data/module-maturity.yaml) | The claims rendered into the README; the maturity value is a tag-day recheck |
+| `CHANGELOG.adoc` | Generated from the commit log at release time; working text until the tag |
+| [`docs/plans/2026-07-28-release-pipeline-hardening.md`](../plans/2026-07-28-release-pipeline-hardening.md) | The dated plan for the publish pipeline |
+| `release-v6-announcement.md` (on astubbs#446, not on master) | The announcement theme and plan; follows v6 |
+| `release-v6-merge-order.md`, `release-0600-blockers.md` (deleted) | Folded into this file on 2026-09-08; `git show 2c874ecac:docs/inflight/release-0600-blockers.md` for the history |
+
+**What astubbs#197's body carried before it was shed, and where each item now lives** - kept so
+nothing on the issue was lost:
+
+- Its two "blocking" artefact claims - the changelog saying the Kafka client stays on 3.9.1, and the
+  README roadmap pointing readers at upstream's tracker - are fixed on master; the tag-day checks
+  below carry the recheck.
+- Its "not blocking" list: the permanent load-factor warning is closed (astubbs#155); the MDC item
+  was refuted by the astubbs#476 sweep, below; the unknown-magic-byte hazard was fixed twice
+  (astubbs#217, astubbs#207); `release.yml` now publishes the curated changelog section as the
+  GitHub release body.
+- Its after-it-ships list is in the tag-day section below, with one addition it held that this file
+  did not: one announcing comment each on upstream confluentinc#880, confluentinc#885 and
+  confluentinc#907 - the deliberate exception to one-backlink-per-issue, because a shipped artefact
+  is actionable. Nothing is downloadable until then: no Maven Central artefact, no tag, no GitHub
+  release, and astubbs#186 and astubbs#195 are asking where to get it (astubbs#188 is closed).
+- Its six-mirror triage is the ranking note's content, absorbed below under the astubbs#476 sweep:
+  astubbs#155, astubbs#169 and astubbs#170 merged; astubbs#161 and astubbs#181 are decisions listed
+  below; astubbs#177 is closed.
+- Its one comment records that astubbs#207's squash closed the issue by mistake on 2026-09-02 and
+  it was reopened; it closes with the tag and not before.
+
 ## The decisions - 2026-09-07 by the owner, confirmed and extended 2026-09-08
 
 **v6 is a bug release. It is overdue. The bar is the one already stated** in
@@ -582,8 +627,10 @@ the tracker is astubbs#197.
   default. Do not "fix" either.
 - **After it ships:** the mirrors that describe 0.6.0.0 in the future tense need the real
   coordinate (`gh issue list -R astubbs/parallel-consumer --label 0.6.0.0` finds them);
-  astubbs#186, astubbs#188 and astubbs#195 close with a pointer to the release; and the
-  `issue-response-*.md` drafts are posted in the same sweep.
+  astubbs#186 and astubbs#195 close with a pointer to the release (astubbs#188 already is); one
+  announcing comment each on upstream confluentinc#880, confluentinc#885 and confluentinc#907, the
+  deliberate exception to one-backlink-per-issue; the `issue-response-*.md` drafts are posted in the
+  same sweep; and astubbs#197, the tracking handle, closes with the tag.
 
 Context worth inheriting on the day:
 
