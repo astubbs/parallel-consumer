@@ -184,14 +184,39 @@ jobs:
           # layer along. If the probe stops firing, the lane is broken and must go red until it is fixed;
           # docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md owns why.
           #
-          # 7m42s measured on ubuntu-latest (about 2m50s locally), nearly all of it
+          # COST: 7m42s when this entry was written (about 2m50s locally), nearly all of it
           # WorkManagerLincheckTest, whose inverted arm cannot stop early and always pays its full
           # bound. bin/lincheck-test.sh's header owns the five flags that each fail silently on their
           # own.
+          #
+          # THE TIMEOUT IS 60, NOT SIZED TO THAT 7m42s, and deliberately so (owner ruling,
+          # 2026-09-09). Successful runs of this lane had drifted to 12m55s-19m58s by then and one
+          # crossed the old cap of 20 - and because Lincheck is a REQUIRED merge context, a cap
+          # inside the lane's own run-time distribution fails unrelated PRs at random, which is the
+          # false red this repo treats as worse than no signal. 60 is headroom, not a measurement.
+          #
+          # THE CAUSE IS RUNNER SPEED, NOT THE CODE. Nearly all of this lane is
+          # WorkManagerLincheckTest's checkpoint-three tear stress arm - a fixed
+          # iterations-times-invocations budget that cannot stop early, so its wall clock is a
+          # function of runner CPU speed alone. On 2026-09-09 the job ran 5-8.5 min until ~01:00
+          # UTC, 12-20 min until ~04:00 on EVERY branch including docs-only ones, then 7-8 min
+          # again. Codecov records that one test between 292s and 720s on commits an hour apart:
+          #   bin/inflight.mjs codecov test stressMustNotRediscoverTheCheckpointThreeTear
+          # A change that appears on branches sharing no code and reverses on a clock is ordinary
+          # ubuntu-latest variance. 20 was 2.6x the priced cost, which that variance exceeds; 60 is
+          # sized so it no longer does. Do NOT re-price the test's budget instead - that class's own
+          # comment records the starve-and-count procedure the number came from, and lowering it
+          # because CI was slow is not that procedure.
+          # docs/inflight/test-lincheck-lane-open-items.md carries the durations and the reproduce
+          # commands.
+          #
+          # WHAT IT COSTS: bin/lincheck-test.sh has no internal cap, so this job timeout is the only
+          # backstop against a genuine hang, and the runner minutes a hang can burn go from 20 to 60.
+          # That is the trade being made, named rather than discovered later.
           - suite: lincheck
             name: "Lincheck"
             cmd: "bin/lincheck-test.sh"
-            timeout: 20
+            timeout: 60
             scenarios: ""
             shard: ""
 

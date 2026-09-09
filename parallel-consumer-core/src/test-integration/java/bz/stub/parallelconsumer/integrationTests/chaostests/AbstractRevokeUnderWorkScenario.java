@@ -237,8 +237,10 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 // (30s max.poll.interval) and firing on them would mask the Class 2 measurement
                 .disableRebalanceDwellViolation()
                 // storm-phase rebalances can legitimately pause much of the fleet for up to the
-                // eviction horizon (all of it, under the eager assignor); widen the watermark beyond it
-                .withNoProgressWindow(Duration.ofSeconds(60));
+                // eviction horizon (all of it, under the eager assignor); widen the watermark beyond
+                // it. The number is shared with W1, which reaches the same bound by a different
+                // mechanism - ProgressProbe#CHURN_NO_PROGRESS_WINDOW carries both.
+                .withNoProgressWindow(ProgressProbe.CHURN_NO_PROGRESS_WINDOW);
 
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, heavySleep(), MAX_FLEET)
                 .seed(seed.getValue())

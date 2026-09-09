@@ -1,8 +1,8 @@
-# The 30s fleet-progress window may not transfer to W1 either - a possible third instance
+# The 30s fleet-progress window does not transfer to W1 either - the third instance, replayed 2026-09-09
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
-<!-- inflight-vetted: 2026-09-09 - the calibration asymmetry is still unchanged in the tree (ProgressProbe's NO_PROGRESS window is still 30s and TAIL_SLACK still 500, AbstractRevokeUnderWorkScenario still calls withNoProgressWindow(Duration.ofSeconds(60)), ChaosChurnStormIT still takes the default), and the 2026-09-09 row below is new evidence. PROPOSED partly-true, for the owner: "What would settle it" and "Nobody has replayed that seed, and no control arm exists" are out of date, and this note never took delivery of the answer. The deciding experiment HAS been run with the diagnostic engaged, on two seeds that are not in this table, and both DRAINED - test-857-churn-storm-async-stalls.md's "CONFIRMED, 2026-08-28" section replayed 9086872209853284830 six times and drained six for six, and its "Sighting, 2026-09-08" section replayed 5650361238717170909 from 93487 to 101070/100000 at an outstanding count of 6513 against a TAIL_SLACK of 500, larger than every row here. That second sighting says outright that this note owns the question; the pointer was written and never followed. The 2026-09-09 row is a third drain-side observation and the first on the gate's own configuration, but it is the weak form - no diagnostic, and churn stopped 10s after the firing. Owner-gated because the impact is misdirection: the demote-or-widen call this now supports is not an agent's to make. What the note says against it still stands as written - it forbids acting on the pattern-matching argument, and these are replays, not that argument -->
+<!-- inflight-vetted: 2026-09-09 - REPLAYED, and the widening has landed: ChaosChurnStormIT now calls withNoProgressWindow(ProgressProbe.CHURN_NO_PROGRESS_WINDOW), the 60s bound AbstractRevokeUnderWorkScenario already held, and NoProgressWindowIT fires the detector at that bound on a fleet that genuinely stops - its firing assertions go red under a one-term sabotage of recordFleetProgress (stub it to return false and re-run the class), so the green is not vacuous. PROPOSED for the owner, and only this: whether the note is now CLOSED or kept open on the residue named in its 2026-09-09 verdict section - the demote-or-widen call was owner-gated on the misdirection impact, so the marker is not moved by the agent that ran the replays. The verdict itself is evidence, not judgement: thirteen replays of every seed in this table plus the five in bug-857-family.md, all with -Dchaos.diagnoseStallRecovery=true; one fired and DRAINED, twelve were VOID, none stayed flat. Nine firings across four seeds have now been watched past detection and nine drained -->
 
 Two chaos detectors have now been found asserting a timing bound that the scenario's own disturbances
 legitimately cross - `CLASS2_STALL` (demoted to an observation) and `REBALANCE_DWELL` (disarmed in
@@ -17,7 +17,7 @@ for it either:
 
 | Source | Observation | Seed |
 |---|---|---|
-| astubbs/parallel-consumer#348, in `test-chaos-autopsy-omits-fleet-violations.md` | `fleet consumed count stuck at 98804/100000 for 30s (bound 30s)` | not recorded |
+| astubbs/parallel-consumer#348, in `test-chaos-autopsy-omits-fleet-violations.md` | `fleet consumed count stuck at 98804/100000 for 30s (bound 30s)` | **`2575991864395313898`** <!-- corrected 2026-09-09: this cell read "not recorded" from the day the row was written. The seed is in the note the row cites, under `chaos seed:`, and in bug-857-family.md's 2026-08-25 entry against the same job id -->|
 | `bug-857-family.md`'s fourteenth sighting (from astubbs/parallel-consumer#347) | `NO_PROGRESS, fleet stuck at 97896/100000` - 30s against a 30s bound | **`1521825993857670757`** |
 | Torture soak 2026-08-29, cycle 51 (`bin/torture-overnight.sh`) | `fleet consumed count stuck at 97386/100000 for 30s (bound 30s)` | **`87978223167568`** |
 | Torture soak 2026-08-29, cycle 166 | `fleet consumed count stuck at 97297/100000 for 30s (bound 30s)` | **`106062481479157`** |
@@ -74,6 +74,11 @@ drained is unknown, as for every row above it.
 
 ## Why it is NOT yet called a third instance
 
+> STATUS: **SUPERSEDED 2026-09-09** by the verdict section below - the replays were run and a control
+> arm exists. The paragraph is kept verbatim because it is the standard this note set for itself and
+> the verdict has to be read against it: it forbade acting on the *pattern-matching* argument, and
+> what settled it was replays rather than that argument.
+
 Nobody has replayed that seed, and no control arm exists. The alternative reading is a genuine
 fleet-wide stall, which is exactly what this detector is for and would be the most interesting
 outcome in the whole family. **Do not demote or widen it on the argument above** - that argument is
@@ -81,10 +86,150 @@ pattern-matching, and the same reasoning applied to `CLASS2_STALL` took a replay
 
 ## What would settle it
 
+> STATUS: **SUPERSEDED 2026-09-09** - this is what was run, and the section below is what it returned.
+
 Replay `1521825993857670757` with the fleet allowed to continue past detection, and read whether
 consumption resumes. Drains -> calibration, and W1 wants the same widening W4 has. Stays flat ->
 this is the fleet-level stall the family has been hunting, and it is a much better lead than any
 `CLASS2_STALL` seed in [`bug-857-family.md`](bug-857-family.md).
+
+## ANSWERED, 2026-09-09: it DRAINS. This is the third instance, and the window is the term that moves.
+
+**Every seed in the table above, plus five more the table never carried, replayed with
+`-Dchaos.diagnoseStallRecovery=true` so the fleet ran on past detection.** The prediction was written
+before the first run: the drains reading predicted every firing drains, the stall reading predicted
+at least one stays flat.
+
+| Seed | Source | Verdict |
+|---|---|---|
+| `1521825993857670757` | this table | VOID - passed, no firing |
+| `87978223167568` | this table | **DRAINED** - fired at 97633/100000, ran on to 100742 with full key coverage |
+| `106062481479157` | this table | VOID |
+| `2512758007437016849` | this table | VOID |
+| `8064312734196519950` | this table | VOID |
+| `8637977624689145046` | this table | VOID |
+| `3717713223451201639` | this table | VOID on this replay; its 2026-09-09 CI firing DRAINED - the last row of the sightings table above |
+| `5650361238717170909` | this table | VOID on this replay; it DRAINED on its 2026-09-08 one |
+| `2575991864395313898` | the row above said "not recorded" - it was | VOID |
+| `3086917415748208232` | `bug-857-family.md`, ninth sighting | VOID |
+| `8603691233664838594` | `bug-857-family.md`, tenth sighting | VOID |
+| `8746139315096023802` | `bug-857-family.md`, 2026-08-26 | VOID |
+| `1630088991107806597` | `bug-857-family.md`, 2026-09-03 - *"the next experiment"* it nominates by name | VOID |
+
+**One firing, no flats, and the VOIDs are not evidence for either reading** - the void-replay rule.
+A seed that does not fire has not been asked the question. What the VOIDs do say is that these seeds
+are one-offs, which
+[`../solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md`](../solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md)
+predicted in as many words, and it is why the seed hunt this note prescribed was the weaker half of
+the instrument.
+
+**With the prior arms this line already had, nine firings have now been watched past detection and
+nine drained, on four seeds, zero flat.** The six of `9086872209853284830` and the 2026-09-08 replay
+of `5650361238717170909` are in
+[`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md), which **owns that
+mechanism**; the 2026-09-09 hosted-runner recovery is the last row of the table above; the ninth is
+`87978223167568` here. That answers what its `## ANSWERED, 2026-08-28` section asked for outright -
+*"a second firing, ideally on a different seed, is what would put it beyond argument."*
+
+## Which term the drains crossed - and it is not the one the sightings pointed at
+
+This note read the firings as sitting "just past the slack". They do not: they sit **just past the
+window**, and a long way past the slack. That distinction chooses the fix.
+
+- **The window is crossed by seconds.** The violation line can only ever report the bound plus the
+  probe's detection latency, so it discriminates nothing - the arithmetic
+  [`../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
+  sets out. So the fleet's own pause length was measured instead, off the `[diagnose]` consumed
+  series and **restricted to the region where the detector is armed** (outside `TAIL_SLACK`), which
+  makes it readable on runs that PASSED - where nothing else records it. Across the thirteen replays
+  the armed peak reached **32.1s**, with three further runs at 28.2-30.1s that did not fire. The 30s
+  bound sits inside the ordinary distribution of this scenario's own churn, and three passing runs
+  missed it by under two seconds.
+- **The slack would have to be crossed by an order of magnitude.** The firings sit 1196-6513 records
+  short against a `TAIL_SLACK` of 500. A slack wide enough to excuse them is several percent of the
+  backlog, and would blind the detector to the "stall with THOUSANDS remaining" its own constant's
+  javadoc names as the defect signature. Raising it was the wrong lever, and this is why.
+
+**So the window moves, to the 60s W4 already holds** - `ProgressProbe#CHURN_NO_PROGRESS_WINDOW`,
+named rather than repeated now that two scenarios reach the same number by two different mechanisms.
+60s is 1.9x the measured armed peak - the same METHOD `REBALANCE_DWELL_BOUND` was sized by, a
+multiple of a measured healthy peak, though at a smaller multiple than the 2.2x its own javadoc
+records.
+
+**Be exact about where the 60 comes from, because it is the caveat on "does this fix it".** The
+VALUE is inherited from W4, which chose it for a different mechanism. What was measured on W1 is
+that 60s is *enough* for it - and measured on ONE DESKTOP, over thirteen replays, one of which
+fired. **The hosted runner's own distribution is unmeasured**, and it cannot be recovered from the
+sightings: every one of them reports `for 30s (bound 30s)`, which is the bound plus detection
+latency and says nothing about how long the pause would have run. So the expected outcome is that
+this lane stops failing on `NO_PROGRESS`, not that it is proven to. If it fires again at 60s, the
+number to take is the armed pause peak from a `-Dchaos.diagnoseStallRecovery=true` replay, not
+another guess.
+
+**It is a re-calibration and not a deletion, and that is asserted rather than argued.**
+`NoProgressWindowIT` fires the detector at the wider bound on a fleet that genuinely stops, and
+pins the calibrated numbers themselves so a later edit to the constant cannot pass silently. Its
+firing assertions go red under a one-term sabotage of `ProgressProbe#recordFleetProgress` - stub it
+to `return false` and re-run the class - so its green is not vacuous. A replay-and-watch-it-go-green check was deliberately NOT used as the evidence -
+the crossing is probabilistic even on a fixed seed, and a window widened to infinity would produce
+the same green. That is `RebalanceDwellToggleIT`'s argument, reused rather than rediscovered.
+
+## What the widening now tolerates - the strongest argument against it, stated
+
+An independent cross-model review of the change put it plainly, and it is right: **a genuine
+fleet-wide stall of 31 to 60 seconds, with thousands of records outstanding and no other detector
+firing, now passes this scenario.** That is not a side effect - it is the change. The 30s bound
+bought that sensitivity and paid for it with a false red several times a day on a required lane, and
+the evidence above says every crossing anyone has watched was the false kind.
+
+Two things bound the risk, and neither removes it:
+
+- **A stall does not stop at 60 seconds.** Nine firings drained; the shape a real wedge would take is
+  flat forever, which crosses any finite window. What the widening loses is the ability to catch a
+  wedge *early*, not the ability to catch one.
+- **The fleet-wide counter was never the instrument for the finer cases anyway** - one wedged member
+  or one wedged partition hides behind healthy siblings in an aggregate count, whatever the window.
+  Those have their own owners: `INSTANCE_STALL` and
+  [`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md).
+
+**What would retire the caveat** is the measurement this change did not make: the benign pause
+distribution on the hosted runner class, with an armed deterministic real-stall control beside it.
+Until someone takes it, 60s rests on thirteen desktop replays.
+
+## What this does NOT close
+
+- **Whether this detector MISSES real failures** is untouched, and a wider window can only make it
+  more pressing. It is [`../testing.md`](../testing.md)'s "Experiment runners" row for
+  `bin/exp-audit-stall-detector-silence.sh`, open and reopened 2026-08-31.
+- **The lane can still go red on this scenario without `NO_PROGRESS`.** The 2026-09-08 replay of
+  `5650361238717170909` failed on the outer completion wait with `consumed=101070/100000` and the
+  ledger still short of full key coverage - the per-shard gap
+  [`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md) owns. Widening
+  the window does not touch it, so this is not "the chaos lane is fixed".
+- **The autopsy still prints `violations (0)` beside a fleet-level firing** -
+  [`test-chaos-autopsy-omits-fleet-violations.md`](test-chaos-autopsy-omits-fleet-violations.md),
+  still live, and reproduced again on the runs above.
+- **Nothing fast asserts that a chaos scenario WIRES the probe it means to.** `NoProgressWindowIT`
+  pins the seam and the calibrated values; delete `ChaosChurnStormIT`'s
+  `.withNoProgressWindow(...)` line and only a real chaos run would notice - and the replays above
+  say the crossing fires roughly once in thirteen, so it could hide for a long time. This is not
+  this change's doing: every fast probe test in the suite
+  (`RebalanceDwellToggleIT`, `InstanceStallProbeIT`, `DiagnosticQuietCapIT`, `ChaosConductorPlanIT`)
+  drives a seam directly and none pins a scenario's configuration call. Named here because a review
+  found it and nothing else tracks it; the cheap options are an ArchUnit-style source assertion or a
+  package-private accessor a scenario-setup test can read.
+- **The defect-class sweep's one surviving candidate, on this same scenario: `REBALANCE_DWELL` is
+  still ARMED here.** W4 and W5 both disable it because their own churn crosses it with no member
+  being a zombie; W1 is where it stays armed, and it has fired here anyway - `ChaosChurnStormIT`
+  with `rebalanceDwell=15602ms` against a 15000ms bound, seed `989468380938115993`, on a
+  documentation-only commit
+  ([run 32321963226](https://github.com/astubbs/parallel-consumer/actions/runs/32321963226/job/96285796525)),
+  and again at `15392ms` and `15482ms` in
+  [`bug-857-family.md`](bug-857-family.md). Crossings of 2.6-4.0% are this class's whole signature.
+  **It is NOT settled by this note and is not touched by this change**, because the deciding
+  experiment is a different one - measure the dwell distribution on this scenario the way the pause
+  distribution was measured above, rather than reason from the resemblance. Recorded here because
+  nothing else tracks it; naming it is not a verdict on it.
 
 **That experiment no longer rests on a single seed - every row in the table above is one**, and the
 table is where the set lives, so a sentence here does not restate it (an earlier version of this
