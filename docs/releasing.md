@@ -47,13 +47,13 @@ has **shipped**:
 | Section | State |
 |---|---|
 | `== 0.5.x` and below | Hand-written legacy from before the fork, and shipped. **Frozen.** |
-| `== 0.6.0.0` - the release being cut | **Not shipped, so not settled.** Whatever sits under this heading now is working text. It will be **generated at release time**, replacing what is there, and frozen only once 0.6.0.0 ships. **How it is generated is not decided** - see below. |
+| `== 0.6.0.0` - the release being cut | **Generated on 2026-09-09 for the tag, from the commit log and the release notes in `docs/inflight/`, and frozen once 0.6.0.0 ships.** Until the tag, the one edit it takes is a correction for work that lands after generation. |
 | Every release after it | Same treatment: generated when that release is cut, frozen once it ships. |
 
 Two readings this rules out. **`0.6.0.0` is not on the hand-written side of the line** - generation
-does not start at some later release. And **the current contents of `== 0.6.0.0` are not what v6
-will publish** - do not cite them as the release notes, and do not treat the section as appendable
-just because the release has not gone out. It is not yours to add to *or* to trust.
+does not start at some later release. And **the section is not appendable** just because the release
+has not gone out: it was generated once, on 2026-09-09, and a fix merging between that and the tag
+earns a correction to the generated text, not a per-PR entry. It is not yours to add to.
 
 The policy removes the file that every PR used to touch - it appeared in 30 of the last 30 master
 commits, dragging the generated `README.adoc` with it - and removes the ordering problem where an
