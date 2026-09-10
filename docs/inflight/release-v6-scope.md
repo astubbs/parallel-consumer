@@ -85,7 +85,7 @@ named "never shipping" as the failure mode to avoid.
 **Prior art this supersedes, and what it still gets right.** A merge-order note from 2026-08-08,
 `release-v6-merge-order.md`, sat on the never-pushed branch `docs/v6-merge-order`; that branch was
 merged into astubbs#475 and the file removed there, so the note is in history
-(`git log --all --oneline -- docs/inflight/release-v6-merge-order.md`) and nowhere live. It ordered a far larger v6: the
+(`git show cea38921d:docs/inflight/release-v6-merge-order.md`, a commit on astubbs#475's branch that a squash merge does not carry into master - GitHub keeps it under `refs/pull/475/head`) and nowhere live. It ordered a far larger v6: the
 transactional-atomicity trio first, then the loss and confluentinc#857 fixes, then **new surface**
 (the health check, MDC, the mock consumer in the main jar), then **new opt-in modules** (the
 dashboard, the Streams and Connect proofs of concept) and the examples rewrite, on the argument that
