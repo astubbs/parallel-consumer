@@ -734,7 +734,7 @@ The three are not a severity ladder. Park is about *this record*, dead-letter is
 
 NOTE: `connect` opens nothing. It follows Kafka's own client, which takes its configuration at construction and reaches the cluster on its first poll: the clients here are built when you call `start()`, and a definition written but never started constructs neither.
 
-*A route binds one topic to one function.* Registering a second route for a topic already routed is refused at definition time -- a second function over the same topic is a second definition with its own consumer group, which is Kafka's own model for it and gives each function its own progress, retries and parked set -- as is naming one of your own routed topics as a dead-letter destination, or supplying a deserialiser in the connection properties -- every check runs before a connection is opened, and every message names the topic or the setting.
+*A route binds one topic to one function.* Registering a second route for a topic already routed is refused at definition time, as is naming one of your own routed topics as a dead-letter destination, or supplying a deserialiser in the connection properties -- every check runs before a connection is opened, and every message names the topic or the setting.
 
 The format-named routes are sugar: `json`, `avro`, `protobuf`, `bytes` and `string`, each with the topic and, where the format needs one, the type. The key defaults to a string. `json(topic)` with no class at all yields the payload as a map of field names to values, so a topic nobody has a class for can still be consumed and read by field name.
 
