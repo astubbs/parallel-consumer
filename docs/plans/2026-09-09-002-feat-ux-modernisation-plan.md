@@ -4,7 +4,7 @@ type: feat
 date: 2026-09-09
 topic: ux-modernisation
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: requirements-only
+artifact_readiness: implementation-ready
 product_contract_source: ce-brainstorm
 execution: code
 ---
@@ -14,9 +14,12 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** A developer who once used Parallel Consumer and is deciding whether to come back can define a working consumer from the README alone, and the README's own example proves it on every build: typed handling per topic, a retry limit, a dead-letter destination and filtering, in one screen of code (the budget is forty lines), without opening the javadoc.
-- **Means:** A new, modern entry point that is a facade over today's engine, shipped beside the existing API as an equal. Its behaviours are specified as record outcomes so the engine can take each one over natively after the God-class decomposition, without the surface moving. The README-minimal set is the entry point, routes and types (R1 to R6), outcomes and policy (R7 to R12), export (R13 to R15), park in place (R27), the handle (R17), the README and the API rule (R21, R26), the sandbox (R33) and the quickstart from R36; every other requirement is parity or beyond-parity work a later milestone carries. The first milestone is chosen in planning by implementation cost and risk, not by this list (R30): the owner wants a subset that can ship in the next release beside the bug-fix line, something to show at low risk, and the README-minimal set is the upper bound of that subset, not its definition.
+- **Means:** A new, modern entry point that is a facade over today's engine, shipped beside the existing API as an equal, as a package in core with the sandbox as its own module (KTD1). Its behaviours are specified as record outcomes so the engine can take each one over natively after the God-class decomposition, without the surface moving. The README-minimal set is the entry point, routes and types (R1 to R6), outcomes and policy (R7 to R12), export (R13 to R15), park in place (R27), the handle (R17), the README and the API rule (R21, R26), the sandbox (R33) and the quickstart from R36; every other requirement is parity or beyond-parity work a later milestone carries. The first milestone is chosen in planning by implementation cost and risk, not by this list (R30): the owner wants a subset that can ship in the next release beside the bug-fix line, something to show at low risk, and the README-minimal set is the upper bound of that subset, not its definition.
 - **Product authority:** This document, for the surface and its behaviours. The work sits under STRATEGY.md's Flexibility track; shipping it requires that document's audience and Tracks sections to record the returning developer and the surface work. The engine-native implementation of each outcome is separately planned work that must honour the behaviours fixed here. The Kafka Streams work (astubbs#255) and the language proxy (astubbs#242) are constraints on this surface, not scope. This surface precedes the self-scaling track (astubbs#333) because per-route admission is cheaper to define once here, where the route is the unit, than to retrofit after a per-instance controller has shipped; if the order reverses, R23's admission target becomes the controller's per-route sub-target and nothing else here changes.
-- **Open blockers:** None. Every open item is deferred to planning.
+- **Open blockers:** None. Every open item is deferred to planning or to implementation, each named in Outstanding Questions or the Planning Contract.
+- **Execution profile:** Milestone A (U1 to U6) is the next-release candidate and touches no engine code; later milestones each wait on a named prerequisite (Planning Contract, Sequencing).
+- **Stop conditions:** Stop and re-plan if a settled decision is invalidated by the code (park through the retry-delay hook cannot be made silent, or the engine's batch assembly cannot be restricted to one route), if the compatibility gate reports a break on the classic API, or if a milestone's prerequisite PR is closed unmerged.
+- **Tail ownership:** The README regeneration, the CONCEPTS.md entries, the STRATEGY.md audience line and the inflight note's prerequisite table are part of the milestone that triggers them, not follow-up work.
 
 ---
 
@@ -97,7 +100,7 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 
 **Park and export**
 
-- R27. A parked record stays incomplete in the offset map, holds no worker, and is not re-attempted until its park delay elapses, which is how scheduled retry (astubbs#234) is delivered: a park policy may declare a delay and a number of cycles together, after each delay the record is attempted once more and after the declared cycles it parks without delay, or no delay, meaning parked until resumed or exported; a permanent decode failure (R12) never takes the delay path, and the parked view reports a record's cycles beside its attempts (R28). Otherwise it waits until an operator resumes it through the handle (R28), or a restart re-delivers it (R10's per-assignment rule). Parked records count against the partition's offset-map payload, never against the intake load gate. When a partition's payload reaches the declared percentage of Kafka's commit-metadata cap, seventy by default, its parked records are exported oldest-first to the declared dead-letter destination until the payload is below that percentage; with no destination declared, the partition stops at the cap's pressure threshold as it does today: it fetches nothing more and takes no buffered record above its highest succeeded offset, and since a parked record never completes by itself, nothing shrinks the payload until an operator resumes or exports through the handle (R28). A declared age bound exports a parked record before the topic's retention could delete it; when no bound is declared and retention removes a parked record before it is resumed or exported, the record is lost: the engine drops it from the map when the partition's fetch position passes it, counts it (R19) and the parked view reports it (R28), and the documentation says a production route parks with a destination or an age bound. An instance may declare export-immediately, which is the classic dead-letter queue. The setting is a whole percentage of the cap, spelled `exportAtOffsetPayloadPercent` on the API, and its ceiling is the engine's pressure threshold minus five points: the threshold is seventy-five percent today, at which the partition stops taking work, so a percentage at or above it is never reached, and five points below it is the margin the owner chose. The default is that ceiling, seventy, and a declared value above it is refused at definition time. Making the threshold a per-instance setting is a small-tier engine change planning may take instead of holding the ceiling down. Both numbers are provisional on today's encoding: exact continuous offset encoding (astubbs#237, confluentinc#53) makes the payload size precise, so the default and the ceiling are revisited when it lands, and `docs/inflight/core-237-continuous-offset-encoding.md` carries that reminder. The parked set is queryable and metered (R28), and the documentation states that consumer-group lag reads as stuck at the oldest parked record.
+- R27. A parked record stays incomplete in the offset map, holds no worker, and is not re-attempted until its park delay elapses, which is how scheduled retry (astubbs#234) is delivered: a park policy may declare a delay and a number of cycles together, after each delay the record is attempted once more and after the declared cycles it parks without delay, or no delay, meaning parked until resumed or exported; a permanent decode failure (R12) never takes the delay path, and the parked view reports a record's cycles beside its attempts (R28). Otherwise it waits until an operator resumes it through the handle (R28), or a restart re-delivers it (R10's per-assignment rule). Parked records count against the partition's offset-map payload, never against the intake load gate. When a partition's payload reaches the declared percentage of Kafka's commit-metadata cap, seventy by default, its parked records are exported oldest-first to the declared dead-letter destination until the payload is below that percentage; with no destination declared, the partition stops at the cap's pressure threshold as it does today: it fetches nothing more and takes no buffered record above its highest succeeded offset, and since a parked record never completes by itself, nothing shrinks the payload until an operator resumes or exports through the handle (R28). A declared age bound exports a parked record before the topic's retention could delete it; when no bound is declared and retention removes a parked record before it is resumed or exported, the record is lost, and today's engine does not notice: it prunes incomplete offsets only inside a polled batch's range and at partition bootstrap, so a parked record below the fetch position stays indexed until a rebalance re-bootstraps the partition; pruning it when the log start passes it, counting it (R19) and reporting it in the parked view (R28) are engine work from the small tier, and the documentation says a production route parks with a destination or an age bound. An instance may declare export-immediately, which is the classic dead-letter queue. The setting is a whole percentage of the cap, spelled `exportAtOffsetPayloadPercent` on the API, and its ceiling is the engine's pressure threshold minus five points: the threshold is seventy-five percent today, at which the partition stops taking work, so a percentage at or above it is never reached, and five points below it is the margin the owner chose. The default is that ceiling, seventy, and a declared value above it is refused at definition time. Making the threshold a per-instance setting is a small-tier engine change planning may take instead of holding the ceiling down. Both numbers are provisional on today's encoding: exact continuous offset encoding (astubbs#237, confluentinc#53) makes the payload size precise, so the default and the ceiling are revisited when it lands, and `docs/inflight/core-237-continuous-offset-encoding.md` carries that reminder. The parked set is queryable and metered (R28), and the documentation states that consumer-group lag reads as stuck at the oldest parked record.
 - R28. The parked set is queryable per route, retrieved from the handle by the route's name, with an instance-wide roll-up under a name of its own so the per-route accessor is never overloaded. A route's parked view spans every partition by default and answers, per partition on request: the parked count, the oldest parked record's age, the offset-map payload as a fraction of the cap, an estimated time to reach the export percentage from the current park rate and payload growth, and the count of unresolved records (parked, waiting and in flight), which is the honest lag figure beside the broker's offset distance; and it lists parked records with topic, partition, offset, key, attempt count, last failure, parked-since time, and the count of records held behind it under key ordering, which is the blast-radius figure the retry-economics note ranks by. Two commands act on a parked record or a partition's parked set: resume, which re-attempts now, and export, which sends to the dead-letter destination now. The same figures are published as metrics (R19): parked count, oldest parked age and estimated time to export per topic-partition as gauges, the payload fraction per partition as a gauge, exported records as a counter, and records lost to retention as a counter. Queries and commands are data on the wire (R18), and the embedded dashboard (astubbs#268) consumes them for its blocked-frontier panel rather than reading engine state itself.
 - R29. A route may declare a circuit breaker: a failure-rate threshold over a window of attempts, and an open duration. A failed attempt is a throw (R9), a transient decode failure (R12), or a park or export on exhaustion, so a dependency that is down opens the route on its first records rather than after each has exhausted its retries. When the rate crosses the threshold the route opens: its records are withheld without counting an attempt for the open duration, then a declared number are let through half-open, and the route closes when they all succeed or re-opens for another open duration when any of them fails. Other routes are unaffected: the breaker declared on the definition is the per-route default of R6, copied into each route, and no breaker state is shared between routes. Open, half-open and closed transitions are counted (R19) and the state is on the route's handle (R28). The policy is data. Retries and the breaker answer different failures: a retry is one record's transient failure, the breaker is a dependency that is down.
 - R13. An exported record carries the original key bytes, value bytes and headers unchanged, plus provenance headers naming the source topic, partition, offset, timestamp, attempt count, the time of the last failure and the last failure's class and message. The header names take the 2022 draft's prefix and names (astubbs#8: `pc-failure-count`, `pc-last-failure-at`, `pc-last-failure-cause`, `pc-partition`, `pc-offset`) and add the source topic and timestamp the draft lacked; the draft's reaction enum maps onto this document's outcomes, SHUTDOWN to stop (R24), SKIP to filtered (R8), DLQ to export. A destination shared by several routes carries records from all of them, so its consumer reads raw bytes and dispatches on the source-topic provenance header; a route may declare its own. A destination that is one of the instance's own routed topics is refused at definition time, since the instance would consume its own exports. Provenance headers are appended after the copied user headers, their names are reserved, and where a user header shares a name the last occurrence is the framework's and is authoritative.
@@ -115,12 +118,12 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 
 - R20. The classic API's public surface is unchanged and the API-compatibility gate passes with no allowed-breakage entries added for this work; the classic API's existing unit and integration suites pass unchanged as the behavioural regression beside the gate.
 - R30. The implementation plan is cut into milestones ordered by how much of the engine each needs to change, and every requirement is assigned to a tier; a requirement whose parts need different amounts of engine change is listed in each tier with the part named, so that no entry reads as the whole requirement: **tiny** is facade-only, composed from today's public primitives with no engine edit; **small** is a cosmetic engine change, a new accessor, a new overload, a getter over state the engine already holds, a validation message, with no behaviour change; **medium** is a contained engine change on an existing seam, no God-class cut; **large** is engine-native work that waits for the decomposition. Planning picks the first milestone by implementation cost and risk (user-directed, 2026-09-10: "the first cut size depends on implementation cost and complexity; I am looking for some set that can sneak into v6 to show people something interesting rather than a plain bug fix, at low risk"); the README-minimal set the Goal Capsule names is its upper bound, and a candidate to cost first is the entry point with typed routes, the outcomes with park in place, and the sandbox, with no export, breaker, batch mode or handle operations. The rest of the tiny tier is a later batch that gates nothing, and each milestone ships on its own. The expected tiering, for planning to confirm against the code rather than inherit:
-  - Tiny: the entry point, routes and types (R1 to R6), the sink terminal (R35), the example set over the sandbox (R36), the classic-API change list as a constraint (R34), the sandbox and generator over the shipped mock consumer (R33), instance-wide batch mode over the existing batch option (R32, size only), outcomes and the filter value (R7 to R9), the retry limit and per-route policy (R10, R11), the three-way decode result (R12), export on the produce-many path (R13 to R15, with R14 refusing a destination under the transactional commit mode until producer recovery lands), the park observer (R16), the handle and console sink (R17), the wire constraint (R18), park in place as the retry queue with the re-attempt withheld, with the age bound and export-immediately as its triggers (R27), per-route admission as best-effort limits over a pool sized to their sum (R23), the per-route breaker (R29), stop through the existing close paths (R24), the API rule and README (R21, R26).
+  - Tiny: the entry point, routes and types (R1 to R6), the sink terminal (R35), the example set over the sandbox (R36), the classic-API change list as a constraint (R34), the sandbox and generator over the shipped mock consumer (R33), instance-wide batch mode over the existing batch option (R32, size only, and only on a definition with one route, since an engine batch mixes topics), outcomes and the filter value (R7 to R9), the retry limit and per-route policy (R10, R11), the three-way decode result (R12), export on the produce-many path (R13 to R15, with R14 refusing a destination under the transactional commit mode until producer recovery lands), the park observer (R16), the handle and console sink (R17), the wire constraint (R18), park in place as the retry queue with the re-attempt withheld, with the age bound and export-immediately as its triggers (R27), per-route admission as best-effort limits over a pool sized to their sum (R23), the per-route breaker (R29), stop through the existing close paths (R24), the API rule and README (R21, R26).
   - Small: the classic API's produce overloads with separate output types (R34); the accessors the parked-set query needs over state the engine already holds, the payload fraction above all (R28), and export at the payload fraction, which reads that accessor (R27); per-route admission as deferral back to the retry queue with no attempt counted, the static guarantee (R23); the handle's health adoption when astubbs#226 lands.
   - Medium: per-route ordering at the shard-key seam (R6); the classic API's poll-path policy as a third arm on the existing seam (R25); seek and runtime route changes as control-thread commands (R31); the remaining batch defect, the extra in-flight request (astubbs#311), and the maximum-wait release (R32); the parked-set gauges and commands where they need engine behaviour rather than an accessor, resume and export (R19, R28); lifting the transactional-export refusal once producer recovery lands (R14, astubbs#225); the compatibility gate (R20).
   - Large: the engine-native form of each outcome (R22); per-route batching, same-key batches and per-record outcomes inside a batch (R32); parked state carried in commit metadata so a restart does not re-attempt; adaptive per-route admission inside the engine, which the self-scaling work owns (R6, R23).
 - R31. The handle exposes the consumer operations users have asked for, as commands that are data on the wire (R18): seek a partition to an offset, to its beginning, or to its end (astubbs#174, astubbs#246; the safe-exposure ask of astubbs#158 is answered by these being the only consumer operations the handle offers), and add or remove a route while the instance runs (astubbs#245), under the same definition-time checks as at start. A seek runs on the control thread between polls: the partition's in-flight work is abandoned and those records are delivered again from the new position, and its offset map is reset. A seek on a partition that holds parked records, or the removal of a route whose partitions hold them, is refused unless the command says what becomes of them, export first or discard, since a reset map would silently drop a set the operator was told they could resume or export (R28); the alternative, carrying the parked set across the seek with an operation epoch that fences late completions, is engine work for the medium tier that planning may choose instead. Removing a route drains its in-flight work first.
-- R32. A route may declare batch mode: the function receives up to a declared number of records, released early when a declared maximum wait elapses (astubbs#165), and optionally only records sharing one key (astubbs#145). Each record in a batch reaches its own outcome, so one record's failure parks or retries that record alone (astubbs#189); the batch's produced records and filtered values are per record. When the batch function throws, the outcomes it reported before the throw stand, and every record it had not reported counts one attempt and retries (R9, R10). Of the classic API's batch defects (astubbs#311), the unvalidated size landed on master on 2026-09-09 and the extra in-flight request remains, fixed in the engine before batch mode ships on the fluent API; astubbs#164 is the separate batching-behaviour report, checked against batch mode when it ships.
+- R32. A route may declare batch mode: the function receives up to a declared number of records, released early when a declared maximum wait elapses (astubbs#165), and optionally only records sharing one key (astubbs#145). In the tiny tier batch mode is instance-wide and accepted only on a definition with one route, because the engine batches records across topics; from the medium tier a batch holds one route's records and batch mode is declared per route. Each record in a batch reaches its own outcome, so one record's failure parks or retries that record alone (astubbs#189); the batch's produced records and filtered values are per record. When the batch function throws, the outcomes it reported before the throw stand, and every record it had not reported counts one attempt and retries (R9, R10). Of the classic API's batch defects (astubbs#311), the unvalidated size landed on master on 2026-09-09 and the extra in-flight request remains, fixed in the engine before batch mode ships on the fluent API; astubbs#164 is the separate batching-behaviour report, checked against batch mode when it ships.
 - R33. A sandbox module runs any definition with no broker and no test environment: the same facade over the mock consumer that already ships in the main artefact, with a generator that produces records into the definition's source topics at a declared rate, hydrating each route's consumed type with realistic random data through a random-object filler, and a console sink by default. The definition does not change between sandbox and broker; only the start call does, and the generator can be replaced by hand-written records. The generator accepts an optional bound, a duration or a record count, after which the sandbox shuts down; without one it runs until the handle is closed. The README example and the generator's default types use the parcel-logistics domain the core example already established, per the executable-progression note, so the sandbox is the first stage of that progression rather than a separate demo. This is also the broker-free test kit, since a test drives the same sandbox with its own records and asserts on outcomes and the parked set. The sandbox serves the classic API too: it hands a definition built on the options builder the same mock consumer and producer with the generator behind them, so the classic API itself gains nothing (R34), and every existing example in the repository, in the core module and the Vert.x, Reactor and Mutiny modules, starts in the sandbox by default and reaches a broker only when told to. (user-directed, 2026-09-10: "all the existing examples also need to be modified to, by default, use the sandbox system, so sandbox needs to work with the classic API too".)
 - R34. The classic API changes only by addition: no existing method changes shape or meaning, and the compatibility gate (R20) proves it. What is added: overloads of the produce methods that take separate produced key and value types, so a classic user gets astubbs#243 without migrating; the deserialisation-failure policy on the poll path (R25); the remaining batch defect fixed (R32); and, once the engine owns park and export natively, a thrown terminal signal in the 2022 draft's shape (astubbs#8), so a classic user can park or export a record from the function they already have. Anything that would need an existing classic method to change belongs to the fluent API instead. The list is closed; a new addition to it is a decision recorded here, not a convenience.
 - R35. A route's terminal may be a sink: a functional interface that receives the route's value, or its record, and returns on success or throws to retry, so it is the route's one function under KD3 and needs nothing on the wire. The console sink is one sink; a Kafka topic is another; a user's own is a lambda. A Connect sink-connector task wrapped as a sink lets a route write to an external system through a connector that already exists, so the user writes no client for it. That is a different audience from the Connect-on-PC work (astubbs#240, spike astubbs#269), which is for people configuring connectors and running this library transparently underneath; the two share the connector task as the unit and this interface as the seam, and nothing else (user-directed, 2026-09-10).
@@ -316,12 +319,12 @@ ParallelConsumerOptions.builder()
 - AE18. **Covers R13, R27.** Given AE2's definition with a dead-letter destination and the default fraction, when parked records push a partition's payload past seventy percent of the metadata cap, then the oldest parked records on that partition are exported until the payload is below the fraction, each holding the original bytes and headers plus provenance headers reporting its attempts, and each exported record's source offset commits.
 - AE21. **Covers R29.** Given a route with a breaker of half the last hundred attempts and a thirty-second open duration, when sixty of the last hundred attempts fail, then the route opens, its next records are withheld for thirty seconds with no attempt counted, other routes keep processing, the transition is counted, and after thirty seconds five probe records run; the route closes when they all succeed and re-opens for another thirty seconds when one of them fails.
 - AE22. **Covers R31.** Given a running instance, when the handle seeks one partition to its beginning, then that partition's in-flight records are abandoned and delivered again from offset zero, its offset map is reset, other partitions are untouched; and when that partition holds parked records, then the plain seek is refused and the seek that says export-first exports them before the reset; and when a route is added at runtime for a new topic, then its records are processed under its own declared policy without a restart, and adding a route for an already-routed topic is refused as at definition time.
-- AE23. **Covers R32.** Given a route in batch mode with a size of one hundred and a maximum wait of one second, when forty records arrive and no more follow, then the function receives the forty after one second; and when one record in a batch throws, then that record alone is retried and later parked while the other records' outcomes stand.
+- AE23. **Covers R32.** Given a route in batch mode with a size of one hundred and a maximum wait of one second, when forty records arrive and no more follow, then the function receives the forty after one second (from the medium tier); and when one record in a batch throws, then that record alone is retried and later parked while the other records' outcomes stand (from the large tier).
 - AE24. **Covers R33.** Given the README's first example started in the sandbox with a generator of fifty orders per second, when it is started with a ten-second bound on the generator and no broker reachable, then about five hundred generated orders with realistic field values have passed through the route, the console sink has printed them, and switching the start call to a broker changes nothing else in the definition; and the example's always-failing route, with the retry limit and delay it declares, has one record parked before the bound.
 - AE25. **Covers R7.** Given a route that declares no produced types and a route with a dead-letter destination, when a record on the first returns normally, then its outcome is succeeded and it is counted once; and when a record on the second exhausts its retries and is later exported, then it is counted once as parked and once as exported and never as succeeded or filtered, and at no point does one record appear under two of succeeded, filtered and parked.
 - AE26. **Covers R33.** Given an existing classic-API example from one of the integration modules, when it is started with no broker reachable, then it runs in the sandbox against generated records of its declared types and prints them, and its definition differs from the broker form only in the start call.
 - AE20. **Covers R28.** Given AE2's definition and three parked records on one partition, when the handle is queried, then it reports three parked on that partition with the oldest one's age and the partition's payload fraction, lists the three with offset, key, attempts, last failure and parked-since; and when resume is issued for one of them, then that record is attempted again at once and, on success, its offset commits and the parked count reads two.
-- AE19. **Covers R27.** Given AE2's definition with a dead-letter destination and export-immediately declared, when a record exhausts its retries, then it is exported at once with provenance reporting three attempts and its source offset commits, which is the classic dead-letter queue.
+- AE19. **Covers R27.** Given AE2's definition with a dead-letter destination and export-immediately declared, when a record exhausts its retries, then it is exported on the next dispatch, one retry delay after exhaustion, with provenance reporting three attempts and its source offset commits, which is the classic dead-letter queue.
 - AE3. **Covers R14, from the medium tier once the refusal is lifted.** Given the transactional commit mode and AE19's definition, when a consumer reads the dead-letter topic with read-committed isolation and the source consumer group's committed offset is observed separately, then the exported record becomes visible only together with that committed source offset; and when the export send fails after the record was produced but before the offset committed, then no source offset for it is committed and no exported record becomes visible.
 - AE4. **Covers R15.** Given a non-transactional commit mode, AE19's definition, and a dead-letter destination that is unreachable, when a record exhausts its retries, then the record stays parked, its offset does not commit, its attempt count is unchanged, the user function is not run again, the instance keeps processing other records, and the export is re-attempted after the retry delay; and when the instance is restarted before the export succeeds, the record is re-polled, the user function runs again and its attempt count starts from zero; that restart clause is the facade-era floor of R22, which the engine-native form may tighten to a durable count.
 - AE5. **Covers R8, R19.** Given a route whose function returns the filtered outcome for records with a missing field, when a thousand records are consumed of which a hundred lack the field, then the succeeded count is nine hundred, the filtered count is one hundred, all offsets commit, and nothing is produced for the hundred.
@@ -331,10 +334,10 @@ ParallelConsumerOptions.builder()
 - AE9. **Covers R17.** Given a running handle inside try-with-resources, when the block exits with work in flight, then in-flight work drains up to the configured drain timeout before the consumer closes, and offsets for drained work commit.
 - AE10. **Covers R20.** Given the classic API's public surface before this work, when the API-compatibility gate and the classic API's existing unit and integration suites run after it, then the gate passes with no new allowed-breakage entry and the suites pass unchanged.
 - AE11. **Covers R22.** Given AE1 to AE9 (AE4 without its restart clause), AE12, AE18, AE19 and AE25 passing against the facade, when the engine implements park and export natively behind the same definition, then they pass unchanged.
-- AE12. **Covers R16.** Given a park observer registered, when a record exhausts its retries and is parked, then the observer is invoked exactly once with that record, the last failure and the attempt count, after the last attempt and before the record's offset commits; and when the record's decoding had failed permanently, the observer fires once with an attempt count of zero and its record is the raw envelope of the original bytes and headers.
+- AE12. **Covers R16.** Given a park observer registered, when a record exhausts its retries and is parked, then the observer is invoked exactly once per assignment with that record, the last failure and the attempt count, after the last attempt and before the record's offset commits; and when the record's decoding had failed permanently, the observer fires once with an attempt count of zero and its record is the raw envelope of the original bytes and headers.
 - AE17. **Covers R6, R23.** Given two routes with concurrency limits of ten and one hundred, both with backlogs larger than their limits, when the instance runs, then at most ten records of the first and one hundred of the second are in flight at once, and draining the first route's backlog does not change the second's throughput; the throughput clause holds from the small tier (R23, R30).
 - AE16. **Covers R13.** Given an input record carrying a header named like a provenance header, when it is exported, then the exported record holds the user's header first and the framework's last, and a consumer reading the last occurrence gets the framework's value.
-- AE14. **Covers R24.** Given an instance declaring the drain-first close path, when a record's function reports stop while other records are in flight, then no new record is started, the in-flight records complete and their offsets commit, the stopping record's offset does not commit, the instance closes, and after a restart the stopping record is delivered again.
+- AE14. **Covers R24.** Given an instance declaring the drain-first close path, when a record's function reports stop while other records are in flight, then no new record is started, the in-flight records complete and their offsets commit, the stopping record is not invoked again during the drain and its offset does not commit, the instance closes, and after a restart the stopping record is delivered again.
 - AE15. **Covers R25.** Given the classic API with the skip-and-log policy declared, when the poll returns a record its configured deserialiser rejects, then that record is logged and its offset advances, the poll thread stays alive, and the next record is processed; and given the default policy, the instance fails as it does today.
 - AE13. **Covers the one-screen objective.** Given the README's first example, a two-route definition with JSON and Avro values, a filtered outcome on one route, a retry limit and a dead-letter destination, when it is compiled in CI, then it compiles and its definition fits within the forty-line budget named in the Goal Capsule.
 
@@ -456,16 +459,18 @@ Every capability the comparable library offers is listed with its disposition he
 
 **Deferred to Planning**
 
-- Whether the fluent API is a new module or a package in the core module, and its name.
-- The exact chain syntax and the handle's method names; a compiled README example is the arbiter, and a cheap sketch settles it.
-- How the facade multiplexes routes into the engine's single function, and how it recovers the route for a record under a pattern subscription; a pattern subscription needs either a default route or a definition-time refusal.
-- Metric names and tags for R19, consistent with the existing metrics, and whether the outcome counters extend the existing processed and failed record meters or sit beside them.
-- Whether the health surface (astubbs#226) has landed, and how the handle adopts it.
-- Which connection properties the facade owns outright and which pass through to route deserialisers, such as schema-registry settings.
-- Whether parked state is carried in the commit metadata, through the opaque-rider work (astubbs#460), so that a restart does not re-attempt a parked record; without it R10's per-assignment rule applies.
-- The measured per-record cost of the raw-bytes consumer against a typed one at zero processing time, on the client version PC targets (Dependencies).
-- Metric names for the R28 gauges, beside the existing incomplete-offset gauges, and whether the parked list is served from a control-thread snapshot as the dashboard plan prescribes.
-- Whether a stop (R24) also leaves the consumer group promptly on the consumer-commit modes, where today's close sends no leave-group request.
+**Deferred to implementation** (each owned by a unit in the Planning Contract)
+
+- The exact chain syntax and the handle's method names; a compiled README example is the arbiter (U6). The entry point's spelling is part of this: `ParallelConsumer` collides with core's interface of that name, so U2 picks the name with the example.
+- The exact metric names and tags for R19 and the R28 gauges, beside the existing meters, under the new subsystem KTD8 names (U4, U10).
+- The measured per-record cost of the raw-bytes consumer against a typed one at zero processing time (U3, printed not asserted).
+- Whether a stop (R24) also leaves the consumer group promptly on the consumer-commit modes, where today's close sends no leave-group request (U4).
+
+**Deferred to later milestones**
+
+- Whether the health surface (astubbs#226) has landed, and how the handle adopts it (small tier).
+- Parked state in the commit metadata through the opaque-rider work (astubbs#460), so that a restart does not re-attempt a parked record; until then R10's per-assignment rule applies (U19).
+- A default route for pattern subscriptions; this version refuses them at definition time (KTD2).
 - Whether park in place replaces STRATEGY.md's existing marketing lead or sits beneath it as the capability line (Success Criteria, KD14): the owner's call when the fluent API ships and that document is updated; raised in review round three.
 
 ### Issues this work relates to
@@ -530,3 +535,599 @@ Fork numbers; each mirror links its upstream original. A row says how the issue 
 - The README anchors `skipping-records` and the circuit-breaker section, for today's documented behaviour and the DIY composition.
 <!-- file-refs: N/A - the four docs/inflight and docs/plans sources above live on unmerged branches; print them with bin/inflight.mjs docs show, which searches every ref -->
 
+---
+
+## Planning Contract
+
+**Product Contract preservation:** changed: R27 (the retention clause now describes today's engine, which never notices a parked record retention removed, so the lost counter is engine work from the small tier) and R30/R32 (tiny-tier batch mode is accepted only on a one-route definition, since an engine batch mixes topics); clarified, no scope change: AE12 (once per assignment), AE14 (the stopping record is not re-invoked), AE19 (export lands on the next dispatch), AE23 (tier tags). All R, A, F and AE IDs are unchanged.
+
+### Key Technical Decisions
+
+- KTD1. **The fluent API is a package in core, `bz.stub.parallelconsumer.fluent`, and the sandbox is its own module.** One dependency gives a user both APIs, and there is no boundary to dissolve when the engine takes the outcomes over natively (KD2). The package is excluded from the API-compatibility gate while it incubates, since it will churn before it settles. The sandbox module targets Java 17 because every maintained generator library does, and core stays Java 8 bytecode. (session-settled: user-directed, 2026-09-10 - chosen over a published `parallel-consumer-fluent` module: a second artefact and a later merge buy nothing a gate exclusion does not.) Governs U1, U5, U6.
+- KTD2. **One engine function, a route table keyed by topic, raw bytes both ways.** The facade builds a `ParallelStreamProcessor<byte[], byte[]>` from an options builder it owns, subscribes to the union of route topics with its own rebalance listener chained before the user's, and dispatches each record by `topic()` to its route, which deserialises, runs the function, and serialises produced records. Pattern subscriptions are refused at definition time in this version; a default route is a later addition. Governs U2, U3.
+- KTD3. **The facade never holds a client field.** A pre-built consumer or producer (R1) goes straight into the options builder; the consumer must be typed `byte[]`/`byte[]` and unsubscribed, which the engine enforces. This keeps core's raw-client ArchUnit rule intact. Governs U2.
+- KTD4. **Park rides the retry-delay hook, and the facade keeps the attempt ledger.** The wrapper records its intent for a record before it throws, because the engine calls the retry-delay provider synchronously inside the failure path with the count already incremented; the provider then returns a far-future but representable delay for park, the remaining open duration for a breaker withhold, or the age bound for a timed export. The ledger is keyed by topic, partition and offset and cleared on revocation, which is R10's per-assignment rule. Every facade-originated throw extends the engine's retriable exception so it logs quietly. Governs U3, U7.
+- KTD5. **Export-immediately and the age bound are re-dispatches, not sends from the failure path.** On the dispatch after exhaustion the wrapper returns the export record instead of calling the function; the engine sends it on the produce-many path and commits. The payload-percentage trigger has no engine accessor today, so an explicit percentage is refused in the tiny tier with a message naming the tier, and the default is inert until U10 lands. Governs U3, U7, U10.
+- KTD6. **Stop is a marker throw plus a close from the handle's own thread.** A worker cannot close the engine it runs in, because close awaits the worker pool. The wrapper marks the record stopping with a far-future delay so a drain does not re-invoke it, and the handle closes on the declared path and records the reason so `awaitShutdown` can tell stop from close from failure. Governs U3, U4.
+- KTD7. **Format helpers resolve reflectively; only Jackson is declared, as optional.** Registry deserialisers are not on Maven Central, so `avro(...)` and `protobuf(...)` look up the deserialiser class by name on the user's classpath and refuse at definition time naming the missing library. The JSON helpers use Jackson through an optional dependency in core. Connection properties the facade owns (bootstrap, group, client serialisers) are consumed; every other key is passed to each route deserialiser's configure call unchanged. Governs U2.
+- KTD8. **Facade metrics go through the module.** The processor is constructed with a `PCModule` the facade builds, so outcome counters (tagged topic and outcome) and parked-set gauges (tagged topic and partition) register through `PCMetricsDef` under a new subsystem, following `PartitionState.initMetrics`. The parked list is a control-thread snapshot taken through the existing loop-end hook. Governs U4.
+- KTD9. **The sandbox plugs in through a start-with-runtime hook.** The fluent API exposes a runtime seam that supplies the clients; the sandbox module implements it with a subclass of the shipped mock consumer and Kafka's mock producer, and offers the same clients to the classic options builder. Core never depends on the sandbox. The generator uses Instancio for structure and Datafaker for field-name-aware leaf values, Avro's own `RandomData` for Avro schemas, and defers Protobuf to a later filler. Governs U5, U8.
+- KTD10. **Per-route admission is a permit per route over a pool sized to the sum, until deferral exists.** In the tiny tier a permit at the function boundary bounds each route and the wait is interruptible so close is never held; isolation is best-effort and documented (R23). The small tier replaces the wait with the verdict-free return of astubbs#295, so a record at a full route returns to scheduling with no attempt counted. Governs U7, U11.
+- KTD11. **Engine changes land as the smallest accessor that serves the facade.** The small tier adds, per partition, the last encoded payload length and a getter, a retry-now command for resume, a parked-list accessor, and the pause threshold as an instance option; each is a getter or a command over state the engine already holds, no behaviour change (R30). Governs U10.
+- KTD12. **Classic-API additions are new interface methods, proven additive by the gate.** Produce overloads with separate output types are new methods on the processor interface with a loosely typed producer path; the poll-path policy is a third typed arm beside the two that exist; each addition runs the compatibility gate before merge. Governs U9, U13.
+- KTD13. **Milestone A is the release candidate, and it touches nothing in core's engine.** Its units create the fluent package, the sandbox module and the README signal; the one core edit outside the package is the optional Jackson dependency. That is what makes it low risk beside a bug-fix line (R30, Goal Capsule). Governs the phasing below.
+
+### High-Level Technical Design
+
+Where the fluent package sits over today's engine, and what the sandbox replaces:
+
+```mermaid
+flowchart TB
+  subgraph user["User code"]
+    DEF["Definition: routes, policy, defaults"]
+    FN["One function per route"]
+  end
+  subgraph fluent["core: fluent package"]
+    VAL["Definition-time validation"]
+    TABLE["Route table by topic"]
+    WRAP["Dispatch wrapper: decode, ledger, outcomes"]
+    HANDLE["Handle: close, await, parked view, metrics"]
+    RT["Runtime seam: clients"]
+  end
+  subgraph engine["core: today's engine"]
+    OPTS["Options builder: raw bytes, producerConfig"]
+    PROC["ParallelStreamProcessor byte[]/byte[]"]
+    RQ["Retry queue + offset map"]
+    PM["Produce-many path"]
+  end
+  subgraph sandbox["sandbox module (Java 17)"]
+    MOCK["Mock consumer + mock producer"]
+    GEN["Generator: Instancio + Datafaker, Avro RandomData"]
+  end
+  DEF --> VAL --> TABLE
+  FN --> WRAP
+  TABLE --> WRAP --> PROC
+  VAL --> OPTS --> PROC
+  PROC --> RQ
+  WRAP --> PM
+  HANDLE --> PROC
+  RT --> OPTS
+  MOCK --> RT
+  GEN --> MOCK
+```
+
+The life of one record under the facade in the tiny tier. Retry and park are the same engine state, distinguished only by the delay the facade asks for:
+
+```mermaid
+stateDiagram-v2
+  [*] --> Dispatched
+  Dispatched --> Decoding
+  Decoding --> Running: value
+  Decoding --> Parked: permanent failure, zero attempts
+  Decoding --> Retrying: transient failure
+  Running --> Succeeded: normal return or produced records
+  Running --> Filtered: filtered outcome
+  Running --> Retrying: throw, attempts below limit
+  Running --> Parked: limit reached, or park outcome
+  Running --> ExportPending: export outcome, or limit reached with export-immediately
+  Running --> Stopping: stop outcome
+  Retrying --> Dispatched: retry delay elapsed
+  Parked --> Dispatched: resume, cycle delay, or age bound
+  Parked --> ExportPending: age bound reached
+  ExportPending --> Exported: export record sent on next dispatch
+  ExportPending --> Parked: export send failed, retried after delay
+  Stopping --> [*]: handle closes on the declared path
+  Succeeded --> [*]
+  Filtered --> [*]
+  Exported --> [*]
+```
+
+How a failure becomes a park without an engine change. The intent must be recorded before the throw, because the engine asks for the delay on the way out:
+
+```mermaid
+sequenceDiagram
+  participant W as Worker thread
+  participant F as Facade wrapper
+  participant U as User function
+  participant E as Engine (WorkContainer)
+  participant D as Retry-delay provider (facade)
+  W->>F: dispatch(record)
+  F->>F: attempts = ledger[tp, offset] + 1
+  F->>U: run(ctx)
+  U-->>F: throws
+  alt attempts below limit
+    F->>F: intent = retry
+  else limit reached
+    F->>F: intent = park (or export-pending)
+    F->>F: observer fires once
+  end
+  F-->>E: throw retriable marker
+  E->>D: delay for record
+  D-->>E: retry delay, or far-future delay for park
+  E->>E: enqueue in retry queue; partition commits past it
+```
+
+Milestones and the branches they wait on. Arrows point from prerequisite to dependant:
+
+```mermaid
+flowchart LR
+  P266["astubbs#266 examples support + parcel domain"] --> A
+  A["Milestone A (tiny): U1 U2 U3 U4 U5 U6"] --> B["Milestone B (tiny): U7 U8 U9"]
+  P295["astubbs#295 verdict-free return"] --> C
+  B --> C["Milestone C (small): U10 U11"]
+  C --> D["Milestone D (medium): U12 U13 U14 U15 U16"]
+  P410["astubbs#472, astubbs#474, astubbs#410, astubbs#434 producer recovery, in order"] --> U16
+  D --> E["Milestone E (large, after decomposition): U17 U18 U19 U20"]
+  P479["astubbs#479 God-class decomposition"] --> E
+  P460["astubbs#460 metadata rider"] --> U19
+```
+
+### Assumptions
+
+- The maintained generator libraries in the sandbox (Instancio 6, Datafaker 2) require Java 17 at runtime; the sandbox is a development-time tool, so a Java 17 floor for that one module is acceptable, as it already is for the Mutiny module.
+- Kafka's record-deserialisation exception carries the raw key and value buffers on the client versions the CI matrix builds against (KIP-1036, 3.8 and later); U13 verifies this against the matrix before relying on it.
+- The API-compatibility gate (astubbs#315) lands before Milestone B's classic-API overloads merge; until then R20 is proved by that branch's check run.
+- The industry-grounded examples (astubbs#266) merge before Milestone A's sandbox needs the parcel domain; if they do not, U5 hosts a minimal parcel domain in the sandbox's own tests and U8 reconciles when they land.
+
+### Sequencing
+
+- **Milestone A, the next-release candidate:** U1 to U6, in that order, with U5 parallel to U3 and U4. Everything a returning developer needs to see park in place from the README, and nothing in the engine.
+- **Milestone B, the rest of tiny:** U7 and U8, plus U9 on the classic API. Merges the examples PR first.
+- **Milestone C, small:** U10, then U11 after astubbs#295 merges.
+- **Milestone D, medium:** U12 to U15 in any order; U16 only after the producer-recovery stack has merged in its own order.
+- **Milestone E, large:** after the decomposition (astubbs#479); U17 to U20 are sketched here so the earlier tiers leave the seams they need, and are re-planned against the decomposed engine.
+
+### System-Wide Impact
+
+- **Core's dependency set** gains Jackson as optional. Nothing else on core's classpath changes.
+- **The compatibility gate** gains an exclusion for the fluent package while it incubates, and the sandbox module is added to its module list when it becomes published.
+- **Every example module** changes its default start to the sandbox (R33, U8), so the examples' tests stop overriding the consumer through a subclass and use the runtime seam instead.
+- **The README** is regenerated from its template; the quickstart is a tagged region in an example class, so the example and the README cannot drift.
+- **Metrics** gain a subsystem with outcome counters and parked-set gauges; existing meters are untouched.
+- **The engine** changes from Milestone C on, each change a getter, a command or a third arm on an existing seam, named in KTD11 and KTD12.
+
+### Risks & Dependencies
+
+- **Park through the delay hook relies on two engine details:** the provider is called synchronously inside the failure path, and an overflowing duration is silently replaced by the default delay. U3 pins both with control-arm tests so a future engine change fails loudly instead of turning parks into hot retries.
+- **Batches mix topics in the engine.** Tiny-tier batch mode is restricted to a one-route definition (R32); lifting that is U15 and U18.
+- **Retention loss is invisible to today's engine** (R27). Milestone A documents it; the counter and the prune are U10 and U19.
+- **The unordered scan is linear in the parked set.** U4 measures throughput with thousands of parked records on one partition and records the figure beside R28's guidance.
+- **Three open PRs gate three milestones:** astubbs#266 (examples), astubbs#295 (deferral), and the producer-recovery stack. The inflight note `docs/inflight/core-ux-modernisation.md` tracks their state.
+- **The entry point's name collides with core's `ParallelConsumer` interface** if spelled as the illustrative surface shows; U2 settles the spelling with the compiled README example, which the Outstanding Questions already make the arbiter.
+
+### Deferred Implementation Notes
+
+- Exact method and type names on the fluent API; the compiled README example decides (Outstanding Questions).
+- The per-record cost of the raw-bytes consumer against a typed one; U3's verification measures it.
+- Whether a stop also leaves the consumer group promptly on the consumer-commit modes; observed during U4.
+- Protobuf generation in the sandbox; the Descriptor-driven filler follows once the first Protobuf example exists.
+- The Spring example's dependency footprint; decided in U8 when the example module's pom is touched.
+
+---
+
+## Implementation Units
+
+| U-ID | Title | Key files | Depends on |
+|---|---|---|---|
+| U1 | Fluent package skeleton and gate exclusion | `parallel-consumer-core/pom.xml`, `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/fluent/` | none |
+| U2 | Definition, routes, types and validation | `fluent/…Definition`, `fluent/…Route`, `fluent/…FormatHelpers` | U1 |
+| U3 | Dispatch wrapper and outcomes | `fluent/…Dispatch`, `fluent/…Outcome`, `fluent/…AttemptLedger` | U2 |
+| U4 | Handle, parked view and metrics | `fluent/…Handle`, `fluent/…ParkedView`, `metrics/PCMetricsDef.java` | U3 |
+| U5 | Sandbox module | `parallel-consumer-sandbox/` | U1 |
+| U6 | README rewrite and the quickstart build signal | `src/docs/README_TEMPLATE.adoc`, `parallel-consumer-examples/parallel-consumer-example-core/` | U2, U3, U4, U5 |
+| U7 | Per-route policy: breaker, admission, batch size, sinks, prelude | `fluent/…Policy`, `fluent/…Breaker`, `fluent/…Admission` | U3 |
+| U8 | Example set, existing examples in the sandbox, Spring example | `parallel-consumer-examples/*` | U5, U6, astubbs#266 |
+| U9 | Classic-API produce overloads with separate output types | `ParallelStreamProcessor.java`, `ParallelEoSStreamProcessor.java`, `internal/ProducerManager.java` | none |
+| U10 | Engine accessors for the parked set, export at the percentage, resume and export commands | `state/PartitionState.java`, `state/PartitionStateManager.java`, `state/WorkContainer.java`, `fluent/…ParkedView` | U4 |
+| U11 | Admission as deferral through the verdict-free return | `fluent/…Admission` | U7, astubbs#295 |
+| U12 | Per-route ordering at the shard-key seam | `state/ShardManager.java`, `state/ShardKey.java` | U3 |
+| U13 | Classic poll-path deserialisation-failure policy | `internal/ConsumerManager.java`, `internal/BrokerPollSystem.java`, `ParallelConsumerOptions.java` | none |
+| U14 | Poll-thread command queue: seek and runtime routes | `internal/ConsumerManager.java`, `internal/BrokerPollSystem.java`, `fluent/…Handle` | U4 |
+| U15 | Batch mode: maximum-wait release and the quantity defect | `internal/AbstractParallelEoSStreamProcessor.java`, `state/WorkManager.java` | U7 |
+| U16 | Lift the transactional-export refusal | `fluent/…Definition`, `fluent/…Dispatch` | U3, producer-recovery stack |
+| U17 | Engine-native outcomes and the classic thrown terminal signal | engine, after decomposition | U10, astubbs#479 |
+| U18 | Per-record outcomes inside a batch | engine, after decomposition | U15, U17 |
+| U19 | Parked state in commit metadata, durable count, retention prune and lost counter | `offsets/`, `state/PartitionState.java` | U17, astubbs#460 |
+| U20 | Adaptive per-route admission | engine, with the self-scaling work | U11, U17 |
+
+### U1. Fluent package skeleton and gate exclusion
+
+- **Goal:** The `fluent` package exists in core with its conventions wired, so every later unit adds classes without touching the build again.
+- **Requirements:** R20, R30 (tiny); KTD1, KTD13.
+- **Dependencies:** none.
+- **Files:** `parallel-consumer-core/pom.xml` (optional Jackson dependency; Truth subject list gains the fluent public types as they appear), `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/fluent/package-info.java`, the ArchUnit test conventions already wired for core, `bin/check-api-breaking.sh` or its configuration on the astubbs#315 branch (package exclusion).
+<!-- file-refs: N/A - planned files and modules this plan creates; they do not exist yet -->
+- **Approach:**
+  1. Create the package with a package-level javadoc that names it incubating and points at the plan.
+  2. Add Jackson as an optional dependency, using the version property the examples already define, with the pom comment explaining why it is optional (KTD7).
+  3. Add the incubating exclusion to the compatibility gate's configuration, on the gate's branch if it has not merged.
+  4. Every new file carries the fork-original copyright header (`docs/copyright.md`).
+- **Patterns to follow:** `parallel-consumer-mutiny/pom.xml` for a commented property override; `bin/check-copyright-headers.sh` for header rules.
+- **Test scenarios:** Test expectation: none -- scaffolding; the build, the copyright gate and the ArchUnit conventions test prove it.
+- **Verification:** A whole-reactor build passes with the empty package; `bin/check-all.sh` is green.
+
+### U2. Definition, routes, types and validation
+
+- **Goal:** A user defines a consumer from properties, one route per topic with its own types, and every refusal in AE7 fires before a client is built.
+- **Requirements:** R1 to R6, R18, R21 (names), R26; AE7, AE8; KD3, KD11; KTD2, KTD3, KTD7.
+- **Dependencies:** U1.
+- **Files:** `fluent/` definition, route, consumed and produced type holders, format helpers and the decode-classification wrapper; tests under `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/fluent/`.
+- **Approach:**
+  1. The definition is a mutable builder: instance settings plain, per-route defaults with the `default` prefix, each route copying the defaults it does not override (R6).
+  2. Define is pure validation in a fixed order, routes then properties then policy; start builds the options and the clients. A definition never started opens nothing.
+  3. Refusals at definition time, each naming the offending topic or setting: a second route on a topic or an overlap between a topic set and another route, naming the topic; a commit mode on a route; deserialiser settings in the properties; export-immediately or an age bound with no destination; an export percentage above the ceiling, or any explicit percentage in this tier (KTD5); a destination that is a routed topic; a destination under the transactional commit mode; a pattern subscription; a transactional producer under a non-transactional mode or the reverse; a produced record type on a route with no produced types is a compile error.
+  4. Format helpers resolve by class name and fail naming the missing library; the JSON-as-map helper uses Jackson.
+  5. Properties the facade owns are consumed; the rest pass to each deserialiser's configure call.
+  6. Pre-built clients (Java only) are typed `byte[]`, handed to the options builder, never held (KTD3); a pre-built producer forgoes recovery and transactional export, documented on the option.
+- **Patterns to follow:** `ParallelConsumerOptions` validation messages; Kafka Streams' `Consumed.with` and `Produced.with` shape for the type holders.
+- **Test scenarios:**
+  - Covers AE7. Each refusal in the list above fires at define with a message naming the topic or setting, and no consumer or producer is constructed (assert the runtime seam was never invoked).
+  - Covers AE8. A route consuming string keys and JSON values that produces long keys and Avro values compiles and its produced records are typed by the route's produced types.
+  - A route with no produced types cannot return a producing outcome: a compile-time negative test through the test compiler, or a definition-time refusal on the wire form.
+  - Instance default copied per route: a route without its own retry limit reads the instance default; one with its own overrides only itself.
+  - A format helper for a library absent from the test classpath fails at define naming the library.
+  - Pass-through properties reach a test deserialiser's configure call; consumed properties do not.
+  - A pre-built consumer that is already subscribed is refused at start by the engine's existing check.
+  - A definition defined but never started leaves no client constructed.
+- **Verification:** The unit suite for the fluent package passes with no broker; the ArchUnit raw-client rule still passes.
+
+### U3. Dispatch wrapper and outcomes
+
+- **Goal:** One engine function dispatches by route; every outcome in R7 to R16 and R24 behaves as specified over today's engine, including park in place.
+- **Requirements:** R7 to R16, R24, R27 (tiny triggers); F2, F3, F4, F6; AE1, AE2, AE5, AE6, AE12, AE14, AE19, AE25; KD9, KD10, KD12; KTD2, KTD4, KTD5, KTD6.
+- **Dependencies:** U2.
+- **Files:** `fluent/` dispatch wrapper, outcome type, attempt ledger, marker exceptions extending `PCRetriableException`, the retry-delay provider; tests beside them over `AbstractParallelEoSStreamProcessorTestBase`.
+- **Approach:**
+  1. The processor is `byte[]`/`byte[]`, created through a `PCModule` the facade builds (KTD8) with produce-many as the one function; the route table maps topic to route.
+  2. Per record: increment the ledger entry; decode through the route's deserialisers into a value, a permanent failure or a transient failure (R12); run the function; map the outcome.
+  3. Succeeded and filtered return an empty list; produced records are serialised and returned; a throw is a retry until the ledger reaches the route's limit.
+  4. Before any facade throw, record the record's intent in the ledger; the delay provider reads it: retry delay, a far-future representable delay for park, the age bound when declared (KTD4, KTD5).
+  5. On exhaustion, or a park outcome, or a permanent decode failure: mark parked, fire the observer once with the raw envelope when decoding failed, count the outcome. With export-immediately or an export outcome: mark export-pending; on the next dispatch return the export record with provenance headers (R13) instead of calling the function; an export send failure leaves the record parked and re-dispatches after the delay (R15).
+  6. Stop: mark the record stopping with a far-future delay, record the reason on the handle, and signal the handle to close on the declared path from its own thread (KTD6).
+  7. The rebalance listener clears ledger entries for revoked partitions (R10).
+  8. Decode failure inside an engine batch, and batch mode generally, are U7 and U15; in this unit batching is off.
+- **Execution note:** Implement the park and stop paths test-first with a control arm for each engine detail they rely on, so the tests fail when the detail is absent.
+- **Patterns to follow:** `UserFunctions.carefullyRun` and `PCRetriableException.isPresentIn` for how the engine classifies throws; `PartitionState.initMetrics` for meters; the retry-delay provider contract on `ParallelConsumerOptions`.
+- **Test scenarios:**
+  - Covers AE1. Under the explicit unbounded limit an always-failing record is retried indefinitely with no offset past it committed under partition ordering; with no limit declared it is attempted ten times and parked.
+  - Covers AE2 / F2. With a limit of two under key ordering, the fourth attempt never occurs, the offset stays incomplete in the commit metadata, offsets past it commit, no worker holds it, the parked count is one.
+  - Control arm: the park intent written after the throw yields the default one-second delay, and the record is re-attempted; written before the throw it parks.
+  - Control arm: an overflowing park delay is replaced by the default delay and the record loops; the far-future delay parks it.
+  - The revoke-and-reassign case: a partition revoked mid-retry and re-assigned to the same instance restarts the record's count at one.
+  - Covers AE5 / F3. Of a thousand records a hundred return filtered: succeeded nine hundred, filtered one hundred, all offsets commit, nothing produced.
+  - Covers AE6 / F4. A permanent decode failure parks with zero attempts and the raw bytes preserved; a transient one follows the retry path; the other route and the poll thread are unaffected.
+  - Covers AE12. The observer fires exactly once per assignment for a parked record, after the last attempt and before its offset commits, with the raw envelope when decoding failed.
+  - Covers AE19. With export-immediately, an exhausted record is exported on the next dispatch after one retry delay, the user function is not called on that dispatch, provenance reports three attempts, and the source offset commits.
+  - Export send failure: the record stays parked with its count kept, only the export is retried after the delay, the instance keeps processing.
+  - Covers AE25. Terminal exclusivity: a normal return on a non-producing route counts once as succeeded; a parked-then-exported record counts once as parked and once as exported and never under succeeded or filtered.
+  - Covers AE14 / F6. Stop with the drain-first path: no new record starts, in-flight records complete and commit, the stopping record is not invoked again during the drain, its offset does not commit, the instance closes well inside the shutdown timeout, and after a restart the record is delivered again.
+  - Every facade-originated throw is absent from the engine's error log (assert no error-level user-function failure entry).
+  - A produced record on a producing route is serialised with the route's serialisers and reaches the mock producer with the declared destination.
+  - Park under key ordering holds the key: later records with the same key wait, other keys proceed, and the parked view reports the held count.
+  - Drain with parked records: close completes without waiting the drain timeout when only far-future parked records remain.
+  - Measurement, printed not asserted: per-record cost of the raw-bytes route against a typed classic consumer at zero processing time.
+- **Verification:** All fluent unit tests pass over the mock consumer; the error log is clean of facade throws; the printed cost figure is recorded in the plan's Dependencies section.
+
+### U4. Handle, parked view and metrics
+
+- **Goal:** A running definition is controlled and observed through a handle: close, drain, await, the stop reason, the parked set per route with an instance roll-up, and the outcome and parked meters.
+- **Requirements:** R17, R19, R28 (query half); AE9, AE20 (query half); KTD6, KTD8.
+- **Dependencies:** U3.
+- **Files:** `fluent/` handle, parked view and roll-up, the subsystem addition in `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/metrics/PCMetricsDef.java`; tests beside them.
+- **Approach:**
+  1. The handle owns the processor, closes through the engine's draining close with the drain timeout, and exposes a blocking await with three exits: close, stop by request, or control-thread failure, which rethrows the cause wrapped.
+  2. Double close is idempotent; close on a never-started definition is a no-op; a second start is refused before a second processor is built.
+  3. The parked view answers from the ledger plus a control-thread snapshot registered through the loop-end hook: per partition, the parked count, the oldest parked age, the held-behind count under key ordering, the parked record list with attempts, last failure and parked-since; the payload fraction and the time-to-export estimate read "not available" until U10.
+  4. Resume and export commands throw a not-yet-supported refusal in this tier (U10 wires them).
+  5. Meters: outcome counters tagged topic and outcome; parked count and oldest age gauges tagged topic and partition; registered through the module and deregistered on close.
+  6. Routes with no assignment after start are logged once.
+  7. Measure throughput of a healthy route with several thousand parked records on one partition under unordered processing and record the figure.
+- **Patterns to follow:** `internal/DrainingCloseable`; `PartitionState.initMetrics` and `deregisterMetrics`; `addLoopEndCallBack` for the snapshot.
+- **Test scenarios:**
+  - Covers AE9. Try-with-resources exit with work in flight drains up to the drain timeout, then closes, and drained offsets commit.
+  - Await returns when another thread closes the handle, when the function reports stop, and rethrows the cause when the control thread fails.
+  - Double close and close-without-start are no-ops; a second start is refused.
+  - Covers AE20 (query half). Three parked records on one partition: the view reports three, the oldest age, and lists offset, key, attempts, last failure and parked-since; resume in this tier returns the not-yet-supported refusal.
+  - The instance roll-up totals every route; the per-route accessor spans every partition by default and one partition on request.
+  - Outcome counters and parked gauges appear in the registry with the expected tags and disappear on close.
+  - A route whose topic has no assignment is logged once.
+  - Measurement, printed: dispatch throughput with thousands parked on one partition.
+- **Verification:** Fluent handle tests pass; meters are visible in a `SimpleMeterRegistry`; the throughput figure is recorded beside R28.
+
+### U5. Sandbox module
+
+- **Goal:** Any definition, fluent or classic, runs with no broker against generated records at a declared rate, bounded or until closed, and the same module is the broker-free test kit.
+- **Requirements:** R33, R36 (test kit); AE24 (sandbox half), AE26; KD7; KTD1, KTD9.
+- **Dependencies:** U1 (the runtime seam is declared in U2; U5 can start against the seam's interface).
+- **Files:** `parallel-consumer-sandbox/pom.xml` (Java 17 target, Instancio, Datafaker, Avro optional), `parallel-consumer-sandbox/src/main/java/bz/stub/parallelconsumer/sandbox/` (mock runtime, generator, bound, classic entry), `TestConventionsArchTest.java` for the module, tests under `src/test/java`.
+<!-- file-refs: N/A - planned files and modules this plan creates; they do not exist yet -->
+- **Approach:**
+  1. The mock runtime subclasses the shipped `LongPollingMockConsumer`, seeds beginning offsets before assignment, and pairs it with Kafka's `MockProducer`, built transactional when the commit mode is (Vert.x, Reactor and Mutiny reject transactional at construction, so the sandbox reports that identically).
+  2. The generator: Instancio builds the object graph per route value type; a Datafaker strategy supplies leaf values by field name and type (names, addresses, emails, amounts, timestamps, identifiers); Avro types use `RandomData` from the schema; a fixed seed makes a run reproducible; a declared rate paces records into the source topics on a generator thread through the mock's synchronised add.
+  3. The bound is a duration or a record count; reaching it closes drain-first so the final parked snapshot is observable after close; without a bound the run ends when the handle closes.
+  4. The classic entry hands the same consumer, producer and generator to the options builder; the fluent entry implements the runtime seam.
+  5. The parcel-logistics default types come from astubbs#266's support module once merged; until then a minimal parcel domain lives in the sandbox's tests.
+  6. The module is added to the published set and the compatibility gate's module list.
+- **Execution note:** This is a new module; prefer a smoke run of a two-route definition through the generator before unit coverage of the generator internals.
+- **Patterns to follow:** `parallel-consumer-mutiny/pom.xml` for the Java 17 override and its comment; `MockConsumerTestBase` for how tests drive the mock; the assign-after-seeding trap in `docs/solutions/test-flakiness/`.
+- **Test scenarios:**
+  - Covers AE24 (sandbox half). The README quickstart definition started with a ten-second bound at fifty per second passes about five hundred generated orders with realistic field values, the console sink prints them, and the always-failing route has one record parked before the bound.
+  - Covers AE26. A classic-API example started with no broker runs in the sandbox against generated records of its declared types and its definition differs from the broker form only in the start call.
+  - A seeded run generates the same records twice.
+  - The generator hydrates a Java record, a POJO with setters and an Avro specific record; a Protobuf type reports not supported in this version.
+  - A record-count bound ends the run drain-first and the parked snapshot is readable after close.
+  - A transactional classic definition starts in the sandbox with a transactional mock producer; a Vert.x definition under transactional fails at construction as it does against a broker.
+  - The mock's beginning offsets are seeded before assignment, so the first poll returns records.
+- **Verification:** The sandbox module builds under Java 17, its tests pass, and the quickstart runs through it with no Docker.
+
+### U6. README rewrite and the quickstart build signal
+
+- **Goal:** The README leads with the fluent API in KD14's order, and the quickstart compiles and runs in the sandbox on every build, once against a broker.
+- **Requirements:** R21, R26, R36 (quickstart); AE13, AE24; Success Criteria (primary signal, broker run); KD7, KD14.
+- **Dependencies:** U2, U3, U4, U5.
+- **Files:** `src/docs/README_TEMPLATE.adoc`, the regenerated `README.adoc`, a quickstart class with a tagged region in `parallel-consumer-examples/parallel-consumer-example-core/src/main/java/`, its sandbox test in that module's `src/test/java/`, its broker test in the core module's `src/test-integration/java/` `integrationTests` package, `CONCEPTS.md` if a term is missing.
+- **Approach:**
+  1. Write the fluent-API section first: park in place, then export and the parked set, then the entry point and typed routes; the classic section says which behaviours are fluent-only and when the classic API is the right choice; the migration section maps the three workarounds; the error-handling and skipping-records sections are rewritten around outcomes.
+  2. The quickstart is a tagged region in one example class, within the forty-line budget, with two routes of different value types, a filter, a retry limit and a dead-letter destination whose always-failing route declares a limit and delay that park inside the bound.
+  3. A surefire test in the example module compiles and runs the quickstart in the sandbox with a ten-second bound and asserts the parked record and the line budget.
+  4. One integration test runs the same quickstart against a Testcontainers broker, the single exception to R36.
+  5. Regenerate the README through the template plugin; never hand-edit the generated file; each processing block gets its own tag name (the generator drops repeated tags).
+- **Patterns to follow:** the existing `CoreApp` tagged region and `CoreAppTest`; `BrokerIntegrationTest` for the broker run; astubbs#266's README-tag lesson.
+- **Test scenarios:**
+  - Covers AE13. The quickstart compiles in CI and its definition fits the forty-line budget (the test counts the tagged region).
+  - Covers AE24. The sandbox run produces the parked record before the bound and the console output.
+  - The broker run consumes real records, parks the failing one, and commits past it; the exported provenance headers are readable by a plain consumer.
+  - The regenerated README contains every tagged region once and no stale classic-first example.
+- **Verification:** `README.adoc` regenerates without drift; the example module's tests pass without Docker; the broker test passes in the integration lane.
+
+### U7. Per-route policy: breaker, admission, batch size, sinks, prelude
+
+- **Goal:** The remaining tiny-tier behaviours: per-route retry policy, the circuit breaker, best-effort admission, instance-wide batch size on a one-route definition, sink terminals with the console sink, and the prelude sugar.
+- **Requirements:** R6, R10, R23, R29, R32 (tiny), R35; AE17 (counts clause), AE21; KTD4, KTD5, KTD10.
+- **Dependencies:** U3.
+- **Files:** `fluent/` policy holders, breaker, admission, sink adapter, prelude composition; tests beside them.
+- **Approach:**
+  1. Per-route retry limit and delay read from the route's copy of the defaults (R6).
+  2. The breaker keeps a per-route window of attempts; a failed attempt is a throw, a transient decode failure, or a terminal park or export; crossing the rate opens the route; withheld records take the marker throw with the remaining open duration as their delay and consume no attempt, cycle or permit; half-open admits exactly the declared number of probes through atomic permits; all succeed closes, any failure re-opens. Document the memory bound while open: intake keeps fetching an open route's records.
+  3. Admission: a permit per route at the function boundary, the pool sized to the sum of targets, the wait interruptible on close; isolation documented as best-effort with the starvation case (R23).
+  4. Batch size passes to the options builder only for a one-route definition; more routes with batch mode is refused at definition time (R32); a decode failure inside a batch fails the batch as the engine does today, documented.
+  5. Sink terminal: return is succeeded, throw is retry; the console sink prints and succeeds; the sink is the route's one function.
+  6. Prelude: filter, map and peek compose into the function before it crosses the wire.
+- **Patterns to follow:** U3's marker throws and delay provider; `java.util.concurrent.Semaphore` with interruptible acquire.
+- **Test scenarios:**
+  - Covers AE21. Sixty failed attempts in the last hundred open the route; the next records are withheld for the open duration with no attempt counted; other routes keep processing; the transition is counted; five probes run after the duration, all succeeding closes, one failing re-opens for another duration.
+  - The window counts attempts, not records: one poison record with limit two contributes three failures.
+  - The N+1th record during half-open is withheld.
+  - Covers AE17 (counts clause). Routes limited to ten and one hundred never exceed their limits in flight; the degenerate case is documented and pinned: a huge backlog on the ten-limit route starves the other in this tier, and the test asserts that current behaviour so the small tier's fix inverts an existing green test rather than adding a new one.
+  - Close while records wait on a permit completes inside the shutdown timeout.
+  - Batch mode on a two-route definition is refused at definition time; on one route the engine receives the batch size.
+  - A sink that throws is retried; one that returns succeeds; the console sink prints the record.
+  - The prelude's filter yields the filtered outcome; map and peek run in order before process.
+- **Verification:** Fluent tests pass; the starvation test pins today's behaviour and is named as the small tier's target to invert.
+
+### U8. Example set, existing examples in the sandbox, Spring example
+
+- **Goal:** One example per concern in the core example module, every existing example starting in the sandbox by default, and a Spring Boot example.
+- **Requirements:** R33 (existing examples), R36; AE26; KD7.
+- **Dependencies:** U5, U6, astubbs#266 merged.
+- **Files:** `parallel-consumer-examples/parallel-consumer-example-core/` (new example classes and tests), each `*App` in the vertx, reactor and metrics example modules and their tests, the example-core pom for the Spring Boot dependency.
+- **Approach:**
+  1. Add the examples R36 lists, each a runnable main plus a sandbox-driven test, each a stage of the executable progression and in the parcel domain.
+  2. Convert every existing example's start to the sandbox runtime by default with the broker start as the one-line switch; retire the test-side consumer overrides in favour of the runtime seam.
+  3. The Spring example defines the fluent API as a bean with the handle's lifecycle tied to the context; the Spring Boot dependency lives in the example module only.
+- **Patterns to follow:** astubbs#266's support module, its barrier-not-wall-clock test discipline, and its per-tag README rule.
+- **Test scenarios:**
+  - Each new example's test runs it through the sandbox with a bound and asserts its concern (a parked record, an exported record, a breaker opening, a batch released, a stop, a sink write).
+  - Every converted example runs in its module's test with no broker and no consumer override.
+  - The Spring example's context starts, the handle closes with the context, and records flow in the sandbox.
+- **Verification:** All example modules' tests pass without Docker; the README's example list matches the module.
+
+### U9. Classic-API produce overloads with separate output types
+
+- **Goal:** A classic user produces records of different key and value types than they consume, without migrating.
+- **Requirements:** R34, R20; AE10; KTD12.
+- **Dependencies:** none.
+- **Files:** `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelStreamProcessor.java`, `ParallelEoSStreamProcessor.java`, `internal/ProducerManager.java` and `internal/ProducerWrapper.java`; tests over `ParallelEoSStreamProcessorTestBase`.
+- **Approach:**
+  1. Add produce-many and produce overloads whose function returns records of separate output types; the producer path is typed loosely, since the configured serialisers decide what the producer accepts.
+  2. No existing method changes shape; the compatibility gate proves it.
+- **Patterns to follow:** the existing `pollAndProduceMany` implementation and its `ConsumeProduceResult`.
+- **Test scenarios:**
+  - A function consuming string/JSON returns long/Avro records; they reach the mock producer serialised by the configured output serialisers.
+  - The existing overloads behave unchanged (the existing suite).
+  - Covers AE10. The compatibility gate reports no break.
+- **Verification:** Core suite green; the gate's check run reports only additions.
+
+### U10. Engine accessors for the parked set, export at the percentage, resume and export commands
+
+- **Goal:** The engine exposes what the parked view needs, so export at the payload percentage, resume and export commands work, and the pause threshold becomes an instance option.
+- **Requirements:** R27 (percentage trigger), R28 (commands, payload fraction, estimate), R19 (gauges); AE18, AE20 (command half); KTD11.
+- **Dependencies:** U4.
+- **Files:** `state/PartitionState.java` (store the last encoded payload length; getter), `state/PartitionStateManager.java` (pause threshold from options; parked-list accessor over incomplete offsets with retry-due), `state/WorkContainer.java` (retry-now command, controller-thread only), `ParallelConsumerOptions.java` (pause threshold option), `fluent/` parked view wiring; tests over `BrokerlessWorkManagerTestBase` and the fluent tests.
+- **Approach:**
+  1. Record the payload length each time the map is encoded and expose it with the cap, so the fraction is a getter; publish it as the per-partition gauge.
+  2. Add a controller-thread command that moves a container's retry-due to now, dispatched through the loop-end hook; resume and export commands use it with the ledger's intent set (export-first for export); a command on a record already dispatched returns a refusal result.
+  3. Export at the percentage: the facade's loop-end hook checks each partition's fraction against the route's percentage and marks the oldest parked records export-pending until the fraction is below it.
+  4. The time-to-export estimate is derived from the park rate and payload growth observed by the facade.
+  5. The pause threshold multiplier becomes an instance option with today's static as the default; the definition-time ceiling reads it.
+- **Patterns to follow:** `PartitionState.tryToEncodeOffsets` for where the length is known; `@ControllerThreadOnly` annotations in `state/`; the retry-queue write-lock write-ups in `docs/solutions/`.
+- **Test scenarios:**
+  - The payload fraction getter matches the encoded length after a commit with a sparse map.
+  - Covers AE18. With a destination and the default percentage, parked records pushing a partition past seventy percent are exported oldest-first until below, each with original bytes, headers and provenance, and each source offset commits.
+  - Covers AE20 (command half). Resume re-attempts the record at once and on success its offset commits and the count drops by one; export sends it now.
+  - A resume and an export issued for the same record: the second returns a refusal.
+  - The pause threshold option changes where the partition stops taking work, and the definition-time ceiling follows it.
+  - Retention-loss stays documented, not counted: a test pins that a parked record below the fetch position is not dropped by a later poll (the U19 target).
+- **Verification:** Core state tests and fluent tests pass; the new gauges appear per partition.
+
+### U11. Admission as deferral through the verdict-free return
+
+- **Goal:** A record for a route at its limit returns to scheduling without holding a thread or consuming an attempt, so per-route isolation is a guarantee.
+- **Requirements:** R23; AE17 (throughput clause); KTD10.
+- **Dependencies:** U7, astubbs#295 merged.
+- **Files:** `fluent/` admission; tests beside it.
+- **Approach:** Replace the permit wait with the abandoned-return path astubbs#295 adds: a record that cannot take a permit is returned verdict-free and is immediately selectable again; the pool no longer needs sizing to the sum.
+- **Patterns to follow:** astubbs#295's `WorkContainer` abandon marker and its idempotence tests.
+- **Test scenarios:**
+  - Covers AE17 (throughput clause). Draining the ten-limit route's backlog does not change the hundred-limit route's throughput; U7's starvation test is inverted to assert isolation.
+  - A deferred record consumes no attempt and no cycle in the ledger.
+  - A repeat verdict-free return of the same record does not double-decrement the in-flight counter (the PR's own invariant, re-asserted here).
+- **Verification:** The starvation test passes; in-flight accounting tests from astubbs#295 stay green.
+
+### U12. Per-route ordering at the shard-key seam
+
+- **Goal:** Each route declares its ordering mode; the engine shards by the route's mode.
+- **Requirements:** R6 (ordering per route), R11; KD11.
+- **Dependencies:** U3.
+- **Files:** `state/ShardManager.java`, `state/ShardKey.java`, `state/ProcessingShard.java`; the fluent definition passes a per-topic ordering map; tests over the work-manager bases.
+- **Approach:** The shard key already carries the topic; compute the key by the topic's declared mode instead of the instance's, and let the shard's head check read the same mode. The instance default remains the mode for topics without a declaration. Cross-topic key identity stays with astubbs#150.
+- **Patterns to follow:** `ShardKey` construction and `ProcessingShard.getWorkIfAvailable`'s order-restriction check.
+- **Test scenarios:**
+  - Two routes, one key-ordered and one unordered: same-key records on the first are serialised, on the second they run concurrently.
+  - A partition-ordered route holds its partition on a parked record; a key-ordered route holds only the key.
+  - The instance default applies to a route with no declaration.
+- **Verification:** Work-manager and fluent tests pass; the shard-map ArchUnit rules stay green.
+
+### U13. Classic poll-path deserialisation-failure policy
+
+- **Goal:** On the classic API a payload the configured deserialiser rejects no longer ends the poll thread; the instance follows a declared policy.
+- **Requirements:** R25; AE15; KTD12.
+- **Dependencies:** none.
+- **Files:** `internal/ConsumerManager.java` (third typed arm), `internal/BrokerPollSystem.java`, `ParallelConsumerOptions.java` (policy option, default fail), a raw-bytes dead-letter send through the producer manager; tests over `ParallelEoSStreamProcessorTestBase` and one broker test.
+- **Approach:**
+  1. Catch the record-deserialisation exception beside the two existing arms; fail-instance is today's behaviour and the default.
+  2. Skip-and-log seeks the partition past the offending offset on the poll thread and logs once per record.
+  3. Dead-letter sends the raw key and value buffers with provenance headers (R13) on the produce path, then seeks past; refused at options validation under the transactional commit mode for R14's reason.
+  4. Verify the raw buffers are present on every client version in the CI matrix before relying on them.
+- **Patterns to follow:** the SASL and wakeup arms in `ConsumerManager`; `core-163-poll-path-has-no-error-seam.md` for the seam's shape.
+- **Test scenarios:**
+  - Covers AE15. Skip-and-log: the record is logged, its offset advances, the poll thread stays alive, the next record processes; the default policy fails as today.
+  - Dead-letter: the raw bytes and headers reach the destination with provenance, the offset advances.
+  - Dead-letter under the transactional mode is refused at options validation.
+  - The skipped offset commits once the next record succeeds.
+- **Verification:** Core suite and the broker test pass on every Kafka version in the matrix.
+
+### U14. Poll-thread command queue: seek and runtime routes
+
+- **Goal:** The handle seeks a partition and adds or removes a route at runtime, with the parked set protected.
+- **Requirements:** R31; AE22; KTD6.
+- **Dependencies:** U4.
+- **Files:** `internal/ConsumerManager.java` and `internal/BrokerPollSystem.java` (a command queue drained between polls: seek, subscription change), `fluent/` handle commands and ledger clearing; tests over the processor test base.
+- **Approach:**
+  1. Commands are data queued for the poll thread and applied between polls; the thread-confined consumer stays confined.
+  2. Seek abandons the partition's in-flight work, resets its map and clears the ledger for it atomically; refused while the partition holds parked records unless the command says export-first (export then seek) or discard.
+  3. Route add re-subscribes to the union under the same definition-time checks; remove drains the route's in-flight work first and is refused while its partitions hold parked records unless export-first or discard.
+- **Patterns to follow:** the controller's `workMailBox` for a typed command channel; `ThreadConfinedConsumer.checkThread`.
+- **Test scenarios:**
+  - Covers AE22. A seek to the beginning abandons in-flight work, re-delivers from offset zero, resets the map, leaves other partitions untouched; with parked records the plain seek is refused and export-first exports them before the reset.
+  - A runtime route add processes the new topic under its own policy without a restart; adding an already-routed topic is refused.
+  - Route removal drains first and is refused while parked records exist unless export-first or discard.
+  - A command issued from a non-poll thread never touches the consumer directly (the confinement assertion holds).
+- **Verification:** Processor and fluent tests pass; the confinement checks stay green.
+
+### U15. Batch mode: maximum-wait release and the quantity defect
+
+- **Goal:** A batch is released early after a declared maximum wait, the remaining batch-quantity defect is fixed, and batch mode is declared per route on a one-route-per-batch basis.
+- **Requirements:** R32 (maximum wait, remaining defect); AE23 (first clause).
+- **Dependencies:** U7.
+- **Files:** `internal/AbstractParallelEoSStreamProcessor.java` (batch assembly), `state/WorkManager.java` (quantity calculation), `fluent/` batch declaration; tests over `BatchTestBase`.
+- **Approach:**
+  1. Fix the extra in-flight request in the quantity calculation (`bug-batch-quantity-over-request.md`).
+  2. Add a maximum wait: a partial batch is released when the wait elapses.
+  3. Assemble batches per topic so one engine batch is one route, which lets the fluent API declare batch mode per route.
+- **Patterns to follow:** `BatchTestMethods`; `core-189-batch-failure-granularity.md` for what per-record outcomes will need later.
+- **Test scenarios:**
+  - Covers AE23 (first clause). Forty records with a size of a hundred and a one-second wait reach the function after one second.
+  - The quantity requested never exceeds the batch size modulo the in-flight count.
+  - Two routes in batch mode receive batches that never mix topics.
+- **Verification:** Batch tests pass; the batch-quantity inflight note is resolved in the same PR.
+
+### U16. Lift the transactional-export refusal
+
+- **Goal:** Export under the transactional commit mode is allowed once producer recovery and the poisoned-transaction abort have merged.
+- **Requirements:** R14; AE3; KD10.
+- **Dependencies:** U3; astubbs#472, astubbs#474, astubbs#410, astubbs#434 merged in that order.
+- **Files:** `fluent/` definition validation and dispatch; a broker test in the core integration package.
+- **Approach:** Remove the definition-time refusal; export sends join the transaction; a failing export aborts it, the ledger puts the records back, recovery replaces the producer; a persistently failing export leaves the record parked.
+- **Test scenarios:**
+  - Covers AE3. A read-committed consumer sees the exported record only with the committed source offset; an export failure after produce and before commit leaves no offset committed and no record visible.
+  - An oversized export record poisons the transaction, the abort lands, the producer is replaced, and healthy work continues.
+- **Verification:** The broker test passes on the recovery stack's merged master.
+
+### U17. Engine-native outcomes and the classic thrown terminal signal
+
+- **Goal:** The engine owns park, export, filter and the retry limit; the facade's ledger and delay tricks are removed; the classic API gains the thrown terminal signal.
+- **Requirements:** R22, R34 (thrown signal); AE11.
+- **Dependencies:** U10, astubbs#479 (decomposition).
+- **Files:** the decomposed engine's function runner and state machine; `fluent/` dispatch simplification; `PCTerminalException`-shaped classic signal.
+- **Approach:** Re-planned against the decomposed engine. The acceptance examples of AE11's set are the oracle and must pass unchanged; the 2022 terminal-exception branch is read for its shape before the classic signal is designed.
+- **Test scenarios:** Covers AE11. The named acceptance examples pass unchanged with the facade's outcome implementation deleted.
+- **Verification:** AE11's set green on the native implementation; the classic signal proven by the compatibility gate as additive.
+
+### U18. Per-record outcomes inside a batch
+
+- **Goal:** One record's failure in a batch parks or retries that record alone.
+- **Requirements:** R32 (per-record outcomes); AE23 (second clause).
+- **Dependencies:** U15, U17.
+- **Approach:** Re-planned after decomposition; the abandoned per-record correlation in the function runner is the starting point.
+- **Test scenarios:** Covers AE23 (second clause). One throwing record in a batch is retried and later parked while the others' outcomes stand.
+- **Verification:** Batch tests green; `core-189-batch-failure-granularity.md` resolved.
+
+### U19. Parked state in commit metadata, durable count, retention prune and lost counter
+
+- **Goal:** A restart does not re-attempt a parked record, the attempt count survives reassignment, and a parked record retention removed is pruned and counted.
+- **Requirements:** R10 (durable count, R22's floor), R19 (lost counter), R27 (retention).
+- **Dependencies:** U17, astubbs#460.
+- **Approach:** Ride the opaque metadata rider for parked offsets and counts; prune incompletes below the fetch position when the log start passes them and count them lost.
+- **Test scenarios:** A restart re-polls a parked record and does not re-attempt it; a parked record below a raised log start is dropped from the map, counted, and reported by the view.
+- **Verification:** Offset-encoding and state tests green; the continuous-encoding note's decisions revisited if exact encoding has landed.
+
+### U20. Adaptive per-route admission
+
+- **Goal:** The self-scaling controller moves each route's admission target at runtime.
+- **Requirements:** R6, R23 (adaptive).
+- **Dependencies:** U11, U17, the self-scaling work (astubbs#333, astubbs#392, astubbs#456).
+- **Approach:** Owned by the self-scaling plan; this plan leaves the per-route target as the knob it moves.
+- **Test scenarios:** Owned by that plan.
+- **Verification:** Owned by that plan.
+
+---
+
+## Verification Contract
+
+| Check | Command or signal | Applies to |
+|---|---|---|
+| Fresh-clone build | `./mvnw clean install -DskipTests` first, whole reactor (`docs/building.md`) | every unit |
+| Unit suites, no Docker | `bin/ci-unit-test.sh` | every unit |
+| Integration lane | `bin/ci-integration-test.sh` (Docker) | U6, U13, U16 |
+| Repository gates | `bin/check-all.sh` before every push | every unit |
+| Compatibility gate | the astubbs#315 branch's check run until it merges, then `bin/check-api-breaking.sh` | U9, U13, U17, and the fluent package's exclusion in U1 |
+| README regeneration | the template plugin in the core build; `README.adoc` must show no drift | U6, U8 |
+| Analysis surfaces | `bin/check-pr-analysis-surfaces.sh <PR>` before review | every PR |
+| Primary signal | the quickstart's sandbox test in the example module and its one broker test | U6 onward |
+| Kafka matrix | the `compat: kafka` CI job | U13 |
+<!-- file-refs: N/A - planned files and modules this plan creates; they do not exist yet -->
+
+Quality gates: no test weakened; a flake gets a sightings entry before merge; every facade-originated throw absent from the error log; every engine change under `state/` honours the `@GuardedBy` and controller-thread rules in that package's `AGENTS.md`.
+
+---
+
+## Definition of Done
+
+**Global**
+
+- Every requirement R1 to R36 is either delivered by a landed unit or explicitly deferred to a named later milestone in this plan.
+- The README's first example is the fluent quickstart, compiled and run in the sandbox on every build, and run once against a broker.
+- The classic API's compatibility gate reports only additions across every milestone.
+- `CONCEPTS.md` carries every domain term the plan introduced (route, record outcome, parked, admission target).
+- STRATEGY.md records the returning developer and the surface work when the fluent API ships.
+- Dead-end and experimental code from abandoned approaches is removed before any milestone is declared done.
+- The inflight note `docs/inflight/core-ux-modernisation.md` is current with which milestones landed and which prerequisites remain.
+
+**Per milestone**
+
+- Milestone A: U1 to U6 landed; the quickstart test and its broker test green; no engine file outside the fluent package changed except the optional dependency.
+- Milestone B: U7 to U9 landed; every example runs in the sandbox by default; the starvation test pins today's behaviour and names the small tier as its target.
+- Milestone C: U10 and U11 landed; AE17, AE18 and AE20 green in full.
+- Milestone D: U12 to U16 landed; AE3, AE15, AE22 and AE23's first clause green.
+- Milestone E: re-planned against the decomposed engine; AE11's set green on the native implementation.
