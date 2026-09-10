@@ -433,6 +433,13 @@ Every capability the comparable library offers is listed with its disposition he
 - Commanding from the dashboard, pause, resume, export and trace: the control-plane note; R28's commands are the engine API it needs first.
 - Direct assignment and ad-hoc iteration of a topic without a consumer group: the handle-operations family (R31), useful for tools and the sandbox.
 - A per-record failure strategy hook deciding retry, export or skip: only as Java-binding sugar over the outcomes, never a second callback on the wire (KD3).
+- Routes as configuration with hot reloading: every policy is data, so a route's retry limit, reaction and admission target could live in properties and change without a rebuild; a future step, not now (owner, 2026-09-10).
+- A test extension over the sandbox: a JUnit extension that boots a definition against generated or hand-written records, and an assertion subject over the handle's outcomes and parked set; a future step (owner, 2026-09-10).
+- Per-route rate limits, throughput per second beside the admission target's concurrency: a token bucket as data, delivered through the same hand-back-with-delay the breaker uses, so it rides the small tier's primitive; distinct from the self-scaling controller, which moves the admission target.
+- An idempotency layer in front of external calls, so a replayed record does not re-apply its side effect: the framework-level gate the internal-machinery note names (`docs/inflight/core-internal-machinery-as-features.md`, idempotency gates for Kafka-contained effects); key ordering makes a per-key window cheap to keep, and a rebalance is what it must survive.
+- Seek to a timestamp, from the handle and from the web GUI: one more command on the medium tier's poll-thread queue, since the consumer offers offsets-for-times.
+- Exception-class mapping as Java-binding sugar: a helper composed into the one function that maps exception classes to outcomes, the way the prelude composes filter and map, so nothing crosses the wire (KD3).
+<!-- file-refs: N/A - the internal-machinery note lives on an unmerged branch; print it with bin/inflight.mjs docs show -->
 
 **Tracked elsewhere**
 
@@ -656,7 +663,7 @@ Milestones and the branches they wait on. Arrows point from prerequisite to depe
 
 ```mermaid
 flowchart LR
-  A["Milestone A (tiny): U1 U2 U3 U21 U4 U5 U6"] --> B["Milestone B (tiny): U22 U7 U8 U9"]
+  A["Milestone A (tiny): U1 U2 U3 U21 U4 U5 U6"] --> B["Milestone B (tiny): U22 U7 U23 U8 U9"]
   P266["astubbs#266 examples support, reconciled when it lands"] -.-> B
   P295["astubbs#295 verdict-free return"] --> C
   B --> C["Milestone C (small): U10 U11"]
@@ -677,7 +684,7 @@ flowchart LR
 ### Sequencing
 
 - **Milestone A, the next-release candidate:** U1, U2, U3, U21, U4, U5, U6 in dependency order, with U5 parallel to U3 onward once U2 has landed. Everything a returning developer needs to see park in place from the README, and nothing in the engine.
-- **Milestone B, the rest of tiny:** U22, U7 and U8, plus U9 on the classic API.
+- **Milestone B, the rest of tiny:** U22, U7, U23 and U8, plus U9 on the classic API.
 - **Milestone C, small:** U10, then U11 after astubbs#295 merges.
 - **Milestone D, medium:** U12 to U15 in any order; U16 only after the producer-recovery stack has merged in its own order.
 - **Milestone E, large:** after the decomposition (astubbs#479); U17 to U20 are sketched here so the earlier tiers leave the seams they need, and are re-planned against the decomposed engine.
@@ -724,6 +731,7 @@ flowchart LR
 | U7 | Per-route policy: breaker, admission, batch size, sinks, prelude | `fluent/…Policy`, `fluent/…Breaker`, `fluent/…Admission` | U21 |
 | U8 | Example set, existing examples in the sandbox, Spring example | `parallel-consumer-examples/*` | U5, U6, astubbs#266 |
 | U9 | Classic-API produce overloads with separate output types | `ParallelStreamProcessor.java`, `ParallelEoSStreamProcessor.java`, `internal/ProducerManager.java` | none |
+| U23 | Explain: the effective definition, printed before start | `fluent/…Explain` | U2, U7 |
 | U10 | Engine accessors for the parked set, export at the percentage, resume and export commands | `state/PartitionState.java`, `state/PartitionStateManager.java`, `state/WorkContainer.java`, `fluent/…ParkedView` | U4 |
 | U11 | Admission as deferral through the verdict-free return, with a delay | `fluent/…Admission`, `state/WorkContainer.java` | U7, astubbs#295 |
 | U12 | Per-route ordering at the shard-key seam | `state/ShardManager.java`, `state/ShardKey.java` | U3 |
@@ -977,6 +985,24 @@ flowchart LR
   - The Spring example's context starts, the handle closes with the context, and records flow in the sandbox.
 - **Verification:** All example modules' tests pass without Docker; the README's example list matches the module.
 
+### U23. Explain: the effective definition, printed before start
+
+- **Goal:** A definition can describe itself before it starts: each route with the settings it inherited and the ones it overrode, so "why did it do that" is answered from the definition rather than the javadoc.
+- **Requirements:** R6, R18, R21 (the README shows it); KD3; KTD2.
+- **Dependencies:** U2, U7 (so every per-route setting exists to print).
+- **Files:** `fluent/` an explain renderer over the definition view; tests beside it.
+- **Approach:**
+  1. `explain()` on the definition returns a plain-text report, one block per route: consumed and produced types, ordering, admission target, retry limit and delay, the reaction on exhaustion with its dlq settings, the breaker, batch mode, the sink or function; each value marked inherited from the instance default or set on the route.
+  2. An instance block: the commit mode, the commit-failure policy when present, the flow chosen (poll or produce-many) and why, which connection properties the facade consumed and which pass through.
+  3. The report is data (a map the wire can carry) rendered to text; the README's first section shows it once.
+- **Patterns to follow:** the definition-time refusal messages for how a setting is named; `DefinitionView` and `RouteView` as the only sources.
+- **Test scenarios:**
+  - A two-route definition with one override prints both routes, marks the override as the route's own and the rest as inherited.
+  - A producing route reports produce-many with the reason; a non-producing definition reports poll.
+  - Consumed properties are listed as consumed; the rest as passed through, with values redacted for keys the classic redaction rules mark secret.
+  - The report is stable across two calls on the same definition.
+- **Verification:** Fluent tests pass; the README shows a real report from the quickstart.
+
 ### U9. Classic-API produce overloads with separate output types
 
 - **Goal:** A classic user produces records of different key and value types than they consume, without migrating.
@@ -1189,7 +1215,7 @@ Quality gates: no test weakened; a flake gets a sightings entry before merge; ev
 **Per milestone**
 
 - Milestone A: U1 to U6 and U21 landed; the quickstart test and its broker test green; no engine file outside the fluent package changed except the optional dependency and the `PCMetricsDef` entries U4 adds.
-- Milestone B: U22 and U7 to U9 landed; every example runs in the sandbox by default; the starvation test pins today's behaviour and names the small tier as its target.
+- Milestone B: U22, U7, U23, U8 and U9 landed; every example runs in the sandbox by default; the starvation test pins today's behaviour and names the small tier as its target.
 - Milestone C: U10 and U11 landed; AE17, AE18 and AE20 green in full.
 - Milestone D: U12 to U16 landed; AE3, AE15, AE22 and AE23's first clause green.
 - Milestone E: re-planned against the decomposed engine; AE11's set green on the native implementation.
