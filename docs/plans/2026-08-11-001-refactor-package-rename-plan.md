@@ -11,7 +11,7 @@ the rename was run in a throwaway clone and thrown away with it; the real run co
 **Expires:** expired on execution. Kept because the licence analysis (§2), the wire-format finding
 (§4.1) and the traps in §5 are the reasoning behind the tool, not a plan anyone still has to follow.
 **Ledger entry:** [`docs/inflight/branch-package-rename.md`](../inflight/branch-package-rename.md)
-**Release gate:** [`docs/inflight/release-0600-blockers.md`](../inflight/release-0600-blockers.md)
+**Release gate:** `docs/inflight/release-0600-blockers.md` - folded into `docs/inflight/release-v6-scope.md` on 2026-09-08; the version this plan cited is `git show 2c874ecac:docs/inflight/release-0600-blockers.md`
 **Prior art:** none. `docs/plans/`, `docs/solutions/`, `docs/inflight/`,
 [`docs/refactoring.md`](../refactoring.md) and the issue tracker (all states) were searched for a
 package rename before this was written and returned nothing. The adjacent work that exists is the

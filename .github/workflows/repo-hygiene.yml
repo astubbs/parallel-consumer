@@ -494,20 +494,20 @@ jobs:
               pull_number: pr.number,
             });
 
-            const changelog = files.find(f => f.filename === "CHANGELOG.adoc");
+            const changelog = files.find(f => f.filename === "CHANGELOG.md");
             // No patch also covers GitHub omitting it for very large diffs - accepted gap: a giant
             // changelog rewrite would skip the check rather than fail it.
             if (!changelog || !changelog.patch) {
-              core.info("No CHANGELOG.adoc change in this PR - nothing to check.");
+              core.info("No CHANGELOG.md change in this PR - nothing to check.");
               return;
             }
 
-            // The section comes from the CHANGELOG itself, not the patch: git has no funcname
-            // pattern for asciidoc, so a hunk header here reads `endif::[]` rather than the
-            // heading, and entries are too long for three lines of context to reach one.
+            // The section comes from the CHANGELOG itself, not the patch: a hunk header carries
+            // whatever funcname git guessed, not the `### Section` the entry sits under, and entries
+            // are too long for three lines of context to reach one.
             const fs = require("fs");
             const changelogText = fs.readFileSync(
-              `${process.env.GITHUB_WORKSPACE}/CHANGELOG.adoc`, "utf8");
+              `${process.env.GITHUB_WORKSPACE}/CHANGELOG.md`, "utf8");
             const missing = gate.entriesMissingIssue(changelog.patch, changelogText);
 
             if (missing.length === 0) {
@@ -516,7 +516,7 @@ jobs:
             }
 
             core.setFailed(
-              `New CHANGELOG.adoc entr${missing.length === 1 ? "y does" : "ies do"} not cite an issue.\n` +
+              `New CHANGELOG.md entr${missing.length === 1 ? "y does" : "ies do"} not cite an issue.\n` +
               `Entries under ${gate.SECTIONS_REQUIRING_AN_ISSUE.join(" / ")} should say which reported problem or request they address.\n` +
               `Link the issue explicitly - a bare #NN is ambiguous, since issues and PRs share one number sequence:\n` +
               `  fork:     (https://github.com/${context.repo.owner}/${context.repo.repo}/issues/NN[#NN])\n` +

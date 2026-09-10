@@ -33,6 +33,11 @@ opt_in:
   mechanism: Automatic when buffered work reaches the configured throttle threshold.
   isolated_from_stable_modules: false
 boundaries:
+  - Back-pressure that never lifts is reported. When the intake gate reads loaded across many consecutive
+    control-loop passes with no record retiring, the consumer logs one WARN naming the gate's operands and the
+    paused-partition count, and one INFO when it clears. That state - every partition paused, workers retrying
+    records that never succeed, throughput zero while the instance looks alive - was previously visible only as
+    pc.partitions.paused, so an operator with no alert on that gauge saw nothing at all.
   - A larger buffer can hide uneven partition traffic but also increases retained work and recovery exposure.
   - messageBufferSize switches load-factor behavior to a static value; do not treat it as a harmless cosmetic limit.
   - Whether partitions are paused is read from the consumer rather than tracked separately, so the

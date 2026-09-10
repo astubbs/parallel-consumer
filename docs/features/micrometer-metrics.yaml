@@ -11,7 +11,7 @@ availability:
   since: 0.5.2.6
   evidence:
     tag: 0.5.2.6
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Added Micrometer metrics for Parallel Consumer operation.
   milestones:
     - release: 0.5.2.7

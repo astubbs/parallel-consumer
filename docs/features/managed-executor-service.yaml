@@ -11,7 +11,7 @@ availability:
   since: 0.3.2.0
   evidence:
     tag: 0.3.2.0
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Added managed executor service support for Java EE environments.
 summary: Use a JNDI-managed executor for Parallel Consumer control work when the runtime owns application threads.
 use_this_when:

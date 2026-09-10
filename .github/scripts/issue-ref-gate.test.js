@@ -116,7 +116,7 @@ check("ignores removed and context lines", () => {
 });
 
 check("exempts the files where a bare number means upstream", () => {
-  for (const p of ["CHANGELOG.adoc",
+  for (const p of ["CHANGELOG.md",
                    "src/docs/development/upstream-map.yaml",
                    "src/docs/development/upstream-pr-analysis.adoc",
                    ".github/scripts/issue-ref-gate.test.js",

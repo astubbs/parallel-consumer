@@ -1,9 +1,10 @@
-# Retry-forever plus any poison eventually stops the instance fetching, at a threshold you can compute
+# Retry-forever plus any FRACTION of never-succeeding records eventually stops the instance fetching, at a threshold you can compute
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
-<!-- inflight-state: open - mechanism settled and the latch point derived; waiting on astubbs#149 for the real fix -->
+<!-- post-merge: checked -->
+<!-- inflight-state: open - mechanism settled, latch point derived, and the latch now reports itself (astubbs/parallel-consumer#497); waiting on astubbs#149 for the real fix -->
 
 **The filename carries astubbs#119, the fork mirror of confluentinc#857**, per this directory's rule
 that a note's number is always the fork's. `bug-857-family.md` carries an upstream number because it
@@ -28,8 +29,8 @@ produced for confluentinc#809 and confluentinc#833.
 **This is not a pathological-workload result.** It does not need a 50% failure rate, it does not need
 `KEY` ordering, and it does not need the workers to be busy. At 1% poison the instance ran normally
 for a minute, delivering ~3,900 records, and then latched for good with **11 of its 14 workers idle**.
-Any long-lived instance that retries forever and meets any poison at all arrives here; the only
-question is when, and that is computable - see the latch point below.
+Any long-lived instance that retries forever while a non-zero *fraction* of its stream never
+succeeds arrives here; the only question is when, and that is computable - see the latch point below.
 
 ## Settled: the gate is the mechanism, and head-of-line blocking is not why
 
@@ -120,11 +121,71 @@ own keys, because at 1% over four bursts a key holds several records where arm 1
 each key exactly one. **Eleven idle workers sat beside 58 deliverable records they were not allowed
 to reach.** So: not the cause of the latch, and the reason the latch is unrecoverable.
 
+## Correction, 2026-09-09 - a FRACTION, not "any poison"; one bad record is not enough
+
+<!-- post-merge: checked -->
+Written into astubbs/parallel-consumer#497, and applied in place above rather than left standing,
+because this note is the live record rather than a dated one. **The phrase "any poison at all" was
+inherited from astubbs/parallel-consumer#487 and overstates the result; its own text on master is
+left alone.**
+
+**A single record that never succeeds does not latch the gate, and cannot.** The gate is
+`inShards - parkedForRetry > target * loadingFactor`: one held record, minus one parked while it
+waits out its back-off, is nowhere near a threshold of tens. Its offset map encodes a single gap
+compactly, the commit sits below it, and the instance runs indefinitely with that one record
+retrying beneath a healthy stream that keeps retiring.
+
+**What latches the gate is a non-zero FRACTION of a live stream that never succeeds.** The two
+properties that matter are both about the population, not about any one record: healthy records
+retire and leave the shards, never-succeeding ones do not, so their share of what is held rises
+monotonically while the stream keeps arriving. The parked term subtracted from it is bounded by
+throughput rather than by population, so the unparked remainder crosses the threshold eventually -
+at 1% in the measured arm, and sooner when the retry service is slower. "Any fraction" is the
+correct claim and it is still a strong one; "any poison" is not, and reads as if one bad record
+were enough.
+
+## Open, from the review of the latch warning - the pass count is calibrated against ONE commit interval
+
+<!-- post-merge: checked -->
+`WorkManager#LATCHED_PASSES_BEFORE_WARNING` is derived from the loop's two cadences: latched passes
+are fast because failure results arrive in the mailbox continuously, and healthy-but-slow passes are
+slow because the mailbox is empty and each one blocks for the commit interval. The asymmetry is what
+makes a pass count safer than an elapsed-time bound - **at the ordinary commit-interval default.**
+
+**It is not safe at every default, and the constant's javadoc now says so. `getTimeToBlockFor()` has
+two branches, and the derivation described only one.**
+
+- **The commit interval, which is not always five seconds.** Under `PERIODIC_TRANSACTIONAL_PRODUCER`
+  the default is `DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS`, two orders of magnitude shorter than the
+  ordinary one, so the healthy grace collapses to roughly the same order as the latched cadence and a
+  fully-loaded transactional instance inside a long user function can be reported. A short commit
+  interval set by hand does the same on any mode.
+- **The retry-delay branch, which needs no unusual configuration at all.** When
+  `isWorkInFlightMeetingTarget()` is false - dispatch below full concurrency, which is the ordinary
+  state under `KEY` or `PARTITION` ordering whenever fewer keys are active than `maxConcurrency`
+  allows - and any record is in retry back-off, the pass blocks for
+  `min(commitInterval, max(defaultMessageRetryDelay, lowestScheduled))`. At the stock one-second retry
+  delay that is a one-second cadence, so the grace is roughly a hundred seconds rather than eight
+  minutes, on stock defaults. **This one is a static trace of the two branches rather than a measured
+  arm** - it wants a calibration run before anything is decided on it.
+
+**What is not decided.** The line carries its own discriminator today - it prints `parkedForRetry`,
+which the state this exists for holds continuously and a merely-slow instance reads as zero - so the
+operator can tell the two apart from the report itself. Narrowing the *trigger* on that term is the
+obvious next move and is **not** taken here, because it changes what the report fires on and wants its
+own measured arm: a transient zero in the parked count would suppress a real latch, and no arm has
+measured how often that happens. Scaling the count from the configured commit interval is the other
+candidate, and reintroduces the clock the design avoided.
+
+<!-- post-merge: checked -->
+Raised by review on astubbs/parallel-consumer#497, which corrected the constant's javadoc rather than
+changing the trigger.
+
 ## Not a product decision to be weighed - an eventual certainty to be bounded
 
 The earlier close called this "a decision", which understates it. There is no configuration of the
-existing code in which a long-lived instance with retry-forever and any poison does **not** end up
-here; the only variables are how long it takes and how idle the machine is when it happens. What is
+existing code in which a long-lived instance with retry-forever and a non-zero fraction of
+never-succeeding records does **not** end up here; the only variables are how long it takes and how idle the machine is when it happens. What is
 open is which of the mitigations below is taken, not whether the state is reachable.
 
 Two bounds are in play and only one of them is the gate.
@@ -149,12 +210,17 @@ direction already: `docs/data/roadmap.yaml`'s `dead-letter-queue` entry says in 
 "retrying forever is the only built-in answer today, and it is the wrong one for a poison record"
 (astubbs#149, confluentinc#310). Until that lands:
 
-- **Make the latch loud.** The state is exported as the `NUM_PAUSED_PARTITIONS` gauge and says nothing
-  in the log. A gate that has read `true` across many consecutive ticks while nothing retired is a
-  report an operator can act on, it changes no semantics, and it needs nothing else settled first.
-  It is the cheapest available improvement and the one worth taking first - and arm 4 is the argument
-  for it: an instance can be 78% idle, look healthy, and be permanently stopped, and today the only
-  thing that would tell an operator is a gauge nobody is alerting on.
+<!-- post-merge: checked -->
+- **Make the latch loud - DONE, astubbs/parallel-consumer#497.** The state was exported as the
+  `NUM_PAUSED_PARTITIONS` gauge and said nothing in the log; a gate reading `true` across
+  `LATCHED_PASSES_BEFORE_WARNING` consecutive control-loop passes with nothing retiring is now a WARN
+  naming the operands, once, with an INFO when it clears. No semantics changed - the gate's decision,
+  the poller's pausing, the retry service and every counter are untouched. Arm 4 is the argument that
+  made it first: an instance can be 78% idle, look healthy, and be permanently stopped, and until
+  then the only thing that would tell an operator was a gauge nobody is alerting on. **The count is
+  passes, not elapsed time**, and `WorkManager#LATCHED_PASSES_BEFORE_WARNING`'s javadoc owns the
+  derivation - the two cadences it separates and the fifty-fold grace the count gives the healthy
+  one.
 - **Do not** raise the default buffer, add a "selectable" count, or special-case the ordered shard
   head. The arms above show what each of those buys.
 

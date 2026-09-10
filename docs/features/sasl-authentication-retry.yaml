@@ -11,7 +11,7 @@ availability:
   since: 0.5.3.1
   evidence:
     tag: 0.5.3.1
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Added support for a SaslAuthenticationException retry timeout as part of the improved offset commit retry.
 summary: Keep retrying consumer poll and synchronous commit through a transient SaslAuthenticationException instead of stopping the consumer.
 use_this_when:

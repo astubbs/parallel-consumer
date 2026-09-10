@@ -11,7 +11,7 @@ availability:
   since: 0.5.2.4
   evidence:
     tag: 0.5.2.4
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Added support for compacted topics and commit-offset resetting by reconciling tracked incomplete offsets with polled records.
 summary: Recover completion tracking when compaction or an offset reset means records previously represented in the offset map are no longer present in a poll.
 use_this_when:

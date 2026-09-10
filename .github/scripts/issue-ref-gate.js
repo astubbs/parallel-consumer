@@ -39,7 +39,7 @@ const QUALIFY_BELOW = 1000;
 // Files where a bare #NN legitimately means upstream, so the rule must NOT fire.
 const EXEMPT_PATHS = [
   // its own header says entries below 0.6.0.0 predate the fork and their #NN already mean upstream
-  /(^|\/)CHANGELOG\.adoc$/,
+  /(^|\/)CHANGELOG\.md$/,
   // every number in it is upstream by construction
   /(^|\/)src\/docs\/development\/upstream-map\.yaml$/,
   // editorial analysis written entirely in upstream terms

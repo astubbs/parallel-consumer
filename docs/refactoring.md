@@ -85,12 +85,12 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 ## Breaking changes queued for next major version
 
 **The gate is currently OPEN: `0.6.0.0` is that major, it is unreleased, and it is the release being
-cut right now.** It already carries a `=== Breaking` section in `CHANGELOG.adoc` (the `bz.stub`
+cut right now.** It already carries a `### Breaking` section in `CHANGELOG.md` (the `bz.stub`
 package rename), so the items below are **not** waiting for some future bump - this is the pass they
 were collected for, and work that lands now lands in the right release.
 
 Do not read "queued for next major" as "not yet". Check
-[`CHANGELOG.adoc`](../CHANGELOG.adoc) for whether the top section is still marked `(unreleased)`
+[`CHANGELOG.md`](../CHANGELOG.md) for whether the top section is still marked `(unreleased)`
 before deciding a breaking change must wait: while it is, the gate is open. It closes when 0.6.0.0
 ships, and then this section starts accruing for the release after it.
 
@@ -464,6 +464,13 @@ cosmetic - see the last bullet.*
     could be, because the iterator holds a read lock only its opener can release.
     SpotBugs reads no confinement annotation and will keep reporting it; do not "fix" it
     with `volatile`, which would assert a sharing that does not exist.
+    **`WorkManager`'s three intake-latch counters are plain on purpose, carry NO
+    `@ThreadConfined`, and must not be "fixed" with `volatile`.** They are
+    `retiredTotalAtLastGateObservation`, `consecutiveLatchedPasses` and `latchReported`.
+    **`observeLoadGateLatch`'s javadoc owns the argument** - which thread touches them,
+    why the usual `@ThreadConfined`-plus-assertion pairing is not applied here, and what
+    a foreign caller would actually cost. What belongs on this list is only that a
+    detector reporting them is expected.
   - **`PartitionState`'s commit-window pair shares one lifecycle - declare the confinement on both or
     on neither.** The pair is `offerLastMadeForCommit` (astubbs#470) and `completionCountBeingCommitted`
     (astubbs#469): both written by `getCommitDataIfDirty()` where a commit window opens, both read by
@@ -544,6 +551,13 @@ cosmetic - see the last bullet.*
   comparison" analysis-only code once the encoding choice is settled.
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
   missing `max-uncommitted < Short.MAX` bound.
+- **astubbs#480 leaves the codec's consumer dependency where it was.** Its first revision bounded
+  every decoded run and bitset by a blocking `consumer.endOffsets(...)` round trip inside the
+  rebalance callback; the rework moved the check off the wire entirely. The codec now only passes
+  the committed offset into `PartitionState`, which settles the loaded map's claim lazily at its
+  first poll batch against a watermark `ConsumerManager` reconstructs without blocking
+  (`position` plus `currentLag`, on the thread that owns the consumer). So the split above does not
+  inherit a ground-truth lookup: the plausibility check already lives outside the codec.
 
 - **The cached-and-shared instance is still only safe by the schedule, not by construction.**
   Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition

@@ -246,6 +246,37 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * to bound the FAILURES rather than the buffer</b> - astubbs#149's dead letter queue. Full write-up,
  * the operator-visible shape and the interim mitigation:
  * {@code docs/inflight/bug-119-load-gate-counts-blocked-work-as-available.md}.
+ *
+ * <h2>Confirmation, 2026-09-09 - the latch now reports itself, and this arm is what proved it</h2>
+ * The interim mitigation named above shipped in astubbs/parallel-consumer#497: a WARN on
+ * {@code WorkManager}'s logger once the intake gate has read loaded across
+ * {@code LATCHED_PASSES_BEFORE_WARNING} consecutive control-loop passes with no record retiring, and
+ * a line when that clears. One confirming run of arm 1's shape - same seed
+ * {@code 3747722682837130843}, {@code KEY}, {@code failureFraction} 0.5, on the same workstation,
+ * shortened to {@code -Dsoak.duration=PT4M} because the latch arrives in the first second and this run
+ * is a confirmation rather than a re-derivation, with {@code -Dpc.loadgate.log.level=info} so the
+ * report is visible without the per-tick DEBUG equation.
+ * <ul>
+ *   <li><b>The arm reproduced.</b> {@code succeeded=451}, arm 1's number and astubbs#471's
+ *   thirty-minute number, in four minutes.</li>
+ *   <li><b>Exactly ONE WARN in the whole run</b>, about ten seconds after the run banner - the
+ *   hundred passes at the measured latched cadence, as designed - and no clear line, because the
+ *   latch never cleared. "Once, then quiet" holds over roughly forty times the reporting window.</li>
+ *   <li><b>Its operands agree with the arms that derived them:</b>
+ *   {@code inShards=549 parkedForRetry=138 workable=411 vs target(14)*loadingFactor(3)=42,
+ *   pausedPartitions=20}. 549 is arm 1's pinned population, 138 sits inside the parked band arms 1-3
+ *   measured, and every partition is paused.</li>
+ * </ul>
+ * <b>And one correction to the wording above, not to its measurements.</b> The verdict block says
+ * "retry-forever and any poison at all", which overstates it: a <em>single</em> record that never
+ * succeeds is one held minus one parked against a threshold of tens, so it never crosses, its offset
+ * map encodes one gap compactly, and the instance runs indefinitely with it retrying under a healthy
+ * stream. What latches the gate is a non-zero <em>fraction</em> of a live stream that never succeeds -
+ * healthy records retire and these do not, so their share of what is held rises while the stream
+ * keeps arriving. Every arm above ran a fraction (0.5, then 0.01), so nothing measured changes; only
+ * the claim drawn from it narrows. The earlier text is left as it was written -
+ * {@code docs/inflight/bug-119-load-gate-counts-blocked-work-as-available.md} carries the correction
+ * in full.
  * <p>
  * <b>Still eliminated, re-measured on all four arms:</b> offset-encoding back pressure. Neither
  * {@code Offset map data too large} nor {@code not allow further messages} appears once in any of the

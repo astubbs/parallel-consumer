@@ -61,7 +61,7 @@ This is a community-maintained fork of https://github.com/confluentinc/parallel-
 // namespace they are moving OFF, and a summary that names only the destination cannot say that.
 // rename-packages.sh would otherwise rewrite it into a package that moves to itself.
 // rename-packages: freeze-begin(fork-summary)
-*Behaviour* is a drop-in replacement for upstream 0.5.x: the API is source-compatible, and the committed offset format is unchanged, so an existing consumer group upgrades in place without resetting or migrating offsets.
+*Behaviour* is a drop-in replacement for upstream 0.5.x for most users: the committed offset format is unchanged, so an existing consumer group upgrades in place without resetting or migrating offsets, and the API changes are the short list under Breaking in the link:CHANGELOG.md[changelog].
 Two identifiers do change in 0.6.0.0, and both are mechanical: the Maven `groupId` becomes `bz.stub.parallelconsumer`, and the Java packages *move* with it, from `io.confluent.parallelconsumer.*` to `bz.stub.parallelconsumer.*`.
 See <<upgrading-from-upstream,Upgrading from upstream 0.5.x>> for the steps.
 // rename-packages: freeze-end(fork-summary)
@@ -792,9 +792,10 @@ find . -name '*.java' -exec sed -i 's/io\.confluent\.parallelconsumer/bz.stub.pa
 NOTE: That `sed -i` is GNU syntax. On macOS or BSD, use `sed -i '' -e 's/…/…/g'` instead -- BSD `sed` reads the argument after `-i` as a backup-file suffix.
 // rename-packages: freeze-end(upgrade-instructions)
 
-Nothing else changes.
-The API is source-compatible, so beyond the import lines no source edit is needed, and most codebases reference only a handful of types.
-Committed offset metadata is unchanged too, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
+For most codebases nothing else changes: they reference only a handful of types, and none of those moved beyond the package.
+The exceptions are the Breaking section of the link:CHANGELOG.md[changelog], and it is short: a commit that exhausts its budget throws `OffsetCommitBudgetExceededException` instead of Kafka's bare exception, the JStream result stream now blocks until close, `InternalRuntimeException` is renamed `PCInternalRuntimeException`, `RecordContext` equality is now identity, and two narrowings of the internal controller's subclass surface.
+Read it once before you upgrade.
+Committed offset metadata is unchanged, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
 The library's shared internal utilities moved with the rest, into `bz.stub.parallelconsumer.internal.utils` -- they were always plumbing, they are not part of the published API, and they are now named as such.
 
 === From 0.4 to 0.5
@@ -1459,7 +1460,7 @@ NOTE:: any additional binders / metrics need to be cleaned up appropriately - fo
 Maven Central as `bz.stub.parallelconsumer`, and it is where fixes, releases and issue triage land.
 The original {base_confluent_url}[confluentinc/parallel-consumer] is no longer actively maintained.
 
-For what has already shipped, see the link:CHANGELOG.adoc[CHANGELOG].
+For what has already shipped, see the link:CHANGELOG.md[CHANGELOG].
 
 For the direction of the project, see link:docs/data/roadmap.yaml[the roadmap data]. For work in progress and
 known defects, use the {issues_link}[issue tracker on this repository]. We mirrored every open issue from
@@ -1970,7 +1971,7 @@ https://www.google.com/url?q=https://www.yourkit.com/.net/profiler/&source=gmail
 
 // The changelog is deliberately NOT embedded here - it used to be `include::`d in full, which put
 // every release note (build and CI detail included) into the README, and made every changelog edit a
-// two-file change: CHANGELOG.adoc plus the generated README.adoc.
+// two-file change: CHANGELOG.md plus the generated README.adoc.
 == Change Log
 
-Release notes for every version live in link:CHANGELOG.adoc[CHANGELOG.adoc].
+Release notes for every version live in link:CHANGELOG.md[CHANGELOG.md].

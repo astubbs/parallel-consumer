@@ -11,7 +11,7 @@ availability:
   since: 0.5.3.0
   evidence:
     tag: 0.5.3.0
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: Added RecordContext access to the most recent processing failure reason.
 summary: Inspect the latest recorded failure for a record while making retry or diagnostic decisions in processing code.
 use_this_when:

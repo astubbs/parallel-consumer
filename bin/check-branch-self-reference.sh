@@ -31,7 +31,7 @@
 #
 # **The PR did not stop existing - PRs are permanent, and citing one is fine forever.** What rotted is
 # the BRANCH (deleted) and the TENSE (a present-state claim about an arrangement that ended). That is
-# also why this looks nowhere else: in docs/solutions/, dated docs/plans/ or CHANGELOG.adoc, a branch
+# also why this looks nowhere else: in docs/solutions/, dated docs/plans/ or CHANGELOG.md, a branch
 # or PR reference records what already happened and stays correct forever. Demanding a marker there
 # would be a tax on writing history correctly.
 #
@@ -219,7 +219,7 @@ strip_spans() { sed 's/`[^`]*`/ /g' "$1"; }
 
 # docs/inflight/ ONLY, and the scope is the whole point. That directory's contract is "currently
 # true" - AGENTS.md calls it transient cross-branch state, and a note is deleted when its work lands.
-# Everywhere else (docs/solutions/, dated docs/plans/, CHANGELOG.adoc) records what ALREADY HAPPENED,
+# Everywhere else (docs/solutions/, dated docs/plans/, CHANGELOG.md) records what ALREADY HAPPENED,
 # where a branch reference stays correct forever and demanding a marker would be pure tax.
 # The glob DOES recurse - a git pathspec `*` matches `/` too, so `docs/inflight/sub/note.md` is
 # covered. (An earlier comment here claimed the opposite and called the flatness load-bearing; it was

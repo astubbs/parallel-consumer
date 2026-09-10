@@ -11,6 +11,7 @@ announcement was invisible from master. The content is unchanged apart from punc
 above. Several documents it cites still live only on those branches; each is marked where it is
 cited, and `node bin/inflight.mjs docs show <path>` reads it from the branch that holds it.
 
+<!-- post-merge: checked-begin -->
 **What this note is, corrected 2026-09-09 by the owner.** It is an aggregate written when 0.6.0.0
 was going to carry features. It no longer does: 0.6.0.0 is a bugs-only stability release (decision
 of 2026-09-07), and the scope note carried by astubbs#475 is the source of truth for what ships. Most
@@ -19,6 +20,7 @@ polyglot positioning, the performance inventory and the claims decision built on
 the next release, 6.1, which the owner plans to start on once 0.6.0.0 is cut. What this note
 contributes to 0.6.0.0 is the theme and the ordering of the announcement, and the rule that nothing
 experimental is claimed; [`release-0.6.0.0.md`](release-0.6.0.0.md) holds 0.6.0.0's own wording.
+<!-- post-merge: checked-end -->
 
 **Every performance figure below came from an experimental branch, not from master.** This note was
 written on the language-proxy branch and grew on the engine-performance stack, whose engine is

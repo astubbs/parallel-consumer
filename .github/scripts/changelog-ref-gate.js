@@ -43,14 +43,14 @@ function citesIssue(entry) {
 // on every CI PR.
 const SECTIONS_REQUIRING_AN_ISSUE = ["Breaking", "Improvements", "Fixes", "Examples"];
 
-const isBullet = line => /^\s*\*\s+\S/.test(line);
+const isBullet = line => /^\s*[-*]\s+\S/.test(line);
 
 function headingOf(line) {
-  const match = line.match(/^===\s+(.+?)\s*$/);
+  const match = line.match(/^###\s+(.+?)\s*$/);
   return match ? match[1] : null;
 }
 
-/** Asciidoc bullets added by this diff. */
+/** Markdown bullets (`-` or `*`) added by this diff. */
 function addedBullets(patch) {
   return (patch || "")
     .split(/\r?\n/)
@@ -59,12 +59,13 @@ function addedBullets(patch) {
 }
 
 /**
- * The `=== Section` an entry sits under, found in the CHANGELOG ITSELF rather than in the diff.
+ * The `### Section` an entry sits under, found in the CHANGELOG ITSELF rather than in the diff.
  *
  * Reading the file is the whole trick, and it is worth saying why, because inferring the section
- * from the patch looks obviously fine and is not: git has no funcname pattern for asciidoc, so a
- * hunk header for this file reads `@@ ... @@ endif::[]` rather than the heading. Entries are also
- * one long line each, so three lines of context rarely reach back to a heading either. An earlier
+ * from the patch looks obviously fine and is not: no Markdown funcname pattern is configured for
+ * this file, so a hunk header carries whatever prose line git's default pattern matched last, not
+ * the `### Section` heading. Entries are also one long line each, so three lines of context rarely
+ * reach back to a heading either. An earlier
  * version inferred from the patch, got null for essentially every real entry, and - because an
  * unknown section counted as exempt - passed everything silently. The job already checks the repo
  * out, so the real file is right there.

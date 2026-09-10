@@ -11,7 +11,7 @@ availability:
   since: 0.5.2.3
   evidence:
     tag: 0.5.2.3
-    path: CHANGELOG.adoc
+    path: CHANGELOG.md
     basis: The transactional commit mode rework introduced the lock acquisition timeouts and the eager-processing option.
 readme_anchor: transaction-system
 summary: Tune how long the transactional commit mode waits for the commit and produce locks, and whether processing may continue up to the send step during a commit.
