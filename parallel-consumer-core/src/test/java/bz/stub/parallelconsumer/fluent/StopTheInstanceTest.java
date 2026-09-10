@@ -79,7 +79,7 @@ class StopTheInstanceTest {
         var laterInvoked = new AtomicInteger();
         var holdCompleted = new AtomicInteger();
 
-        var pc = ParallelConsumer.define(props())
+        var pc = ParallelConsumer.connect(props())
                 .closePath(ClosePath.DONT_DRAIN_FIRST)
                 .defaultOrdering(ProcessingOrder.UNORDERED)
                 // Two workers: one holds a record in flight while the other reaches the stopping record, which is
@@ -147,7 +147,7 @@ class StopTheInstanceTest {
     @Test
     void afterARestartTheStoppingRecordIsDeliveredAgain() {
         var firstRunSaw = new AtomicInteger();
-        var pc = ParallelConsumer.define(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var pc = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
         pc.string(TOPIC).process(context -> {
             firstRunSaw.incrementAndGet();
             return Outcome.stop("the schema is not supported");
@@ -163,7 +163,7 @@ class StopTheInstanceTest {
 
         var restartRuntime = new RecordingClientRuntime();
         var restartSaw = new AtomicInteger();
-        var restarted = ParallelConsumer.define(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var restarted = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
         restarted.string(TOPIC).process(context -> {
             restartSaw.incrementAndGet();
             return Outcome.stop("the schema is not supported");
@@ -186,7 +186,7 @@ class StopTheInstanceTest {
         int concurrency = 16;
         var invokedOffsets = ConcurrentHashMap.<Long>newKeySet();
 
-        var pc = ParallelConsumer.define(props())
+        var pc = ParallelConsumer.connect(props())
                 .closePath(ClosePath.DONT_DRAIN_FIRST)
                 .defaultOrdering(ProcessingOrder.UNORDERED)
                 .defaultConcurrency(concurrency);
@@ -228,7 +228,7 @@ class StopTheInstanceTest {
     @Test
     void aRouteMayStopTheInstanceWhenARecordRunsOutOfAttempts() {
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.define(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var pc = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
         pc.string(TOPIC)
                 .retryLimit(2)
                 .retryDelay(Duration.ofMillis(10))
@@ -263,7 +263,7 @@ class StopTheInstanceTest {
      */
     @Test
     void theExhaustionReactionIsPerRoute() {
-        var pc = ParallelConsumer.define(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var pc = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
         pc.string(TOPIC)
                 .retryLimit(2)
                 .retryDelay(Duration.ofMillis(10))

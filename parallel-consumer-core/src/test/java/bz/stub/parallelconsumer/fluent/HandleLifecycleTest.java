@@ -73,7 +73,7 @@ class HandleLifecycleTest {
         int concurrency = 4;
         var entered = new AtomicInteger();
         var completed = new AtomicInteger();
-        var pc = ParallelConsumer.define(props())
+        var pc = ParallelConsumer.connect(props())
                 .defaultOrdering(ProcessingOrder.UNORDERED)
                 .defaultConcurrency(concurrency);
         pc.string(TOPIC).process(context -> {
@@ -122,7 +122,7 @@ class HandleLifecycleTest {
      */
     @Test
     void awaitReturnsWhenAnotherThreadClosesTheHandle() throws Exception {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> Outcome.succeeded());
         ConsumerHandle started = runtime.startAndAssign(pc, 1);
         handle = started;
@@ -162,7 +162,7 @@ class HandleLifecycleTest {
      */
     @Test
     void awaitRethrowsAControlThreadFailureWrapped() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> Outcome.succeeded());
         ConsumerHandle started = runtime.startAndAssign(pc, 1);
         handle = started;
@@ -188,7 +188,7 @@ class HandleLifecycleTest {
      */
     @Test
     void doubleCloseIsIdempotent() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> Outcome.succeeded());
         ConsumerHandle started = runtime.startAndAssign(pc, 1);
         handle = started;
@@ -208,7 +208,7 @@ class HandleLifecycleTest {
      */
     @Test
     void closingADefinitionThatWasNeverStartedIsANoOp() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> Outcome.succeeded());
 
         pc.close();
@@ -225,7 +225,7 @@ class HandleLifecycleTest {
      */
     @Test
     void aSecondStartIsRefusedBeforeASecondProcessorIsBuilt() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> Outcome.succeeded());
         handle = runtime.startAndAssign(pc, 1);
         int clientsBuiltByTheFirstStart = runtime.consumerCalls + runtime.producerCalls;
@@ -244,7 +244,7 @@ class HandleLifecycleTest {
     void closingTheDefinitionClosesTheInstanceItStarted() {
         var processed = new AtomicInteger();
         var entered = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> {
             processed.incrementAndGet();
             return Outcome.succeeded();

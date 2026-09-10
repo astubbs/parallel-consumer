@@ -57,7 +57,7 @@ class RouteDispatchOutcomesTest {
     @Test
     void ofAThousandRecordsAHundredAreFilteredAndTheRestSucceedWithEveryOffsetCommitted() {
         int records = 1000;
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context ->
                 context.value().startsWith("no-customer-") ? Outcome.filtered() : Outcome.succeeded());
 
@@ -91,7 +91,7 @@ class RouteDispatchOutcomesTest {
      */
     @Test
     void aProducedRecordIsSerialisedWithTheRoutesProducedTypesAndReachesTheProducer() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .produced(Produced.with(Serdes.String(), Serdes.Long()))
                 .process(context -> Outcome.produce(
@@ -120,7 +120,7 @@ class RouteDispatchOutcomesTest {
     @Test
     void aRouteThatProducesNothingSucceedsOnANormalReturn() {
         var seen = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> {
             seen.incrementAndGet();
             return Outcome.succeeded();
@@ -144,7 +144,7 @@ class RouteDispatchOutcomesTest {
     void eachTopicIsDecodedAndRunByItsOwnRoute() {
         var ordersSeen = new AtomicInteger();
         var auditSeen = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> {
             assertThat(context.topic()).isEqualTo(TOPIC);
             ordersSeen.incrementAndGet();

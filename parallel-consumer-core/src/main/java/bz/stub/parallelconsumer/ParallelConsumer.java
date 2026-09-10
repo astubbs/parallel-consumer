@@ -35,6 +35,12 @@ public interface ParallelConsumer<K, V> extends DrainingCloseable {
      * Begin a definition on the <b>fluent API</b>: connection properties in, one typed route per topic with its own
      * processing function and policy, and a handle out.
      * <p>
+     * <b>Nothing is connected here.</b> The name follows Kafka's own client, which takes its configuration at
+     * construction and reaches the cluster on its first poll: this call validates nothing and opens nothing, every
+     * definition-time check runs when the routes are complete, and the consumer - and the producer, if the definition
+     * needs one - is built when {@code start()} is called. A definition that is written and never started constructs
+     * no client at all.
+     * <p>
      * The fluent API ships beside the options-builder API above it as an equal - neither is deprecated, both are
      * documented, and this factory is the one addition the classic surface takes for it. The classic API remains the
      * right choice for a running application that needs nothing new; an existing user with hand-built clients can
@@ -49,7 +55,7 @@ public interface ParallelConsumer<K, V> extends DrainingCloseable {
      * @see ParallelConsumerDefinition
      */
     @InterfaceStability.Unstable
-    static ParallelConsumerDefinition define(Properties connectionProperties) {
+    static ParallelConsumerDefinition connect(Properties connectionProperties) {
         return new ParallelConsumerDefinition(connectionProperties);
     }
 

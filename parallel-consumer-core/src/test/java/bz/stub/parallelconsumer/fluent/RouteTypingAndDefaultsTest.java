@@ -53,7 +53,7 @@ class RouteTypingAndDefaultsTest {
         Properties properties = new Properties();
         properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
         properties.put(ConsumerConfig.GROUP_ID_CONFIG, "route-typing-test");
-        return ParallelConsumer.define(properties);
+        return ParallelConsumer.connect(properties);
     }
 
     /**

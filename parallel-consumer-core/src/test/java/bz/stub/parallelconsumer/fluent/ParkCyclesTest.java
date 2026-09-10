@@ -67,7 +67,7 @@ class ParkCyclesTest {
     void aDelayWithTwoCyclesReAttemptsTwiceThenParksWithoutDelay() {
         var attempts = new AtomicInteger();
         var observedCycles = new AtomicInteger(-1);
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))
@@ -106,7 +106,7 @@ class ParkCyclesTest {
     @Test
     void aRecordBetweenCyclesIsNotInTheParkedView() {
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))
@@ -141,7 +141,7 @@ class ParkCyclesTest {
     @Test
     void aRecordThatSucceedsOnACycleAttemptCompletesAndIsForgotten() {
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))
@@ -174,7 +174,7 @@ class ParkCyclesTest {
     @Test
     void aPermanentDecodeFailureNeverTakesTheDelayPath() {
         var ran = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.topic(TOPIC)
                 .consumed(Consumed.with(Serdes.String(),
                         Formats.classifyDecodeFailures(Serdes.serdeFrom(Serdes.String().serializer(), rejecting()),
@@ -208,7 +208,7 @@ class ParkCyclesTest {
     @Test
     void aParkOutcomeSkipsTheCyclesToo() {
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(5)
                 .retryDelay(Duration.ofMillis(10))

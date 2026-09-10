@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Properties;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * R4 and KTD7's property split: the keys the facade owns are consumed, and everything else reaches each route's
@@ -66,7 +67,7 @@ class ConnectionPropertiesTest {
     void passThroughPropertiesReachEachRoutesDeserialisersAndTheFacadesOwnKeysDoNot() {
         RecordingDeserializer key = new RecordingDeserializer();
         RecordingDeserializer value = new RecordingDeserializer();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.topic("orders").consumed(Consumed.with(key, value)).process(context -> Outcome.succeeded());
 
         pc.validate();
@@ -87,7 +88,7 @@ class ConnectionPropertiesTest {
     void eachSideIsToldWhetherItIsTheKey() {
         RecordingDeserializer key = new RecordingDeserializer();
         RecordingDeserializer value = new RecordingDeserializer();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.topic("orders").consumed(Consumed.with(key, value)).process(context -> Outcome.succeeded());
 
         pc.validate();
@@ -100,11 +101,73 @@ class ConnectionPropertiesTest {
 
     @Test
     void theViewSeparatesTheClientPropertiesFromThePassThroughOnes() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string("orders").process(context -> Outcome.succeeded());
 
         assertThat(pc.connectionProperties()).containsEntry(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
         assertThat(pc.passThroughProperties()).doesNotContainKey(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG);
         assertThat(pc.passThroughProperties()).containsEntry("schema.registry.url", "http://registry:8081");
+    }
+
+    /**
+     * Kafka's consumer auto-commits by default and Parallel Consumer refuses to run one that does, so a definition
+     * given nothing but a bootstrap address and a group would have failed at start with a message about a client the
+     * user never built - which is what {@code FluentQuickstartIT} found against a real broker before the runtime
+     * disabled it (R1).
+     * <p>
+     * The consumer the runtime builds is not reachable from here without a broker, so what is pinned is the
+     * arithmetic that decides it: the connection properties the runtime is handed carry no auto-commit setting at
+     * all, which is exactly the case Kafka defaults to true.
+     */
+    @Test
+    void nothingInTheConnectionPropertiesDisablesAutoCommit_soTheRuntimeMust() {
+        var pc = ParallelConsumer.connect(props());
+        pc.string("orders").process(context -> Outcome.succeeded());
+
+        assertThat(pc.connectionProperties()).doesNotContainKey(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG);
+    }
+
+    /**
+     * Asking for auto-commit is refused at definition time, naming the setting, rather than silently overridden: a
+     * user who typed it believes something about how their offsets are committed, and it is wrong.
+     */
+    @Test
+    void anExplicitAutoCommitIsRefusedBeforeAnythingIsOpened() {
+        Properties properties = props();
+        properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, true);
+        var pc = ParallelConsumer.connect(properties);
+        pc.string("orders").process(context -> Outcome.succeeded());
+
+        var refusal = assertThrows(IllegalArgumentException.class, pc::validate);
+        assertThat(refusal).hasMessageThat().contains(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG);
+        assertThat(refusal).hasMessageThat().contains("commits offsets for you");
+    }
+
+    /**
+     * The string form Kafka itself accepts, so that a properties file loaded from disk is refused the same way an
+     * in-code {@code true} is.
+     */
+    @Test
+    void anExplicitAutoCommitIsRefusedWhenItArrivesAsAString() {
+        Properties properties = props();
+        properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true");
+        var pc = ParallelConsumer.connect(properties);
+        pc.string("orders").process(context -> Outcome.succeeded());
+
+        assertThrows(IllegalArgumentException.class, pc::validate);
+    }
+
+    /**
+     * An explicit {@code false} is what a careful user writes, and it agrees with what the facade does - so it is
+     * accepted rather than refused for naming a setting the facade owns.
+     */
+    @Test
+    void anExplicitlyDisabledAutoCommitIsAccepted() {
+        Properties properties = props();
+        properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        var pc = ParallelConsumer.connect(properties);
+        pc.string("orders").process(context -> Outcome.succeeded());
+
+        pc.validate();
     }
 }

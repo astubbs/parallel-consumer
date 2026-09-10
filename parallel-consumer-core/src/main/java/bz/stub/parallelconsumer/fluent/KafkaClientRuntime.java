@@ -10,6 +10,7 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -29,7 +30,24 @@ class KafkaClientRuntime implements ClientRuntime {
     public Consumer<byte[], byte[]> consumer(DefinitionView definition) {
         Map<String, Object> config = definition.connectionProperties();
         requireConnection(config);
-        return new KafkaConsumer<>(config, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+        return new KafkaConsumer<>(withAutoCommitDisabled(config), new ByteArrayDeserializer(),
+                new ByteArrayDeserializer());
+    }
+
+    /**
+     * Kafka's consumer auto-commits by default and Parallel Consumer refuses to run one that does, since it commits
+     * offsets itself - so a definition given nothing but a bootstrap address and a group would fail at start with a
+     * message about a client the user never built (R1).
+     * <p>
+     * Set here rather than at definition time because it is a property of the client this class constructs: a
+     * definition that supplies its own consumer, or runs in the sandbox, has already answered the question. An
+     * explicit {@code true} in the connection properties is refused before this, by
+     * {@link ParallelConsumerDefinition}, rather than being silently overridden.
+     */
+    private static Map<String, Object> withAutoCommitDisabled(Map<String, Object> config) {
+        Map<String, Object> withoutAutoCommit = new LinkedHashMap<>(config);
+        withoutAutoCommit.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        return withoutAutoCommit;
     }
 
     /**

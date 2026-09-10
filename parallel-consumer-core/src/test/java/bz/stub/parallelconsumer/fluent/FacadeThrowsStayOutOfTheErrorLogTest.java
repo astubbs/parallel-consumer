@@ -70,7 +70,7 @@ class FacadeThrowsStayOutOfTheErrorLogTest {
 
     @Test
     void parkingARecordPrintsNoErrorAtAll() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))
@@ -96,7 +96,7 @@ class FacadeThrowsStayOutOfTheErrorLogTest {
      */
     @Test
     void aRecordThatRunsOutOfAttemptsPrintsNoErrorForTheParkItself() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(1)
                 .retryDelay(Duration.ofMillis(10))
@@ -126,7 +126,7 @@ class FacadeThrowsStayOutOfTheErrorLogTest {
     @Test
     void aPlainUserExceptionIsStillLoggedAtErrorAsItAlwaysHasBeen() {
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(1)
                 .retryDelay(Duration.ofMillis(10))
@@ -162,7 +162,7 @@ class FacadeThrowsStayOutOfTheErrorLogTest {
      */
     @Test
     void theParkItselfIsReportedOnceWithTheFailureThatEndedIt() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(1)
                 .retryDelay(Duration.ofMillis(10))

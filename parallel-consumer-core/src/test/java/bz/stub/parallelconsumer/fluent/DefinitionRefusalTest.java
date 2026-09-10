@@ -43,7 +43,7 @@ class DefinitionRefusalTest {
     }
 
     private static ParallelConsumerDefinition define() {
-        return ParallelConsumer.define(props());
+        return ParallelConsumer.connect(props());
     }
 
     /**

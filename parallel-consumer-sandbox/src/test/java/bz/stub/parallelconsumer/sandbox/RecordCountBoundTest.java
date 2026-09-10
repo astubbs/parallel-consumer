@@ -38,7 +38,7 @@ class RecordCountBoundTest {
 
     @Test
     void aRecordCountBoundEndsTheRunAndDrainsBeforeClosing() {
-        ParallelConsumerDefinition definition = ParallelConsumer.define(new Properties());
+        ParallelConsumerDefinition definition = ParallelConsumer.connect(new Properties());
         definition.json("orders", Order.class)
                 .process(context -> Outcome.succeeded());
 
@@ -67,7 +67,7 @@ class RecordCountBoundTest {
 
     @Test
     void anUnboundedSandboxSaysSoRatherThanWaitingForever() {
-        ParallelConsumerDefinition definition = ParallelConsumer.define(new Properties());
+        ParallelConsumerDefinition definition = ParallelConsumer.connect(new Properties());
         definition.json("orders", Order.class)
                 .process(context -> Outcome.succeeded());
 

@@ -40,7 +40,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
  * A Parallel Consumer being defined: connection properties in, one typed route per topic, policy as data, and a
- * handle out. Start it from {@link ParallelConsumer#define(Properties)}.
+ * handle out. Start it from {@link ParallelConsumer#connect(Properties)}.
  *
  * <h2>What happens when</h2>
  * <b>Defining opens nothing.</b> Every check this class makes runs before a client exists, in a fixed order - routes,
@@ -66,7 +66,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * definition is {@link AutoCloseable} too, for a caller who would rather hold one thing than two: closing it closes
  * the instance it started, and closes nothing at all if it never started one.
  *
- * @see ParallelConsumer#define(Properties)
+ * @see ParallelConsumer#connect(Properties)
  */
 @Slf4j
 @InterfaceStability.Unstable
@@ -163,8 +163,9 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     private RouteDispatcher dispatcher;
 
     /**
-     * The same door as {@link ParallelConsumer#define(Properties)}, which is how the documentation and the README
-     * spell it: {@code define} reads as the start of a definition where a constructor reads as an object.
+     * The same door as {@link ParallelConsumer#connect(Properties)}, which is how the documentation and the README
+     * spell it: {@code connect} reads as the verb Kafka's own client uses for taking configuration now and reaching
+     * the cluster later, where a constructor reads as an object being built.
      */
     public ParallelConsumerDefinition(Properties connectionProperties) {
         Objects.requireNonNull(connectionProperties, "Connection properties must be supplied");
@@ -514,6 +515,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     private void validateProperties() {
         refuseDeserialiserSetting(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG);
         refuseDeserialiserSetting(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG);
+        refuseConsumerAutoCommit();
         validateTransactionalId();
 
         Map<String, Object> passThrough = passThroughProperties();
@@ -524,6 +526,26 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
                 route.producedKey().configure(passThrough, true);
                 route.producedValue().configure(passThrough, false);
             }
+        }
+    }
+
+    /**
+     * Parallel Consumer commits offsets itself, and refuses to run a consumer that auto-commits - so a definition
+     * that asked for both would fail at start, from inside a client the user never built.
+     * <p>
+     * Kafka's own default is {@code true}, which is why {@link KafkaClientRuntime} sets it to {@code false} on the
+     * consumer it constructs rather than leaving the default to fail every properties-only definition (R1). What is
+     * refused here is only the explicit {@code true}: silently overriding a setting somebody typed would be the one
+     * outcome worse than either.
+     */
+    private void refuseConsumerAutoCommit() {
+        Object declared = properties.get(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG);
+        if (declared != null && Boolean.parseBoolean(String.valueOf(declared))) {
+            throw new IllegalArgumentException(msg("{} is {} in the connection properties, and Parallel Consumer "
+                            + "commits offsets for you - a consumer that also commits on its own would commit "
+                            + "records this instance has not finished. Remove the setting; the fluent API disables "
+                            + "it on the consumer it builds.",
+                    ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, declared));
         }
     }
 

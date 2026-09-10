@@ -55,7 +55,7 @@ class RetryIntentHookTest {
      * fallback delay and the thread-local for the intent.
      */
     private static RouteDispatcher dispatcherWithRouteDelay(Duration routeDelay) {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         var route = pc.string(TOPIC);
         if (routeDelay != null) {
             route.retryDelay(routeDelay);

@@ -85,7 +85,7 @@ class RouteMetersTest {
      */
     @Test
     void outcomeCountersCarryTheTopicAndTheOutcome() {
-        var pc = ParallelConsumer.define(props())
+        var pc = ParallelConsumer.connect(props())
                 .meterRegistry(registry)
                 .defaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC)
@@ -128,7 +128,7 @@ class RouteMetersTest {
      */
     @Test
     void parkedGaugesCarryTheTopicAndPartitionAndReadTheLiveSet() {
-        var pc = ParallelConsumer.define(props())
+        var pc = ParallelConsumer.connect(props())
                 .meterRegistry(registry)
                 .defaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC)
@@ -165,7 +165,7 @@ class RouteMetersTest {
      */
     @Test
     void everyRouteMeterIsGoneAfterTheInstanceCloses() {
-        var pc = ParallelConsumer.define(props())
+        var pc = ParallelConsumer.connect(props())
                 .meterRegistry(registry)
                 .defaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC)
@@ -229,7 +229,7 @@ class RouteMetersTest {
     @Test
     void aRouteWithNoAssignmentIsLoggedOnce() {
         var processed = new AtomicInteger();
-        var pc = ParallelConsumer.define(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC).process(context -> {
             processed.incrementAndGet();
             return Outcome.succeeded();

@@ -47,7 +47,7 @@ class ClientConstructionTest {
 
     @Test
     void aDefinitionThatIsNeverStartedConstructsNoClientAtAll() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.json("orders", RouteTypingAndDefaultsTest.Order.class)
                 .retryLimit(3)
                 .afterRetries(AfterRetries.park())
@@ -59,7 +59,7 @@ class ClientConstructionTest {
 
     @Test
     void aDefinitionWithNothingToProduceOpensNoProducerAndAsksForNone() {
-        var pc = ParallelConsumer.define(props()).commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS);
+        var pc = ParallelConsumer.connect(props()).commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS);
         pc.string("orders").process(context -> Outcome.succeeded());
 
         assertThat(pc.requiresProducer()).isFalse();
@@ -73,7 +73,7 @@ class ClientConstructionTest {
 
     @Test
     void aDeadLetterDestinationIsEnoughToNeedAProducer() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
 
         assertThat(pc.requiresProducer()).isTrue();
@@ -97,7 +97,7 @@ class ClientConstructionTest {
      */
     @Test
     void aDeadLetterDestinationIsRefusedAtStartUntilExportLands() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
 
         var thrown = assertThrows(IllegalArgumentException.class, () -> pc.start(runtime));
@@ -111,7 +111,7 @@ class ClientConstructionTest {
 
     @Test
     void aRouteThatDeclaresProducedTypesNeedsAProducer() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string("orders")
                 .produced(Produced.with(Serdes.String(), Serdes.String()))
                 .process(context -> Outcome.succeeded());
@@ -138,7 +138,7 @@ class ClientConstructionTest {
     @Test
     void aRuntimeThatSuppliesNoProducerGetsTheConfigurationInsteadWithRawByteSerialisers() {
         var declining = RecordingClientRuntime.decliningToSupplyAProducer();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
 
         ParallelConsumerOptions<byte[], byte[]> options = pc.buildOptions(declining);
@@ -158,7 +158,7 @@ class ClientConstructionTest {
      */
     @Test
     void theEnginesAdmissionTargetIsTheSumOfTheRoutesTargets() {
-        var pc = ParallelConsumer.define(props()).defaultConcurrency(10);
+        var pc = ParallelConsumer.connect(props()).defaultConcurrency(10);
         pc.string("orders").process(context -> Outcome.succeeded());
         pc.string("audit").concurrency(100).process(context -> Outcome.succeeded());
 
@@ -167,7 +167,7 @@ class ClientConstructionTest {
 
     @Test
     void aPreBuiltConsumerIsUsedInsteadOfAskingTheRuntime() {
-        var pc = ParallelConsumer.define(props())
+        var pc = ParallelConsumer.connect(props())
                 .consumer(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST));
         pc.string("orders").process(context -> Outcome.succeeded());
 
@@ -195,7 +195,7 @@ class ClientConstructionTest {
         // The engine checks the group id first, so without this the test would prove that check instead.
         Mockito.when(subscribed.groupMetadata())
                 .thenReturn(new ConsumerGroupMetadata("client-construction-test"));
-        var pc = ParallelConsumer.define(props()).consumer(subscribed);
+        var pc = ParallelConsumer.connect(props()).consumer(subscribed);
         pc.string("orders").process(context -> Outcome.succeeded());
 
         var thrown = assertThrows(IllegalStateException.class, () -> pc.start(runtime));
@@ -205,7 +205,7 @@ class ClientConstructionTest {
 
     @Test
     void aDefinitionCanOnlyBeStartedOnce() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string("orders").process(context -> Outcome.succeeded());
         pc.buildOptions(runtime);
 
@@ -220,7 +220,7 @@ class ClientConstructionTest {
      */
     @Test
     void theRuntimeSeamIsHandedTheValidatedDefinition() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.json("orders", RouteTypingAndDefaultsTest.Order.class).process(context -> Outcome.succeeded());
         pc.buildOptions(runtime);
 

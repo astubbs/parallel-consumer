@@ -45,10 +45,11 @@ merely fetched: in-flight work is what a commit must wait for, and what a shutdo
 
 **Route**
 One topic bound to one processing function with its own consumed and produced key and value types.
-A route is the unit a user defines; policy such as the retry limit, the dead-letter destination
-and ordering belongs to the instance and applies to every route on it, while the concurrency
-limit is each route's own, a copy of the instance default unless the route declares one. A topic
-has at most one route.
+A route is the unit a user defines, and it carries its own policy: retry limit, retry delay, what
+happens when a record runs out of attempts, dead-letter destination and concurrency limit are each
+a copy of the instance default unless the route declares its own. What stays instance-wide is what
+belongs to the clients rather than to the work — the commit mode, because there is one consumer and
+one commit — and ordering, until the engine can key a shard by route. A topic has at most one route.
 
 **Record outcome**
 The terminal disposition of one record: succeeded, filtered (the processing function chose to drop
@@ -65,6 +66,14 @@ destination when one is declared. Today's retry queue is the same state with the
 scheduled; park is that state with the re-attempt withheld. The vocabulary is
 shared by the user-facing definition and the engine, so a behaviour first implemented above the
 engine can later be implemented inside it without changing what the user sees.
+
+**Sandbox**
+A run of a definition with no broker: the same processing engine and the same definition, with the
+Kafka clients replaced by fakes and records generated into the definition's own topics at a declared
+rate, hydrated with realistic random data of each route's declared type. What differs between a
+sandbox run and a real one is the start call and nothing else, which is what makes it both the demo
+and the broker-free test kit. A bound — a duration or a record count — ends the run by draining and
+closing, so what is readable afterwards is the end of the run rather than the middle of it.
 
 **Commit frontier**
 The offset a partition would resume from if consumption restarted — the highest offset committed for

@@ -32,7 +32,7 @@ import java.util.Optional;
  *
  * <h2>The definition does not change; the start call does</h2>
  * <pre>{@code
- * ParallelConsumerDefinition pc = ParallelConsumer.define(props);
+ * ParallelConsumerDefinition pc = ParallelConsumer.connect(props);
  * pc.json("orders", Order.class)
  *         .process(ctx -> { inventory.reserve(ctx.value()); return Outcome.succeeded(); });
  *

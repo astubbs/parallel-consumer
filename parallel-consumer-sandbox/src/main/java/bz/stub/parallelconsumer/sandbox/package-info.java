@@ -11,7 +11,7 @@
  * and nothing else (R33):
  *
  * <pre>{@code
- * ParallelConsumerDefinition pc = ParallelConsumer.define(props);
+ * ParallelConsumerDefinition pc = ParallelConsumer.connect(props);
  * pc.json("orders", Order.class)
  *         .process(ctx -> { inventory.reserve(ctx.value()); return Outcome.succeeded(); });
  * pc.json("dispatches", Dispatch.class)

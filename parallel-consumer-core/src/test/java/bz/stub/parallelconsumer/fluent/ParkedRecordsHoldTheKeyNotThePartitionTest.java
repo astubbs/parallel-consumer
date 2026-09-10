@@ -63,7 +63,7 @@ class ParkedRecordsHoldTheKeyNotThePartitionTest {
     void parkUnderKeyOrderingHoldsItsKeyWhileOtherKeysCarryOn() {
         var behindTheParkedKey = new AtomicInteger();
         var otherKeys = new AtomicInteger();
-        var pc = ParallelConsumer.define(props()).defaultOrdering(ProcessingOrder.KEY);
+        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.KEY);
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))
@@ -112,7 +112,7 @@ class ParkedRecordsHoldTheKeyNotThePartitionTest {
      */
     @Test
     void aDrainingCloseWithOnlyParkedRecordsDoesNotWaitTheDrainTimeout() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))
@@ -149,7 +149,7 @@ class ParkedRecordsHoldTheKeyNotThePartitionTest {
      */
     @Test
     void aParkedRecordIsStillResumableAfterTheBrokersLogStartHasPassedIt() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))

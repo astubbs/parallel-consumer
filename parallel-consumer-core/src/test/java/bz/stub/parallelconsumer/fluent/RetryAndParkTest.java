@@ -61,7 +61,7 @@ class RetryAndParkTest {
     void underTheExplicitUnboundedLimitAnAlwaysFailingRecordRetriesForeverAndBlocksItsPartition() {
         var attempts = new AtomicInteger();
         var laterRecordsRun = new AtomicInteger();
-        var pc = ParallelConsumer.define(props()).defaultOrdering(ProcessingOrder.PARTITION);
+        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.PARTITION);
         pc.string(TOPIC)
                 .retryForever()
                 .retryDelay(Duration.ofMillis(10))
@@ -97,7 +97,7 @@ class RetryAndParkTest {
     @Test
     void withNoLimitDeclaredTheDefaultIsTenAttemptsAfterTheFirstAndThenPark() {
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryDelay(Duration.ofMillis(5))
                 .process(context -> {
@@ -124,7 +124,7 @@ class RetryAndParkTest {
     @Test
     void aRecordAtItsLimitParksAndThePartitionCommitsPastIt() {
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.define(props()).defaultOrdering(ProcessingOrder.KEY);
+        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.KEY);
         pc.string(TOPIC)
                 .retryLimit(2)
                 .retryDelay(Duration.ofMillis(10))
@@ -176,7 +176,7 @@ class RetryAndParkTest {
     @Test
     void aFunctionThatReturnsParkSkipsTheRemainingAttempts() {
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(10)
                 .retryDelay(Duration.ofMillis(10))
@@ -208,7 +208,7 @@ class RetryAndParkTest {
      */
     @Test
     void afterARevokeAndReassignmentTheCountRestartsAtOneAndTheEnginesCountAgrees() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryForever()
                 .retryDelay(Duration.ofMillis(400))

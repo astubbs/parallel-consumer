@@ -145,11 +145,40 @@ NOTE: Below 1.0 does not mean unproven.
 The same core engine has been in production use for years.
 What 1.0 is waiting on is a settled API surface, the functionality still intended for it, and confidence that reaches beyond the defects already known.
 
-.Consume many messages _concurrently_ with a *single* consumer instance:
+.A whole consumer: two topics, two value types, one function each, and a record that gives up without holding anything else up.
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=example]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentQuickstartApp.java[tag=quickstart]
 ----
+<1> Connection properties in. You construct no Kafka clients; the library builds them, and sets the serialisers itself because each route declares its own.
+<2> One topic bound to one function, with its own types -- `json(Order.class)` resolves to the JSON deserialiser already on your classpath, and `context.value()` is an `Order`.
+<3> A *filtered* outcome: the record is finished with, commits like a success, and is counted separately. No exception, no sentinel return.
+<4> A normal return is success.
+<5> A second topic with a different value type. Two routes, two functions -- not one handler switching on `record.topic()`.
+<6> After two further attempts, two hundred milliseconds apart, this record *parks in place*: it stays incomplete in the offset map, holds no worker, and the partition commits past it. Nothing was configured to make that possible and no dead-letter topic exists.
+<7> Told once, when a record gives up.
+<8> Your own client. An exception here is a retry.
+
+.Starting it, against a broker:
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentQuickstartApp.java[tag=quickstartRun]
+----
+<1> A handle out, usable with try-with-resources. Its close drains.
+<2> Blocks until the instance has shut down -- closed, stopped by a route, or failed.
+
+This is the <<fluent-api,fluent API>>, which is *incubating* -- see that section for what that means, for what park in place costs and does not cost, and for the classic API this library shipped first, which is unchanged and not deprecated.
+
+.The same definition, no broker, no Docker, no test environment -- this is how it is run on every build of this repository:
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/test/java/bz/stub/parallelconsumer/examples/core/FluentQuickstartAppTest.java[tag=quickstartSandbox]
+----
+<1> Generated records per second, per source topic, with each route's declared type filled with realistic random data.
+<2> Stop generating after ten seconds and close, draining first. Without a bound the run ends when you close the handle.
+<3> How many distinct keys the generator draws from. Keys have to repeat for key ordering to have anything to order, and they have to repeat rarely for a topic to look like a real one.
+<4> The one line that differs from a run against a broker.
+<5> The bound closes the instance, so this returns when the run ends.
 
 An overview article to the library can also be found on Confluent's https://www.confluent.io/blog/[blog]: https://www.confluent.io/blog/introducing-confluent-parallel-message-processing-client/[Introducing the Confluent Parallel Consumer].
 
@@ -318,6 +347,11 @@ without operational burden or harming the cluster's performance
 * Client side queueing system on top of Apache Kafka consumer
 ** Efficient individual message acknowledgement system (without local or third party external system state storage) to massively reduce (and usually completely eliminate) message replay upon failure - see <<offset_map>> section for more details
 * Solution for the https://en.wikipedia.org/wiki/Head-of-line_blocking["head of line"] blocking problem where continued failure of a single message, prevents progress for messages behind it in the queue
+* A <<fluent-api,fluent API>> (incubating) beside the classic options-builder one: connection properties in, one typed route per topic with its own function and policy, and a handle out
+** <<park-in-place,Park in place>> - a record that runs out of attempts stays where it is, holding no worker, while the partition commits past it, so a dead-letter topic is a relief valve rather than a requirement
+** Terminal outcomes counted apart: succeeded, filtered, parked, stopped
+** A queryable parked set per route, with metrics beside it
+* A <<sandbox,sandbox>> that runs any definition - fluent or classic - with no broker, no Docker and no test environment, against generated records of the definition's own types
 * Per `key` concurrent processing, per partition and unordered message processing
 * Offsets committed correctly, in order, of only processed messages, regardless of concurrency level or retries
 * Batch support in all versions of the API to process batches of messages in parallel instead of single messages.
@@ -492,6 +526,242 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-rea
 .Vert.x Module Dependency
 [source,xml,indent=0]
 include::{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/pom.xml[tag=exampleDep]
+
+[[fluent-api]]
+== The fluent API
+
+Two APIs ship side by side and neither is deprecated.
+The *classic API* is the options builder this library shipped first: one processing function per instance, over records the consumer has already deserialised.
+The *fluent API* is the one the example at the top of this page uses: connection properties in, one typed route per topic with its own function and its own policy, and a handle out.
+
+[IMPORTANT]
+====
+*The fluent API is incubating.* Every public type in it carries Kafka's `@InterfaceStability.Unstable`, and the package is excluded from this project's API-compatibility gate while its surface settles -- so a name or a shape here may change between releases without a deprecation cycle, which the classic API never does.
+It is promoted to `Evolving`, the classic API's level, when that exclusion is lifted.
+It is not experimental in the sense of untested: it is composition over the same engine the classic API drives, and the example above runs on every build.
+====
+
+Everything below is what the fluent API adds.
+For the classic API, see <<classic-api,The classic API>>.
+
+[[park-in-place]]
+=== Park in place: the dead-letter topic you do not need
+
+A record that has run out of attempts *stays where it is*.
+It stays incomplete in the offset map, holds no worker and no thread, and the partition commits past it -- so the records behind it keep flowing and the group keeps making progress.
+The source topic is the store and the offset map is the index.
+
+This is the one thing in this library that the architecture makes possible and a commit-frontier consumer cannot do at all.
+A consumer whose committed offset is a single frontier has exactly two options for a record it cannot process: replay everything after it, or lose it.
+A dead-letter topic exists to escape that choice by copying the record somewhere else.
+Here the map already commits past an incomplete record, so nothing has to be copied anywhere, and *a definition that declares no dead-letter destination is complete*.
+
+Park is the default reaction: with no retry limit declared at all, a record is attempted ten times and then parks.
+That default is only safe because parking costs offset-map capacity rather than a worker -- which is also the bound worth knowing about.
+
+.What park costs, honestly
+[cols="1,3", options="header"]
+|===
+| Ordering mode | What a parked record holds
+
+| `UNORDERED`
+| Nothing. The partition commits past it and everything else runs.
+
+| `KEY` (the default)
+| *Its key, and nothing else.* Later records with that key wait behind it; every other key on the partition is unaffected. A route's parked view reports how many records each parked record is holding, which is the blast radius.
+
+| `PARTITION`
+| Its partition, in full. Partition ordering means records are processed in offset order, so a parked record at the head stops the partition. Park serves key and unordered processing; a partition-ordered instance should declare a dead-letter destination instead.
+|===
+
+Three more consequences, none of them defects, all of them things an operator will see:
+
+* *Consumer-group lag reads as stuck at the oldest parked record.* The committed offset cannot advance past an incomplete one, so `kafka-consumer-groups` shows the distance from that offset even while everything after it is being processed and committed in the metadata. The honest figure is on the handle -- the count of unresolved records -- and in the parked-count metric.
+* *A parked record is reported as slow work in this release.* Parking is, over today's engine, a retry with a far-future delay, so the shard scan counts every parked record against its partition's slow-records meter and names its topic in the periodic "records in the queue have been waiting longer than" warning. It is noise rather than a symptom. Removing it is a small engine change, and a test pins today's behaviour so the change shows up rather than happening in silence.
+* *A close that drains waits for records queued behind a parked key.* The handle closes draining by default, and a drain waits for the work the shards still hold. Under `KEY` ordering, records queued behind a parked key are work the engine can never take, so such a close waits out its whole drain timeout and then reports the timeout. Either close without draining, or keep in mind that the wait is bounded by `drainTimeout` and nothing is lost by it.
+
+*What releases a parked record today.* A restart or a rebalance, and nothing else: the attempt count is per assignment, so a record delivered again after either is attempted afresh.
+`resume` and `dlq` on the handle refuse in this release and say so -- they need engine commands that do not exist yet, and they arrive in the next milestone.
+A parked record that the broker's retention deletes while the instance runs is unaffected, because the engine still holds it in memory and can still act on it; only a restart loses it, since it cannot be polled again.
+*A route whose parked records must survive a restart parks with a dead-letter destination or an age bound.*
+
+[[parked-set]]
+=== Dead-lettering, and the parked set
+
+A store nobody can see is a leak, so the parked set is queryable per route from the handle.
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentQuickstartApp.java[tag=quickstartParked]
+----
+<1> One route's parked set, across every partition it is assigned. `handle.topic(...)` names a route by any of its topics, and a topic nothing routes is refused rather than answered with an empty set.
+<2> Everything an operator needs to decide what to do about a record: offset, key, attempts, the last failure, how long it has been parked.
+<3> The instance-wide roll-up, named apart so the per-route accessor is never overloaded.
+
+The same figures are published through the <<metrics,metrics integration>>, under the `routes` subsystem: outcome counts tagged by topic and outcome, and the parked count and oldest parked age tagged by topic and partition.
+
+*Copying a record to another topic is called `dlq` here, and it is a verb.*
+It is the relief valve for park rather than the first resort: `dlqTo` names the destination, `dlqWhenOffsetPayloadReaches` fires when a partition's offset-map payload reaches a percentage of Kafka's commit-metadata cap, `dlqOlderThan` fires before the topic's retention could delete a parked record, and `dlqImmediately` is the classic dead-letter queue -- export on the dispatch after exhaustion, with no park in between.
+
+NOTE: *Dead-lettering does not run in this release.* A definition that declares a destination is refused at start, naming the topic, rather than accepted and silently doing nothing -- which is the one outcome worse than a refusal. The API is documented here because the shape is settled; what is missing is the engine accessor the payload trigger reads. Until it lands, park in place is the whole of the story, and for the ordering modes above it is enough.
+
+An exported record will carry the original key bytes, value bytes and headers unchanged, plus provenance headers naming the source topic, partition, offset, timestamp, attempt count, and the last failure's time, class and message.
+
+[[fluent-outcomes]]
+=== Outcomes: what a record can end up as
+
+Every record reaches exactly one terminal outcome, and the processing function says which by what it returns.
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentApiSnippets.java[tag=fluentOutcomes]
+----
+<1> *Filtered*: nothing to do for this record. It completes and commits like a success, and is counted separately -- so "we processed nine hundred and skipped a hundred" is a number you have rather than one you infer.
+<2> *Park now*, skipping the remaining attempts, for a record the function already knows is hopeless.
+<3> *Stop the instance.* It takes no further work and closes on its declared close path; the stopping record is left incomplete, so a restart delivers it again -- which means the definition's author owns breaking that loop.
+<4> Your own client. *Any exception thrown from the function is a retry*, and the retriable exception the classic API already has keeps its meaning: it differs only in not being logged at error level.
+<5> *Succeeded.* A normal return is success on every route.
+
+A retry is a step towards one of these, never an outcome of its own.
+
+[[fluent-error-handling]]
+=== Which reaction fits which failure
+
+What happens to a record that has run out of attempts is declared as data, per route or as an instance default.
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentApiSnippets.java[tag=fluentAfterRetries]
+----
+<1> *Park* -- the default, and the right answer for a routine poison record. One record is unprocessable, the rest of the topic is fine, and you want to look at it later without stopping anything now.
+<2> *Park with a schedule.* Wait half an hour, attempt once more, four times over, then park for good. This is scheduled retry: the record holds no worker while it waits, so a long horizon is cheap.
+<3> *Dead-letter* -- when the record must leave the topic rather than sit in it. That is a capacity or a retention question, not a severity one: the offset map is bounded, and a parked record only survives a restart if it has somewhere to go.
+<4> *Stop* -- when a record running out of attempts means the deployment is wrong rather than the record is. A schema nobody deployed a reader for, a downstream that will never come back: continuing would burn through the topic parking everything.
+
+The three are not a severity ladder. Park is about *this record*, dead-letter is about *capacity*, and stop is about *the deployment*.
+
+[[fluent-entry-point]]
+=== The entry point, routes and types
+
+`ParallelConsumer.connect(props)` starts a definition. You construct no Kafka clients: the library builds them from those properties, and sets the client serialisers itself, because each route applies its own.
+
+NOTE: `connect` opens nothing. It follows Kafka's own client, which takes its configuration at construction and reaches the cluster on its first poll: the clients here are built when you call `start()`, and a definition written but never started constructs neither.
+
+*A route binds one topic to one function.* Registering a second route for a topic already routed is refused at definition time, as is naming one of your own routed topics as a dead-letter destination, or supplying a deserialiser in the connection properties -- every check runs before a connection is opened, and every message names the topic or the setting.
+
+The format-named routes are sugar: `json`, `avro`, `protobuf`, `bytes` and `string`, each with the topic and, where the format needs one, the type. The key defaults to a string. `json(topic)` with no class at all yields the payload as a map of field names to values, so a topic nobody has a class for can still be consumed and read by field name.
+
+`avro` and `protobuf` resolve to the deserialiser already on your classpath and are refused at definition time, naming the library, when it is not there. Only Jackson is declared as a dependency of this project, and it is optional -- declare it yourself if you use the JSON helpers.
+
+For anything the helpers do not cover -- a key that is not a string, a deserialiser of your own -- there is the general form:
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentApiSnippets.java[tag=fluentRouteForm]
+----
+<1> Consumed types, in the shape a Kafka Streams developer already reads.
+<2> Produced types, separately. *Only now can this route's function produce anything*: a route that has not declared produced types cannot return a produced record, and that is a compile error rather than a runtime one.
+<3> A produced record, typed by the route's produced types, with no casts.
+<4> A set of topics that share one function and one type pair is one route.
+
+[[fluent-settings]]
+==== Instance settings and per-route defaults
+
+*Almost nothing is instance-wide.* The engine has one consumer, one commit and one transaction, so the commit mode is a property of the instance; everything else is a per-route setting with an instance default, and the two are named apart -- instance-wide settings plain, per-route defaults with a `default` prefix.
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentApiSnippets.java[tag=fluentSettings]
+----
+<1> Instance-wide, because the engine has one commit.
+<2> Per-route defaults: every route takes a copy.
+<3> This route only, overriding its copy of the default.
+
+Ordering is the exception among the per-route settings: it needs a change at the engine's shard-key seam, so in this release it is accepted as the instance default and nothing else.
+
+[[fluent-own-clients]]
+==== Bringing your own clients
+
+An existing user with hand-built clients reaches the fluent API without changing how they build them.
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentApiSnippets.java[tag=fluentOwnClients]
+----
+<1> The consumer must be unsubscribed -- the library subscribes it -- and configured for raw bytes, because each route deserialises its own records. That second one cannot be checked at definition time, since a consumer's type parameters are erased, so a consumer configured for anything else stops the instance on its first record with a message naming its deserialisers, rather than retrying for ever.
+<2> A supplied producer is an instance rather than a configuration, and *producer recovery does not run on an instance path*. A definition that supplies its own producer forgoes recovery; one that supplies only properties gets it.
+
+[[fluent-handle]]
+==== The handle
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentApiSnippets.java[tag=fluentHandle]
+----
+<1> Usable with try-with-resources. The close *drains* by default, bounded by the drain timeout, with the shutdown timeout bounding the close that follows -- which differs from the classic API, whose plain `close()` does not drain.
+<2> Blocks until the instance has shut down, however it ended.
+<3> An instance can end in three ways, and the handle says which: closed by you, stopped by a route, or failed. This is the second.
+<4> And this is the third.
+
+[[sandbox]]
+=== Running with no broker: the sandbox
+
+`parallel-consumer-sandbox` runs *any* definition with no broker, no Docker and no test environment, against records it generates itself: each route's declared value type filled with realistic random data, encoded with that route's own serialiser, paced at a rate you declare, with an optional bound after which the run closes itself.
+
+The definition does not change. The `start` call does -- which is the whole claim, and the second example at the top of this page is it.
+
+Two things follow from that. It is the *demo*: a new reader can run a real definition against real records without provisioning anything. And it is the *broker-free test kit*: a test drives the same sandbox with its own records and asserts on outcomes and the parked set, which is how this project's own primary build signal works. It serves the classic API too, so an existing options-builder application runs broker-free with its start call changed and nothing else.
+
+[[fluent-migration]]
+=== Replacing the three workarounds
+
+Three things users have had to build by hand around the classic API, and their one-line replacements.
+
+*"I wrote my own dead-letter topic, and swallowed the exception so the offset would commit."*
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentApiSnippets.java[tag=fluentMigrationDeadLetter]
+----
+
+The retry limit is the part that did not exist: on the classic API a record retries for ever unless the function swallows the failure, and swallowing it marks the record *succeeded*, so the failure disappears from every count. Here the record is counted as parked, the observer fires once, and you can see it afterwards.
+
+*"I subscribed to several topics and switched on `record.topic()` inside one handler."*
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentApiSnippets.java[tag=fluentMigrationTopics]
+----
+
+Two routes, two functions, two value types, each with its own retry limit and its own policy. No switch, and no cast.
+
+*"I consumed raw bytes and deserialised by hand, because a bad payload kills the poll thread."*
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentApiSnippets.java[tag=fluentMigrationTypes]
+----
+<1> Deserialisation happens per route, inside the library, off the poll thread. A payload that cannot be read is *that record's* failure: it retries, or it parks, and every other record and every other route carries on.
+<2> And when there is no class for the topic at all, the payload arrives as a map of field names to values -- which was the other reason for reaching for raw bytes.
+
+A route that needs to tell a corrupt payload from a registry outage wraps its deserialiser to say so, with `classifyDecodeFailures`: a permanent failure parks immediately without spending any attempts, a transient one is an ordinary failed attempt. Without the wrapper every decode failure is transient, because a deserialiser that throws cannot tell the two apart.
+
+[[classic-api]]
+== The classic API
+
+The options-builder API, unchanged and not deprecated. *It remains the right choice for a running application that needs nothing new* -- there is no forced migration and no compatibility break: the fluent API is additive, reaching the classic surface through one new static factory and nothing else.
+
+If you do want something from the list below, note that you do not have to rebuild your clients to get it: a hand-built consumer and producer can be handed to a fluent definition (<<fluent-own-clients,Bringing your own clients>>).
+
+What is on the fluent API only:
+
+* *A retry limit, and what happens when a record reaches it.* On the classic API a record retries for ever until the function stops throwing -- see <<retries,Retries>> and <<skipping-records,Skipping Records>> for what that means and what people do about it.
+* *Park in place, and the parked set.* <<park-in-place,Park in place>>.
+* *Terminal outcomes.* Filtered, parked and stopped are distinct from succeeded and counted apart; on the classic API a record either succeeded or it did not.
+* *A type and a function per topic.* One instance, one function, one type pair on the classic API.
+* *Per-route deserialisation off the poll thread.* On the classic API the consumer deserialises, so a payload it rejects ends the poll thread -- the one fix planned for the classic API is a policy for that.
+* *Per-route policy* -- retry limit, delay, concurrency, dead-letter destination.
+
 
 [[common_preparation]]
 === Common Preparation
@@ -785,27 +1055,25 @@ image::https://lucid.app/publicSegments/view/f7a05e99-24e6-4ea3-b3d0-978e306aa56
 
 Even during retries, offsets will always be committed only after successful processing, and in order.
 
+[[retries]]
 == Retries
 
-If processing of a record fails, the record will be placed back into it's queue and retried with a configurable delay (see the `ParallelConsumerOptions` class).
-Ordering guarantees will always be adhered to, regardless of failure.
+A failure is *any* exception thrown from your processing function.
+The system catches it, logs it, and puts the record back in its queue to be retried after a configurable delay.
+Ordering guarantees are adhered to regardless of failure, and offsets continue to be committed for everything that has succeeded (see <<commit-mode>> and <<Offset Map>>).
 
-A failure is denoted by *any* exception being thrown from the user's processing function.
-The system catches these exceptions, logs them and replaces the record in the queue for processing later.
-All types of Exceptions thrown are considered retriable.
-To not retry a record, do not throw an exception from your processing function.
+TIP: To keep the system from logging an error for an expected failure, throw an exception extending `PCRetriableException`. It is retried exactly like any other exception; the difference is the log level.
 
-TIP:: To avoid the system logging an error, throw an exception which extends PCRetriableException.
+*Where the two APIs differ is what happens when retrying is not working.*
 
-TIP:: If there was an error processing a record, and you'd like to skip it - do not throw an exception, and the system will mark the record as succeeded.
+On the *fluent API* a route declares a retry limit -- ten attempts by default -- and what happens when a record reaches it: <<park-in-place,park in place>>, dead-letter, or stop the instance.
+That is <<fluent-error-handling,Which reaction fits which failure>>, and it is the behaviour most people are looking for when they arrive at this section.
 
-If for some reason you want to proactively fail a record, without relying on some other system throwing an exception which you don't catch - simply throw an exception of your own design, which the system will treat the same way.
+On the *classic API* there is no retry limit: a record is retried for as long as your function keeps throwing.
+That does not hold up `KEY` or `UNORDERED` processing -- other keys and other records keep going -- but in `PARTITION` mode it blocks the partition, and in every mode the record's own offset stays uncommitted for as long as it keeps failing.
+The two things people do about that are below: give up on the record (<<skipping-records,Skipping Records>>), or stop attempting it while a dependency is down (<<circuit-breaker,Circuit Breaker Pattern>>).
 
 To configure the retry delay, see `ParallelConsumerOptions#defaultRetryDelay`.
-
-At the moment there is no terminal error support, so messages will continue to be retried forever as long as an exception continues to be thrown from the user function (see <<skipping-records>>).
-But still this will not hold up the queues in `KEY` or `UNORDERED` modes, however in `PARTITION` mode it *will* block progress.
-Offsets will also continue to be committed (see <<commit-mode>> and <<Offset Map>>).
 
 === Retry Delay Function
 
@@ -823,12 +1091,15 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 [[skipping-records]]
 === Skipping Records
 
-If for whatever reason you want to skip a record, simply do not throw an exception, or catch any exception being thrown, log and swallow it and return from the user function normally.
-The system will treat this as a record processing success, mark the record as completed and move on as though it was a normal operation.
+On the *fluent API*, a record with nothing to do for it is <<fluent-outcomes,filtered>>: return `Outcome.filtered()`, and the record completes and commits like a success while being counted apart from one.
+A record that has failed too many times is <<park-in-place,parked>> by the route's retry limit, which needs no code in the function at all -- and, unlike swallowing, leaves the failure visible: the record is counted as parked, the park observer fires once, and the parked set still holds it.
 
-A user may choose to skip a record for example, if it has been retried too many times or if the record is invalid or doesn't need processing.
+On the *classic API* there is one way to skip a record, and it is to return normally: do not throw, or catch the exception, log it and return.
+The system treats that as a success, marks the record completed and moves on.
 
-Implementing a https://github.com/confluentinc/parallel-consumer/issues/196[max retries feature] as a part of the system is planned.
+WARNING: On the classic API, skipping and succeeding are *the same event*. A record you gave up on is counted as processed, and nothing afterwards can tell you how many records that was. Counting them yourself, in the function, is the only way to know -- which is what the example below does before it gives up.
+
+Bounding the retries therefore has to be done by hand, by counting attempts in a map keyed by the record:
 
 .Example of skipping a record after a maximum number of retries is reached
 [source,java,indent=0]
@@ -836,12 +1107,18 @@ Implementing a https://github.com/confluentinc/parallel-consumer/issues/196[max 
 include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=maxRetries]
 ----
 
+That map is the workaround the fluent API's `retryLimit` replaces; see <<fluent-migration,Replacing the three workarounds>>.
+
+[[circuit-breaker]]
 === Circuit Breaker Pattern
 
-Although the system doesn't have an https://github.com/confluentinc/parallel-consumer/issues/110[explicit circuit breaker pattern feature], one can be created by combining the custom retry delay function and proactive failure.
-For example, the retry delay can be calculated based upon the status of an external system - i.e. if the external system is currently out of action, use a higher retry.
-Then in the processing function, again check the status of the external system first, and if it's still offline, throw an exception proactively without attempting to process the message.
-This will put the message back in the queue.
+When a dependency is down, retrying each record individually is the wrong shape: what you want is to stop attempting the route at all for a while.
+
+Neither API has a declared circuit breaker in this release -- it is specified for the fluent API as a per-route failure rate over a window with an open duration, and it is not yet built.
+Until it lands, on *either* API, one can be assembled from the custom retry delay function and proactive failure: calculate the retry delay from the status of the external system, and in the processing function check that status first and throw proactively without attempting the record when it is still offline.
+This puts the record back in the queue without doing any work.
+
+A retry and a breaker answer different failures, and it is worth keeping them apart when reading the example below: a retry is *one record's* transient failure, a breaker is *a dependency that is down*.
 
 .Example of circuit break implementation
 [source,java,indent=0]
@@ -857,12 +1134,14 @@ This is because in `PARTITION` ordering mode, records are always processed in or
 
 === Future Work
 
-Improvements to this system are planned, see the following issues:
+Much of the retry epic is delivered on the <<fluent-api,fluent API>>: a max-retry limit with a callback when it is reached (confluentinc#196), scheduled retry as a park with a delay (confluentinc#48), and stopping the instance when a record gives up (confluentinc#34).
+What is still open:
 
-* https://github.com/confluentinc/parallel-consumer/issues/65[Enhanced retry epic confluentinc#65]
-* https://github.com/confluentinc/parallel-consumer/issues/48[Support scheduled message processing (scheduled retry)]
-* https://github.com/confluentinc/parallel-consumer/issues/196[Provide option for max retires, and a call back when reached (potential DLQ) confluentinc#196]
-* https://github.com/confluentinc/parallel-consumer/issues/34[Monitor for progress and optionally shutdown (leave consumer group), skip message or send to DLQ confluentinc#34]
+* Dead-lettering itself -- the API is settled and refused at start until the engine accessor it reads exists (<<parked-set,Dead-lettering, and the parked set>>).
+* `resume` and `dlq` as commands on the handle, so a parked record can be acted on without a restart.
+* A declared circuit breaker per route (<<circuit-breaker,Circuit Breaker Pattern>>).
+* A deserialisation-failure policy for the classic API's poll path, which is the one behaviour on this list that the classic API is getting rather than the fluent one.
+* https://github.com/confluentinc/parallel-consumer/issues/65[Enhanced retry epic confluentinc#65], which tracks the rest.
 
 == Result Models
 
@@ -1093,7 +1372,7 @@ Number of records queued for processing across all shards
 
 Gauge `pc.shards.max.size{subsystem=shardmanager}`
 
-Maximum number of records queued in any single shard (the most-loaded shard) - useful for spotting hot-key shards under KEY ordering
+Maximum number of records queued in any single shard (the most-loaded shard)
 
 ==== Work Manager
 
@@ -1166,6 +1445,26 @@ Ratio between offset metadata payload size and available space
 Distribution Summary `pc.payload.ratio.used{subsystem=offsetencoder}`
 
 Ratio between offset metadata payload size and offsets encoded
+
+==== Routes
+
+**Route Records**
+
+Counter `pc.route.records{subsystem=routes, topic="topicName", outcome="succeeded|filtered|parked|stopped"}`
+
+Total number of records that reached each terminal outcome on a fluent API route - counts events, so it never decreases
+
+**Route Parked Records**
+
+Gauge `pc.route.parked.records{subsystem=routes, topic="topicName", partition="partitionNumber"}`
+
+Number of records parked in place right now on this partition - the size of the set an operator can act on, which is not the parked counter above
+
+**Route Parked Oldest Age**
+
+Gauge `pc.route.parked.oldest.age{subsystem=routes, topic="topicName", partition="partitionNumber"}`
+
+Age in seconds of the oldest record parked on this partition, or zero when none is parked
 
 === Example Metrics setup steps
 Meter registry that metrics should be bound has to be set using Parallel Consumer Options along with any common tags that identify the PC instance.

@@ -106,7 +106,7 @@ class ThroughputWithThousandsParkedTest {
     private double measureHealthyThroughput(int parkedRecords) {
         var runtime = new RecordingClientRuntime();
         var processed = new AtomicInteger();
-        var pc = ParallelConsumer.define(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC).process(context -> {
             if (context.value().startsWith("park")) {
                 // Declared hopeless by the function: no attempts spent, and no stack trace in the log for each of

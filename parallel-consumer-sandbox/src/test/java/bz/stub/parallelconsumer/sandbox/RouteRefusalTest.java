@@ -48,7 +48,7 @@ class RouteRefusalTest {
 
     @Test
     void aRouteWhoseFormatCanOnlyReadIsRefusedNamingItsTopic() {
-        ParallelConsumerDefinition definition = ParallelConsumer.define(new Properties());
+        ParallelConsumerDefinition definition = ParallelConsumer.connect(new Properties());
         definition.topic("legacy")
                 .consumed(Consumed.with(Formats.string(), Format.reading(SHOUTY_READER)))
                 .process(context -> Outcome.succeeded());
@@ -63,7 +63,7 @@ class RouteRefusalTest {
 
     @Test
     void theSameRouteWithASerialiserAndATypeGeneratesAndEncodes() {
-        ParallelConsumerDefinition definition = ParallelConsumer.define(new Properties());
+        ParallelConsumerDefinition definition = ParallelConsumer.connect(new Properties());
         definition.topic("legacy")
                 .consumed(Consumed.with(Formats.string(), Format.of(SHOUTY_READER, SHOUTY_WRITER, String.class)))
                 .process(context -> Outcome.succeeded());
@@ -113,7 +113,7 @@ class RouteRefusalTest {
      * A definition may only be started once, so each arm of the test above needs its own.
      */
     private static ParallelConsumerDefinition untypedRoute() {
-        ParallelConsumerDefinition definition = ParallelConsumer.define(new Properties());
+        ParallelConsumerDefinition definition = ParallelConsumer.connect(new Properties());
         definition.topic("legacy")
                 .consumed(Consumed.with(Formats.string(), Format.of(SHOUTY_READER, SHOUTY_WRITER)))
                 .process(context -> Outcome.succeeded());

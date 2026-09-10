@@ -55,7 +55,7 @@ class RawBytesConsumerFaultTest {
 
     @Test
     void theDescriptionIsKeptOnTheDefinitionForTheMessageTheWrapperWillThrow() {
-        var pc = ParallelConsumer.define(props())
+        var pc = ParallelConsumer.connect(props())
                 .consumer(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST));
         pc.string("orders").process(context -> Outcome.succeeded());
 

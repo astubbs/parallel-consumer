@@ -63,7 +63,7 @@ class ParkedViewOnTheHandleTest {
      * parked set without waiting out any retries.
      */
     private ParallelConsumerDefinition definitionThatParksEverything(String... topics) {
-        var pc = ParallelConsumer.define(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
         for (String topic : topics) {
             pc.string(topic)
                     .retryLimit(0)
@@ -222,7 +222,7 @@ class ParkedViewOnTheHandleTest {
     @Test
     void aParkedEntryTheEngineNoLongerHoldsIncompleteIsDropped() {
         var processed = new AtomicInteger();
-        var pc = ParallelConsumer.define(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC).process(context -> {
             processed.incrementAndGet();
             return Outcome.succeeded();
@@ -259,7 +259,7 @@ class ParkedViewOnTheHandleTest {
     @Test
     void aSnapshotThatThrowsIsContainedAndTheInstanceKeepsRunning() {
         var processed = new AtomicInteger();
-        var pc = ParallelConsumer.define(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC).process(context -> {
             processed.incrementAndGet();
             return Outcome.succeeded();

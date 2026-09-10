@@ -75,7 +75,7 @@ class DecodeFailureTest {
     @Test
     void aTransientDecodeFailureRetriesAndThenParksWhileTheOtherRouteIsUnaffected() {
         var auditSeen = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.topic("orders")
                 .consumed(Consumed.with(Serdes.String(), rejecting()))
                 .retryLimit(2)
@@ -113,7 +113,7 @@ class DecodeFailureTest {
     @Test
     void aPermanentDecodeFailureIsParkedAtOnceWithoutSpendingAnAttempt() {
         var ran = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.topic("orders")
                 .consumed(Consumed.with(Serdes.String(),
                         Formats.classifyDecodeFailures(Serdes.serdeFrom(Serdes.String().serializer(), rejecting()),
@@ -155,7 +155,7 @@ class DecodeFailureTest {
      */
     @Test
     void aFailureTheClassifierCallsTransientSpendsAttemptsAsUsual() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.topic("orders")
                 .consumed(Consumed.with(Serdes.String(),
                         Formats.classifyDecodeFailures(Serdes.serdeFrom(Serdes.String().serializer(), rejecting()),

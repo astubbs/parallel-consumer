@@ -97,7 +97,7 @@ class ParkedViewAndObserverTest {
         var observed = new CopyOnWriteArrayList<ObservedPark>();
         var attempts = new AtomicInteger();
         var lastAttemptAt = new AtomicLong();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(2)
                 .retryDelay(Duration.ofMillis(10))
@@ -143,7 +143,7 @@ class ParkedViewAndObserverTest {
     void theObserverGetsTheRawEnvelopeAndZeroAttemptsWhenDecodingFailedPermanently() {
         var observed = new CopyOnWriteArrayList<ObservedPark>();
         var ran = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.topic(TOPIC)
                 .consumed(Consumed.with(Serdes.String(),
                         Formats.classifyDecodeFailures(Serdes.serdeFrom(Serdes.String().serializer(), rejecting()),
@@ -179,7 +179,7 @@ class ParkedViewAndObserverTest {
     @Test
     void theParkedEntryCarriesTheKeyAttemptsFailureReasonAndParkedSince() {
         var before = Instant.now();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(1)
                 .retryDelay(Duration.ofMillis(10))
@@ -220,7 +220,7 @@ class ParkedViewAndObserverTest {
     void aParkOutcomeParksAtOnceWithTheReasonTheFunctionGave() {
         var observed = new CopyOnWriteArrayList<ObservedPark>();
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(10)
                 .retryDelay(Duration.ofMillis(10))
@@ -257,7 +257,7 @@ class ParkedViewAndObserverTest {
     void aRouteObserverOverridesTheInstanceDefaultForThatRouteAlone() {
         var toTheDefault = new CopyOnWriteArrayList<String>();
         var toTheRoute = new CopyOnWriteArrayList<String>();
-        var pc = ParallelConsumer.define(props())
+        var pc = ParallelConsumer.connect(props())
                 .defaultRetryLimit(0)
                 .defaultRetryDelay(Duration.ofMillis(10))
                 .defaultOnParked((record, failure, attempts) -> toTheDefault.add(record.topic()));
@@ -286,7 +286,7 @@ class ParkedViewAndObserverTest {
      */
     @Test
     void anObserverThatThrowsIsContainedAndLoggedAndTheRecordParksAnyway() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))
@@ -335,7 +335,7 @@ class ParkedViewAndObserverTest {
         var observed = new CopyOnWriteArrayList<ObservedPark>();
         var attemptsSeen = new CopyOnWriteArrayList<Integer>();
         var runs = new AtomicInteger();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))

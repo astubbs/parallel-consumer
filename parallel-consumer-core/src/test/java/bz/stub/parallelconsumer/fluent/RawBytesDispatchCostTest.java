@@ -76,7 +76,7 @@ class RawBytesDispatchCostTest {
 
     private long timeTheFluentRoute() {
         var runtime = new RecordingClientRuntime();
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         var processed = new AtomicInteger();
         pc.string(TOPIC).process(context -> {
             processed.incrementAndGet();

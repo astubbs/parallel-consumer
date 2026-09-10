@@ -71,7 +71,7 @@ class ParkedRecordsAreSlowWorkForNowTest {
 
     @Test
     void aParkedRecordIsNamedInTheEnginesSlowWorkWarningUntilTheSmallTierRemovesIt() {
-        var pc = ParallelConsumer.define(props());
+        var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))
