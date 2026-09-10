@@ -121,6 +121,18 @@ class FluentQuickstartAppTest {
             handle.awaitShutdown();                                  // <5>
             // end::quickstartSandbox[]
 
+            // OUTSIDE the tagged region deliberately: awaitShutdown() is what the README shows a demo doing, and
+            // it returns whatever the run did. Asking the bound is the TEST's step, and it is the only one that
+            // can fail - sandbox.awaitBound is the sole route to RecordGenerator#rethrowAnyFailure, and the
+            // bound's own callback wraps its wait in try/finally { handle.close() }, so a wait that REFUSED still
+            // closes the handle, awaitShutdown() still returns normally, and the recorded failure never leaves the
+            // log. A run that failed to account for its records would otherwise be read as a completed one - which
+            // is astubbs#504's own defect class leaving its own primary success signal green. The bound has
+            // already been reached by the time awaitShutdown returns, so this is a verdict rather than a wait.
+            assertWithMessage("the ten-second bound should have been reached and its close completed, with the "
+                    + "generator recording no failure")
+                    .that(sandbox.awaitBound(Duration.ofSeconds(60))).isTrue();
+
             assertConsole(console);
         }
 
