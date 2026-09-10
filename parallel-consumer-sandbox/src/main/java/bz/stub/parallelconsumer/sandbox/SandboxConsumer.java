@@ -5,6 +5,9 @@ package bz.stub.parallelconsumer.sandbox;
  */
 
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.offsets.OffsetDecodingError;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -22,7 +25,9 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /**
  * The broker: a mock consumer with beginning offsets already recorded, partitions it can hand out, and a
@@ -94,6 +99,15 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
      * that had committed everything. Told to us by whoever built the producer.
      */
     private volatile MockProducer<?, ?> transactionalCommitter;
+
+    /**
+     * How many records are parked on each partition right now, or an empty map when nothing on this path can park.
+     * <p>
+     * A <em>supplier of counts</em> rather than the fluent API's handle, deliberately: this class is the broker
+     * under both APIs and knows nothing about either, and the classic API has no park at all. The fluent path
+     * supplies the handle's parked view; {@link ClassicSandbox} supplies nothing and gets the empty answer.
+     */
+    private volatile Supplier<Map<TopicPartition, Long>> parkedCounts = Collections::emptyMap;
 
     /**
      * Records every partition's beginning offset before anything can be assigned. Nothing is assigned yet - call
@@ -202,6 +216,18 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
     }
 
     /**
+     * Tell the wait how to find out what is parked, so that a parked record counts as accounted for rather than as
+     * a record the instance still owes - see {@link #awaitEveryPublishedRecordCommitted()}.
+     *
+     * @param parkedCountsByPartition how many records are parked on each partition at the moment it is asked;
+     *                                partitions with nothing parked may be absent
+     */
+    public void countingParkedRecordsWith(Supplier<Map<TopicPartition, Long>> parkedCountsByPartition) {
+        this.parkedCounts = Objects.requireNonNull(parkedCountsByPartition,
+                "A parked-count supplier must be supplied - the default already answers zero for every partition");
+    }
+
+    /**
      * The highest offset committed for each partition, whichever way it was committed - through this consumer, or
      * through a transactional producer named with {@link #alsoCountingCommitsThrough(MockProducer)}.
      * <p>
@@ -209,7 +235,21 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
      * the number of records published to it has had every one of them completed and committed.
      */
     public Map<TopicPartition, Long> highestCommittedOffsets() {
-        Map<TopicPartition, Long> highest = new LinkedHashMap<>();
+        Map<TopicPartition, Long> offsets = new LinkedHashMap<>();
+        for (Map.Entry<TopicPartition, OffsetAndMetadata> commit : highestCommits().entrySet()) {
+            offsets.put(commit.getKey(), commit.getValue().offset());
+        }
+        return offsets;
+    }
+
+    /**
+     * The highest commit made for each partition, <b>whole</b>: the offset and the offset map committed beside it.
+     * The metadata is half the answer to how much of a partition is done - everything below the committed offset,
+     * plus everything inside the encoded range that the map does not list as incomplete - so the wait reads the
+     * commit rather than only its offset. See {@link #completedOn}.
+     */
+    private Map<TopicPartition, OffsetAndMetadata> highestCommits() {
+        Map<TopicPartition, OffsetAndMetadata> highest = new LinkedHashMap<>();
         for (Map<TopicPartition, OffsetAndMetadata> commit : getCommitHistoryInt()) {
             keepHighest(highest, commit);
         }
@@ -226,8 +266,8 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
     }
 
     /**
-     * Waits until the engine has accounted for every record this sandbox published: each partition's committed
-     * offset has reached the number of records published to it.
+     * Waits until the engine has accounted for every record this sandbox published: on every partition, what the
+     * commit says is complete plus what is parked there right now equals what was published to it.
      *
      * <h2>Why the committed offset, and not "everything has been polled"</h2>
      * This used to wait for every published record to have been handed out of {@code poll} plus two further poll
@@ -240,18 +280,42 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
      * from a collected set, and as a highest committed offset of 40 where 50 was expected (astubbs#504).
      * <p>
      * A committed offset is the one thing the engine publishes that means the work behind it is finished, so it is
-     * what this waits for. The wait replaces the timing model; it is not a longer version of it.
+     * what this waits for - together with the parked set, below, which is the other way a record reaches an end.
+     * The wait replaces the timing model; it is not a longer version of it.
      *
-     * <h2>A parked record pins its partition here</h2>
+     * <h2>A parked record is accounted for, and this reverses the decision that said otherwise</h2>
      * The committed offset is the highest <em>sequentially succeeded</em> offset plus one
      * ({@code PartitionState#getOffsetHighestSequentialSucceeded}), and a parked record stays incomplete in the
      * offset map for as long as it is parked - it holds no worker and is never retried, but it is not complete
-     * either. So it holds its partition's committed offset at its own offset, and offsets above it are carried in
-     * the commit's metadata rather than in the number this reads. A <b>bounded</b> run whose records park cannot
-     * satisfy this wait and will fail it, naming the partition and the shortfall, rather than hanging. Drive a run
-     * that parks with {@link Bound#none()} and close the handle yourself.
+     * either. So it holds its partition's committed offset at its own offset for good.
+     * <p>
+     * The first version of this wait read that as a record the instance still owed, and so <b>refused a bounded run
+     * whose records park</b> - telling the caller to use {@link Bound#none()} and close the handle itself. That is
+     * the decision being overridden here, and it was wrong for the product rather than merely inconvenient: the
+     * README's own quickstart parks by design and is bounded, so every build spent the whole twenty-second budget
+     * waiting for a commit that could never come, logged the refusal at error, and then closed anyway - about
+     * thirty-six seconds for a ten-second run (astubbs#504).
+     * <p>
+     * <b>Parking is a terminal outcome for the run</b>, so this counts it as accounted for. Per partition:
+     * <ul>
+     *   <li><b>completed</b> is what the commit says is done - every offset below the committed one, plus every
+     *       offset inside the commit metadata's encoded range that the map does not list as incomplete
+     *       ({@link #completedOn});</li>
+     *   <li><b>parked</b> is how many records are parked on that partition right now, from the supplier
+     *       {@link #countingParkedRecordsWith(Supplier)} was given - the fluent API's parked view, or zero on the
+     *       classic path, which has no park;</li>
+     *   <li>the wait ends when {@code published == completed + parked} on every partition.</li>
+     * </ul>
+     * A parked record below the highest succeeded offset is one of the incompletes (so it is <em>not</em> in
+     * completed) and one of parked, so it is counted once; one above that range is outside the encoding and is
+     * counted only through parked. A record still queued or in flight is in neither, so the wait continues - which
+     * is the whole point of waiting rather than closing.
+     * <p>
+     * The parked view is a control-loop snapshot, so a record that has just parked may take one loop to appear.
+     * This polls, so that resolves itself.
      *
-     * @throws IllegalStateException when the budget ran out, naming every partition still short and by how much
+     * @throws IllegalStateException when the budget ran out, naming every partition still short and what it
+     *                               published, completed and parked
      */
     public void awaitEveryPublishedRecordCommitted() {
         awaitEveryPublishedRecordCommitted(COMMITTED_BUDGET);
@@ -264,12 +328,13 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
      */
     public void awaitEveryPublishedRecordCommitted(Duration budget) {
         long deadline = System.nanoTime() + budget.toNanos();
-        Map<TopicPartition, Long> outstanding = uncommittedByPartition();
+        Map<TopicPartition, PartitionAccount> outstanding = unaccountedByPartition();
         while (!outstanding.isEmpty()) {
             if (closed()) {
                 // Closed under us: the run is over and nothing else will ever be committed. That is the ordinary
                 // end of an unbounded run rather than a fault, so it is not one here either.
-                log.debug("The sandbox consumer closed while waiting for commits, still outstanding: {}", outstanding);
+                log.debug("The sandbox consumer closed while waiting for the instance to account for what was "
+                        + "published, still outstanding: {}", outstanding);
                 return;
             }
             if (System.nanoTime() > deadline) {
@@ -291,12 +356,14 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
                 // stop, and that caller closes the instance itself - so returning is right, and the flag is put
                 // back for whatever runs next on this thread.
                 Thread.currentThread().interrupt();
-                log.debug("Interrupted while waiting for commits, still outstanding: {}", outstanding);
+                log.debug("Interrupted while waiting for the instance to account for what was published, still "
+                        + "outstanding: {}", outstanding);
                 return;
             }
-            outstanding = uncommittedByPartition();
+            outstanding = unaccountedByPartition();
         }
-        log.debug("Every one of the {} published record(s) has been committed", publishedRecords.get());
+        log.debug("Every one of the {} published record(s) is accounted for - completed, or parked",
+                publishedRecords.get());
     }
 
     // Synchronized to match the method it overrides: MockConsumer guards addRecord, poll, commitSync and close
@@ -310,40 +377,114 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
     }
 
     /**
-     * How many records each partition has published but not yet had committed - empty when the engine has
-     * accounted for everything this sandbox offered it.
+     * Every partition with records the instance has neither completed nor parked - empty when it has accounted for
+     * everything this sandbox offered it.
      */
-    private Map<TopicPartition, Long> uncommittedByPartition() {
-        Map<TopicPartition, Long> committed = highestCommittedOffsets();
-        Map<TopicPartition, Long> outstanding = new LinkedHashMap<>();
+    private Map<TopicPartition, PartitionAccount> unaccountedByPartition() {
+        Map<TopicPartition, OffsetAndMetadata> commits = highestCommits();
+        Map<TopicPartition, Long> parked = parkedCounts.get();
+        Map<TopicPartition, PartitionAccount> outstanding = new LinkedHashMap<>();
         for (Map.Entry<TopicPartition, Long> published : publishedCounts().entrySet()) {
-            Long done = committed.get(published.getKey());
-            long shortfall = published.getValue() - (done == null ? 0L : done);
-            if (shortfall > 0) {
-                outstanding.put(published.getKey(), shortfall);
+            TopicPartition partition = published.getKey();
+            Long parkedHere = parked.get(partition);
+            PartitionAccount account = new PartitionAccount(published.getValue(),
+                    completedOn(partition, commits.get(partition)),
+                    parkedHere == null ? 0L : parkedHere);
+            if (account.unaccounted() > 0) {
+                outstanding.put(partition, account);
             }
         }
         return outstanding;
     }
 
-    private String shortfallMessage(Map<TopicPartition, Long> outstanding, Duration budget) {
-        return "The sandbox published " + publishedRecords.get() + " record(s) and waited " + budget
-                + " for the instance to commit them, and these never arrived (partition: how many of its records "
-                + "are still uncommitted): " + outstanding + ". Published per partition: " + publishedCounts()
-                + ". Committed so far: " + highestCommittedOffsets() + ". Handed out of poll: "
-                + polledOutRecords.get() + " - a count well short of what was published means the engine never "
-                + "fetched them, and one that matches means it fetched them and did not finish them. Note that a "
-                + "record which PARKS stays incomplete in the offset map and pins its partition's committed "
-                + "offset here for good; see SandboxConsumer#awaitEveryPublishedRecordCommitted.";
+    /**
+     * How many of a partition's records the instance has finished, read off its highest commit: everything below
+     * the committed offset, plus everything inside the encoded range that the offset map does not list as
+     * incomplete.
+     * <p>
+     * The range the engine encodes runs from the offset it is committing to the highest offset it has succeeded
+     * ({@code OffsetMapCodecManager#encodeOffsetsCompressed}), so the count is
+     * {@code highestSucceeded + 1 - incompletes}. Absent or empty metadata is not an error and not a special case
+     * of the decoder either - it is a partition with nothing above its committed offset, and the decode answers a
+     * highest-seen of one below the committed offset, which is the same arithmetic.
+     *
+     * @param partition the partition being counted, named in the refusal when its offset map cannot be read
+     * @param commit the partition's highest commit, or null when it has never committed - which is what a
+     *               partition whose every record parked looks like: not one of them completed, so it was never
+     *               dirty, so it never committed at all
+     */
+    private static long completedOn(TopicPartition partition, OffsetAndMetadata commit) {
+        if (commit == null) {
+            return 0;
+        }
+        long committedOffset = commit.offset();
+        String offsetMap = commit.metadata();
+        if (offsetMap == null || offsetMap.isEmpty()) {
+            return committedOffset;
+        }
+        try {
+            HighestOffsetAndIncompletes encoded =
+                    OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(committedOffset, offsetMap);
+            long highestSucceeded = encoded.getHighestSeenOffset().orElse(committedOffset - 1);
+            // Never below the committed offset: a decode that claimed less than the commit itself would make the
+            // wait ask for records the instance has already reported as done.
+            return Math.max(committedOffset, highestSucceeded + 1 - encoded.getIncompleteOffsets().size());
+        } catch (OffsetDecodingError e) {
+            // Loud rather than quietly pessimistic. Metadata this build cannot read means the wait is counting the
+            // wrong thing, and a run that then spent its whole budget would read as the engine's fault.
+            throw new IllegalStateException("The sandbox cannot read the offset map the instance committed against "
+                    + partition + " at offset " + committedOffset + " (" + offsetMap + "), so it cannot tell how "
+                    + "much of that partition is finished", e);
+        }
     }
 
-    private static void keepHighest(Map<TopicPartition, Long> into, Map<TopicPartition, OffsetAndMetadata> commit) {
+    private String shortfallMessage(Map<TopicPartition, PartitionAccount> outstanding, Duration budget) {
+        return "The sandbox published " + publishedRecords.get() + " record(s) and waited " + budget
+                + " for the instance to account for them, and these partitions never got there: " + outstanding
+                + ". Committed so far: " + highestCommittedOffsets() + ". Handed out of poll: "
+                + polledOutRecords.get() + " - a count well short of what was published means the engine never "
+                + "fetched them, and one that matches means it fetched them and did not finish them. A record that "
+                + "is neither complete nor parked is one the instance is still holding: queued, in flight, or "
+                + "waiting on a retry delay. See SandboxConsumer#awaitEveryPublishedRecordCommitted.";
+    }
+
+    private static void keepHighest(Map<TopicPartition, OffsetAndMetadata> into,
+                                    Map<TopicPartition, OffsetAndMetadata> commit) {
         for (Map.Entry<TopicPartition, OffsetAndMetadata> entry : commit.entrySet()) {
-            Long previous = into.get(entry.getKey());
-            long offset = entry.getValue().offset();
-            if (previous == null || offset > previous) {
-                into.put(entry.getKey(), offset);
+            OffsetAndMetadata previous = into.get(entry.getKey());
+            if (previous == null || entry.getValue().offset() > previous.offset()) {
+                into.put(entry.getKey(), entry.getValue());
             }
+        }
+    }
+
+    /**
+     * One partition's accounting at the moment it was read, and how the refusal renders it: what was published,
+     * what the commit says is complete, what is parked, and the difference - which is what the instance is still
+     * holding.
+     */
+    private static final class PartitionAccount {
+
+        private final long published;
+
+        private final long completed;
+
+        private final long parked;
+
+        private PartitionAccount(long published, long completed, long parked) {
+            this.published = published;
+            this.completed = completed;
+            this.parked = parked;
+        }
+
+        private long unaccounted() {
+            return published - completed - parked;
+        }
+
+        @Override
+        public String toString() {
+            return "published " + published + ", completed " + completed + ", parked " + parked + ", so "
+                    + unaccounted() + " unaccounted for";
         }
     }
 }

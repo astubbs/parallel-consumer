@@ -143,9 +143,13 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
 
     /**
      * Assign the partitions - the instance must already have subscribed - and start generating. When the bound is
-     * reached the generator stops, waits until every record it published has had its offset committed
+     * reached the generator stops, waits until every record it published has been accounted for
      * ({@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}), and only then closes {@code instance} drain
      * first - so what is readable afterwards is the end of the run.
+     * <p>
+     * That wait also counts parked records, and this path never has any: park is the fluent API's, so nothing here
+     * tells the consumer how to find them and it answers zero for every partition, which on this path is the
+     * truth.
      *
      * @param instance the Parallel Consumer instance to close at the bound; every processor type implements
      *                 {@link DrainingCloseable}
@@ -164,7 +168,8 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         generator = new RecordGenerator(feeds, perSecond, bound, () -> {
             try {
                 // See SandboxConsumer#awaitEveryPublishedRecordCommitted: draining is not the same as finishing,
-                // so the bound waits for the offsets rather than trusting the close to catch up.
+                // so the bound waits for the instance to account for what was published rather than trusting the
+                // close to catch up. No parked-count supplier is given: the classic API has no park.
                 consumer.awaitEveryPublishedRecordCommitted();
             } finally {
                 instance.closeDrainFirst();

@@ -31,10 +31,10 @@
  *       subscribe, so somebody has to; and it has to happen once a rebalance listener exists to be told. That is
  *       what {@code ClientRuntime#started} is for.</li>
  *   <li><b>Closes the instance when the generator reaches its bound</b> - after waiting for every published
- *       record's offset to commit, because draining is not the same as finishing
- *       ({@link bz.stub.parallelconsumer.sandbox.SandboxConsumer#awaitEveryPublishedRecordCommitted()}) - so the
- *       final state of a bounded run is readable after the close rather than being whatever the middle of it
- *       looked like.</li>
+ *       record to be accounted for, either by a commit or by being parked, because draining is not the same as
+ *       finishing ({@link bz.stub.parallelconsumer.sandbox.SandboxConsumer#awaitEveryPublishedRecordCommitted()})
+ *       - so the final state of a bounded run is readable after the close rather than being whatever the middle of
+ *       it looked like. A definition that parks by design is an ordinary bounded run here.</li>
  * </ol>
  *
  * <h2>The generator</h2>

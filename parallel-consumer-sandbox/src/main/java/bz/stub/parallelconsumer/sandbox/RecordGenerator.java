@@ -39,8 +39,8 @@ final class RecordGenerator implements AutoCloseable {
     private final Bound bound;
 
     /**
-     * What to do when the bound is reached: wait for the engine to account for every record already published,
-     * then close the instance. Run on this generator's own thread, because a close cannot be run from inside the
+     * What to do when the bound is reached: wait for the instance to account for every record already published -
+     * completed, or parked - then close it. Run on this generator's own thread, because a close cannot be run from inside the
      * engine it closes (KTD6) and this thread is outside it.
      * <p>
      * It runs <b>before</b> {@link #finished} counts down, so {@link #awaitFinished(Duration)} covers the whole
