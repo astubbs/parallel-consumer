@@ -116,6 +116,53 @@ class ParkCyclesTest extends AbstractFluentEngineTest {
     }
 
     /**
+     * The cycle's delay is the policy's, even when the user's function throws something that carries nothing.
+     * <p>
+     * <b>Every other test in this file throws {@link FakeRuntimeException}, which extends
+     * {@link bz.stub.parallelconsumer.PCRetriableException}</b> - so the delay the wrapper attaches to the throw
+     * is carried, and none of them can see what happens when it is not. A plain {@link IllegalStateException}
+     * cannot carry one, so the engine falls through to the retry-delay provider, and that provider used to answer
+     * the route's ordinary delay: a route declaring {@code park().thenRetryAfter(3s).forCycles(1)} re-attempted
+     * after ten milliseconds instead.
+     * <p>
+     * What this pins is the actual WAIT, not the mechanism, because the mechanism is the part that may move:
+     * three seconds against ten milliseconds is a difference no scheduling noise can produce.
+     */
+    @Test
+    void aPlainThrowUnderAParkCycleWaitsThePolicysDelayAndNotTheRoutesOwn() {
+        var attempts = new AtomicInteger();
+        var pc = ParallelConsumer.connect(props());
+        pc.string(TOPIC)
+                .retryLimit(0)
+                .retryDelay(Duration.ofMillis(10))
+                .afterRetries(park().thenRetryAfter(Duration.ofSeconds(3)).forCycles(1))
+                .process(context -> {
+                    attempts.incrementAndGet();
+                    // NOT a PCRetriableException, which is the whole point: it can carry nothing back.
+                    throw new IllegalStateException("this record never succeeds, and says nothing about it");
+                });
+
+        handle = runtime.startAndAssign(pc, 1);
+        runtime.publish(TOPIC, 0, 0, "key-0", "an order");
+
+        RouteDispatcher dispatcher = pc.dispatcher();
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(attempts.get()).isEqualTo(1));
+
+        // A full second with no second attempt. The route's own delay is ten milliseconds, so an attempt inside
+        // this window could only have taken it - which is the defect.
+        Awaitility.await().pollDelay(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10))
+                .untilAsserted(() -> assertThat(attempts.get()).isEqualTo(1));
+
+        // ...and once the policy's three seconds are up the record is attempted once more, and then parks.
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+            assertThat(attempts.get()).isEqualTo(2);
+            assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1);
+        });
+        assertThat(dispatcher.parkedForRoute(TOPIC).get(0).cycles()).isEqualTo(1);
+    }
+
+    /**
      * A record that succeeds on a cycle attempt completes like any other, and takes its cycle count with it - the
      * next time this offset is seen it starts from zero (R10).
      */

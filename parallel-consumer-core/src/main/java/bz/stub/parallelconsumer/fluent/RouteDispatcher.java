@@ -414,7 +414,8 @@ class RouteDispatcher {
      * A throw from the user's function keeps its own type and message - the engine classifies it, and the user
      * reads it - so the delay is added to the instance in flight rather than to a wrapper around it. Only a
      * {@link PCRetriableException} can carry one; anything else takes the configured delay, which for this facade
-     * is the same topic-keyed answer {@link #retryDelayFor} gives.
+     * is what {@link #retryDelayFor} answers - and that method, not this one, is why a plain throw under a park
+     * policy still waits the park cycle's delay rather than the route's ordinary one.
      */
     private static RuntimeException retriable(RuntimeException failure, Duration delay) {
         if (failure instanceof PCRetriableException && delay != null && !delay.isNegative()) {
@@ -578,21 +579,52 @@ class RouteDispatcher {
     // ---------------------------------------------------------------- the retry-delay provider
 
     /**
-     * What the engine's retry-delay provider answers for one record: the route's own delay, and nothing else.
+     * What the engine's retry-delay provider answers for one record: the route's ordinary delay, or its park
+     * policy's delay when this failure is the one that spends a park cycle.
      * <p>
-     * <b>It is a pure function of the topic</b>, which is what it became once a throw could carry its own delay
-     * (KTD14). It used to read a thread-local the throw site had written a moment earlier, because park and retry
-     * needed different answers for the same topic and this was the only channel; the engine calls the provider
-     * synchronously inside the failure path, so getting that write order wrong did not fail, it silently turned a
-     * park into a one-second retry.
+     * <b>It is a pure function of the topic and the record's attempt count</b>, which is what it became once a
+     * throw could carry its own delay (KTD14). It used to read a thread-local the throw site had written a moment
+     * earlier, because park and retry needed different answers for the same topic and this was the only channel;
+     * the engine calls the provider synchronously inside the failure path, so getting that write order wrong did
+     * not fail, it silently turned a park into a one-second retry.
+     * <p>
+     * <b>Why the park cycle's delay comes back through here rather than on the throw.</b>
+     * {@link #parkCycle} attaches it to the exception, and {@link #retriable} can only attach a delay to a
+     * {@link PCRetriableException} - so a route declaring {@code park().thenRetryAfter(30s).forCycles(3)} whose
+     * function throws a plain {@code IllegalStateException} waited the route's ORDINARY delay instead. Wrapping
+     * the user's throw to carry the delay is not available: the engine reads the hand-back and classifies the
+     * failure for logging with the same {@code unwrapTransparentWrappers} walk, so any wrapper that carried a
+     * delay would also demote the user's error to debug, which R9 says must not change. The provider is the other
+     * channel the engine already offers, and it is consulted for exactly the failures that carried nothing.
+     * <p>
+     * The attempt count the engine passes has already been incremented for the failure being handled, so it is
+     * the same {@code attempts} {@link #afterAttempt} decided on - the two therefore cannot disagree about which
+     * failure spends a cycle.
      * <p>
      * <b>It cannot throw, return null, return a negative delay, or return one that overflows.</b> The engine
      * replaces a provider that does any of those with its own one-second default and a rate-limited warning.
      * {@code EngineRetryDelayProviderContractTest} pins that engine behaviour so this claim keeps its teeth.
+     *
+     * @param topic    the record's topic, which is what selects the route
+     * @param attempts how many times this record has failed, INCLUDING the failure being handled
      */
-    Duration retryDelayFor(String topic, int partition, long offset) {
+    Duration retryDelayFor(String topic, int attempts) {
         RouteState route = routesByTopic.get(topic);
-        return route == null ? fallbackRetryDelay : route.retryDelay();
+        if (route == null) {
+            return fallbackRetryDelay;
+        }
+        if (spendsAParkCycle(route, attempts)) {
+            return route.afterRetries().parkDelay();
+        }
+        return route.retryDelay();
+    }
+
+    /**
+     * Whether the failure at {@code attempts} is the one {@link #afterAttempt} answers with a park cycle - the
+     * same two conditions, in the same order, read from the same two functions.
+     */
+    private static boolean spendsAParkCycle(RouteState route, int attempts) {
+        return isExhausted(route, attempts) && route.afterRetries().parkCycles() > cyclesUsed(route, attempts);
     }
 
     // ---------------------------------------------------------------- decoding, running and serialising

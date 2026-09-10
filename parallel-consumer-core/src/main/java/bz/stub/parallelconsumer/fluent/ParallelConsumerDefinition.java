@@ -805,11 +805,13 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         options.commitMode(commitMode)
                 .ordering(defaultOrdering)
                 .maxConcurrency(totalAdmissionTarget())
-                // One delay per route, answered from the topic (R6). What a throw MEANT - a park, a park cycle's
-                // own delay, a hand-back that is not an attempt - rides on the exception instead, so this stays a
-                // pure function and there is no note for it to find (KTD14).
+                // One delay per route, answered from the topic and the record's attempt count (R6). What a throw
+                // MEANT - a park, a hand-back that is not an attempt - rides on the exception instead, so this
+                // stays a pure function and there is no note for it to find (KTD14). A park CYCLE's own delay is
+                // the exception: the engine only reads a carried delay off a PCRetriableException, so a plain
+                // throw under a park policy has to be answered here - see RouteDispatcher#retryDelayFor.
                 .retryDelayProvider(context ->
-                        dispatcher.retryDelayFor(context.topic(), context.partition(), context.offset()));
+                        dispatcher.retryDelayFor(context.topic(), context.getNumberOfFailedAttempts()));
         // The engine's own defaultMessageRetryDelay is deliberately left alone. It is deprecated, and it is only
         // reached when the provider above misbehaves - which the provider is written not to do, and which
         // EngineRetryDelayProviderContractTest pins. Setting it would make the fallback look intentional.
