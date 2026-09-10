@@ -79,6 +79,8 @@ per-flag reporting fault, `docs/inflight/ci-codecov-flags-not-like-for-like.md`)
   record succeeds when all return, a throw from any retries them all); isolated success (a container
   per record per function) is the later step. KTD15. A "second consumer group" answer and a
   "run in sequence" answer were both proposed by the agent and rejected by the owner.
+  **Reversed by the owner on 2026-09-10** - one function per topic; see the correction
+  under "The next unit" below, and the plan's KTD15.
 - **Owner:** the pause takes queued batches back out of the pool on the controller, not a per-task
   check or an exception through the failure path; the window before the controller's next pass is
   accepted and documented on the purge method.
@@ -93,6 +95,21 @@ per-flag reporting fault, `docs/inflight/ci-codecov-flags-not-like-for-like.md`)
   the PR's branch; implementation commits cite astubbs#504; API maturity via `InterfaceStability`.
 
 ## The next unit: functions per topic (KTD15)
+
+**Corrected 2026-09-10, after this handoff was written.** The owner reversed the shape described below:
+the engine holds **one** function per topic, not any number, and fan-out is the user's own composition
+inside their one function ("good yes, lets keep it simple"). The widened form this section describes - N
+functions per topic, run concurrently on the worker pool and judged collectively - is a **rejected shape,
+not a later step**: nothing is staged behind it. Two consequences change what the unit is. The narrowed
+decision is already what the code does, since the first cut binds one function to one topic and already
+refuses the second, so the unit turned out to be documentation rather than an engine change; and an
+engine-side per-topic function registry was designed and then declined under the simplicity gate, because
+it removes one of the facade's four topic lookups while the parked view and the retry-delay provider keep
+the topic-to-route map regardless. The classic API deliberately gains no per-topic verb (R26); the typed
+routes are the answer to astubbs#254 (confluentinc#372). The plan's KTD15 carries the decision and its
+full reasoning. What follows is left exactly as written, because a dated handoff records what was believed
+when it was written.
+
 
 The dispatch packet lived in the session's scratchpad (machine-local, gone with the session); what
 it said, pointer-first:
