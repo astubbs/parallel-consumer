@@ -89,8 +89,9 @@ public final class Bound {
     }
 
     private long durationNanos() {
-        // Duration.toNanos overflows past ~292 years; nothing near that is a sandbox run, and the check is here
-        // so that a nonsense bound fails loudly rather than wrapping into the past.
+        // No check of our own, deliberately: Duration.toNanos() THROWS ArithmeticException past about 292 years
+        // rather than wrapping, so a nonsense bound already fails loudly and a guard here would only restate it.
+        // An earlier version of this comment claimed a check that was never written.
         return duration.toNanos();
     }
 

@@ -337,7 +337,12 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
                         + "published, still outstanding: {}", outstanding);
                 return;
             }
-            if (System.nanoTime() > deadline) {
+            // Subtract, never compare directly: System.nanoTime() is explicitly allowed to be negative and to
+            // wrap, so `nanoTime() + toNanos()` can overflow and a bare `nanoTime() > deadline` is then true on
+            // the very first pass - the wait refuses instantly with a shortfall message about a run that had no
+            // chance to start. The difference is correct across the wrap for any two readings less than about
+            // 292 years apart, which is the standard form and what Object#wait-style deadline loops use.
+            if (System.nanoTime() - deadline > 0) {
                 throw new IllegalStateException(shortfallMessage(outstanding, budget));
             }
             if (polledOutRecords.get() < publishedRecords.get()) {
