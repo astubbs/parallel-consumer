@@ -60,7 +60,7 @@ On master, each named for what it lends this work:
 - `docs/inflight/core-retry-queue-needs-a-runtime-controller-ownership-guard.md`,
   `docs/inflight/test-retry-queue-behaviour-untested.md` - the retry queue that park in place is
   built on (R27), and the tests it lacks.
-- `docs/inflight/core-237-continuous-offset-encoding.md` - the export fraction default is provisional
+- `docs/inflight/core-237-continuous-offset-encoding.md` - the export percentage default is provisional
   on today's approximate encoding.
 - `docs/inflight/branch-ks-streams-workstream.md` - the stateful API this surface must not contradict
   about what an outcome means.
