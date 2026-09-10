@@ -18,7 +18,7 @@ the price of not knowing the exact size.
 
 - **The UX modernisation plan's export fraction (R27 of
   `docs/plans/2026-09-09-002-feat-ux-modernisation-plan.md`).** Parked records are exported to a dead-letter destination when a partition's
-  payload reaches a declared fraction of the cap. The default is sixty percent and a declared
+  payload reaches a declared fraction of the cap. The default is seventy percent, five points below the threshold, and a declared
   fraction at or above the pressure threshold is refused at definition time, both chosen only
   because the threshold is seventy-five percent and a fraction above it can never be reached. The
   owner's original number was eighty percent, "when offset capacity nears its end". With exact
