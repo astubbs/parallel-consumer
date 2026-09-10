@@ -36,10 +36,10 @@ The rungs, in the order they must merge, and what each one unlocks here:
   so a definition that supplies a pre-built producer (R1's Java-only sugar) forgoes recovery and,
   under the transactional mode, export.
 - **astubbs#352**, the commit-failure seam, is independent of the stack. It gives the instance a
-  decision other than terminating when a commit exhausts its budget. If it lands, its handler is a
-  second instance-wide setting beside the commit mode, which KD11 currently says is the only one, so
-  the plan's owner decides whether the fluent API carries it as data. Merging it before R21 means the
-  README error-handling section is written once.
+  decision other than terminating when a commit exhausts its budget. When it lands, the fluent API
+  carries its policy as data, the one other instance-wide setting beside the commit mode (KD11, R6;
+  owner decision, 2026-09-10). Merging it before R21 means the README error-handling section is
+  written once.
 <!-- post-merge: checked-end -->
 
 Re-read this section whenever one of those merges: `gh pr view <n> -R astubbs/parallel-consumer`
