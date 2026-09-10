@@ -399,9 +399,20 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
             Object value = random.create(valueType, index);
             byte[] keyBytes = encode(keyFormat, key);
             byte[] valueBytes = encode(valueFormat, value);
-            // Hashed like Kafka's own default partitioner, so that one key always lands on one partition and a
-            // key-ordered run in the sandbox shards the way it would against a broker.
-            int partition = Math.floorMod(Objects.hashCode(key), partitions);
+            // Hashed over the ENCODED KEY BYTES, which is the only thing every key type here agrees on.
+            //
+            // Kafka's default partitioner also hashes the serialised key rather than the object - it murmur2s
+            // those bytes - so this places a key on the same partition every time and reproduces the same
+            // placement for the same seed, which is what a key-ordered sandbox run and Builder#seed both promise.
+            // It does NOT put a key on the same partition a broker would; nothing here needs that, and claiming
+            // it would be false.
+            //
+            // Hashing the key OBJECT is what this used to do, and it silently defeated both promises for every
+            // key type but String: RandomObjects.key hands back a fresh byte[] per call for Format.bytes(), and a
+            // freshly instantiated POJO for anything else, neither of which overrides hashCode - so
+            // Objects.hashCode was the IDENTITY hash, different for every record of the same logical key and
+            // different between two runs of one seed.
+            int partition = Math.floorMod(Arrays.hashCode(keyBytes), partitions);
             return consumer.publish(topic, partition, keyBytes, valueBytes) >= 0;
         }
 

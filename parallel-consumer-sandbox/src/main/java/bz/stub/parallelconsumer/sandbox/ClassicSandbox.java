@@ -12,6 +12,7 @@ import org.apache.kafka.common.serialization.Serializer;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -228,8 +229,36 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         public boolean publish(long index) {
             K key = random.key(keyType, index, keyCardinality);
             V value = random.create(valueType, index);
-            int partition = Math.floorMod(Objects.hashCode(key), partitionsPerTopic);
+            int partition = Math.floorMod(valueHashOf(key), partitionsPerTopic);
             return consumer.publish(topic, partition, key, value) >= 0;
         }
+    }
+
+    /**
+     * A <b>value-based</b> hash of a generated key, so that one key always lands on one partition and a seed
+     * reproduces the placement - which is what {@code Sandbox.Builder#seed} promises and what makes a key-ordered
+     * run in the sandbox shard the way it would against a broker.
+     * <p>
+     * Arrays are the case {@code Objects.hashCode} gets wrong, and the case this generator manufactures:
+     * {@code RandomObjects#key} builds a <em>fresh</em> {@code byte[]} on every call for a {@code byte[]} key
+     * type, so the identity hash differs for every record of the same logical key and differs again between two
+     * runs of one seed.
+     * <p>
+     * This is deliberately the same treatment {@code ShardKey.KeyWithEquals} gives a key when the engine above
+     * shards on it - arrays by value, everything else by its own {@code hashCode} - so the sandbox partitions a
+     * key the way the engine shards one. A key type whose {@code hashCode} is the inherited identity one is
+     * therefore as unusable for key ordering here as it is against a real broker.
+     * <p>
+     * The fluent path does not need this: it partitions on the ENCODED key bytes, which every route has because
+     * the engine underneath consumes raw bytes - see {@code Sandbox.RouteFeed#publish}.
+     */
+    private static int valueHashOf(Object key) {
+        if (key instanceof byte[]) {
+            return Arrays.hashCode((byte[]) key);
+        }
+        if (key instanceof Object[]) {
+            return Arrays.deepHashCode((Object[]) key);
+        }
+        return Objects.hashCode(key);
     }
 }
