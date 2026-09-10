@@ -33,7 +33,7 @@
                datafaker 1.9.0       - major 52 throughout; module-info.class sits under META-INF/versions/9, the
                                        correct multi-release shape. 2.x is Java 17 and is where this moves when
                                        the Java baseline changes (astubbs#53).
-               avro 1.11.4           - major 52 throughout. 1.12 raises the floor to Java 11. Optional: only the
+               avro 1.11.5           - major 52 throughout; 1.11.4 carried CVE-2025-33042. 1.12 raises the floor to Java 11. Optional: only the
                                        Avro arm of the generator touches it, and that arm is not loaded unless
                                        the class is on the classpath.
 
@@ -41,12 +41,12 @@
              (bytes 7-8 are the major version: 0x34 = 52 = Java 8). -->
         <instancio.version>5.4.1</instancio.version>
         <datafaker.version>1.9.0</datafaker.version>
-        <avro.version>1.11.4</avro.version>
+        <avro.version>1.11.5</avro.version>
         <!-- Test only, and only so that the generator's "Protobuf is not supported in this version" refusal is
              proved against a real protobuf message type rather than a stand-in. protobuf-java ships several
              (Int32Value and friends), so no code generation is needed. -->
         <protobuf.version>3.25.5</protobuf.version>
-        <!-- One version for both jackson artifacts here, because they are NOT independent: avro 1.11.4 pulls
+        <!-- One version for both jackson artifacts here, because they are NOT independent: avro 1.11.x pulls
              jackson-core 2.14.3 transitively, maven's nearest-wins picked it over the 2.18 that jackson-databind
              asks for, and the first generated record died on
              `NoSuchMethodError: com.fasterxml.jackson.core.util.BufferRecycler.releaseToPool()` - a 2.18 databind
