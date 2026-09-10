@@ -93,7 +93,16 @@ class ProducingIsACompileErrorWithoutProducedTypesTest {
                     "-proc:none",
                     "-d", work.toString(),
                     file.toString()));
-            Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+            ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
+            // The JVM prints "Picked up JAVA_TOOL_OPTIONS: ..." to STDERR whenever either of these is set, and
+            // redirectErrorStream(true) folds that into the stream this method reads as javac's own diagnostics -
+            // so on any machine that sets one, a snippet that compiled perfectly cleanly comes back with output.
+            // That is what the exit-code guard below then reports, as a bare "expected: false but was: true" with
+            // nothing about a compiler in it. Cleared at the source rather than filtered out of the text, because
+            // the variables also change how the child JVM runs and this test wants a plain javac.
+            builder.environment().remove("JAVA_TOOL_OPTIONS");
+            builder.environment().remove("_JAVA_OPTIONS");
+            Process process = builder.start();
             String output;
             try (InputStream stream = process.getInputStream()) {
                 output = new String(readAll(stream), StandardCharsets.UTF_8);
