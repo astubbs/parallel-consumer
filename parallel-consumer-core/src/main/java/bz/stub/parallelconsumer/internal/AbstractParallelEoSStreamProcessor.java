@@ -1360,7 +1360,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         brokerPollSubsystem.drain();
 
         log.debug("Shutting down execution pool...");
-        //Clear scheduled but not started work in execution pool
+        // Clear scheduled but not started work in execution pool.
+        //
+        // This DROPS those records - no onAbandonedBeforeStarting, so no claim released and
+        // numberRecordsOutForProcessing not decremented - and they are redelivered after a rebalance.
+        // purgeQueuedWorkNotAllowedToStart() is the path that takes them back properly instead, and on the
+        // DONT_DRAIN close it normally runs first, earlier in the same control-loop pass. It can be beaten to
+        // the queue: the state is read twice, once by the purge and once by the switch that reaches this close,
+        // and a close(DONT_DRAIN) landing BETWEEN them means the purge saw RUNNING and did nothing. One statement
+        // wide, and the outcome is the pre-existing behaviour rather than a new fault - noted here so the two
+        // sites read as a pair. See purgeQueuedWorkNotAllowedToStart(), which carries the same note from its end.
         workerThreadPool.get().getQueue().clear();
         //request graceful shutdown
         workerThreadPool.get().shutdown();
@@ -2484,6 +2493,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * "will finish in flight, then close" - a batch still queued in the pool is not in flight, so starting it is
      * starting new work during a close that promised not to. {@link State#DRAINING} is deliberately absent: a
      * drain-first close exists to dispatch the records already buffered, so its queued batches must run.
+     * <p>
+     * <b>On that close path this has a twin, and it can get to the queue first.</b> {@code innerDoClose} clears
+     * the pool's queue outright, which DROPS the records rather than abandoning them. Within one control-loop pass
+     * the order is right - this runs, then the trailing {@code switch (state)} reaches the close - but the state is
+     * read twice, once here and once by that switch, and a {@code close(DONT_DRAIN)} landing between the two reads
+     * means this saw {@link State#RUNNING} and did nothing while the clear then ran. One statement wide, and the
+     * outcome is the behaviour that predates this method rather than a new fault, so it is recorded rather than
+     * closed; the same note sits on the clear itself.
      *
      * @return how many records were taken back on this pass
      */
