@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.state;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
@@ -18,6 +19,7 @@ import org.threeten.extra.MutableClock;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.HashSet;
@@ -110,6 +112,47 @@ class ShardManagerTest {
                 .that(population.getInSystem()).isEqualTo(0L);
         assertWithMessage("the available counter lands on exactly zero without needing a clamp")
                 .that(shard.getCountOfWorkAwaitingSelection()).isEqualTo(0L);
+    }
+
+    /**
+     * A container that was handed back <b>without</b> counting an attempt is in the retry queue like any other -
+     * {@link ShardManager#onFailure} adds every hand-back it is given - so taking it as work again has to take it
+     * back out.
+     * <p>
+     * The removal filter used to ask {@code hasPreviouslyFailed()}, on the stated invariant that "retry queue
+     * won't have any that didn't previously fail". A {@code notAnAttempt()} hand-back falsifies that: the counter
+     * stays at zero while the entry is real, so the container was left in the queue <em>and</em> in flight at the
+     * same time until {@code purgeDepartedRetryEntries()} collected it on some later pass.
+     * <p>
+     * Driven at the shard directly, like {@code theInlineStaleSweepRetiresTheRecordItRemoves} above: the queue and
+     * the shard are the only two collaborators the filter reads.
+     */
+    @Test
+    void aHandbackThatCountedNoAttemptIsStillTakenOutOfTheRetryQueueWhenItIsRetaken() {
+        PCModuleTestEnv module = mu.getModule();
+        var consumerRecord = new ConsumerRecord<>(topic, partition, 7L, "a-key", "a-value");
+        var container = new WorkContainer<>(wm.getPm().getEpochOfPartition(tp), consumerRecord, module);
+
+        var shard = new ProcessingShard<>(ShardKey.ofTopicPartition(consumerRecord), module.options(), wm.getPm(),
+                new RecordPopulation(), new DispatchScanMeter());
+        shard.addWorkContainer(container);
+
+        // Withheld rather than failed, and due again at once - so the only thing this test can turn on is whether
+        // the queue entry is taken back out, not whether the record is selectable.
+        container.onUserFunctionFailure(new PCRetriableException("withheld")
+                .retryAfter(Duration.ZERO)
+                .notAnAttempt());
+        assertThat(container.getNumberOfFailedAttempts()).isEqualTo(0);
+
+        var retryQueue = new RetryQueue();
+        retryQueue.add(container);
+        assertThat(retryQueue.contains(container)).isTrue();
+
+        var taken = shard.getWorkIfAvailable(10, retryQueue);
+
+        assertThat(taken).containsExactly(container);
+        assertWithMessage("a re-taken container is out of the retry queue, whether or not its hand-back counted")
+                .that(retryQueue.contains(container)).isFalse();
     }
 
     @Test

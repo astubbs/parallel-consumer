@@ -568,9 +568,15 @@ public class ProcessingShard<K, V> {
 
         logSlowWork(slowWork);
 
-        // Remove from retry queue as picked for submission to work pool - filter to only remove work containers that have
-        // previously failed - as retry queue won't have any that didn't previously fail.
-        retryQueue.removeAll(workTaken.stream().filter(WorkContainer::hasPreviouslyFailed).collect(Collectors.toList()));
+        // Remove from the retry queue as picked for submission to the work pool. The filter asks whether a
+        // hand-back has ever written the container a deadline, which is exactly what ShardManager.onFailure adds
+        // to the queue on.
+        //
+        // It used to ask hasPreviouslyFailed(), and that stopped being the same question when a hand-back gained
+        // notAnAttempt(): onFailure queues EVERY container it is handed, whether or not the hand-back counted as
+        // an attempt, so a zero-attempt container is in the queue and was not filtered out when it was re-taken -
+        // leaving it in the queue and in flight at once until purgeDepartedRetryEntries() collected it.
+        retryQueue.removeAll(workTaken.stream().filter(WorkContainer::hasRetryDeadline).collect(Collectors.toList()));
 
         return workTaken;
     }

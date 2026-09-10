@@ -126,6 +126,39 @@ class WorkContainerHandbackTest {
     }
 
     /**
+     * The documented shape of {@code notAnAttempt}, on a record's <b>first</b> delivery: the function was never
+     * run, or was withheld, and it asks to be handed back in thirty seconds.
+     * <p>
+     * The regression this pins is that the deadline survives the suppressed attempt. "Has this record an
+     * artificial delay at all" used to be answered from the attempt counter, which {@code notAnAttempt} is
+     * defined not to move - so a first delivery wrote a deadline nothing then consulted, the record was
+     * immediately claimable again, and repeated withholding became a hot loop at control-loop frequency against
+     * whatever the function was backing off from. That is the exact failure {@code computeRetryDueAt}'s javadoc
+     * says the design exists to prevent.
+     * <p>
+     * {@code aNotAnAttemptThrowLeavesTheFailureCountWhereItWas} cannot see it: it throws a real failure first, so
+     * the counter is already non-zero and the broken branch is never entered.
+     */
+    @Test
+    void aWithheldFirstDeliveryStillWaitsTheDelayItAskedFor() {
+        var container = container();
+
+        container.onUserFunctionFailure(new PCRetriableException("throttled")
+                .retryAfter(Duration.ofSeconds(30))
+                .notAnAttempt());
+
+        // The withhold cost no attempt, which is the whole point of saying so...
+        assertThat(container.getNumberOfFailedAttempts()).isEqualTo(0);
+        assertThat(container.hasPreviouslyFailed()).isFalse();
+        // ...and the delay it asked for is still what decides when the record comes back.
+        assertThat(container.hasRetryDeadline()).isTrue();
+        assertThat(container.isDelayPassed()).isFalse();
+        assertThat(container.isAvailableToTakeAsWork()).isFalse();
+        assertThat(container.getDelayUntilRetryDue()).isGreaterThan(Duration.ofSeconds(29));
+        assertThat(container.getDelayUntilRetryDue()).isAtMost(Duration.ofSeconds(30));
+    }
+
+    /**
      * The park is a state. Nothing computes it, so nothing can lose it - which is the whole reason it is not a
      * hundred-year retry delay.
      */

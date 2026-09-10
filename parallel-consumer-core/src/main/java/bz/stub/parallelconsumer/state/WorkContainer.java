@@ -459,8 +459,8 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
             // the sentinel that stands in for one may be allowed to decide whether the record is due.
             return false;
         }
-        if (!hasPreviouslyFailed()) {
-            // if never failed, there is no artificial delay, so "delay" has always passed
+        if (!hasRetryDeadline()) {
+            // no hand-back has ever written this record a deadline, so there is no artificial delay to wait out
             return true;
         }
         Duration delay = getDelayUntilRetryDue();
@@ -518,6 +518,27 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      */
     public Instant getRetryDueAt() {
         return retryDueAt.orElse(Instant.MIN); // use a constant for stable comparison
+    }
+
+    /**
+     * Whether a hand-back has ever written this record a retry deadline - which is the honest form of "does this
+     * record have an artificial delay at all", and the question {@link #isDelayPassed()} asks before doing any
+     * arithmetic.
+     * <p>
+     * <b>Not the attempt count.</b> Those two used to be the same question and are not: a
+     * {@link PCRetriableException#notAnAttempt()} hand-back suppresses the counter and still writes a deadline, so
+     * a record whose FIRST delivery was withheld with {@code retryAfter(30s).notAnAttempt()} has a deadline while
+     * {@code hasPreviouslyFailed()} is still false - and reading the count made the 30 seconds vanish, retrying at
+     * control-loop frequency against whatever the function was backing off from.
+     * <p>
+     * It is also the honest answer to "could this container be in the retry queue", because
+     * {@code ShardManager.onFailure} adds every hand-back to it regardless of whether the hand-back counted -
+     * see {@link ProcessingShard#getWorkIfAvailable}.
+     *
+     * @return true once any hand-back has set a deadline; it is never unset again
+     */
+    public boolean hasRetryDeadline() {
+        return retryDueAt.isPresent();
     }
 
     /**
