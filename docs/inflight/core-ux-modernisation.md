@@ -45,6 +45,10 @@ The rungs, in the order they must merge, and what each one unlocks here:
 Re-read this section whenever one of those merges: `gh pr view <n> -R astubbs/parallel-consumer`
 is the status, this note is the consequence.
 
+## The compatibility gate's exclusion
+
+The fluent package `bz.stub.parallelconsumer.fluent` is incubating and its shape will churn before it settles, so it is excluded from the API-compatibility gate until then (plan KTD1). The gate is astubbs#315, not yet merged; when it lands, or when that branch is next touched, add the package exclusion to its japicmp configuration and name this note in the commit. Until the gate exists on master, nothing enforces the exclusion and nothing needs it.
+
 ## Related notes
 
 On master, each named for what it lends this work:

@@ -18,6 +18,7 @@
     <name>Parallel Consumer - Core</name>
 
     <properties>
+        <jackson.fluent.version>2.18.10</jackson.fluent.version>
         <!-- Root of the per-fork test log silos; see the surefire argLine below and docs/logging.md. -->
         <pc.log.dir>target/pc-logs</pc.log.dir>
         <!-- JUnit 5 thread-parallelism for THIS module's tests. Declared once here because surefire and
@@ -54,6 +55,18 @@
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-clients</artifactId>
             <version>${kafka.version}</version>
+        </dependency>
+        <!-- Optional: the fluent API's JSON helpers (bz.stub.parallelconsumer.fluent) resolve to Jackson
+             when the user's classpath carries it, and nothing else in core touches it. Optional so a
+             classic-API user gains no transitive dependency. Kept at the same line the examples pin
+             (jackson.examples.version in the examples parent) and deliberately not in the root
+             dependencyManagement: a global pin is transitive to wiremock-jre8 and broke VertxTest
+             (HTTP 500) when tried, which the example-metrics pom records. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.fluent.version}</version>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>com.github.luben</groupId>

@@ -880,7 +880,8 @@
                         <excludeVulnerabilityId>CVE-2026-59295</excludeVulnerabilityId>
                         <excludeVulnerabilityId>CVE-2026-59296</excludeVulnerabilityId>
 
-                        <!-- com.fasterxml.jackson.core:jackson-databind (example-streams only). False
+                        <!-- com.fasterxml.jackson.core:jackson-databind (example-streams, and core's optional
+                             dependency for the fluent API's JSON helpers). False
                              positive: GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and
                              the module resolves a 2.18.x - see jackson.examples.version in the
                              examples parent for which one. Stated as the line rather than the exact
