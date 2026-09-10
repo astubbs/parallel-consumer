@@ -11,11 +11,22 @@ import java.util.Objects;
 
 /**
  * When a sandbox run should stop generating and close: after so many records, after so long, or not at all.
+ *
+ * <h2>Reaching a bound waits for the committed offsets, then closes drain first</h2>
+ * Either bound - the count or the duration - ends the same way (R33, R17): the generator stops publishing, then
+ * waits until every record it published has had its offset committed, and only then closes the instance. So what
+ * a test reads after the close is the end of the run rather than the middle of it. Without a bound the run ends
+ * when its handle is closed, which is what an interactive demo wants and what a test almost never does.
  * <p>
- * <b>Reaching a bound closes the instance drain first</b> (R33, R17): the records already buffered are dispatched
- * and their offsets commit before the consumer goes, so what a test reads after the close is the end of the run
- * rather than the middle of it. Without a bound the run ends when its handle is closed, which is what an
- * interactive demo wants and what a test almost never does.
+ * <b>The wait is on committed offsets, and not on a drain</b>, because a drain-first close is not the same thing
+ * as finishing: it transitions to closing once nothing is awaiting selection, while the worker pool may still
+ * hold queued tasks, and the close then clears that queue. {@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}
+ * owns that reasoning, and the refusal the wait raises when the offsets never arrive.
+ * <p>
+ * <b>A record that parks never completes</b>, and the committed offset is the highest sequentially succeeded one
+ * plus one - so a parked record holds its partition's committed offset at its own for as long as it stays parked.
+ * A bounded run whose records park cannot satisfy that wait and fails it naming the partition; drive a run that
+ * parks with {@link #none()} and close the handle yourself.
  */
 @InterfaceStability.Unstable
 public final class Bound {

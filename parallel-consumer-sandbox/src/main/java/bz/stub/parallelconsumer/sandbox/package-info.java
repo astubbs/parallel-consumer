@@ -30,8 +30,11 @@
  *   <li><b>Assigns the partitions after the engine has subscribed.</b> A mock consumer assigns nothing on
  *       subscribe, so somebody has to; and it has to happen once a rebalance listener exists to be told. That is
  *       what {@code ClientRuntime#started} is for.</li>
- *   <li><b>Closes the instance when the generator reaches its bound</b>, draining first, so the final state of a
- *       bounded run is readable after the close rather than being whatever the middle of it looked like.</li>
+ *   <li><b>Closes the instance when the generator reaches its bound</b> - after waiting for every published
+ *       record's offset to commit, because draining is not the same as finishing
+ *       ({@link bz.stub.parallelconsumer.sandbox.SandboxConsumer#awaitEveryPublishedRecordCommitted()}) - so the
+ *       final state of a bounded run is readable after the close rather than being whatever the middle of it
+ *       looked like.</li>
  * </ol>
  *
  * <h2>The generator</h2>

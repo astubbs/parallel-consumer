@@ -35,6 +35,8 @@ class GeneratorReproducibilityTest {
 
     private static final int RECORDS = 20;
 
+    private static final long SEED = 2026;
+
     @Test
     void theSameSeedAndIndexGiveTheSameObject() {
         RandomObjects first = RandomObjects.seededWith(4711);
@@ -72,17 +74,57 @@ class GeneratorReproducibilityTest {
     }
 
     /**
-     * The whole run, end to end: two sandboxes of the same seed hand the same records, in the same order, to the
-     * same function. Partition ordering with one partition, so that "the same order" is a property of the
-     * generator rather than of the scheduler.
+     * The whole run, end to end - and two claims that are worth keeping apart, because only one of them is what
+     * "reproducible" means.
+     *
+     * <ol>
+     *   <li><b>What the generator produced.</b> A seeded run generates the sequence its seed and indices name,
+     *       and both runs of a seed generate the same one. That is a property of the generator alone, so it is
+     *       asserted against the sequence recomputed from the seed and compared without regard to the order the
+     *       engine happened to deliver it in.</li>
+     *   <li><b>What was consumed.</b> Every generated record reached the function exactly once - nothing dropped,
+     *       nothing delivered twice.</li>
+     * </ol>
+     *
+     * <p>This used to be one assertion comparing the two runs' delivery order element by element, which made the
+     * consumption schedule part of the definition of a reproducible generator. It was also the test that caught
+     * the real defect underneath (astubbs#504): under load a run delivered nineteen of twenty records, because
+     * the bound closed the instance drain-first while the worker pool still held queued tasks and the close
+     * cleared that queue. The bound now waits for every published record's offset to commit before it closes -
+     * see {@link SandboxConsumer#awaitEveryPublishedRecordCommitted()} - and the completeness claim above is what
+     * guards it.
      */
     @Test
-    void twoRunsOfTheSameSeedDeliverTheSameRecordsInTheSameOrder() {
-        List<String> firstRun = runAndCollect(2026);
-        List<String> secondRun = runAndCollect(2026);
+    void aRunOfASeedGeneratesAndDeliversExactlyTheRecordsThatSeedNames() {
+        List<String> expected = theSequenceTheSeedNames(SEED, RECORDS);
 
-        assertThat(firstRun).hasSize(RECORDS);
-        assertThat(secondRun).isEqualTo(firstRun);
+        List<String> firstRun = runAndCollect(SEED);
+        List<String> secondRun = runAndCollect(SEED);
+
+        assertWithMessage("what the generator produced: run one should be the sequence seed %s names, in "
+                + "whatever order it was delivered", SEED)
+                .that(firstRun).containsExactlyElementsIn(expected);
+        assertWithMessage("what the generator produced: run two of the same seed should be the same sequence, "
+                + "which is the whole of what a seed promises")
+                .that(secondRun).containsExactlyElementsIn(expected);
+
+        assertWithMessage("what was consumed: every generated record reached the function, exactly once")
+                .that(firstRun).hasSize(RECORDS);
+        assertWithMessage("what was consumed: every generated record reached the function, exactly once")
+                .that(secondRun).hasSize(RECORDS);
+    }
+
+    /**
+     * The sequence the generator will produce for a seed, derived the same way {@code ClassicSandbox.TypedFeed}
+     * derives it - one topic, so the record index is the tick.
+     */
+    private static List<String> theSequenceTheSeedNames(long seed, int records) {
+        RandomObjects random = RandomObjects.seededWith(seed);
+        List<String> sequence = new ArrayList<>();
+        for (int index = 0; index < records; index++) {
+            sequence.add(random.create(Order.class, index).toString());
+        }
+        return sequence;
     }
 
     private static List<String> runAndCollect(long seed) {
@@ -102,7 +144,11 @@ class GeneratorReproducibilityTest {
             pc.subscribe(classic.topics());
             pc.poll(context -> seen.add(context.getSingleRecord().value()));
             classic.startGenerating(pc);
+            // The bound waits for every published record to commit and then closes this instance itself, so this
+            // returning true is already the end of the run rather than the middle of it.
             assertThat(classic.awaitBound(Duration.ofSeconds(30))).isTrue();
+            // Idempotent - the bound has already closed it. Kept so that a run whose bound was never reached
+            // still shuts its instance down rather than leaving the threads behind.
             pc.closeDrainFirst();
         }
 
