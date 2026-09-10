@@ -389,8 +389,27 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * {@link #computeRetryDueAt} and replaced with the default, so "never" silently becomes a one-second hot retry
      * against whatever was already failing. Nothing can do that to a field that is either set or not.
      * <p>
-     * Written by the holder of the claim inside {@link #updateFailureHistory}, beside the failure history, and
-     * published by the same state write - see {@code isClaimableFrom}.
+     * Written by the holder of the claim inside {@link #updateFailureHistory}, beside the failure history.
+     * <p>
+     * <b>CLEARED SUSPICION, 2026-09-10: a plain field read from three threads.</b> The suspicion is the obvious
+     * one - a worker writes this and the controller and a user's own thread read it, with no {@code volatile} and
+     * no lock. It is sound on all three paths, and the argument is a <em>different</em> one on each, which is why
+     * naming only the first was not enough:
+     * <ul>
+     *   <li><b>worker to controller</b> goes through the work mailbox, a {@link java.util.concurrent.BlockingQueue},
+     *       which carries the happens-before;</li>
+     *   <li><b>worker to the selection path</b> goes through {@code state}'s volatile write in
+     *       {@link #recordVerdict}, and {@code isClaimableFrom} reads the state first;</li>
+     *   <li><b>controller to whoever reads the parked VIEW</b> - the widest reader, and the one the previous
+     *       version of this javadoc did not cover - goes through the retry queue's write lock: the controller adds
+     *       the container under it in {@code ShardManager.onFailure}, and
+     *       {@link ShardManager#getParkedWorkContainers()} walks the queue holding the matching read lock.</li>
+     * </ul>
+     * <b>What would reopen it:</b> a reader of this field that reaches a container by some route other than those
+     * three - a second parked store, a direct handle from the facade to a container, a scan of the shard maps -
+     * and nothing would go red if one appeared, because no gate can see which edge a read arrived by. Per this
+     * package's {@code AGENTS.md} no {@code @GuardedBy} is owed or even writable here: the queue's guard is a
+     * {@link java.util.concurrent.locks.ReadWriteLock}, on which the check is silently inert.
      */
     private String parkedReason;
 

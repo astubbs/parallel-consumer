@@ -32,8 +32,13 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
  * <h2>What it demonstrates, in the order the README leads with</h2>
  * <ul>
  *   <li><b>Park in place.</b> The scans route's downstream is down, so its records exhaust their two retries and
- *       park: they stay incomplete in the offset map, hold no worker, and the partition commits past them. No
- *       dead-letter topic is involved, and none is declared - export at capacity is a later milestone.</li>
+ *       park: they stay incomplete in the offset map and hold no worker, and the records above them go on being
+ *       processed and recorded as complete in the commit metadata. The COMMITTED OFFSET itself does not move past
+ *       a parked record - it is the highest sequential succeeded offset plus one, and a parked record is never
+ *       sequentially succeeded - so consumer-group lag reads as stuck at the oldest parked record for the life of
+ *       the assignment. The README's park section owns that consequence, and
+ *       {@code SandboxConsumer#awaitEveryPublishedRecordCommitted} depends on it. No dead-letter topic is
+ *       involved, and none is declared - export at capacity is a later milestone.</li>
  *   <li><b>The parked set.</b> {@link #reportParked} asks the handle what is parked and why.</li>
  *   <li><b>Typed routes.</b> Two topics, two value types, one function each - no casts, no {@code instanceof} on a
  *       shared handler, no hand-rolled deserialisation.</li>
