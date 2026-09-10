@@ -54,6 +54,38 @@ The fluent package `bz.stub.parallelconsumer.fluent` is incubating and its shape
 <!-- post-merge: checked - the PR numbers below outlive the branches -->
 The pause in the shipped engine stops work in two places: the controller stops submitting, and on its next pass it pulls the batches still queued in the worker pool out of that queue and abandons their claims, so nothing queued before the pause starts after the controller acts (plan KTD14; the window between a worker requesting the pause and the controller's next pass is accepted and documented on the purge). That purge exists only because the shipped engine pre-fills the pool queue ahead of the workers. Under direct pull (astubbs#361, `perf/shard-occupancy-scan-v2`, draft) workers take their own next record from the shards and there is no queue, so a pause is simply a take that refuses, and the purge has nothing to do. When astubbs#361 merges after the UX modernisation (astubbs#502), or when astubbs#502 is rebased over it: make the purge a no-op for the direct-pull pool rather than leaving it to find an empty queue, keep the pause test's upper bound on what ran (that branch's `pausingDrainsThePreLoadedExecutorQueueAsWellAsTheInFlightRecords` skips itself for queue-less engines and the unconditional bound stays), and re-read the stop path in `ConsumerHandle`, which relies on the purge for "no new work after the controller acts". Owner direction, 2026-09-10.
 
+**The same branch is also where the drain-first close's park defect gets cheap.** Gated on the same merge. Under
+`KEY` or `PARTITION` ordering, records
+queued behind a parked shard head are work the engine can never take, so a close that drains waits
+out its whole drain timeout and then reports the timeout - about five seconds on the README's
+quickstart, ten on a small run. It is documented rather than hidden: see the README's park section,
+"A close that drains waits for records queued behind a parked key". The fix is a shard whose head is
+parked yields nothing, and the drain ends when no shard could yield. Written against today's master
+that is a new per-shard walk, because
+`ShardManager.getNumberOfWorkQueuedInShardsAwaitingSelection()` is an O(1) counter with a documented
+skew the drain depends on - and astubbs#361 then rewrites that walk. That branch already carries a
+per-shard walk for the ordered modes in `ShardManager.getUpperBoundOnSelectableWork()`, so after it
+merges the fix is one clause on a walk that already exists. Owner direction, 2026-09-10.
+
+## The classic API as an adapter over the fluent one: a later milestone's question
+
+Raised by the owner on 2026-09-10 and deliberately **not** Milestone A. Today the classic API is the
+engine's public surface and the fluent package sits over it; inverting that - the classic verbs
+re-expressed as a thin adapter over the fluent definition - would put the stable, long-lived API on
+top of one every public type of which still carries Kafka's `@InterfaceStability.Unstable` (plan
+KTD1, and the compatibility-gate exclusion above says the same thing from the gate's side). A surface
+users depend on cannot rest on one whose shape is expected to churn.
+
+So this is recorded as a decision to revisit **once the fluent API stabilises**, not as work. What
+would make it worth doing is not new: it is the duplication the two surfaces will otherwise carry,
+and the per-topic design cluster is where that is already being thought about -
+`docs/inflight/next-multi-topic-multi-function.md`, which exists only on branches that have not
+merged (`node bin/inflight.mjs prior-art per-topic` finds it; print it with
+`node bin/inflight.mjs docs show <path>`). astubbs#254, the fork mirror of confluentinc#372, is the
+issue the typed routes already answer, and the one whose classic-API counterpart this question is
+really about - R26 deliberately gives the classic API no per-topic verb.
+<!-- file-refs: N/A - next-multi-topic-multi-function.md is branch-only; print it with bin/inflight.mjs docs show -->
+
 ## Related notes
 
 On master, each named for what it lends this work:
