@@ -4,21 +4,15 @@ package bz.stub.parallelconsumer.sandbox;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.fluent.ConsumerHandle;
-import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.sandbox.demo.Dispatch;
 import bz.stub.parallelconsumer.sandbox.demo.Order;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
-import java.util.Map;
-import java.util.Properties;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -38,7 +32,6 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * function saw its own topic's records, decoded into its own type. When the wrapper lands, add it here rather
  * than in a new file, so the two halves of "the sandbox runs a definition" stay in one place.
  */
-@Slf4j
 @Timeout(60)
 class SandboxSmokeTest {
 
@@ -46,11 +39,9 @@ class SandboxSmokeTest {
 
     @Test
     void aTwoRouteDefinitionConsumesGeneratedRecordsWithNoBroker() {
-        ParallelConsumerDefinition definition = ParallelConsumer.connect(new Properties());
-        definition.json("orders", Order.class)
-                .process(context -> Outcome.succeeded());
-        definition.json("dispatches", Dispatch.class)
-                .process(context -> Outcome.succeeded());
+        ParallelConsumerDefinition definition =
+                SandboxFixtures.succeedingJsonRoute(SandboxFixtures.definition(), "orders", Order.class);
+        SandboxFixtures.succeedingJsonRoute(definition, "dispatches", Dispatch.class);
 
         Sandbox sandbox = Sandbox.builder()
                 // Fast enough that the test is not a stopwatch, slow enough that the pacing code is still the
@@ -82,20 +73,8 @@ class SandboxSmokeTest {
      */
     private static long totalCommittedOffsets(Sandbox sandbox) {
         long total = 0;
-        for (Map<TopicPartition, OffsetAndMetadata> commit : sandbox.consumer().getCommitHistoryInt()) {
-            // Later commits supersede earlier ones for the same partition, so only the last matters - but the
-            // histories are per-call, so walk them and keep the highest per partition.
-            log.debug("Commit: {}", commit);
-        }
         for (TopicPartition partition : sandbox.consumer().publishedCounts().keySet()) {
-            long highest = 0;
-            for (Map<TopicPartition, OffsetAndMetadata> commit : sandbox.consumer().getCommitHistoryInt()) {
-                OffsetAndMetadata offset = commit.get(partition);
-                if (offset != null) {
-                    highest = Math.max(highest, offset.offset());
-                }
-            }
-            total += highest;
+            total += SandboxFixtures.highestCommittedOffset(sandbox, partition);
         }
         return total;
     }

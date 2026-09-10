@@ -8,11 +8,13 @@ import bz.stub.parallelconsumer.fluent.ClientRuntime;
 import bz.stub.parallelconsumer.fluent.ConsumerHandle;
 import bz.stub.parallelconsumer.fluent.DefinitionView;
 import bz.stub.parallelconsumer.fluent.Format;
+import bz.stub.parallelconsumer.fluent.ParkedRecord;
 import bz.stub.parallelconsumer.fluent.RouteView;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.annotation.InterfaceStability;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.Serializer;
@@ -161,12 +163,17 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
                     + "sandbox, because the sandbox IS the consumer");
         }
         consumer.assignAfterSeeding();
+        // A parked record is a terminal outcome, and its partition never commits past it - so without this the
+        // bound's wait would spend its whole budget on a definition that parks by design, which the README's own
+        // quickstart does (astubbs#504). The handle is the only thing that knows what is parked, and this is the
+        // first moment it exists.
+        consumer.countingParkedRecordsWith(() -> parkedCountsByPartition(handle));
         generator = new RecordGenerator(fluentFeeds(), perSecond, bound, () -> {
             try {
                 // The bound stops the generator; the engine still has to finish and commit what it was already
                 // given. A drain-first close does not do that for us - see
-                // SandboxConsumer#awaitEveryPublishedRecordCommitted for what it does instead, and why the
-                // committed offset is the only observable that means the work is done.
+                // SandboxConsumer#awaitEveryPublishedRecordCommitted for what it does instead, and why a committed
+                // offset or a park is what means a record is done with.
                 consumer.awaitEveryPublishedRecordCommitted();
             } finally {
                 // Closed either way: a handle left open outlives whatever made it, and the wait's own refusal
@@ -235,11 +242,11 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
 
     /**
      * Waits for the run to reach its bound, <b>and for the bound to finish what reaching it starts</b>: the
-     * generator stops, every published record's offset commits, and the instance closes. So a true return means
-     * the state readable afterwards is the end of the run rather than the middle of it. An unbounded run never
-     * reaches a bound, so this is the wait a test uses and a demo does not.
+     * generator stops, every published record is accounted for - committed, or parked - and the instance closes.
+     * So a true return means the state readable afterwards is the end of the run rather than the middle of it. An
+     * unbounded run never reaches a bound, so this is the wait a test uses and a demo does not.
      * <p>
-     * Give it a timeout larger than the bound's own wait for those commits
+     * Give it a timeout larger than the bound's own wait
      * ({@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}), or this will time out first and report a
      * bare false where that wait would have named the partition and the shortfall.
      *
@@ -270,6 +277,24 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     }
 
     // ---------------------------------------------------------------- internals
+
+    /**
+     * How many records are parked on each of the instance's partitions right now, for the bound's wait.
+     * <p>
+     * Counted from {@link ConsumerHandle#parkedAllTopics()}'s own records rather than from its
+     * {@code byPartition()} roll-out, because that groups by partition <em>number</em> across every topic - so a
+     * definition with two routes would credit {@code orders-0}'s parked records to {@code parcel-scans-0} as well.
+     * The record carries its topic and its partition, and a partition here is both.
+     */
+    private static Map<TopicPartition, Long> parkedCountsByPartition(ConsumerHandle handle) {
+        Map<TopicPartition, Long> counts = new LinkedHashMap<>();
+        for (ParkedRecord parked : handle.parkedAllTopics().records()) {
+            TopicPartition partition = new TopicPartition(parked.topic(), parked.partition());
+            Long already = counts.get(partition);
+            counts.put(partition, already == null ? 1L : already + 1L);
+        }
+        return counts;
+    }
 
     /**
      * One feed per topic, each encoding with its own route's serialisers - the engine below the facade consumes

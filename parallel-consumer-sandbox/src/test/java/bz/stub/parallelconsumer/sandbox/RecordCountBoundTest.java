@@ -4,19 +4,14 @@ package bz.stub.parallelconsumer.sandbox;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.fluent.ConsumerHandle;
-import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.sandbox.demo.Order;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
-import java.util.Map;
-import java.util.Properties;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -29,13 +24,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * generated but never dispatched and their offsets never committed, and the state a test read afterwards would be
  * the middle of the run rather than its end - which is the difference between a broker-free test kit and a race.
  * The evidence is that <em>every</em> generated offset has committed by the time the bound has finished, with
- * nothing awaiting or polling in between.
+ * nothing awaiting or polling in between. Nothing here parks - the route always succeeds - so a commit is the
+ * whole of what the wait can count; {@link ParkedRunBoundTest} is the other half.
  * <p>
  * <b>Draining is not what provides that</b>, which is the whole of the defect this test used to carry
  * (astubbs#504): a drain-first close transitions to closing once nothing is awaiting selection, while the worker
  * pool may still hold queued tasks, and the close then clears that queue - so on a loaded runner this assertion
- * read 40 where it expected 50. The bound now waits for the committed offsets before it closes
- * ({@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}), and this is the assertion that guards it.
+ * read 40 where it expected 50. The bound now waits until the instance has accounted for every published record
+ * before it closes ({@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}), and this is the assertion that
+ * guards it.
  */
 @Timeout(60)
 class RecordCountBoundTest {
@@ -44,9 +41,8 @@ class RecordCountBoundTest {
 
     @Test
     void aRecordCountBoundEndsTheRunAndDrainsBeforeClosing() {
-        ParallelConsumerDefinition definition = ParallelConsumer.connect(new Properties());
-        definition.json("orders", Order.class)
-                .process(context -> Outcome.succeeded());
+        ParallelConsumerDefinition definition =
+                SandboxFixtures.succeedingJsonRoute(SandboxFixtures.definition(), "orders", Order.class);
 
         Sandbox sandbox = Sandbox.builder()
                 .perSecond(2000)
@@ -70,16 +66,16 @@ class RecordCountBoundTest {
         // is evidence independent of the ledger the bound's own wait consults.
         assertWithMessage("the bound waits for the offsets, so every record generated before it has committed by "
                 + "the time the bound has finished")
-                .that(highestCommittedOffset(sandbox, new TopicPartition("orders", 0))).isEqualTo(RECORDS);
+                .that(SandboxFixtures.highestCommittedOffset(sandbox, new TopicPartition("orders", 0)))
+                .isEqualTo(RECORDS);
 
         handle.close();
     }
 
     @Test
     void anUnboundedSandboxSaysSoRatherThanWaitingForever() {
-        ParallelConsumerDefinition definition = ParallelConsumer.connect(new Properties());
-        definition.json("orders", Order.class)
-                .process(context -> Outcome.succeeded());
+        ParallelConsumerDefinition definition =
+                SandboxFixtures.succeedingJsonRoute(SandboxFixtures.definition(), "orders", Order.class);
 
         Sandbox sandbox = Sandbox.builder().perSecond(100).build();
         try (ConsumerHandle handle = definition.start(sandbox)) {
@@ -88,16 +84,5 @@ class RecordCountBoundTest {
             assertThat(refusal).hasMessageThat().contains("unbounded");
             handle.close();
         }
-    }
-
-    private static long highestCommittedOffset(Sandbox sandbox, TopicPartition partition) {
-        long highest = 0;
-        for (Map<TopicPartition, OffsetAndMetadata> commit : sandbox.consumer().getCommitHistoryInt()) {
-            OffsetAndMetadata offset = commit.get(partition);
-            if (offset != null) {
-                highest = Math.max(highest, offset.offset());
-            }
-        }
-        return highest;
     }
 }
