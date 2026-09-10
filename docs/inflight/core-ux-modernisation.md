@@ -49,6 +49,10 @@ is the status, this note is the consequence.
 
 The fluent package `bz.stub.parallelconsumer.fluent` is incubating and its shape will churn before it settles, so it is excluded from the API-compatibility gate until then (plan KTD1). The gate is astubbs#315, not yet merged; when it lands, or when that branch is next touched, add the package exclusion to its japicmp configuration and name this note in the commit. Until the gate exists on master, nothing enforces the exclusion and nothing needs it.
 
+## When the direct-pull engine merges: the pause purge has nothing to purge
+
+The pause in the shipped engine stops work in two places: the controller stops submitting, and on its next pass it pulls the batches still queued in the worker pool out of that queue and abandons their claims, so nothing queued before the pause starts after the controller acts (plan KTD14; the window between a worker requesting the pause and the controller's next pass is accepted and documented on the purge). That purge exists only because the shipped engine pre-fills the pool queue ahead of the workers. Under direct pull (astubbs#361, `perf/shard-occupancy-scan-v2`, draft) workers take their own next record from the shards and there is no queue, so a pause is simply a take that refuses, and the purge has nothing to do. When that PR merges, or when this branch is rebased over it: make the purge a no-op for the direct-pull pool rather than leaving it to find an empty queue, keep the pause test's upper bound on what ran (that branch's `pausingDrainsThePreLoadedExecutorQueueAsWellAsTheInFlightRecords` skips itself for queue-less engines and the unconditional bound stays), and re-read the stop path in `ConsumerHandle`, which relies on the purge for "no new work after the controller acts". Owner direction, 2026-09-10.
+
 ## Related notes
 
 On master, each named for what it lends this work:
