@@ -2,7 +2,7 @@
 
 <!-- inflight-type: feature -->
 
-The requirements are `docs/plans/2026-09-09-002-feat-ux-modernisation-plan.md`: a fluent API over
+The tracking issue is astubbs#504; implementation commits cite it. The requirements are `docs/plans/2026-09-09-002-feat-ux-modernisation-plan.md`: a fluent API over
 today's engine, one typed route per topic with one function, outcomes instead of exceptions, park in
 place as the dead-letter of first resort with export at a payload fraction, a broker-free sandbox that
 serves both APIs, and milestones cut by how much of the engine each needs (tiny, small, medium,
