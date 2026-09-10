@@ -72,6 +72,12 @@ class WorkContainerHandbackTest {
 
     /**
      * The control arm for every test below: an ordinary failure, saying nothing.
+     * <p>
+     * <b>Bounded on BOTH sides</b>, like {@link #aCarriedDelayIsAppliedInsteadOfTheConfiguredOne} and unlike the
+     * one-sided assertion this used to carry. {@code getRetryDueAt()} is {@code retryDueAt.orElse(Instant.MIN)},
+     * so a container that applied no delay at all answers a roughly billion-year NEGATIVE duration - which
+     * satisfies {@code isAtMost(ENGINE_DEFAULT)} and left the "a plain throw still takes the configured delay"
+     * contract that KTD14 promises classic users unpinned, in the arm written to pin it.
      */
     @Test
     void aThrowThatCarriesNothingCountsAnAttemptAndTakesTheConfiguredDelay() {
@@ -82,7 +88,11 @@ class WorkContainerHandbackTest {
         assertThat(container.getNumberOfFailedAttempts()).isEqualTo(1);
         assertThat(container.isParked()).isFalse();
         assertThat(container.getParkedReason()).isNull();
+        // Within a tick of the configured one second: the deadline is the failure time plus the delay, and the
+        // clock has moved since.
+        assertThat(container.getDelayUntilRetryDue()).isGreaterThan(ENGINE_DEFAULT.dividedBy(2));
         assertThat(container.getDelayUntilRetryDue()).isAtMost(ENGINE_DEFAULT);
+        assertThat(container.isDelayPassed()).isFalse();
     }
 
     @Test
@@ -239,7 +249,13 @@ class WorkContainerHandbackTest {
         container.onUserFunctionFailure(new PCRetriableException("far future")
                 .retryAfter(Duration.ofDays(Long.MAX_VALUE / 100_000)));
 
+        // The LOW side is where the named defect is, and an upper bound alone cannot see it: with the fallback
+        // deleted the deadline is left unset, unset reads as Instant.MIN, and the resulting ~billion-year
+        // negative duration passes isAtMost(ENGINE_DEFAULT) while the record is due immediately - the hot retry
+        // loop the javadoc above says this test exists to prevent.
+        assertThat(container.getDelayUntilRetryDue()).isGreaterThan(ENGINE_DEFAULT.dividedBy(2));
         assertThat(container.getDelayUntilRetryDue()).isAtMost(ENGINE_DEFAULT);
+        assertThat(container.isDelayPassed()).isFalse();
         assertThat(container.isParked()).isFalse();
     }
 

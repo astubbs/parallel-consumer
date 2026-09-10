@@ -164,7 +164,10 @@ class PausedWorkIsTakenBackOutOfThePoolTest {
         var work = submitOneBlockingBatchAndQueueAnother();
         pc.setState(State.PAUSED);
 
-        pc.purgeQueuedWork();
+        // Asserted, not dropped: it is this test's own PREMISE - that the record was taken back rather than left
+        // queued. Every assertion below is about a container the purge was supposed to have touched, so a purge
+        // that took back nothing would be diagnosed from the wrong one of them.
+        assertThat(pc.purgeQueuedWork()).isEqualTo(1);
 
         WorkContainer<String, String> abandoned = work.queued;
         assertThat(abandoned.getNumberOfFailedAttempts()).isEqualTo(0);
