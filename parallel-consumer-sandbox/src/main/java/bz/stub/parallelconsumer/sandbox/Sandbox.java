@@ -125,6 +125,9 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         this.definition = view;
         refuseRoutesTheGeneratorCannotFeed(view);
         this.consumer = new SandboxConsumer<>(view.topics(), partitionsPerTopic);
+        // Under the transactional commit mode the offsets go to the broker through the producer and never reach
+        // the consumer at all, so the bound's wait has to be able to see them there too.
+        consumer.alsoCountingCommitsThrough(producer);
         return consumer;
     }
 
@@ -159,10 +162,17 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         }
         consumer.assignAfterSeeding();
         generator = new RecordGenerator(fluentFeeds(), perSecond, bound, () -> {
-            // Let the engine fetch the last records before the close drains - see
-            // SandboxConsumer#awaitAllPublishedRecordsPolled for why a drain alone is not enough.
-            boolean ignoredAllDelivered = consumer.awaitAllPublishedRecordsPolled();
-            handle.close();
+            try {
+                // The bound stops the generator; the engine still has to finish and commit what it was already
+                // given. A drain-first close does not do that for us - see
+                // SandboxConsumer#awaitEveryPublishedRecordCommitted for what it does instead, and why the
+                // committed offset is the only observable that means the work is done.
+                consumer.awaitEveryPublishedRecordCommitted();
+            } finally {
+                // Closed either way: a handle left open outlives whatever made it, and the wait's own refusal
+                // still reaches the caller through the generator's recorded failure.
+                handle.close();
+            }
         });
         log.info("Sandbox running: {} at {}/s per topic, seed {}, {}",
                 definition.topics(), perSecond, seed, bound);
@@ -224,10 +234,17 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     }
 
     /**
-     * Waits for the run to reach its bound. An unbounded run never does, so this is the wait a test uses and a
-     * demo does not.
+     * Waits for the run to reach its bound, <b>and for the bound to finish what reaching it starts</b>: the
+     * generator stops, every published record's offset commits, and the instance closes. So a true return means
+     * the state readable afterwards is the end of the run rather than the middle of it. An unbounded run never
+     * reaches a bound, so this is the wait a test uses and a demo does not.
+     * <p>
+     * Give it a timeout larger than the bound's own wait for those commits
+     * ({@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}), or this will time out first and report a
+     * bare false where that wait would have named the partition and the shortfall.
      *
      * @return false if the bound had not been reached when the wait ran out
+     * @throws IllegalStateException wrapping whatever stopped the generator or failed the bound's wait
      */
     public boolean awaitBound(Duration timeout) {
         if (generator == null) {

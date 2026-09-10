@@ -127,6 +127,9 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         Objects.requireNonNull(keySerializer, "A key serializer must be supplied");
         Objects.requireNonNull(valueSerializer, "A value serializer must be supplied");
         producer = new MockProducer<>(true, keySerializer, valueSerializer);
+        // Under the transactional commit mode the offsets go to the broker through the producer and never reach
+        // the consumer at all, so the bound's wait has to be able to see them there too.
+        consumer.alsoCountingCommitsThrough(producer);
         return producer;
     }
 
@@ -140,7 +143,9 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
 
     /**
      * Assign the partitions - the instance must already have subscribed - and start generating. When the bound is
-     * reached, {@code instance} is closed drain first, so what is readable afterwards is the end of the run.
+     * reached the generator stops, waits until every record it published has had its offset committed
+     * ({@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}), and only then closes {@code instance} drain
+     * first - so what is readable afterwards is the end of the run.
      *
      * @param instance the Parallel Consumer instance to close at the bound; every processor type implements
      *                 {@link DrainingCloseable}
@@ -157,8 +162,13 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
             feeds.add(new TypedFeed(topic));
         }
         generator = new RecordGenerator(feeds, perSecond, bound, () -> {
-            boolean ignoredAllDelivered = consumer.awaitAllPublishedRecordsPolled();
-            instance.closeDrainFirst();
+            try {
+                // See SandboxConsumer#awaitEveryPublishedRecordCommitted: draining is not the same as finishing,
+                // so the bound waits for the offsets rather than trusting the close to catch up.
+                consumer.awaitEveryPublishedRecordCommitted();
+            } finally {
+                instance.closeDrainFirst();
+            }
         });
         log.info("Classic sandbox running: {} at {}/s per topic, seed {}, {}", topics, perSecond, seed, bound);
         generator.start();

@@ -39,8 +39,13 @@ final class RecordGenerator implements AutoCloseable {
     private final Bound bound;
 
     /**
-     * What to do when the bound is reached - closing the instance drain first. Run on this generator's own
-     * thread, because a close cannot be run from inside the engine it closes (KTD6) and this thread is outside it.
+     * What to do when the bound is reached: wait for the engine to account for every record already published,
+     * then close the instance. Run on this generator's own thread, because a close cannot be run from inside the
+     * engine it closes (KTD6) and this thread is outside it.
+     * <p>
+     * It runs <b>before</b> {@link #finished} counts down, so {@link #awaitFinished(Duration)} covers the whole
+     * bound sequence rather than only the generating half - and a wait that refuses is carried to whoever is
+     * waiting on the bound through {@link #rethrowAnyFailure()}, instead of dying unseen on this thread.
      */
     private final Runnable onBoundReached;
 
@@ -105,9 +110,14 @@ final class RecordGenerator implements AutoCloseable {
     }
 
     /**
-     * Waits for the run to finish - the bound reached, or the generator closed.
+     * Waits for the run to finish - the bound reached <b>and its close completed</b>, or the generator closed.
+     * <p>
+     * The close is inside the wait deliberately: what a bounded run promises is that the state readable
+     * afterwards is the end of the run, and that is not true until the engine has committed what it was given.
+     * So the caller's timeout has to be larger than the bound's own wait for those commits - see
+     * {@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}.
      *
-     * @return false if it was still generating when the wait ran out
+     * @return false if it was still running when the wait ran out
      */
     boolean awaitFinished(Duration timeout) {
         try {
@@ -163,12 +173,22 @@ final class RecordGenerator implements AutoCloseable {
         } finally {
             running.set(false);
             boundWasReached.set(boundReached);
-            finished.countDown();
             if (boundReached) {
-                log.info("Sandbox bound reached ({}) after {} records - closing the instance, draining first",
-                        bound, generated.get());
-                onBoundReached.run();
+                log.info("Sandbox bound reached ({}) after {} records - waiting for the instance to account for "
+                        + "them, then closing", bound, generated.get());
+                try {
+                    onBoundReached.run();
+                } catch (Throwable e) {
+                    // Recorded rather than only logged, and recorded here rather than left to escape this
+                    // thread: an exception thrown out of a Thread's run method is invisible, and the run would
+                    // then fail as somebody else's timeout with no mention of what actually went wrong.
+                    failure = e;
+                    log.error("The sandbox bound's close failed after {} records", generated.get(), e);
+                }
             }
+            // Last, so that a caller waiting on the bound is released only once the whole sequence - stop
+            // generating, wait for the engine to account for what was published, close - has run.
+            finished.countDown();
         }
     }
 

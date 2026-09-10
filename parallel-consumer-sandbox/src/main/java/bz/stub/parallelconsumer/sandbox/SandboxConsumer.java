@@ -8,7 +8,9 @@ import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
+import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
@@ -52,9 +54,21 @@ import java.util.concurrent.atomic.AtomicLong;
 public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
 
     /**
-     * How long {@link #awaitAllPublishedRecordsPolled} waits before giving up and saying so.
+     * How long {@link #awaitEveryPublishedRecordCommitted()} waits for the engine to account for what was
+     * published. Generous on purpose, and not a guess at how long the work takes: the engine commits on a
+     * <em>cadence</em> rather than on demand ({@code ParallelConsumerOptions.DEFAULT_COMMIT_INTERVAL}, five
+     * seconds), so a run whose work finished in a millisecond still waits out most of one interval before its
+     * offsets appear. Four of those intervals is room for a loaded machine to miss a few without the budget
+     * becoming the thing the test measures.
      */
-    private static final Duration POLLED_OUT_BUDGET = Duration.ofSeconds(30);
+    private static final Duration COMMITTED_BUDGET = Duration.ofSeconds(20);
+
+    /**
+     * How often the wait re-reads the commit ledger. Short enough that a bounded run does not sit on a whole
+     * poll timeout after its last commit, long enough that twenty seconds of waiting is a few thousand cheap
+     * reads rather than a spin.
+     */
+    private static final long WAIT_INTERVAL_MS = 5;
 
     private final List<TopicPartition> partitions;
 
@@ -65,25 +79,21 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
     private final Map<TopicPartition, Long> nextOffsets = new LinkedHashMap<>();
 
     /**
-     * Published and handed out, counted so that a bounded run can wait for the second to catch up with the first
-     * before it closes. <b>A drain is not a fetch</b>: closing drain-first finishes the work the engine already
-     * holds and does not go back for records still sitting here, so a bound that closed the instant its last
-     * record was published would leave that record generated, never delivered and never committed - which read
-     * as an off-by-one in a commit assertion and would have been a missing parked record in a test of the parked
-     * view.
+     * Published and handed out, counted so that a bounded run can wait for the engine to account for all of it
+     * before it closes - see {@link #awaitEveryPublishedRecordCommitted()}.
      */
     private final AtomicLong publishedRecords = new AtomicLong();
 
     private final AtomicLong polledOutRecords = new AtomicLong();
 
     /**
-     * Polls that have RETURNED. Counted because "every record has been handed out" is not the same as "the engine
-     * has registered every record": the poll thread registers a batch after {@code poll} returns and before it
-     * polls again, so a batch handed out microseconds before the close can still be dropped. One poll that
-     * started after the last record was handed out, and finished, proves the batch before it was registered - and
-     * two completions are what it takes to be sure of that, since one may have been in flight already.
+     * Offsets committed inside a producer transaction never reach this consumer at all - {@code ProducerManager}
+     * sends them with {@code sendOffsetsToTransaction} - so under
+     * {@code ParallelConsumerOptions.CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} this consumer's own commit
+     * history stays empty however much was committed, and a wait that read only that would time out on a run
+     * that had committed everything. Told to us by whoever built the producer.
      */
-    private final AtomicLong pollsFinished = new AtomicLong();
+    private volatile MockProducer<?, ?> transactionalCommitter;
 
     /**
      * Records every partition's beginning offset before anything can be assigned. Nothing is assigned yet - call
@@ -173,11 +183,120 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
     }
 
     /**
-     * How many records this consumer has handed out of {@code poll}. Not the same as how many have been
-     * processed - the engine may still be working through them - but it is the line a drain can reach back over.
+     * How many records this consumer has handed out of {@code poll}. <b>Not</b> evidence that any of them were
+     * processed, and deliberately not what a bounded run waits for - see
+     * {@link #awaitEveryPublishedRecordCommitted()}. It is kept because it separates "the engine never fetched
+     * it" from "the engine fetched it and dropped it" when a wait does fail.
      */
     public long polledOutRecords() {
         return polledOutRecords.get();
+    }
+
+    /**
+     * Also count offsets committed inside this producer's transactions as commits of this consumer's partitions.
+     * Call it whenever a producer is handed to the instance: under the transactional commit mode the offsets go
+     * that way instead of through the consumer, and nothing else would see them.
+     */
+    public void alsoCountingCommitsThrough(MockProducer<?, ?> producer) {
+        this.transactionalCommitter = producer;
+    }
+
+    /**
+     * The highest offset committed for each partition, whichever way it was committed - through this consumer, or
+     * through a transactional producer named with {@link #alsoCountingCommitsThrough(MockProducer)}.
+     * <p>
+     * A committed offset is the <em>next</em> offset to be consumed, so a partition whose committed offset equals
+     * the number of records published to it has had every one of them completed and committed.
+     */
+    public Map<TopicPartition, Long> highestCommittedOffsets() {
+        Map<TopicPartition, Long> highest = new LinkedHashMap<>();
+        for (Map<TopicPartition, OffsetAndMetadata> commit : getCommitHistoryInt()) {
+            keepHighest(highest, commit);
+        }
+        MockProducer<?, ?> transactional = transactionalCommitter;
+        if (transactional != null) {
+            for (Map<String, Map<TopicPartition, OffsetAndMetadata>> byGroup
+                    : transactional.consumerGroupOffsetsHistory()) {
+                for (Map<TopicPartition, OffsetAndMetadata> commit : byGroup.values()) {
+                    keepHighest(highest, commit);
+                }
+            }
+        }
+        return highest;
+    }
+
+    /**
+     * Waits until the engine has accounted for every record this sandbox published: each partition's committed
+     * offset has reached the number of records published to it.
+     *
+     * <h2>Why the committed offset, and not "everything has been polled"</h2>
+     * This used to wait for every published record to have been handed out of {@code poll} plus two further poll
+     * cycles, and then close draining first. That was a timing model of the engine rather than a fact about it - a
+     * poll hands a batch to the work manager, and dispatch and completion happen afterwards on other threads - and
+     * the drain does not close the gap either: {@code AbstractParallelEoSStreamProcessor} transitions to closing
+     * once the work manager has nothing <em>awaiting selection</em>, while the worker pool may still hold queued
+     * tasks, and the close then clears that queue outright. Records that were polled, dispatched and queued are
+     * therefore dropped - never completed, never committed. On a loaded runner that surfaced as one record missing
+     * from a collected set, and as a highest committed offset of 40 where 50 was expected (astubbs#504).
+     * <p>
+     * A committed offset is the one thing the engine publishes that means the work behind it is finished, so it is
+     * what this waits for. The wait replaces the timing model; it is not a longer version of it.
+     *
+     * <h2>A parked record pins its partition here</h2>
+     * The committed offset is the highest <em>sequentially succeeded</em> offset plus one
+     * ({@code PartitionState#getOffsetHighestSequentialSucceeded}), and a parked record stays incomplete in the
+     * offset map for as long as it is parked - it holds no worker and is never retried, but it is not complete
+     * either. So it holds its partition's committed offset at its own offset, and offsets above it are carried in
+     * the commit's metadata rather than in the number this reads. A <b>bounded</b> run whose records park cannot
+     * satisfy this wait and will fail it, naming the partition and the shortfall, rather than hanging. Drive a run
+     * that parks with {@link Bound#none()} and close the handle yourself.
+     *
+     * @throws IllegalStateException when the budget ran out, naming every partition still short and by how much
+     */
+    public void awaitEveryPublishedRecordCommitted() {
+        awaitEveryPublishedRecordCommitted(COMMITTED_BUDGET);
+    }
+
+    /**
+     * @param budget how long to wait before failing - {@link #COMMITTED_BUDGET} unless a caller has a reason, and
+     *               the one caller that does is the test of the refusal itself
+     * @see #awaitEveryPublishedRecordCommitted()
+     */
+    public void awaitEveryPublishedRecordCommitted(Duration budget) {
+        long deadline = System.nanoTime() + budget.toNanos();
+        Map<TopicPartition, Long> outstanding = uncommittedByPartition();
+        while (!outstanding.isEmpty()) {
+            if (closed()) {
+                // Closed under us: the run is over and nothing else will ever be committed. That is the ordinary
+                // end of an unbounded run rather than a fault, so it is not one here either.
+                log.debug("The sandbox consumer closed while waiting for commits, still outstanding: {}", outstanding);
+                return;
+            }
+            if (System.nanoTime() > deadline) {
+                throw new IllegalStateException(shortfallMessage(outstanding, budget));
+            }
+            if (polledOutRecords.get() < publishedRecords.get()) {
+                // Something published is still sitting here, so cut the simulated long poll short and let the
+                // poll loop come round now rather than at the end of its timeout. LongPollingMockConsumer
+                // overrides wakeup() to end its own sleep WITHOUT calling MockConsumer's, so this does not arm a
+                // WakeupException. Gated, because once everything has been handed out there is nothing left for
+                // a poll to fetch and waking it every few milliseconds would only spin the poll thread against
+                // this consumer's monitor for as long as the commit cadence takes.
+                wakeup();
+            }
+            try {
+                Thread.sleep(WAIT_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                // The only interrupt that reaches here is RecordGenerator#close asking this generator thread to
+                // stop, and that caller closes the instance itself - so returning is right, and the flag is put
+                // back for whatever runs next on this thread.
+                Thread.currentThread().interrupt();
+                log.debug("Interrupted while waiting for commits, still outstanding: {}", outstanding);
+                return;
+            }
+            outstanding = uncommittedByPartition();
+        }
+        log.debug("Every one of the {} published record(s) has been committed", publishedRecords.get());
     }
 
     // Synchronized to match the method it overrides: MockConsumer guards addRecord, poll, commitSync and close
@@ -187,55 +306,44 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
     public synchronized ConsumerRecords<K, V> poll(Duration timeout) {
         ConsumerRecords<K, V> records = super.poll(timeout);
         polledOutRecords.addAndGet(records.count());
-        pollsFinished.incrementAndGet();
         return records;
     }
 
     /**
-     * Waits until everything published has been handed out of {@code poll}, so that a close which drains reaches
-     * all of it. Deliberately not synchronized: it sleeps, and {@code addRecord}, {@code poll} and {@code close}
-     * all share this object's monitor, so holding it here would wedge the very poll it is waiting for.
-     *
-     * @return false when the budget ran out with records still unpolled
+     * How many records each partition has published but not yet had committed - empty when the engine has
+     * accounted for everything this sandbox offered it.
      */
-    public boolean awaitAllPublishedRecordsPolled() {
-        long deadline = System.nanoTime() + POLLED_OUT_BUDGET.toNanos();
-        if (!awaitUntil(deadline, () -> polledOutRecords.get() >= publishedRecords.get())) {
-            log.warn("Gave up after {} waiting for the instance to poll the last {} generated records; the close "
-                            + "that follows drains what it holds, so those records will not be processed",
-                    POLLED_OUT_BUDGET, publishedRecords.get() - polledOutRecords.get());
-            return false;
+    private Map<TopicPartition, Long> uncommittedByPartition() {
+        Map<TopicPartition, Long> committed = highestCommittedOffsets();
+        Map<TopicPartition, Long> outstanding = new LinkedHashMap<>();
+        for (Map.Entry<TopicPartition, Long> published : publishedCounts().entrySet()) {
+            Long done = committed.get(published.getKey());
+            long shortfall = published.getValue() - (done == null ? 0L : done);
+            if (shortfall > 0) {
+                outstanding.put(published.getKey(), shortfall);
+            }
         }
-        long mark = pollsFinished.get();
-        if (!awaitUntil(deadline, () -> pollsFinished.get() >= mark + 2)) {
-            log.warn("Gave up after {} waiting for the poll loop to come round again; the last records handed out "
-                    + "may not have been registered before the close", POLLED_OUT_BUDGET);
-            return false;
-        }
-        return true;
+        return outstanding;
     }
 
-    /**
-     * Deliberately not synchronized, and neither is its caller: this sleeps, and {@code addRecord}, {@code poll}
-     * and {@code close} all share this object's monitor, so holding it here would wedge the very poll it waits for.
-     */
-    private boolean awaitUntil(long deadlineNanos, java.util.function.BooleanSupplier condition) {
-        while (!condition.getAsBoolean()) {
-            if (closed() || System.nanoTime() > deadlineNanos) {
-                return closed();
-            }
-            // Cut the simulated long poll short so the loop comes round now rather than at the end of its
-            // timeout. LongPollingMockConsumer overrides wakeup() to end its own sleep WITHOUT calling
-            // MockConsumer's, so this does not arm a WakeupException - and without it a bounded run pays two
-            // full poll timeouts on its way out, which measured at four seconds a test.
-            wakeup();
-            try {
-                Thread.sleep(1);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
+    private String shortfallMessage(Map<TopicPartition, Long> outstanding, Duration budget) {
+        return "The sandbox published " + publishedRecords.get() + " record(s) and waited " + budget
+                + " for the instance to commit them, and these never arrived (partition: how many of its records "
+                + "are still uncommitted): " + outstanding + ". Published per partition: " + publishedCounts()
+                + ". Committed so far: " + highestCommittedOffsets() + ". Handed out of poll: "
+                + polledOutRecords.get() + " - a count well short of what was published means the engine never "
+                + "fetched them, and one that matches means it fetched them and did not finish them. Note that a "
+                + "record which PARKS stays incomplete in the offset map and pins its partition's committed "
+                + "offset here for good; see SandboxConsumer#awaitEveryPublishedRecordCommitted.";
+    }
+
+    private static void keepHighest(Map<TopicPartition, Long> into, Map<TopicPartition, OffsetAndMetadata> commit) {
+        for (Map.Entry<TopicPartition, OffsetAndMetadata> entry : commit.entrySet()) {
+            Long previous = into.get(entry.getKey());
+            long offset = entry.getValue().offset();
+            if (previous == null || offset > previous) {
+                into.put(entry.getKey(), offset);
             }
         }
-        return true;
     }
 }
