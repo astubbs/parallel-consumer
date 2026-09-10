@@ -160,6 +160,43 @@ class CommittedOffsetWaitTest {
     }
 
     /**
+     * A partition whose committed offset has stopped advancing still reports progress, and it reports it in the
+     * metadata - which is the case a "highest commit" chosen by offset alone cannot see.
+     * <p>
+     * A parked record low in the partition pins {@code highestSequentialSucceeded + 1} at its own offset for good,
+     * while every record above it keeps completing. Successive commits therefore share an offset and differ only
+     * in their offset map. Keeping the first one seen at that offset freezes the accounting on the least complete
+     * map for the rest of the run, and the wait then spends its whole budget and blames the instance for holding
+     * records it finished long ago.
+     * <p>
+     * This is the shape the wait was rewritten for - a run that parks - so it is the case most likely to hit it,
+     * and the reason nothing caught it is that no existing test has two commits at one offset: in
+     * {@code FluentQuickstartAppTest} every scan fails, so that partition never commits at all, and the orders
+     * partition advances monotonically.
+     */
+    @Test
+    void twoCommitsAtOneOffsetKeepTheOneThatAccountsForMore() {
+        SandboxConsumer<String, String> consumer = assignedConsumer(1);
+        // Offset 0 parks, so the committed offset can never move past it; 1, 2 and 3 complete.
+        consumer.publish("orders", 0, "a", "1");
+        consumer.publish("orders", 0, "b", "2");
+        consumer.publish("orders", 0, "c", "3");
+        consumer.publish("orders", 0, "d", "4");
+        consumer.countingParkedRecordsWith(() -> Collections.singletonMap(ORDERS_0, 1L));
+
+        // The earlier commit: offset 1 is done, 2 and 3 are not.
+        consumer.commitAsync(Collections.singletonMap(ORDERS_0,
+                new OffsetAndMetadata(0L, offsetMapCommittedAt(0L, 1L, 0L))), null);
+        // The later one, at the SAME offset because the park still pins it, with 2 and 3 done as well.
+        consumer.commitAsync(Collections.singletonMap(ORDERS_0,
+                new OffsetAndMetadata(0L, offsetMapCommittedAt(0L, 3L, 0L))), null);
+
+        // No assertion needed beyond returning: reading the earlier commit accounts for two of the four records
+        // and the wait would refuse.
+        consumer.awaitEveryPublishedRecordCommitted(IMPATIENT);
+    }
+
+    /**
      * One partition's commit metadata as the engine writes it, built with the engine's own encoder rather than by
      * hand: the encoded range runs from the committed offset to the highest succeeded one, and the incompletes are
      * the offsets inside it that are not done.

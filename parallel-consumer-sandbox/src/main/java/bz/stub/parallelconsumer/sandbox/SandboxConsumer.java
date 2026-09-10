@@ -448,14 +448,41 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
                 + "waiting on a retry delay. See SandboxConsumer#awaitEveryPublishedRecordCommitted.";
     }
 
+    /**
+     * Keeps, per partition, the commit that says the most - which is <b>not</b> the same as the one with the
+     * highest offset.
+     * <p>
+     * Parallel Consumer's committed offset is {@code highestSequentialSucceeded + 1}, so a record that stalls low
+     * in a partition - a parked one above all - pins that offset while everything above it keeps completing. What
+     * changes between successive commits is then only the <em>metadata</em>: the incompletes shrink and the
+     * highest-seen grows at one unmoving offset. Picking with a strict {@code >} on the offset keeps the FIRST
+     * commit seen at that offset and discards every later, more complete one, so {@link #completedOn} reads the
+     * oldest map for the rest of the run and the wait burns its whole budget - then blames the engine, in a
+     * message about what the instance is still holding, for a defect in this reader.
+     * <p>
+     * So a tie on the offset is broken by what the two commits account for, rather than by which was seen first.
+     * The offset still decides where the offsets differ, which is every case the old comparison got right.
+     */
     private static void keepHighest(Map<TopicPartition, OffsetAndMetadata> into,
                                     Map<TopicPartition, OffsetAndMetadata> commit) {
         for (Map.Entry<TopicPartition, OffsetAndMetadata> entry : commit.entrySet()) {
             OffsetAndMetadata previous = into.get(entry.getKey());
-            if (previous == null || entry.getValue().offset() > previous.offset()) {
+            if (previous == null || accountsForMore(entry.getKey(), entry.getValue(), previous)) {
                 into.put(entry.getKey(), entry.getValue());
             }
         }
+    }
+
+    /**
+     * @return whether {@code candidate} is the commit to keep over {@code previous} for {@code partition}
+     */
+    private static boolean accountsForMore(TopicPartition partition,
+                                           OffsetAndMetadata candidate,
+                                           OffsetAndMetadata previous) {
+        if (candidate.offset() != previous.offset()) {
+            return candidate.offset() > previous.offset();
+        }
+        return completedOn(partition, candidate) >= completedOn(partition, previous);
     }
 
     /**
