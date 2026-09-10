@@ -83,6 +83,32 @@ class ClientConstructionTest {
         assertThat(options.getProducer()).isNotNull();
     }
 
+    /**
+     * ...and yet starting is refused, because export does not run in this release.
+     * <p>
+     * The two claims sit together on purpose. What a destination <em>means</em> for the clients is settled - it
+     * needs a producer, and the test above says so at the level that answers it. What is not yet built is the
+     * thing that would use it: a record that runs out of attempts parks in place, and nothing copies it on. So the
+     * refusal lives at start rather than at validation, and it goes away with the unit that adds export - leaving
+     * the producer decision above untouched.
+     * <p>
+     * A definition-time refusal is this project's answer to any setting it cannot honour, and the alternative here
+     * is the one thing worse than a refusal: {@code dlqTo} accepted and silently doing nothing.
+     */
+    @Test
+    void aDeadLetterDestinationIsRefusedAtStartUntilExportLands() {
+        var pc = ParallelConsumer.define(props());
+        pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
+
+        var thrown = assertThrows(IllegalArgumentException.class, () -> pc.start(runtime));
+
+        assertThat(thrown).hasMessageThat().contains("orders.dlq");
+        assertThat(thrown).hasMessageThat().contains("does not run in this release");
+        assertThat(thrown).hasMessageThat().contains("parks in place");
+        // Refused before anything was built, like every other refusal this definition makes.
+        assertThat(runtime.builtNothing()).isTrue();
+    }
+
     @Test
     void aRouteThatDeclaresProducedTypesNeedsAProducer() {
         var pc = ParallelConsumer.define(props());

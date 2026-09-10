@@ -13,6 +13,7 @@ import bz.stub.parallelconsumer.state.PartitionStateManager;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.annotation.InterfaceStability;
@@ -125,6 +126,18 @@ public class ParallelConsumerDefinition implements DefinitionView {
     private boolean preBuiltProducerSupplied;
 
     private boolean started;
+
+    /**
+     * The user's own rebalance listener, chained after the facade's (KTD2). Null when none was declared.
+     */
+    private ConsumerRebalanceListener usersRebalanceListener;
+
+    /**
+     * The route-dispatching wrapper. Built by {@link #buildOptions}, because the retry-delay provider registered on
+     * the options is one of its methods, and reused by {@link #start(ClientRuntime)} - one owner of the route
+     * table, the attempt ledger and the intent hook.
+     */
+    private RouteDispatcher dispatcher;
 
     /**
      * The same door as {@link ParallelConsumer#define(Properties)}, which is how the documentation and the README
@@ -567,11 +580,52 @@ public class ParallelConsumerDefinition implements DefinitionView {
      * broker, changing nothing else about it (R33, KTD9).
      */
     public ConsumerHandle start(ClientRuntime runtime) {
+        refuseExportUntilItLands();
         ParallelStreamProcessor<byte[], byte[]> processor =
                 ParallelStreamProcessor.createEosStreamProcessor(buildOptions(runtime));
-        processor.subscribe(subscriptionTopics());
-        dispatch(processor);
-        return new ConsumerHandle(processor);
+        ConsumerHandle handle = new ConsumerHandle(processor);
+        dispatcher.instanceControl(handle);
+        // The facade's listener first, the user's chained after it (KTD2).
+        processor.subscribe(subscriptionTopics(), dispatcher.rebalanceListener(usersRebalanceListener));
+        if (requiresProducer()) {
+            processor.pollAndProduceMany(dispatcher::dispatch);
+        } else {
+            processor.poll(dispatcher::dispatchWithoutProducing);
+        }
+        return handle;
+    }
+
+    /**
+     * Refused <b>at start</b>, not at validation: a definition with a destination is still a definition that needs
+     * a producer, which is what {@link #requiresProducer()} answers and what the client-construction tests read.
+     * <p>
+     * The wrapper parks a record that runs out of attempts and nothing sends it on yet - export is a re-dispatch on
+     * a later pass, and that unit has not landed (KTD5). Starting anyway would make {@code dlqTo} a silent no-op,
+     * which is the one outcome this definition refuses to produce: every other setting it cannot honour is refused
+     * at definition time for the same reason. The refusal goes away with the export unit.
+     */
+    private void refuseExportUntilItLands() {
+        for (RouteState route : routes) {
+            String destination = route.afterRetries().destination();
+            if (destination != null) {
+                throw new IllegalArgumentException(msg("Topic {} declares the dead-letter destination {}, and export "
+                                + "does not run in this release: a record that runs out of attempts parks in place, "
+                                + "and nothing copies it on yet. Starting would make dlqTo a silent no-op. Drop the "
+                                + "destination and let records park - they stay incomplete in the offset map, hold "
+                                + "no worker, and offsets past them still commit (R11, R27).",
+                        route.describeTopics(), destination));
+            }
+        }
+    }
+
+    /**
+     * Run this listener on every rebalance, after the facade's own (KTD2). The facade's clears the attempt ledger
+     * for partitions that are no longer ours, so a listener chained here always sees a consistent state; a throw
+     * from here propagates exactly as it does on the classic API.
+     */
+    public ParallelConsumerDefinition rebalanceListener(ConsumerRebalanceListener listener) {
+        this.usersRebalanceListener = Objects.requireNonNull(listener, "A rebalance listener must be supplied");
+        return this;
     }
 
     /**
@@ -587,9 +641,17 @@ public class ParallelConsumerDefinition implements DefinitionView {
         }
         started = true;
 
+        this.dispatcher = new RouteDispatcher(routesByTopic, defaultRetryDelay, preBuiltConsumerDescription);
+
         options.commitMode(commitMode)
                 .ordering(defaultOrdering)
-                .maxConcurrency(totalAdmissionTarget());
+                .maxConcurrency(totalAdmissionTarget())
+                // Park rides this hook: the wrapper records what it meant by a throw immediately before making it,
+                // and the engine calls this synchronously inside the failure path to find out (KTD4).
+                .retryDelayProvider(context -> dispatcher.retryDelayFor(context));
+        // The engine's own defaultMessageRetryDelay is deliberately left alone. It is deprecated, and it is only
+        // reached when the provider above misbehaves - which the provider is written not to do, and which
+        // EngineRetryDelayProviderContractTest pins. Setting it would make the fallback look intentional.
 
         if (!preBuiltConsumerSupplied) {
             options.consumer(runtime.consumer(this));
@@ -619,21 +681,11 @@ public class ParallelConsumerDefinition implements DefinitionView {
     }
 
     /**
-     * <b>Placeholder.</b> The route-dispatching wrapper - decode, run the route's function, map its outcome, count
-     * the attempt, carry the park intent into the retry-delay hook - is the next unit of this milestone and replaces
-     * this method. Until it lands a started definition completes records without running any route's function, which
-     * is loud on purpose.
+     * The route-dispatching wrapper this definition runs on, once {@link #buildOptions} has built it. Visible for
+     * the tests that drive the wrapper without an engine.
      */
-    private void dispatch(ParallelStreamProcessor<byte[], byte[]> processor) {
-        log.warn("The fluent API's dispatch wrapper is not wired yet: this instance will complete records WITHOUT "
-                + "running any route's processing function. Do not run this against a topic whose offsets matter.");
-        if (requiresProducer()) {
-            processor.pollAndProduceMany(context -> Collections.emptyList());
-        } else {
-            processor.poll(context -> {
-                // The dispatching wrapper replaces this.
-            });
-        }
+    RouteDispatcher dispatcher() {
+        return dispatcher;
     }
 
     private List<String> subscriptionTopics() {
