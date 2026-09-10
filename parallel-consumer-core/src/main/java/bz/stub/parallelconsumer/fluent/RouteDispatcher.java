@@ -33,6 +33,9 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  *
  * <h2>What happens to one record</h2>
  * <ol>
+ *     <li><b>The stopping flag is read first.</b> If a route has asked the instance to stop, the record is handed
+ *     straight back without being run - see {@link #stop}, which owns why a flag is needed beside the engine's own
+ *     pause (R24, KTD6).</li>
  *     <li>Its topic picks its route. A topic has exactly one route (R2), and the instance subscribes to exactly the
  *     union of the routes' topics, so a record with no route is an invariant break rather than a user error.</li>
  *     <li>The route's deserialisers decode it, with three possible results (R12): a value, a <em>permanent</em>
@@ -116,11 +119,30 @@ class RouteDispatcher {
      */
     private volatile InstanceControl instance = new LoggingOnlyInstanceControl();
 
+    /**
+     * Replaced at start with the meters the definition registered. Until then, counting nothing.
+     */
+    private volatile FluentMeters meters = FluentMeters.none();
+
+    /**
+     * <b>The fence.</b> Raised by the first record to report a stop, and read before every function call (KTD6).
+     * <p>
+     * The engine's pause stops the control thread handing out <em>new</em> work, and that is all it stops: the
+     * tasks already queued in the worker pool run regardless, and a record dispatched in that window would be
+     * processed by an instance that is on its way down. So every dispatch checks this first and hands the record
+     * straight back with the far-future marker instead of running it - incomplete, uncounted, and delivered again
+     * after the restart.
+     * <p>
+     * Volatile and one-way: a worker thread raises it, every other worker reads it, and nothing ever lowers it. An
+     * instance that has been asked to stop does not come back.
+     */
+    private volatile boolean stopping;
+
     // ---------------------------------------------------------------- outcome counters
     //
-    // Seam for the metrics unit: these are the counts R19 publishes, tagged by topic and outcome, registered
-    // through PCMetricsDef by the module the facade builds (KTD8). They are counters here so that this unit's
-    // tests can assert the outcome of a thousand records without a meter registry.
+    // Instance-wide totals, beside the per-topic meters of R19 that FluentMeters publishes: these are plain
+    // counters so a test can assert the outcome of a thousand records without standing up a meter registry, and
+    // they are what the wrapper's own tests read.
 
     private final AtomicLong succeeded = new AtomicLong();
 
@@ -129,6 +151,12 @@ class RouteDispatcher {
     private final AtomicLong parked = new AtomicLong();
 
     private final AtomicLong producedRecords = new AtomicLong();
+
+    /**
+     * Records handed straight back by the stopping fence. Not an outcome and not a meter: nothing happened to these
+     * records, and they are delivered again after the restart.
+     */
+    private final AtomicLong fenced = new AtomicLong();
 
     RouteDispatcher(Map<String, RouteState> routesByTopic, Duration fallbackRetryDelay,
                     String preBuiltConsumerDescription) {
@@ -139,6 +167,18 @@ class RouteDispatcher {
 
     void instanceControl(InstanceControl instance) {
         this.instance = instance;
+    }
+
+    void meters(FluentMeters meters) {
+        this.meters = meters;
+    }
+
+    /**
+     * How many records have been fenced by the stopping flag: dispatched after the stop and handed straight back
+     * without running. Visible so a test can prove the fence did the work rather than the timing.
+     */
+    long fencedCount() {
+        return fenced.get();
     }
 
     ConsumerRebalanceListener rebalanceListener(ConsumerRebalanceListener usersListener) {
@@ -233,6 +273,9 @@ class RouteDispatcher {
     }
 
     private List<ProducerRecord<byte[], byte[]>> dispatchOne(ConsumerRecord<byte[], byte[]> record) {
+        if (stopping) {
+            throw fence(record);
+        }
         RouteState route = routesByTopic.get(record.topic());
         if (route == null) {
             throw new IllegalStateException(msg("No route claims topic {}, yet a record from it was dispatched. The "
@@ -292,16 +335,19 @@ class RouteDispatcher {
             case SUCCEEDED:
                 forget(record);
                 succeeded.incrementAndGet();
+                meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
                 return emptyProduce();
             case FILTERED:
                 // Completes and commits exactly as a success does, and is counted apart from one (R8).
                 forget(record);
                 filtered.incrementAndGet();
+                meters.recordOutcome(record.topic(), FluentMeters.FILTERED);
                 return emptyProduce();
             case PRODUCE:
                 List<ProducerRecord<byte[], byte[]>> serialised = serialise(route, outcome.records());
                 forget(record);
                 succeeded.incrementAndGet();
+                meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
                 producedRecords.addAndGet(serialised.size());
                 return serialised;
             case PARK:
@@ -355,6 +401,14 @@ class RouteDispatcher {
             AfterRetries policy = route.afterRetries();
             if (parkCycleRemains(policy, record)) {
                 return parkCycle(record, route, policy, failure, attempts);
+            }
+            if (policy.reaction() == AfterRetries.Reaction.STOP) {
+                // This route's author says a record that runs out of attempts here means the deployment is wrong,
+                // not the record - so the instance stops instead of parking, and the parked count does not move
+                // (R24, R27). It is the same stop path the outcome takes, entered from exhaustion.
+                return stop(record, msg("{}-{}@{} ran out of attempts after {} attempt(s), and this route reacts to "
+                                + "exhaustion by stopping the instance",
+                        record.topic(), record.partition(), record.offset(), attempts));
             }
             return park(context, route, failure, attempts, "it ran out of attempts");
         }
@@ -437,6 +491,7 @@ class RouteDispatcher {
 
         notifyObserver(route, context, failure, attempts);
         parked.incrementAndGet();
+        meters.recordOutcome(record.topic(), FluentMeters.PARKED);
         if (failure == null) {
             // Nothing failed: the function asked for this, so it is not a warning.
             log.info(message);
@@ -483,16 +538,50 @@ class RouteDispatcher {
     }
 
     /**
-     * @see InstanceControl#stopRequested the seam that makes this actually stop the instance
+     * A route asked the instance to stop, either from its function's {@link Outcome#stop(String)} or because one of
+     * its records ran out of attempts on a route whose reaction is {@link AfterRetries#stop()} (R24, R27).
+     *
+     * <h2>Five steps, and the order is the design (KTD6)</h2>
+     * <ol>
+     *     <li><b>Mark</b> this record with the far-future delay, so a drain does not re-invoke it in the window
+     *     before the instance closes. The intent has to be recorded before the throw, because the engine asks for
+     *     the delay synchronously inside the failure path.</li>
+     *     <li><b>Fence</b>: raise the stopping flag, so any record already queued in the worker pool is handed back
+     *     rather than run. The pause below cannot do this - it stops the control thread giving out work, not the
+     *     pool running what it already has.</li>
+     *     <li><b>Pause and close</b>, both through the handle: pausing is non-blocking and immediate, closing
+     *     happens on a thread of its own because this one is a worker and the close awaits the worker pool.</li>
+     *     <li><b>Throw</b>, which is the only way to hand a record back, leaving it incomplete so a restart
+     *     delivers it again.</li>
+     * </ol>
+     * The fence is raised <em>before</em> the handle is told, not after: between those two calls the instance is
+     * still running at full speed, and a record dispatched there is exactly what the fence exists to catch.
      */
     private RuntimeException stop(ConsumerRecord<byte[], byte[]> record, String reason) {
-        // Far future, not the route's retry delay: a drain must not re-invoke this record in the window before the
-        // instance closes (KTD6).
         RetryIntents.park(record, PARKED_UNTIL_RESUMED);
+        stopping = true;
         instance.stopRequested(record, reason);
         return new StopRequestedException(msg("The route for {} asked the instance to stop at {}-{}@{}: {}. The "
                         + "record is left incomplete, so a restart delivers it again.",
                 record.topic(), record.topic(), record.partition(), record.offset(), reason));
+    }
+
+    /**
+     * This record was dispatched after the instance was asked to stop, so it is handed straight back without being
+     * run (R24, KTD6).
+     * <p>
+     * No attempt is spent, no park is recorded and nothing is counted: nothing happened to this record. It stays
+     * incomplete and is delivered again after the restart, alongside the record that asked for the stop.
+     */
+    private RuntimeException fence(ConsumerRecord<byte[], byte[]> record) {
+        RetryIntents.park(record, PARKED_UNTIL_RESUMED);
+        long fencedSoFar = fenced.incrementAndGet();
+        log.debug("Not running {}-{}@{}: this instance has been asked to stop, so the record is handed back "
+                        + "incomplete ({} fenced so far)",
+                record.topic(), record.partition(), record.offset(), fencedSoFar);
+        return new StopRequestedException(msg("{}-{}@{} was not run: this instance has been asked to stop. The "
+                        + "record is left incomplete, so a restart delivers it again.",
+                record.topic(), record.partition(), record.offset()));
     }
 
     /**

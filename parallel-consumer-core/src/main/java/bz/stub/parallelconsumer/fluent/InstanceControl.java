@@ -7,8 +7,7 @@ package bz.stub.parallelconsumer.fluent;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 /**
- * The two things the dispatch wrapper needs to say about the <em>instance</em> rather than about a record, and the
- * one seam the lifecycle unit replaces.
+ * The two things the dispatch wrapper needs to say about the <em>instance</em> rather than about a record.
  * <p>
  * A worker cannot close the engine it runs in - the close awaits the worker pool, so a function that closed from
  * inside itself would wait for itself - which is why both of these are a request to somebody else's thread rather
@@ -29,13 +28,16 @@ interface InstanceControl {
     void fatal(Throwable definitionFault);
 
     /**
-     * A route's function reported the stop outcome for this record (R24).
+     * A route asked the instance to stop for this record - from its function's {@link Outcome#stop(String)}, or
+     * because the record ran out of attempts on a route whose reaction is {@link AfterRetries#stop()} (R24, R27).
      * <p>
-     * <b>Seam for the lifecycle unit.</b> The full behaviour is: mark the instance stopping so no further record is
-     * run, call the engine's non-blocking pause so no further record is dispatched, then close on the declared
-     * close path from the handle's own thread and record the reason so that awaiting caller can tell a stop from a
-     * close from a failure (KTD6). Until that lands the wrapper still hands the record back incomplete, so nothing
-     * is silently completed, and the record is delivered again after a restart.
+     * The caller has already marked the record with the far-future delay and raised the stopping flag, so nothing
+     * further will be run. What is left is the part a worker thread cannot do: record the reason, pause the engine
+     * so no further record is dispatched, and close on the declared close path from a thread of the
+     * implementation's own (KTD6).
+     * <p>
+     * The implementation must not block the calling thread - it is a worker thread, and the close it starts awaits
+     * the worker pool this thread belongs to.
      */
     void stopRequested(ConsumerRecord<byte[], byte[]> record, String reason);
 }

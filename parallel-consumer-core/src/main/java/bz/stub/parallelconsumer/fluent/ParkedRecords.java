@@ -81,6 +81,25 @@ class ParkedRecords {
         return !anAssignmentHasBeenSeen || assigned.contains(partition);
     }
 
+    /**
+     * The partitions this instance currently owns, as the rebalance listener last reported them.
+     * <p>
+     * Read by the control-thread snapshot, which needs the assignment for two things the parked set itself does not
+     * care about: which partitions get parked-set gauges (R19), and which routed topics were assigned nothing at
+     * all (R28).
+     */
+    Set<TopicPartition> assignedPartitions() {
+        return Collections.unmodifiableSet(new java.util.LinkedHashSet<>(assigned));
+    }
+
+    /**
+     * @return whether {@code onPartitionsAssigned} has been called at all - until it has, {@link #isOurs} fails
+     * open and there is no assignment to report a route missing from
+     */
+    boolean assignmentSeen() {
+        return anAssignmentHasBeenSeen;
+    }
+
     // ---------------------------------------------------------------- parking
 
     /**

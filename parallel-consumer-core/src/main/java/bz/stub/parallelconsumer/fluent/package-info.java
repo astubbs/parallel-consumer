@@ -17,6 +17,14 @@
  * as a record outcome in {@code docs/plans/2026-09-09-002-feat-ux-modernisation-plan.md}, so the engine can take
  * each one over natively later without the surface moving.
  *
+ * <p><b>What a running instance offers.</b> The handle closes on the instance's declared
+ * {@link bz.stub.parallelconsumer.fluent.ClosePath} - draining by default - waits for shutdown, and says which of
+ * the three ways the instance ended: closed, stopped by a route, or failed. It answers the parked set per route
+ * and instance-wide, from a control-thread snapshot reconciled against the engine's incomplete offsets. The same
+ * figures are published as meters under the {@code routes} subsystem, tagged by topic and outcome for the counters
+ * and by topic and partition for the parked gauges; supply a registry with
+ * {@code meterRegistry(...)} or nothing is published.
+ *
  * <p><b>A parked record is reported as slow work in this release.</b> Parking a record is, over today's engine, a
  * retry with a far-future delay - so the engine's shard scan, which measures how long each record it cannot yet
  * take has been waiting, counts every parked record against its partition's slow-records meter and names its topic

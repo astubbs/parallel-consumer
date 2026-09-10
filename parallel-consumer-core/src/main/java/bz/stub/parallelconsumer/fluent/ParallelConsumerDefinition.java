@@ -8,8 +8,10 @@ import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import bz.stub.parallelconsumer.ParallelStreamProcessor;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.state.PartitionStateManager;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -52,16 +54,23 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  *
  * <h2>Instance-wide settings and per-route defaults are spelled apart</h2>
  * An instance-wide setting is plain - {@link #commitMode} - because the engine has one consumer, one commit and one
- * transaction, so those are properties of the clients rather than of the work. Everything else is a per-route value
+ * transaction, so those are properties of the clients rather than of the work. So are {@link #closePath}, which is
+ * how this instance shuts down whoever asked it to, and {@link #meterRegistry}, which is where its meters go.
+ * Everything else is a per-route value
  * with an instance default, and those carry a {@code default} prefix: {@link #defaultRetryLimit},
  * {@link #defaultConcurrency}, {@link #defaultAfterRetries}. A route that declares its own overrides its copy and
  * nobody else's (KD11, R6).
+ *
+ * <h2>It is closeable, and so is the handle</h2>
+ * {@link #start()} hands back a {@link ConsumerHandle}, which is what the README holds in try-with-resources. This
+ * definition is {@link AutoCloseable} too, for a caller who would rather hold one thing than two: closing it closes
+ * the instance it started, and closes nothing at all if it never started one.
  *
  * @see ParallelConsumer#define(Properties)
  */
 @Slf4j
 @InterfaceStability.Unstable
-public class ParallelConsumerDefinition implements DefinitionView {
+public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable {
 
     /**
      * Connection properties the facade owns, so they are not passed on to a route's deserialisers: the two that
@@ -130,6 +139,18 @@ public class ParallelConsumerDefinition implements DefinitionView {
     private boolean started;
 
     /**
+     * How this instance shuts down, whoever asked it to (R17, R24). Draining by default, which is what makes the
+     * handle a graceful shutdown.
+     */
+    private ClosePath closePath = ClosePath.DRAIN_FIRST;
+
+    /**
+     * The handle {@link #start} produced, so that a definition held in try-with-resources closes the instance it
+     * started. Null until it starts one.
+     */
+    private volatile ConsumerHandle startedHandle;
+
+    /**
      * The user's own rebalance listener, chained after the facade's (KTD2). Null when none was declared.
      */
     private ConsumerRebalanceListener usersRebalanceListener;
@@ -186,6 +207,32 @@ public class ParallelConsumerDefinition implements DefinitionView {
                 + "it needs (astubbs#352) has not landed, and a setting that is accepted and then does nothing is "
                 + "worse than one that says so. Today a commit that exhausts its budget shuts the instance down.",
                 policy));
+    }
+
+    /**
+     * How this instance shuts down: whether the records already fetched are processed first (R17, R24).
+     * <p>
+     * Instance-wide because the stop outcome closes the instance from a thread of its own, with nobody there to
+     * pass an argument - and because an instance having two answers to "what happens to the backlog", one for its
+     * caller and one for itself, is a difference nobody would predict correctly (KTD6).
+     */
+    public ParallelConsumerDefinition closePath(ClosePath path) {
+        this.closePath = Objects.requireNonNull(path, "A close path must be supplied");
+        return this;
+    }
+
+    /**
+     * Where this instance's meters go (R19). Without one, Parallel Consumer registers into a no-op registry and
+     * nothing is published.
+     * <p>
+     * The fluent API's own meters - what each route did with its records, and what is parked right now - register
+     * here alongside every engine meter, under the {@code routes} subsystem, and are removed when the instance
+     * closes.
+     */
+    public ParallelConsumerDefinition meterRegistry(MeterRegistry registry) {
+        Objects.requireNonNull(registry, "A meter registry must be supplied");
+        options.meterRegistry(registry);
+        return this;
     }
 
     // ---------------------------------------------------------------- per-route defaults
@@ -619,12 +666,25 @@ public class ParallelConsumerDefinition implements DefinitionView {
      */
     public ConsumerHandle start(ClientRuntime runtime) {
         refuseExportUntilItLands();
-        ParallelStreamProcessor<byte[], byte[]> processor =
-                ParallelStreamProcessor.createEosStreamProcessor(buildOptions(runtime));
-        ConsumerHandle handle = new ConsumerHandle(processor);
+        ParallelConsumerOptions<byte[], byte[]> built = buildOptions(runtime);
+        // The module, not the static factory: it is what owns this instance's PCMetrics, and registering the
+        // route meters through it is what puts them in the user's own registry beside every engine meter and has
+        // them swept by the same close (KTD8, and core's rule that collaborators are wired through the module).
+        PCModule<byte[], byte[]> module = new PCModule<>(built);
+        ParallelEoSStreamProcessor<byte[], byte[]> processor = new ParallelEoSStreamProcessor<>(built, module);
+
+        ParkedSnapshots parkedSnapshots = new ParkedSnapshots(dispatcher.parkedRecords());
+        FluentMeters meters = FluentMeters.registerFor(module.pcMetrics(), topics(), parkedSnapshots);
+        dispatcher.meters(meters);
+        ConsumerHandle handle = new ConsumerHandle(processor, dispatcher, routeTopicsByTopic(), closePath, meters,
+                parkedSnapshots);
         dispatcher.instanceControl(handle);
+        this.startedHandle = handle;
+
         // The facade's listener first, the user's chained after it (KTD2).
         processor.subscribe(subscriptionTopics(), dispatcher.rebalanceListener(usersRebalanceListener));
+        // Before the poll, so the first control loop already carries the hook rather than the second.
+        handle.startObserving();
         if (requiresProducer()) {
             processor.pollAndProduceMany(dispatcher::dispatch);
         } else {
@@ -634,6 +694,36 @@ public class ParallelConsumerDefinition implements DefinitionView {
         // and with the handle, so a generator with a bound can close the instance when it reaches one (KTD9).
         runtime.started(handle);
         return handle;
+    }
+
+    /**
+     * Every routed topic mapped to the whole route's topics, so that asking the handle about any one topic of a
+     * set-declared route answers for the route rather than for that topic alone (R5, R28).
+     */
+    private Map<String, Set<String>> routeTopicsByTopic() {
+        Map<String, Set<String>> byTopic = new LinkedHashMap<>();
+        for (Map.Entry<String, RouteState> entry : routesByTopic.entrySet()) {
+            byTopic.put(entry.getKey(), entry.getValue().topics());
+        }
+        return Collections.unmodifiableMap(byTopic);
+    }
+
+    /**
+     * Closes the instance this definition started, if it started one - so a definition may itself be held in
+     * try-with-resources.
+     * <p>
+     * <b>A definition that was never started closes nothing</b>, and says so at debug rather than throwing: writing
+     * a definition is not starting one, and a block that returns before its {@code start()} must not fail on the
+     * way out.
+     */
+    @Override
+    public void close() {
+        ConsumerHandle handle = this.startedHandle;
+        if (handle == null) {
+            log.debug("Nothing to close: this definition was never started");
+            return;
+        }
+        handle.close();
     }
 
     /**

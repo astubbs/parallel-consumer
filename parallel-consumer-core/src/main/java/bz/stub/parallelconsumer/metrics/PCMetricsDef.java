@@ -61,7 +61,13 @@ public enum PCMetricsDef {
     OFFSETS_ENCODING_TIME("offsets.encoding.time", "Time spend encoding offsets", PCMetricsSubsystem.OFFSET_ENCODER, TIMER),
     OFFSETS_ENCODING_USAGE("offsets.encoding.usage", "Offset encoding usage per encoding type", PCMetricsSubsystem.OFFSET_ENCODER, COUNTER, tag("codec", "BitSet|BitSetCompressed|BitSetV2Compressed|RunLength")),
     METADATA_SPACE_USED("metadata.space.used", "Ratio between offset metadata payload size and available space", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY),
-    PAYLOAD_RATIO_USED("payload.ratio.used", "Ratio between offset metadata payload size and offsets encoded", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY);
+    PAYLOAD_RATIO_USED("payload.ratio.used", "Ratio between offset metadata payload size and offsets encoded", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY),
+
+    // The fluent API's routes. Registered by that package, through this instance's PCMetrics, so they land in the
+    // user's own registry beside every meter above and are swept by the same close.
+    ROUTE_RECORDS("route.records", "Total number of records that reached each terminal outcome on a fluent API route - counts events, so it never decreases", PCMetricsSubsystem.ROUTES, COUNTER, tag("topic", "topicName"), tag("outcome", "succeeded|filtered|parked|stopped")),
+    ROUTE_PARKED_RECORDS("route.parked.records", "Number of records parked in place right now on this partition - the size of the set an operator can act on, which is not the parked counter above", PCMetricsSubsystem.ROUTES, GAUGE, topicPartitionTags()),
+    ROUTE_PARKED_OLDEST_AGE("route.parked.oldest.age", "Age in seconds of the oldest record parked on this partition, or zero when none is parked", PCMetricsSubsystem.ROUTES, GAUGE, topicPartitionTags());
 
     public static final String PC_INSTANCE_TAG = "pcinstance";
 
@@ -187,7 +193,13 @@ public enum PCMetricsDef {
         SHARD_MANAGER("shardmanager"),
         WORK_MANAGER("workmanager"),
         BROKER_POLLER("poller"),
-        OFFSET_ENCODER("offsetencoder");
+        OFFSET_ENCODER("offsetencoder"),
+        /**
+         * The fluent API's per-route meters (R19). A subsystem of its own because a route is not one of the
+         * engine's parts: it is a topic bound to one function, and an operator filtering on it wants that topic's
+         * outcomes, not the shard or partition machinery underneath.
+         */
+        ROUTES("routes");
 
         private final String subsystemTag;
 
