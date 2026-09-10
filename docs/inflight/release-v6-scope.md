@@ -30,7 +30,7 @@ and points here; nothing is maintained on the issue. Everything else below owns 
 | [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) | The flake register - a tag needs a green master |
 | [`docs/releasing.md`](../releasing.md) | The mechanics: strip `-SNAPSHOT`, merge, `publish.yml` deploys and tags, `release.yml` cuts the GitHub release from the curated changelog section |
 | [`docs/data/roadmap.yaml`](../data/roadmap.yaml), [`docs/data/module-maturity.yaml`](../data/module-maturity.yaml) | The claims rendered into the README; the maturity value is a tag-day recheck |
-| `CHANGELOG.adoc` | Generated from the commit log at release time; working text until the tag |
+| `CHANGELOG.md` | Its `## 0.6.0.0` section is the release notes (astubbs#498), and `release.yml` posts that section verbatim as the release body (astubbs#501) |
 | [`docs/plans/2026-07-28-release-pipeline-hardening.md`](../plans/2026-07-28-release-pipeline-hardening.md) | The dated plan for the publish pipeline |
 | [`release-v6-announcement.md`](release-v6-announcement.md) | The announcement theme and plan, qualified on 2026-09-09 as 6.1 material with its figures from an experimental branch; what it lends 0.6.0.0 is the theme, the ordering and the experimental-claims rule |
 | `release-v6-merge-order.md`, `release-0600-blockers.md` (deleted) | Folded into this file on 2026-09-08; `git show 2c874ecac:docs/inflight/release-0600-blockers.md` for the history |
@@ -94,8 +94,8 @@ first two tiers have all merged. **The 2026-09-08 decision overrides its tiers t
 eight**: new surface and new modules are not defects, so they do not gate a bug release, and the
 announcement plan carries the "maintained, and past where upstream stopped" claim instead. Two of
 its points survive: astubbs#197's body reads as more blocked than it is (since shed to a pointer), and
-astubbs#199 - which it called the one item that cannot follow the tag - can, because the release
-page body is posted by hand on the day (tier 3) and astubbs#199 only automates that. Its open question
+astubbs#199 - which it called the one item that cannot follow the tag - is done: astubbs#501 made
+`release.yml` post the `## <version>` section of `CHANGELOG.md` verbatim and closed it on 2026-09-09. Its open question
 of which modules v6 publishes is moot under this decision, since no module PR is in the queue.
 <!-- file-refs: N/A - the merge-order note was merged and removed by astubbs#475; the path is cited as history -->
 <!-- post-merge: checked-end -->
@@ -206,11 +206,11 @@ than carry a standalone abort.
   generator in `bin/`, so astubbs#498 was that generation done by hand from the commit log and the
   release document. The section is now what the release page carries; astubbs#496 and astubbs#497
   are already in it. The size-of-this-release table was dropped by owner decision on 2026-09-10.
-- [ ] **Post the release page body by hand.** `release.yml` tries to build the notes from the
-  `CHANGELOG.adoc` section, but its heading match is exact and the section is headed
-  `== 0.6.0.0 (unreleased)`, so on master it matches nothing and falls back to generated notes.
-  On the day: convert the curated section and `gh release edit v0.6.0.0 --notes-file <file>`
-  after `release.yml` has cut the release. astubbs#199 fixes the match and can follow.
+- [x] **The release page carries the curated notes** (astubbs#501, merged 2026-09-09, closing
+  astubbs#199). `release.yml` extracts the `## 0.6.0.0` section of `CHANGELOG.md` verbatim before
+  anything is committed, tagged or deployed, fails while it is still cheap if the section is
+  missing or empty, and posts it as the release body. Nothing is converted and nothing is posted by
+  hand; the earlier plan to `gh release edit` on the day is withdrawn.
 - [x] **astubbs#446** - merged 2026-09-09. Lift the announcement plan onto master, so the announcement is not being
   written from a branch nobody merges.
 - [ ] The tag-day artefact checks in the section of that name below.
@@ -228,8 +228,7 @@ than carry a standalone abort.
 ### Can follow - finished or nearly, and deliberately not v6
 
 Named so nobody re-argues them in: the producer-recovery stack in tier 2 (by the 2026-09-07
-decision, unless reopened); astubbs#199 (the changelog heading match in `release.yml` - the release
-page body is posted by hand on the day, so this follows the tag); astubbs#352 (commit-failure seam - a feature, even though
+decision, unless reopened); astubbs#352 (commit-failure seam - a feature, even though
 confluentinc#833's reporter patched the library for it), astubbs#226 (health check), astubbs#306
 (offset density), astubbs#360 (virtual threads), astubbs#405 (the torture harness - test
 infrastructure; astubbs#471's soak has merged and its finding is in the confluentinc#857 list), astubbs#479 (the
@@ -450,7 +449,7 @@ it is research for after the tag, not scope.
 
 ## Tag-day artefact checks - are the things we publish true on the day we cut?
 
-Folded in from the register that was `release-0600-blockers.md`. Scope: `CHANGELOG.adoc` and
+Folded in from the register that was `release-0600-blockers.md`. Scope: `CHANGELOG.md` and
 `README.adoc` as published. Release mechanics stay in [`release-0.6.0.0.md`](release-0.6.0.0.md);
 the tracker is astubbs#197.
 
@@ -485,12 +484,13 @@ the tracker is astubbs#197.
   `docs/data/staging/module-maturity-rows.yaml` and the records in `docs/features/staging/` stay
   staged: under the bug-release decision no module PR is in the queue, and each moves with the PR
   that lands its module.
-- **The release page must carry the curated notes.** `release.yml` already builds a notes file from
-  the `CHANGELOG.adoc` section (astubbs#72) - the 2026-09-07 vet of the old blockers note was right
-  that "the body is empty" was never the whole story - but its heading match is exact and the
-  section is headed `== 0.6.0.0 (unreleased)`, so it matches nothing and falls back to generated
-  notes - so the body is posted by hand on the day (tier 3), and astubbs#199, which fixes the match,
-  follows the tag. The rest of astubbs#197's triage list has been picked
+- **The release page must carry the curated notes.** `release.yml` extracts the `## 0.6.0.0`
+  section of `CHANGELOG.md` verbatim before anything is committed, tagged or deployed, and fails
+  while it is still cheap if the section is missing or empty (astubbs#501, closing astubbs#199;
+  astubbs#72 built the first version, whose exact heading match missed the old `(unreleased)`
+  heading, which is why the 2026-09-07 vet found the body falling back to generated notes). On the
+  day: open the release page once it exists and confirm the body is that section. The rest of
+  astubbs#197's triage list has been picked
   up: the magic-byte hazard in astubbs#217, the load-factor WARN in astubbs#201, and MDC in
   astubbs#205 (`MdcPropagation` on master captures and restores the caller's context; the
   2026-09-08 vet that called the gap "real" grepped for a name the class does not use). The
@@ -512,7 +512,7 @@ Context worth inheriting on the day:
 - **`README.adoc` is generated - never hand-edit it.** Edit `src/docs/README_TEMPLATE.adoc` and
   regenerate with `./mvnw -N asciidoc-template:build`. A PR that touches only the template has
   silently not changed the published README.
-- **`CHANGELOG.adoc`'s `== 0.6.0.0` section is the release notes since astubbs#498 merged** - it
+- **`CHANGELOG.md`'s `## 0.6.0.0` section is the release notes since astubbs#498 merged** - it
   was rewritten from the commit log by hand (tier 3), so anything that merges after it with a
   release-note line has to be folded into the section by hand before the tag. When agents work in
   parallel exactly one holds that file; it is the highest-collision file in the repo.
