@@ -80,7 +80,7 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 **Entry point and routes**
 
 - R1. A consumer is defined from connection properties and started to obtain a handle; the user constructs no Kafka client objects. Supplying pre-built clients remains possible through the classic API only.
-- R2. A route binds one topic, or under R5 a set of topics, to one processing function; registering a second route for a topic already routed is refused at definition time.
+- R2. A route binds one topic, or under R5 a set of topics, to one processing function; the API spells the binding `topic` and `topics`. Registering a second route for a topic already routed is refused at definition time.
 - R3. A route declares its own key and value types for consumed records and, when it produces, separate key and value types for produced records. The processing function returns zero or more produced records, each naming its destination topic; zero records on a normal return is success (R7), and the filtered value (R8) carries no output. A route that has not declared produced types cannot return a produced record, and in the Java binding that is a compile error: declaring produced types changes the route's type so that only its function may return a producing outcome. On the wire, where types cannot help, the engine refuses a produced record from a non-producing route at definition time.
 - R4. A route declares its deserialisers through the general form, consumed with a key and a value deserialiser, or through a format helper that resolves to the deserialiser already on the classpath for JSON, Avro or Protobuf, with the key defaulting to string; a format-named route, json, avro, protobuf or bytes with the topic, is sugar that desugars to the route form. The JSON helper without a class yields the payload as a map of field names to values, so a topic nobody has a class for can be consumed and inspected by field name with nothing declared; it uses the same optional JSON dependency as the class-typed form. A route's deserialisers are applied per record inside the facade and, when the route declares produced types, its serialisers are applied to produced records before they reach the produce path; the consumer and the producer are both configured for raw bytes by the facade, never by the user. Deserialiser settings supplied in the connection properties are refused at definition time with a message naming the setting and the route that supersedes it; the remaining properties are passed to each route deserialiser's configuration.
 - R5. A set of topics that share one function and one type pair may be declared as a single route.
@@ -134,7 +134,7 @@ This plan owns the modern surface and the behaviours it promises. The breakdown 
 
 ### Illustrative surface
 
-Illustrative, not binding: the names are placeholders and the compiled README example decides the syntax (Outstanding Questions). What the examples fix is the shape the requirements imply: a definition from properties, one statement per route ending in `process` or a sink, policy as data, a handle out. Type declarations borrow Kafka Streams' `Consumed.with` and `Produced.with` shape and its `Serdes` names, in this library's own package so no Streams dependency arrives; the chain grammar of the Streams DSL is deliberately not borrowed across routes (KD3). A route is called a route, not a stream, because a stream in Streams is the start of a topology and this is a topic bound to one function. Format helpers such as `json(Order.class)` resolve to the deserialiser already on the classpath, and the format-named routes `json`, `avro`, `protobuf` and `bytes` are sugar for `route(...).consumed(...)`; the same verb, route, defines one before start, adds one after start, and on the handle retrieves one. The one instance-wide setting, commit mode, is plain; per-route defaults carry the prefix `default`, and a route's own setting overrides its copy.
+Illustrative, not binding: the names are placeholders and the compiled README example decides the syntax (Outstanding Questions). What the examples fix is the shape the requirements imply: a definition from properties, one statement per route ending in `process` or a sink, policy as data, a handle out. Type declarations borrow Kafka Streams' `Consumed.with` and `Produced.with` shape and its `Serdes` names, in this library's own package so no Streams dependency arrives; the chain grammar of the Streams DSL is deliberately not borrowed across routes (KD3). The verb is not `stream`, because a stream in Streams is the start of a topology and this is a topic bound to one function. Format helpers such as `json(Order.class)` resolve to the deserialiser already on the classpath, and the format-named routes `json`, `avro`, `protobuf` and `bytes` are sugar for `topic(...).consumed(...)`. The document calls the binding a route, a topic bound to one function with its own policy; the API spells it `topic`, because that is the word a Kafka developer reads, with `topics(...)` for a set. The same verb defines one before start, adds one after start, and on the handle retrieves one. The one instance-wide setting, commit mode, is plain; per-route defaults carry the prefix `default`, and a route's own setting overrides its copy.
 
 The shortest definition: one topic, nothing else declared. Failures retry ten times with the default delay, then park (R1, R2, R10, R11, R17):
 
@@ -173,7 +173,7 @@ MessageSink<Order> warehouse = order -> warehouseClient.post(order);   // return
 pc.json("dispatches", Order.class)
     .to(warehouse);                                  // any sink is a route's terminal; a Connect sink task fits here
 
-pc.route("legacy")                                   // the general form, for a non-string key or your own deserialiser
+pc.topic("legacy")                                   // the general form, for a non-string key or your own deserialiser
     .consumed(Consumed.with(Serdes.Long(), new LegacyDeserializer()))
     .process(ctx -> Outcome.succeeded());
 
@@ -222,7 +222,7 @@ pc.json("orders", Order.class)
 Telling permanent from transient at decode time, when a stock deserialiser cannot (R12):
 
 ```java
-pc.route("orders")
+pc.topic("orders")
     .consumed(Consumed.with(Serdes.String(),
         classifyDecodeFailures(avro(Order.class), e ->
             e instanceof RestClientException ? Decode.transientFailure(e) : Decode.permanentFailure(e))))
@@ -232,7 +232,7 @@ pc.route("orders")
 Querying and acting on the parked set, per route, with an instance roll-up under its own name (R28). The default view spans every partition; one partition is the rare case:
 
 ```java
-var parked = handle.route("orders").parked();   // this route's parked set, every partition
+var parked = handle.topic("orders").parked();   // this topic's parked set, every partition
 parked.records().stream()                        // offset, key, attempts, last failure, parked-since
       .filter(rec -> rec.attempts() > 5)
       .forEach(parked::resume);                  // or parked::export
@@ -248,7 +248,7 @@ Handle operations (R31) and a batch-mode route (R32). A route added after `start
 handle.seek("orders", 3, Seek.beginning());          // one partition; in-flight work is delivered again
 pc.json("refunds", Refund.class)                      // after start: a runtime route add
     .process(ctx -> { refunds.apply(ctx.value()); return Outcome.succeeded(); });
-pc.removeRoute("audit");                              // drains first
+pc.removeTopic("audit");                              // drains first
 
 pc.json("orders", Order.class)
     .batch(Batch.upTo(100).maxWait(Duration.ofSeconds(1)).sameKey())
