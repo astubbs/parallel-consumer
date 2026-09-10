@@ -40,9 +40,8 @@ import static com.google.common.truth.Truth.assertThat;
  */
 @Isolated
 @Timeout(120)
-class FacadeThrowsStayOutOfTheErrorLogTest {
+class FacadeThrowsStayOutOfTheErrorLogTest extends AbstractFluentEngineTest {
 
-    private static final String TOPIC = "orders";
 
     /**
      * The engine's one error line for a failed user function. Asserting on its text rather than on "no errors at
@@ -50,23 +49,7 @@ class FacadeThrowsStayOutOfTheErrorLogTest {
      */
     private static final String USER_FUNCTION_FAILURE_LINE = "Exception caught in user function running stage";
 
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
 
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "facade-throws-quiet-test");
-        return properties;
-    }
 
     @Test
     void parkingARecordPrintsNoErrorAtAll() {
@@ -77,11 +60,7 @@ class FacadeThrowsStayOutOfTheErrorLogTest {
                 .process(context -> Outcome.park("this record is hopeless and the function knows it"));
 
         try (LogCapture logs = LogCapture.of(AbstractParallelEoSStreamProcessor.class, Level.DEBUG)) {
-            handle = runtime.startAndAssign(pc, 1);
-            runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-
-            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                    assertThat(pc.dispatcher().parkedCount()).isEqualTo(1));
+            runUntilOneRecordParks(pc);
 
             assertThat(logs.messagesAt(Level.ERROR, USER_FUNCTION_FAILURE_LINE)).isEmpty();
             // ...and it is not merely unlogged: the engine saw the failure and classified it as retriable.
@@ -107,11 +86,7 @@ class FacadeThrowsStayOutOfTheErrorLogTest {
                 });
 
         try (LogCapture logs = LogCapture.of(AbstractParallelEoSStreamProcessor.class, Level.DEBUG)) {
-            handle = runtime.startAndAssign(pc, 1);
-            runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-
-            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                    assertThat(pc.dispatcher().parkedCount()).isEqualTo(1));
+            runUntilOneRecordParks(pc);
 
             assertThat(logs.messagesAt(Level.ERROR, USER_FUNCTION_FAILURE_LINE)).isEmpty();
         }
@@ -138,11 +113,7 @@ class FacadeThrowsStayOutOfTheErrorLogTest {
                 });
 
         try (LogCapture logs = LogCapture.of(AbstractParallelEoSStreamProcessor.class, Level.DEBUG)) {
-            handle = runtime.startAndAssign(pc, 1);
-            runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-
-            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                    assertThat(pc.dispatcher().parkedCount()).isEqualTo(1));
+            runUntilOneRecordParks(pc);
 
             // Two runs: the first attempt and its one retry.
             assertThat(attempts.get()).isEqualTo(2);
@@ -171,16 +142,24 @@ class FacadeThrowsStayOutOfTheErrorLogTest {
                 });
 
         try (LogCapture parkLines = LogCapture.of(RouteDispatcher.class, Level.WARN)) {
-            handle = runtime.startAndAssign(pc, 1);
-            runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-
-            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                    assertThat(pc.dispatcher().parkedCount()).isEqualTo(1));
+            runUntilOneRecordParks(pc);
 
             // Once per record, not once per attempt.
             String line = parkLines.onlyMessageAt(Level.WARN, "Parked", TOPIC + "-0@0");
             assertThat(line).contains("after 2 attempt(s)");
             assertThat(line).contains("ran out of attempts");
         }
+    }
+
+    /**
+     * Start the definition, publish the one record every scenario here uses, and wait for it to park. Every test in
+     * this class is the same three steps around a different definition and a different log assertion, so the steps
+     * are here and only the difference is in each test.
+     */
+    private void runUntilOneRecordParks(ParallelConsumerDefinition pc) {
+        handle = runtime.startAndAssign(pc, 1);
+        runtime.publish(TOPIC, 0, 0, "key-0", "an order");
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(pc.dispatcher().parkedCount()).isEqualTo(1));
     }
 }

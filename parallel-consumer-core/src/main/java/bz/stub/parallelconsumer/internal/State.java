@@ -16,10 +16,11 @@ public enum State {
     UNUSED(0),
     RUNNING(1),
     /**
-     * When paused, the system will stop submitting work to the processing pool. Polling for new work however may
-     * continue until internal buffers have been filled sufficiently and the auto-throttling takes effect. In flight
-     * work will not be affected by transitioning to this state (i.e. processing will finish without any interrupts
-     * being sent).
+     * When paused, the system will stop submitting work to the processing pool, and the controller takes back the
+     * batches it had already handed over which no worker has started. Polling for new work however may continue
+     * until internal buffers have been filled sufficiently and the auto-throttling takes effect. Work already inside
+     * a user function is not affected by transitioning to this state (i.e. processing will finish without any
+     * interrupts being sent).
      */
     PAUSED(2),
     /**

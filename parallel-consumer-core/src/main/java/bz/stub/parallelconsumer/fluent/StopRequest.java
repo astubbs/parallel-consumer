@@ -16,7 +16,7 @@ import java.time.Instant;
  * rather than in the parked view. It is what lets a caller of {@link ConsumerHandle#awaitShutdown()} tell a stop
  * apart from an ordinary close - both return normally, and only this says which happened.
  * <p>
- * Recorded once. The first record to ask wins: the stopping flag fences every record dispatched after it, so a
+ * Recorded once. The first record to ask wins: the pause it triggers stops every record dispatched after it, so a
  * second request would name a record that was on its way out anyway.
  *
  * @see ConsumerHandle#stopRequest()

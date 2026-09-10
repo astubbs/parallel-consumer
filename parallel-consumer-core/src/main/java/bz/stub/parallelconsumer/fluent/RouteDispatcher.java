@@ -5,10 +5,11 @@ package bz.stub.parallelconsumer.fluent;
  */
 
 import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
+import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.RecordContext;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.Headers;
@@ -16,14 +17,13 @@ import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serializer;
 
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
@@ -33,53 +33,37 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  *
  * <h2>What happens to one record</h2>
  * <ol>
- *     <li><b>The stopping flag is read first.</b> If a route has asked the instance to stop, the record is handed
- *     straight back without being run - see {@link #stop}, which owns why a flag is needed beside the engine's own
- *     pause (R24, KTD6).</li>
  *     <li>Its topic picks its route. A topic has exactly one route (R2), and the instance subscribes to exactly the
  *     union of the routes' topics, so a record with no route is an invariant break rather than a user error.</li>
  *     <li>The route's deserialisers decode it, with three possible results (R12): a value, a <em>permanent</em>
  *     failure, which parks the record at once without spending an attempt, or a <em>transient</em> one, which is a
  *     failed attempt like any other.</li>
- *     <li>The attempt ledger advances - immediately before the function runs, or when a decode failure was
- *     transient - and that count is what the route's retry limit is measured against (KTD4).</li>
  *     <li>The function runs and reports its outcome: succeeded and filtered complete the record and produce
  *     nothing, a produced outcome is serialised with the route's produced types and returned for the engine to
- *     send, and a throw is a retry until the ledger reaches the route's limit, after which the record parks
+ *     send, and a throw is a retry until the record's attempts reach the route's limit, after which it parks
  *     (R7 to R10).</li>
  * </ol>
  *
- * <h2>Why a throw is the only way back</h2>
- * The engine has no "give this record back" call today, so every hand-back the facade makes - a park, a stop - is a
- * throw, and the retry-delay provider is where the wrapper says what it meant by it. Hence {@link RetryIntents}: the
- * intent goes into a thread-local <b>before</b> the throw, because the engine asks the provider synchronously inside
- * the failure path. Getting that order wrong does not fail; it silently turns a park into a one-second retry, which
- * is why {@code RetryIntentHookTest} carries a control arm for it.
+ * <h2>Why a throw is the only way back, and what a throw can say</h2>
+ * The engine has no "give this record back" call, so every hand-back the facade makes - a park, a stop - is a
+ * throw. What it <b>meant</b> by the throw rides on the exception itself: {@link PCRetriableException} carries an
+ * optional retry delay, an optional "this was not an attempt", and an optional park, each read by the engine on the
+ * failure path before it consults any retry-delay provider (KTD14). So there is one attempt count, the engine's,
+ * and the route's retry limit is measured against it.
  * <p>
- * Every throw the wrapper itself makes extends the engine's retriable exception, so it is logged at debug rather
- * than as an error: it is the outcome the definition asked for, not a fault. A throw from the <em>user's</em>
- * function is passed through unchanged, so the engine keeps classifying it as the classic API does - that
- * distinction is logging and nothing else (R9).
+ * Every throw the wrapper itself makes extends that retriable exception, so it is logged at debug rather than as an
+ * error: it is the outcome the definition asked for, not a fault. A throw from the <em>user's</em> function is
+ * passed through unchanged, so the engine keeps classifying it as the classic API does - that distinction is
+ * logging and nothing else (R9).
  *
- * <p>
- * One consequence of parking through that same hook is that the engine reports every parked record as slow work,
- * because a park is a retry with a far-future delay and the shard scan cannot tell the two apart. The package
- * javadoc owns that statement - what an operator sees, why the facade cannot suppress it, and the small-tier
- * engine change that removes it - and {@code ParkedRecordsAreSlowWorkForNowTest} pins it.
+ * <h2>Where the parked set lives</h2>
+ * Nowhere here. A parked record is a failed record the engine will never make due again, so the engine's retry
+ * queue already holds it, and {@link #parkedRecordsFrom} rebuilds the view from those containers rather than from a
+ * second store this class would have to keep in step. What the engine cannot hold - the key as the route decoded
+ * it, and how many park cycles the record spent - is derived here from the route and the attempt count.
  */
 @Slf4j
 class RouteDispatcher {
-
-    /**
-     * The delay a parked record is handed back with: far enough away to be "until somebody does something", and
-     * still representable.
-     * <p>
-     * <b>Not {@code ChronoUnit.FOREVER} or anything of that magnitude.</b> The engine adds this delay to the time
-     * of the failure, and a sum that falls outside {@link java.time.Instant}'s range is caught and silently
-     * replaced with the default one-second delay - so an unrepresentable park delay is a hot retry loop against
-     * whatever was already failing, with no error anywhere (KTD4).
-     */
-    static final Duration PARKED_UNTIL_RESUMED = Duration.ofDays(36500);
 
     private final Map<String, RouteState> routesByTopic;
 
@@ -95,24 +79,6 @@ class RouteDispatcher {
      */
     private final String preBuiltConsumerDescription;
 
-    private final AttemptLedger ledger = new AttemptLedger();
-
-    /**
-     * The facade's half of the parked view, and the park-cycle counts (R27, R28).
-     */
-    private final ParkedRecords parkedRecords = new ParkedRecords();
-
-    /**
-     * The facade's count and the engine's, as they stood the last time the engine asked about each record.
-     * <p>
-     * They are two different numbers on purpose (see {@link AttemptLedger}), and in this milestone they agree for
-     * every record whose hand-backs were all real failures - which is every record except one parked by a
-     * permanent decode failure, where the facade spends no attempt and the engine counts the throw. Keeping the
-     * pair is what lets a test assert that rather than assume it.
-     */
-    private final Map<String, int[]> attemptCountsAtLastHandBack = new ConcurrentHashMap<>();
-
-
     /**
      * Replaced at start with the handle. Until then, and in a test that drives the wrapper directly, a fault has
      * nowhere to go but the log.
@@ -125,18 +91,10 @@ class RouteDispatcher {
     private volatile FluentMeters meters = FluentMeters.none();
 
     /**
-     * <b>The fence.</b> Raised by the first record to report a stop, and read before every function call (KTD6).
-     * <p>
-     * The engine's pause stops the control thread handing out <em>new</em> work, and that is all it stops: the
-     * tasks already queued in the worker pool run regardless, and a record dispatched in that window would be
-     * processed by an instance that is on its way down. So every dispatch checks this first and hands the record
-     * straight back with the far-future marker instead of running it - incomplete, uncounted, and delivered again
-     * after the restart.
-     * <p>
-     * Volatile and one-way: a worker thread raises it, every other worker reads it, and nothing ever lowers it. An
-     * instance that has been asked to stop does not come back.
+     * Where the parked set is read from: the engine's retry queue, through the handle. Empty until the handle wires
+     * it, because a wrapper with no engine behind it has nothing parked.
      */
-    private volatile boolean stopping;
+    private volatile Supplier<List<WorkContainer<?, ?>>> parkedContainers = Collections::emptyList;
 
     // ---------------------------------------------------------------- outcome counters
     //
@@ -151,12 +109,6 @@ class RouteDispatcher {
     private final AtomicLong parked = new AtomicLong();
 
     private final AtomicLong producedRecords = new AtomicLong();
-
-    /**
-     * Records handed straight back by the stopping fence. Not an outcome and not a meter: nothing happened to these
-     * records, and they are delivered again after the restart.
-     */
-    private final AtomicLong fenced = new AtomicLong();
 
     RouteDispatcher(Map<String, RouteState> routesByTopic, Duration fallbackRetryDelay,
                     String preBuiltConsumerDescription) {
@@ -173,35 +125,11 @@ class RouteDispatcher {
         this.meters = meters;
     }
 
-    /**
-     * How many records have been fenced by the stopping flag: dispatched after the stop and handed straight back
-     * without running. Visible so a test can prove the fence did the work rather than the timing.
-     */
-    long fencedCount() {
-        return fenced.get();
-    }
-
-    ConsumerRebalanceListener rebalanceListener(ConsumerRebalanceListener usersListener) {
-        return new FacadeRebalanceListener(ledger, parkedRecords, usersListener);
-    }
-
-    AttemptLedger ledger() {
-        return ledger;
+    void parkedContainers(Supplier<List<WorkContainer<?, ?>>> parkedContainers) {
+        this.parkedContainers = parkedContainers;
     }
 
     // ---------------------------------------------------------------- the parked view
-    //
-    // Seam for the lifecycle unit: these three are what the handle's per-route parked() and its instance roll-up
-    // read (R28). What is missing from them is the reconciliation against the engine's incomplete offsets, which
-    // has to be taken on the control thread, and the per-partition figures that need engine accessors that do not
-    // exist yet - the payload fraction above all (KTD11).
-
-    /**
-     * The parked set as this wrapper holds it: entries, park cycles, and which partitions are still ours.
-     */
-    ParkedRecords parkedRecords() {
-        return parkedRecords;
-    }
 
     /**
      * One route's parked records, across every partition (R28). A route declared over a set of topics answers for
@@ -215,7 +143,13 @@ class RouteDispatcher {
             throw new IllegalArgumentException(msg("No route claims topic {} - this instance routes {}", topic,
                     routesByTopic.keySet()));
         }
-        return parkedRecords.forTopics(route.topics());
+        List<ParkedRecord> found = new ArrayList<>();
+        for (ParkedRecord record : parkedAcrossAllRoutes()) {
+            if (route.topics().contains(record.topic())) {
+                found.add(record);
+            }
+        }
+        return Collections.unmodifiableList(found);
     }
 
     /**
@@ -223,7 +157,71 @@ class RouteDispatcher {
      * per-route accessor is never overloaded (R28).
      */
     List<ParkedRecord> parkedAcrossAllRoutes() {
-        return parkedRecords.all();
+        return parkedRecordsFrom(parkedContainers.get());
+    }
+
+    /**
+     * Rebuild the parked view from the containers the engine is holding parked (KTD14).
+     * <p>
+     * Everything on a {@link ParkedRecord} comes from the container or from the route, and nothing from a store:
+     * the raw record, the failure and the moment it parked are the container's failure history; the reason is the
+     * verdict the engine recorded when the throw said {@code park}; the key is decoded from the raw bytes on
+     * demand; and the park cycles are arithmetic over the attempt count (see {@link #cyclesUsed}).
+     * <p>
+     * A container for a topic this instance does not route is skipped rather than reported: the engine's queue is
+     * the whole instance's, and a definition only ever answers for its own routes.
+     */
+    List<ParkedRecord> parkedRecordsFrom(List<WorkContainer<?, ?>> containers) {
+        List<ParkedRecord> view = new ArrayList<>(containers.size());
+        for (WorkContainer<?, ?> container : containers) {
+            RecordContext<byte[], byte[]> engineContext = contextOf(container);
+            RouteState route = routesByTopic.get(engineContext.topic());
+            if (route == null) {
+                continue;
+            }
+            view.add(new ParkedRecord(engineContext, decodeKeyQuietly(route, engineContext.getConsumerRecord()),
+                    cyclesUsed(route, engineContext.getNumberOfFailedAttempts())));
+        }
+        return Collections.unmodifiableList(view);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static RecordContext<byte[], byte[]> contextOf(WorkContainer<?, ?> container) {
+        // The facade builds every instance on a byte[] consumer (KTD2), so the engine's containers carry byte[]
+        // records - the wildcards are the engine's queue being generic over every instance, not a real unknown.
+        return new RecordContext<>((WorkContainer<byte[], byte[]>) container);
+    }
+
+    /**
+     * How many park cycles this record spent, <b>derived</b> rather than counted (R27).
+     * <p>
+     * A park cycle is one further attempt granted after exhaustion, and the engine counts every attempt - so the
+     * cycles a record has spent are exactly the attempts it has beyond its limit's last ordinary run, capped by
+     * the policy. Keeping a second map of cycle counts said the same thing in a shape that needed clearing on
+     * every rebalance.
+     */
+    private static int cyclesUsed(RouteState route, int attempts) {
+        int cycles = route.afterRetries().parkCycles();
+        OptionalInt limit = route.retryLimit();
+        if (cycles == 0 || !limit.isPresent() || attempts <= limit.getAsInt()) {
+            return 0;
+        }
+        return Math.min(attempts - limit.getAsInt() - 1, cycles);
+    }
+
+    /**
+     * The key as the route reads it, for the parked view (R28). A key that will not decode is reported as absent
+     * rather than as a failure: the record parked for its own reason, and the raw bytes are on the entry either
+     * way.
+     */
+    private static Object decodeKeyQuietly(RouteState route, ConsumerRecord<byte[], byte[]> raw) {
+        try {
+            return decode(route.consumedKey(), raw.topic(), raw.headers(), raw.key());
+        } catch (RuntimeException keyWillNotDecode) {
+            log.debug("Could not decode the key of parked record {}-{}@{} for its parked view entry",
+                    raw.topic(), raw.partition(), raw.offset(), keyWillNotDecode);
+            return null;
+        }
     }
 
     long succeededCount() {
@@ -249,11 +247,9 @@ class RouteDispatcher {
      * offset.
      */
     List<ProducerRecord<byte[], byte[]>> dispatch(PollContext<byte[], byte[]> poll) {
-        // Bounds what an intent nobody read can cost - see RetryIntents' lifecycle note.
-        RetryIntents.clearThread();
         List<ProducerRecord<byte[], byte[]>> produced = new ArrayList<>();
-        for (ConsumerRecord<byte[], byte[]> record : poll.getConsumerRecordsFlattened()) {
-            produced.addAll(dispatchOne(record));
+        for (RecordContext<byte[], byte[]> context : poll.getContextsFlattened()) {
+            produced.addAll(dispatchOne(context));
         }
         return produced;
     }
@@ -272,10 +268,8 @@ class RouteDispatcher {
         }
     }
 
-    private List<ProducerRecord<byte[], byte[]>> dispatchOne(ConsumerRecord<byte[], byte[]> record) {
-        if (stopping) {
-            throw fence(record);
-        }
+    private List<ProducerRecord<byte[], byte[]>> dispatchOne(RecordContext<byte[], byte[]> engineContext) {
+        ConsumerRecord<byte[], byte[]> record = engineContext.getConsumerRecord();
         RouteState route = routesByTopic.get(record.topic());
         if (route == null) {
             throw new IllegalStateException(msg("No route claims topic {}, yet a record from it was dispatched. The "
@@ -284,34 +278,35 @@ class RouteDispatcher {
                     record.topic(), routesByTopic.keySet()));
         }
 
+        // The engine has failed this record `alreadyFailed` times; the run about to happen is the next attempt, and
+        // that is the number the retry limit is measured against (R10, KTD14).
+        int alreadyFailed = engineContext.getNumberOfFailedAttempts();
+        int attempts = alreadyFailed + 1;
+
         // Whatever decoded before the failure, which is what the park observer and an export are given: both sides
         // when the record decoded, the key alone when only the value failed, neither when nothing did (R13, R16).
         Object key = null;
         Object value = null;
         try {
-            byte[] rawKey = record.key();
-            byte[] rawValue = record.value();
-            key = decode(route.consumedKey(), record.topic(), record.headers(), rawKey);
-            value = decode(route.consumedValue(), record.topic(), record.headers(), rawValue);
+            key = decode(route.consumedKey(), record.topic(), record.headers(), record.key());
+            value = decode(route.consumedValue(), record.topic(), record.headers(), record.value());
         } catch (PermanentDecodeFailureException permanent) {
             // No attempt is spent: the payload will never decode, so there is nothing to try again (R12). And no
             // park cycle either - a wait cannot change a payload that can never be read (R27).
-            throw park(new ProcessContext<>(record, key, value), route, permanent, 0,
-                    "its payload can never be decoded");
+            throw park(new ProcessContext<>(engineContext, key, value), route, permanent, alreadyFailed,
+                    "its payload can never be decoded", false);
         } catch (ClassCastException castFailed) {
             if (RawBytesConsumerFaultException.isRawBytesCastFailure(castFailed)) {
                 throw rawBytesFault(castFailed);
             }
-            throw afterAttempt(new ProcessContext<>(record, key, value), route, castFailed, ledger.advance(record));
+            throw afterAttempt(new ProcessContext<>(engineContext, key, value), route, castFailed, attempts);
         } catch (RuntimeException decodeFailed) {
             // A stock deserialiser cannot tell a corrupt payload from a registry outage, so this is transient by
             // default and costs an attempt (R12).
-            throw afterAttempt(new ProcessContext<>(record, key, value), route, decodeFailed,
-                    ledger.advance(record));
+            throw afterAttempt(new ProcessContext<>(engineContext, key, value), route, decodeFailed, attempts);
         }
 
-        ProcessContext<Object, Object> context = new ProcessContext<>(record, key, value);
-        int attempts = ledger.advance(record);
+        ProcessContext<Object, Object> context = new ProcessContext<>(engineContext, key, value);
         Outcome<Object, Object> outcome;
         try {
             outcome = run(route, context);
@@ -333,50 +328,31 @@ class RouteDispatcher {
         ConsumerRecord<byte[], byte[]> record = context.raw();
         switch (outcome.kind()) {
             case SUCCEEDED:
-                forget(record);
                 succeeded.incrementAndGet();
                 meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
                 return emptyProduce();
             case FILTERED:
                 // Completes and commits exactly as a success does, and is counted apart from one (R8).
-                forget(record);
                 filtered.incrementAndGet();
                 meters.recordOutcome(record.topic(), FluentMeters.FILTERED);
                 return emptyProduce();
             case PRODUCE:
                 List<ProducerRecord<byte[], byte[]>> serialised = serialise(route, outcome.records());
-                forget(record);
                 succeeded.incrementAndGet();
                 meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
                 producedRecords.addAndGet(serialised.size());
                 return serialised;
             case PARK:
                 // The function already knows this record is hopeless, so its remaining attempts are skipped - and
-                // so are its park cycles, which are more attempts by another name (R8, R27).
-                throw park(context, route, null, attempts, outcome.reason());
+                // so are its park cycles, which are more attempts by another name (R8, R27). The run that reported it
+                // is still an attempt - the function ran - so it counts, and the parked entry shows it.
+                throw park(context, route, null, attempts, outcome.reason(), true);
             case STOP:
                 throw stop(record, outcome.reason());
             default:
                 throw new IllegalStateException(msg("Unhandled outcome {} on topic {}", outcome.kind(),
                         route.describeTopics()));
         }
-    }
-
-    /**
-     * This record reached an outcome that completes it, so nothing will ask about it again. Both per-record maps
-     * drop it here - which is what keeps them bounded by the records currently in flight or parked, rather than by
-     * everything the instance has ever seen.
-     */
-    private void forget(ConsumerRecord<byte[], byte[]> record) {
-        ledger.forget(record);
-        // A record that completes here may have been parked and then resumed, so its parked entry and its park
-        // cycles go with it - the parked view lists what an operator can still act on, not what once parked.
-        parkedRecords.forget(record);
-        attemptCountsAtLastHandBack.remove(keyOf(record.topic(), record.partition(), record.offset()));
-    }
-
-    private static String keyOf(String topic, int partition, long offset) {
-        return topic + '-' + partition + '@' + offset;
     }
 
     private List<ProducerRecord<byte[], byte[]>> emptyProduce() {
@@ -399,8 +375,9 @@ class RouteDispatcher {
         ConsumerRecord<byte[], byte[]> record = context.raw();
         if (isExhausted(route, attempts)) {
             AfterRetries policy = route.afterRetries();
-            if (parkCycleRemains(policy, record)) {
-                return parkCycle(record, route, policy, failure, attempts);
+            int cycles = cyclesUsed(route, attempts);
+            if (policy.parkCycles() > cycles) {
+                return parkCycle(record, policy, failure, attempts, cycles + 1);
             }
             if (policy.reaction() == AfterRetries.Reaction.STOP) {
                 // This route's author says a record that runs out of attempts here means the deployment is wrong,
@@ -410,18 +387,11 @@ class RouteDispatcher {
                                 + "exhaustion by stopping the instance",
                         record.topic(), record.partition(), record.offset(), attempts));
             }
-            return park(context, route, failure, attempts, "it ran out of attempts");
+            return park(context, route, failure, attempts, "it ran out of attempts", true);
         }
-        RetryIntents.retry(record, route.retryDelay());
-        return asUnchecked(failure);
-    }
-
-    /**
-     * Whether this record still has a park cycle to spend: an exhausted record whose policy declared a delay and a
-     * number of cycles gets one more attempt per cycle, and parks for good after the last of them (R27).
-     */
-    private boolean parkCycleRemains(AfterRetries policy, ConsumerRecord<byte[], byte[]> record) {
-        return policy.parkCycles() > 0 && parkedRecords.cyclesUsed(record) < policy.parkCycles();
+        // An ordinary retry, at the route's own delay: carried on the throw so a route's delay needs no state
+        // anywhere, and a route that declares none simply carries the instance default (R6, KTD14).
+        return retriable(asUnchecked(failure), route.retryDelay());
     }
 
     /**
@@ -429,15 +399,28 @@ class RouteDispatcher {
      * more. It is <b>not</b> parked meanwhile - it has an attempt coming, so it is not in the parked view and
      * nothing observes it. This is scheduled retry (astubbs#234) delivered as a park delay.
      */
-    private RuntimeException parkCycle(ConsumerRecord<byte[], byte[]> record, RouteState route, AfterRetries policy,
-                                       Throwable failure, int attempts) {
-        int cycle = parkedRecords.spendCycle(record);
-        RetryIntents.park(record, policy.parkDelay());
+    private RuntimeException parkCycle(ConsumerRecord<byte[], byte[]> record, AfterRetries policy, Throwable failure,
+                                       int attempts, int cycle) {
         log.info("Park cycle {} of {} for {}-{}@{} after {} attempt(s): it waits {} and is then attempted once "
                         + "more; after the last cycle it parks until resumed.",
                 cycle, policy.parkCycles(), record.topic(), record.partition(), record.offset(), attempts,
                 policy.parkDelay());
-        return asUnchecked(failure);
+        return retriable(asUnchecked(failure), policy.parkDelay());
+    }
+
+    /**
+     * Attach a retry delay to the exception that is about to be thrown, without changing what the exception is.
+     * <p>
+     * A throw from the user's function keeps its own type and message - the engine classifies it, and the user
+     * reads it - so the delay is added to the instance in flight rather than to a wrapper around it. Only a
+     * {@link PCRetriableException} can carry one; anything else takes the configured delay, which for this facade
+     * is the same topic-keyed answer {@link #retryDelayFor} gives.
+     */
+    private static RuntimeException retriable(RuntimeException failure, Duration delay) {
+        if (failure instanceof PCRetriableException && delay != null && !delay.isNegative()) {
+            ((PCRetriableException) failure).retryAfter(delay);
+        }
+        return failure;
     }
 
     /**
@@ -454,39 +437,37 @@ class RouteDispatcher {
      * operator resumes it or a restart re-delivers it (R27).
      * <p>
      * <b>The one path every park goes through</b>, whether the record ran out of attempts, spent its last park
-     * cycle, could never be decoded, or was declared hopeless by the function itself. Four things happen here and
-     * they are deliberately in this order: the far-future intent, so the engine's provider has it before the throw
-     * (KTD4); the parked entry, which is what the parked view lists and what decides whether this park is the
-     * first; the observer, told once and unable to change anything (R16); and the outcome counter (R19).
+     * cycle, could never be decoded, or was declared hopeless by the function itself. The throw carries the park to
+     * the engine, which records it on the record itself - never due again, with the reason attached - so the parked
+     * view is a read of the engine's own retry queue and there is nothing here to keep in step with it (KTD14).
      * <p>
      * <b>A park for a partition that is no longer ours records nothing and tells nobody.</b> A worker can finish
-     * after its partition was revoked, and an entry written then belongs to whoever owns the partition now -
-     * {@link ParkedRecords} owns that judgement. The record is still handed back incomplete, because it must not
-     * complete under this instance either way.
+     * after its partition was revoked, and what it would report then belongs to whoever owns the partition now.
+     * The engine already knows - it drops the container rather than holding it parked - so this asks it rather
+     * than keeping an assignment view of its own.
      * <p>
      * <b>Seam for the export unit.</b> Export is a re-dispatch, not a send from this failure path (KTD5): on a
      * later dispatch of an already-parked record the wrapper returns the export record instead of calling the
-     * function, reading the entry recorded here for the provenance headers. The definition refuses a dead-letter
+     * function, reading the entry the engine holds for the provenance headers. The definition refuses a dead-letter
      * destination at start until that lands, so no definition reaching here has one.
+     *
+     * @param countsAsAttempt false for a park that spent no attempt at the user's work - a payload that can never
+     *                        be decoded (R12)
      */
     private RuntimeException park(ProcessContext<Object, Object> context, RouteState route, Throwable failure,
-                                  int attempts, String why) {
+                                  int attempts, String why, boolean countsAsAttempt) {
         ConsumerRecord<byte[], byte[]> record = context.raw();
-        RetryIntents.park(record, PARKED_UNTIL_RESUMED);
-
-        int cycles = parkedRecords.cyclesUsed(record);
-        boolean firstParkOfThisAssignment = parkedRecords.park(new ParkedRecord(record, context.key(), attempts,
-                cycles, failure, why, Instant.now()));
-
-        String message = msg("Parked {}-{}@{} after {} attempt(s){}: {}. It stays incomplete in the offset map and "
+        String message = msg("Parked {}-{}@{} after {} attempt(s): {}. It stays incomplete in the offset map and "
                         + "holds no worker; offsets past it still commit under key and unordered processing.",
-                record.topic(), record.partition(), record.offset(), attempts,
-                cycles == 0 ? "" : msg(" and {} park cycle(s)", cycles), why);
-        if (!firstParkOfThisAssignment) {
-            // Either a partition we no longer own, or a record already parked in this assignment. Neither is worth
-            // an operator's attention, and neither may fire the observer or move the counter a second time.
-            log.debug("{} (not recorded: this instance has no live claim on the record)", message);
-            return parkedException(message, failure);
+                record.topic(), record.partition(), record.offset(), attempts, why);
+
+        if (context.engineContext().isStale()) {
+            // A worker can finish after its partition was revoked. The engine will drop this container rather than
+            // hold it parked, so there is nothing to list - and reporting it would tell an observer, and an
+            // operator, about a record that belongs to whoever owns the partition now. The record is still handed
+            // back, because it must not complete under this instance either way.
+            log.debug("{} (not recorded: this instance's claim on the partition was revoked while it ran)", message);
+            return parkedThrow(message, failure, why, countsAsAttempt);
         }
 
         notifyObserver(route, context, failure, attempts);
@@ -501,11 +482,24 @@ class RouteDispatcher {
             // is the only place an operator sees why the record gave up. Once per record, never per attempt.
             log.warn(message, failure);
         }
-        return parkedException(message, failure);
+
+        return parkedThrow(message, failure, why, countsAsAttempt);
     }
 
-    private static RecordParkedException parkedException(String message, Throwable failure) {
-        return failure == null ? new RecordParkedException(message) : new RecordParkedException(message, failure);
+    /**
+     * The throw itself: a retriable exception carrying the park, so the engine marks the record never due, records
+     * why, and keeps the whole thing out of the error log (KTD14).
+     */
+    private static RecordParkedException parkedThrow(String message, Throwable failure, String why,
+                                                     boolean countsAsAttempt) {
+        RecordParkedException parkedException = failure == null
+                ? new RecordParkedException(message)
+                : new RecordParkedException(message, failure);
+        parkedException.park(why);
+        if (!countsAsAttempt) {
+            parkedException.notAnAttempt();
+        }
+        return parkedException;
     }
 
     /**
@@ -541,55 +535,37 @@ class RouteDispatcher {
      * A route asked the instance to stop, either from its function's {@link Outcome#stop(String)} or because one of
      * its records ran out of attempts on a route whose reaction is {@link AfterRetries#stop()} (R24, R27).
      *
-     * <h2>Five steps, and the order is the design (KTD6)</h2>
+     * <h2>Four steps, and the order is the design (KTD6)</h2>
      * <ol>
-     *     <li><b>Mark</b> this record with the far-future delay, so a drain does not re-invoke it in the window
-     *     before the instance closes. The intent has to be recorded before the throw, because the engine asks for
-     *     the delay synchronously inside the failure path.</li>
-     *     <li><b>Fence</b>: raise the stopping flag, so any record already queued in the worker pool is handed back
-     *     rather than run. The pause below cannot do this - it stops the control thread giving out work, not the
-     *     pool running what it already has.</li>
-     *     <li><b>Pause and close</b>, both through the handle: pausing is non-blocking and immediate, closing
-     *     happens on a thread of its own because this one is a worker and the close awaits the worker pool.</li>
+     *     <li><b>Mark</b> this record never-due, so a drain does not re-invoke it in the window before the instance
+     *     closes, and spend no attempt on it: it asked to stop, it did not fail.</li>
+     *     <li><b>Pause</b>, through the handle. The engine's pause stops the controller handing out new work
+     *     <em>and</em> hands back the batches already queued in the worker pool, so nothing further reaches a
+     *     route's function - that second half is the engine change this facade used to work around with a flag of
+     *     its own (KTD14).</li>
+     *     <li><b>Close</b>, also through the handle, on a thread of its own because this one is a worker and the
+     *     close awaits the worker pool.</li>
      *     <li><b>Throw</b>, which is the only way to hand a record back, leaving it incomplete so a restart
      *     delivers it again.</li>
      * </ol>
-     * The fence is raised <em>before</em> the handle is told, not after: between those two calls the instance is
-     * still running at full speed, and a record dispatched there is exactly what the fence exists to catch.
      */
     private RuntimeException stop(ConsumerRecord<byte[], byte[]> record, String reason) {
-        RetryIntents.park(record, PARKED_UNTIL_RESUMED);
-        stopping = true;
-        instance.stopRequested(record, reason);
-        return new StopRequestedException(msg("The route for {} asked the instance to stop at {}-{}@{}: {}. The "
-                        + "record is left incomplete, so a restart delivers it again.",
+        StopRequestedException stopping = new StopRequestedException(msg("The route for {} asked the instance to "
+                        + "stop at {}-{}@{}: {}. The record is left incomplete, so a restart delivers it again.",
                 record.topic(), record.topic(), record.partition(), record.offset(), reason));
-    }
-
-    /**
-     * This record was dispatched after the instance was asked to stop, so it is handed straight back without being
-     * run (R24, KTD6).
-     * <p>
-     * No attempt is spent, no park is recorded and nothing is counted: nothing happened to this record. It stays
-     * incomplete and is delivered again after the restart, alongside the record that asked for the stop.
-     */
-    private RuntimeException fence(ConsumerRecord<byte[], byte[]> record) {
-        RetryIntents.park(record, PARKED_UNTIL_RESUMED);
-        long fencedSoFar = fenced.incrementAndGet();
-        log.debug("Not running {}-{}@{}: this instance has been asked to stop, so the record is handed back "
-                        + "incomplete ({} fenced so far)",
-                record.topic(), record.partition(), record.offset(), fencedSoFar);
-        return new StopRequestedException(msg("{}-{}@{} was not run: this instance has been asked to stop. The "
-                        + "record is left incomplete, so a restart delivers it again.",
-                record.topic(), record.partition(), record.offset()));
+        // Parked, with the stop as its reason: the record is held where it is until somebody acts, which is what
+        // park means, and an operator looking at why an instance stopped wants to see exactly this record. No
+        // attempt is spent - it reported, it did not fail.
+        stopping.notAnAttempt().park("it asked the instance to stop");
+        instance.stopRequested(record, reason);
+        return stopping;
     }
 
     /**
      * A pre-built consumer that is not configured for raw bytes: a definition fault, never a retry (KTD3, R1).
      * <p>
-     * <b>Seam for the lifecycle unit.</b> {@link InstanceControl#fatal} is what makes it fatal; today the handle
-     * closes the instance and surfaces this exception to whoever is awaiting shutdown, and the lifecycle unit
-     * routes it through the stop path instead. The throw itself matters either way: the record must not complete,
+     * {@link InstanceControl#fatal} is what makes it fatal; the handle closes the instance and surfaces this
+     * exception to whoever is awaiting shutdown. The throw itself matters either way: the record must not complete,
      * because it was never processed.
      */
     private RuntimeException rawBytesFault(ClassCastException castFailed) {
@@ -602,48 +578,19 @@ class RouteDispatcher {
     // ---------------------------------------------------------------- the retry-delay provider
 
     /**
-     * The provider the engine actually calls. It is also the one place the facade's attempt count and the engine's
-     * own meet, so it is where they are compared (KTD4).
-     */
-    Duration retryDelayFor(RecordContext<byte[], byte[]> context) {
-        recordCrossCheck(context);
-        return retryDelayFor(context.topic(), context.partition(), context.offset());
-    }
-
-    private void recordCrossCheck(RecordContext<byte[], byte[]> context) {
-        int ours = ledger.attempts(context.topic(), context.partition(), context.offset());
-        int theirs = context.getNumberOfFailedAttempts();
-        attemptCountsAtLastHandBack.put(keyOf(context.topic(), context.partition(), context.offset()),
-                new int[]{ours, theirs});
-        if (log.isDebugEnabled() && ours != theirs) {
-            log.debug("The facade has run {}-{}@{} {} time(s) and the engine has failed it {} time(s) - they differ "
-                            + "when a hand-back was not an attempt at the user's work",
-                    context.topic(), context.partition(), context.offset(), ours, theirs);
-        }
-    }
-
-    /**
-     * Visible for tests: {facade attempts, engine attempts} as they stood when the engine last asked about this
-     * record, or null if it never has.
-     */
-    int[] attemptCountsAtLastHandBack(String topic, int partition, long offset) {
-        return attemptCountsAtLastHandBack.get(keyOf(topic, partition, offset));
-    }
-
-    /**
-     * What the engine's retry-delay provider answers for one record: the intent this thread recorded immediately
-     * before it threw, or the route's ordinary retry delay when there is none (KTD4).
+     * What the engine's retry-delay provider answers for one record: the route's own delay, and nothing else.
+     * <p>
+     * <b>It is a pure function of the topic</b>, which is what it became once a throw could carry its own delay
+     * (KTD14). It used to read a thread-local the throw site had written a moment earlier, because park and retry
+     * needed different answers for the same topic and this was the only channel; the engine calls the provider
+     * synchronously inside the failure path, so getting that write order wrong did not fail, it silently turned a
+     * park into a one-second retry.
      * <p>
      * <b>It cannot throw, return null, return a negative delay, or return one that overflows.</b> The engine
-     * replaces a provider that does any of those with its own one-second default and a rate-limited warning, so a
-     * fault here would turn every park into a hot retry loop with nothing going red.
+     * replaces a provider that does any of those with its own one-second default and a rate-limited warning.
      * {@code EngineRetryDelayProviderContractTest} pins that engine behaviour so this claim keeps its teeth.
      */
     Duration retryDelayFor(String topic, int partition, long offset) {
-        RetryIntent intent = RetryIntents.take(topic, partition, offset);
-        if (intent != null) {
-            return intent.delay();
-        }
         RouteState route = routesByTopic.get(topic);
         return route == null ? fallbackRetryDelay : route.retryDelay();
     }

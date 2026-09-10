@@ -257,6 +257,14 @@ public class ProcessingShard<K, V> {
         includeInSelection(failedWork);
     }
 
+    /**
+     * A delivery that never started - see {@link ShardManager#onAbandonedBeforeStarting}. The same re-inclusion a
+     * failure gets, without the retry queue, because nothing failed.
+     */
+    public void onAbandonedBeforeStarting(WorkContainer<?, ?> abandonedWork) {
+        includeInSelection(abandonedWork);
+    }
+
 
     public boolean isEmpty() {
         return workMap.isEmpty();
@@ -579,7 +587,19 @@ public class ProcessingShard<K, V> {
         }
     }
 
+    /**
+     * A container the scan could not take, considered for the slow-work warning and counter.
+     * <p>
+     * <b>A parked record is skipped</b>, and that is not a cosmetic exclusion. "Slow" means work that should have
+     * moved and has not; a parked record is work the definition deliberately stopped, so counting it says an
+     * instance is struggling when it is doing exactly what it was told (R27, KTD14). Every parked record on a
+     * partition would otherwise be re-counted on every shard scan, which is a warning per pass for a set nobody is
+     * waiting on.
+     */
     private void addToSlowWorkMaybe(Set<WorkContainer<?, ?>> slowWork, WorkContainer<?, ?> workContainer) {
+        if (workContainer.isParked()) {
+            return;
+        }
         Duration timeInFlight = workContainer.getTimeInFlight();
         Duration slowThreshold = options.getThresholdForTimeSpendInQueueWarning();
         if (isGreaterThan(timeInFlight, slowThreshold)) {

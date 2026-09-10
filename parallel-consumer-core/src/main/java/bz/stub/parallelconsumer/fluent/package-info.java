@@ -20,19 +20,15 @@
  * <p><b>What a running instance offers.</b> The handle closes on the instance's declared
  * {@link bz.stub.parallelconsumer.fluent.ClosePath} - draining by default - waits for shutdown, and says which of
  * the three ways the instance ended: closed, stopped by a route, or failed. It answers the parked set per route
- * and instance-wide, from a control-thread snapshot reconciled against the engine's incomplete offsets. The same
+ * and instance-wide, read from the engine's own retry queue, which is where a parked record lives. The same
  * figures are published as meters under the {@code routes} subsystem, tagged by topic and outcome for the counters
  * and by topic and partition for the parked gauges; supply a registry with
  * {@code meterRegistry(...)} or nothing is published.
  *
- * <p><b>A parked record is reported as slow work in this release.</b> Parking a record is, over today's engine, a
- * retry with a far-future delay - so the engine's shard scan, which measures how long each record it cannot yet
- * take has been waiting, counts every parked record against its partition's slow-records meter and names its topic
- * in the periodic "records in the queue have been waiting longer than" warning, from about ten seconds after it
- * parks until it is resumed or exported. The facade cannot suppress it: the scan has no way to tell a park from a
- * long backoff. It is noise rather than a symptom, and the figures that mean something are the parked count and
- * the parked set. Removing it is a small engine change - the scan skipping a record whose retry delay has not
- * elapsed - and {@code ParkedRecordsAreSlowWorkForNowTest} pins today's behaviour so that change shows up rather
- * than happening in silence.
+ * <p><b>A parked record is not slow work.</b> The engine's shard scan measures how long each record it cannot yet
+ * take has been waiting, and warns about the ones that have been waiting too long - but a parked record is work
+ * the definition deliberately stopped, so the scan skips it and it appears in neither the warning nor the
+ * slow-records meter. The figures that mean something for a parked record are the parked count and the parked set;
+ * {@code ParkedRecordsAreNotSlowWorkTest} pins that.
  */
 package bz.stub.parallelconsumer.fluent;

@@ -124,7 +124,7 @@ class ThroughputWithThousandsParkedTest {
         }
         RouteDispatcher dispatcher = pc.dispatcher();
         Awaitility.await().atMost(Duration.ofSeconds(120)).until(() ->
-                dispatcher.parkedRecords().count() == parkedRecords);
+                dispatcher.parkedCount() == parkedRecords);
 
         long startedAt = System.nanoTime();
         for (int i = 0; i < HEALTHY_RECORDS; i++) {

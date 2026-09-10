@@ -32,27 +32,10 @@ import static com.google.common.truth.Truth.assertThat;
  * records behind it on its own key wait, everything else carries on, and a draining close does not wait for it.
  */
 @Timeout(120)
-class ParkedRecordsHoldTheKeyNotThePartitionTest {
+class ParkedRecordsHoldTheKeyNotThePartitionTest extends AbstractFluentEngineTest {
 
-    private static final String TOPIC = "orders";
 
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
 
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "park-holds-the-key-test");
-        return properties;
-    }
 
     /**
      * R11. Under key ordering the parked record is the head of its key's shard, so later records with that key wait

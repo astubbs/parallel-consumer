@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Timeout;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -31,27 +32,11 @@ import static com.google.common.truth.Truth.assertThat;
  * attempt: there is nothing to try again.
  */
 @Timeout(60)
-class DecodeFailureTest {
+class DecodeFailureTest extends AbstractFluentEngineTest {
 
     private static final String POISON = "poison";
 
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
 
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "decode-failure-test");
-        return properties;
-    }
 
     /**
      * A deserialiser that rejects one payload and reads every other one, so a test can put a poison record beside
@@ -95,7 +80,7 @@ class DecodeFailureTest {
                 assertThat(dispatcher.parkedCount()).isEqualTo(1));
 
         // A limit of two counts the attempts after the first, so three decode attempts happened and no fourth.
-        assertThat(dispatcher.ledger().attempts("orders", 0, 0)).isEqualTo(3);
+        assertThat(onlyParked(dispatcher).attempts()).isEqualTo(3);
         // The readable record on the same route and partition still succeeded.
         assertThat(dispatcher.succeededCount()).isAtLeast(1L);
 
@@ -107,8 +92,9 @@ class DecodeFailureTest {
     }
 
     /**
-     * AE6's permanent half: parked at once, with <b>no attempt spent</b> - so the facade's count is zero while the
-     * engine has counted the hand-back, which is the one place in this milestone where the two disagree.
+     * AE6's permanent half: parked at once, with <b>no attempt spent</b>. The throw that parks it says so - it is a
+     * park that is not an attempt - so the one attempt count there is stays at zero, and the parked entry reports
+     * zero rather than a number the view had to be told separately.
      */
     @Test
     void aPermanentDecodeFailureIsParkedAtOnceWithoutSpendingAnAttempt() {
@@ -125,23 +111,11 @@ class DecodeFailureTest {
                     return Outcome.succeeded();
                 });
 
-        handle = runtime.startAndAssign(pc, 1);
-        runtime.publish("orders", 0, 0, "key-0", POISON);
+        RouteDispatcher dispatcher = runUntilThePoisonRecordParks(pc);
 
-        RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(dispatcher.parkedCount()).isEqualTo(1));
-
-        assertThat(dispatcher.ledger().attempts("orders", 0, 0)).isEqualTo(0);
+        assertThat(onlyParked(dispatcher).attempts()).isEqualTo(0);
+        assertThat(onlyParked(dispatcher).reason()).contains("never be decoded");
         assertThat(ran.get()).isEqualTo(0);
-
-        // The engine counted the hand-back as a failure; the facade did not count it as an attempt. Two numbers,
-        // on purpose - KTD4's cross-check, seen at the one moment they meet.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(dispatcher.attemptCountsAtLastHandBack("orders", 0, 0)).isNotNull());
-        int[] counts = dispatcher.attemptCountsAtLastHandBack("orders", 0, 0);
-        assertThat(counts[0]).isEqualTo(0);
-        assertThat(counts[1]).isEqualTo(1);
 
         // Parked means parked: no further attempt arrives however long the instance runs.
         Awaitility.await().pollDelay(Duration.ofMillis(300)).atMost(Duration.ofSeconds(5))
@@ -164,13 +138,35 @@ class DecodeFailureTest {
                 .retryDelay(Duration.ofMillis(10))
                 .process(context -> Outcome.succeeded());
 
+        RouteDispatcher dispatcher = runUntilThePoisonRecordParks(pc);
+
+        assertThat(onlyParked(dispatcher).attempts()).isEqualTo(2);
+    }
+
+    /**
+     * Start the definition, publish the one payload no route here can read, and wait for it to park. Every scenario
+     * below is that, around a different decode classifier.
+     */
+    private RouteDispatcher runUntilThePoisonRecordParks(ParallelConsumerDefinition pc) {
         handle = runtime.startAndAssign(pc, 1);
         runtime.publish("orders", 0, 0, "key-0", POISON);
-
         RouteDispatcher dispatcher = pc.dispatcher();
+        // Waits on the parked VIEW, not on the park counter. The counter is incremented by the worker at the moment
+        // it hands the record back; the record reaches the engine's retry queue - which is the view - a moment
+        // later, on the control thread. Waiting on the counter and then reading the view is a race, and it goes red
+        // under a loaded box rather than on a keystroke.
         Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(dispatcher.parkedCount()).isEqualTo(1));
+                assertThat(dispatcher.parkedForRoute("orders")).hasSize(1));
+        return dispatcher;
+    }
 
-        assertThat(dispatcher.ledger().attempts("orders", 0, 0)).isEqualTo(2);
+    /**
+     * The one parked record, read from the engine's own retry queue through the wrapper - which is the only attempt
+     * count there is now, so a test asserting on attempts asserts on what the parked view will show an operator.
+     */
+    private static ParkedRecord onlyParked(RouteDispatcher dispatcher) {
+        List<ParkedRecord> parked = dispatcher.parkedForRoute("orders");
+        assertThat(parked).hasSize(1);
+        return parked.get(0);
     }
 }

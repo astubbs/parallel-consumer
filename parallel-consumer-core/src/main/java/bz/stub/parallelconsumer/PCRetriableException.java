@@ -7,6 +7,8 @@ package bz.stub.parallelconsumer;
 
 import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 
+import java.time.Duration;
+
 /**
  * A user's processing function can throw this exception, which signals to PC that processing of the message has failed,
  * and that it should be retired at a later time.
@@ -17,10 +19,38 @@ import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
  * So in short, if this exception is thrown, nothing will be logged (except at DEBUG level), any other exception will be
  * logged as an error.
  *
+ * <h2>Saying more than "try again"</h2>
+ * A throw is the only way a processing function can hand a record back, so this exception is also where it says what
+ * it meant by it. Three optional facts ride on the instance, and each is read by
+ * {@code WorkContainer.updateFailureHistory} on the failure path, <b>before</b> the configured
+ * {@code retryDelayProvider} is consulted - so a throw that says nothing behaves exactly as it always has:
+ * <ul>
+ *     <li>{@link #retryAfter(Duration)} - retry this record after that delay, instead of the delay the
+ *     {@code retryDelayProvider} or {@code defaultMessageRetryDelay} would give it. Per throw, so a function can back
+ *     a record off further each time without a provider.</li>
+ *     <li>{@link #notAnAttempt()} - do not count this as a failed attempt. For a hand-back that is not a failure of
+ *     the user's work: the record was never run, or was withheld.</li>
+ *     <li>{@link #park(String)} - the record is <em>parked</em>: it stays incomplete in the offset map, holds no
+ *     worker, and is never due again until something acts on it. It implies never-due, and it is not a very long
+ *     retry delay: {@code WorkContainer.isParked()} is its own state, so no arithmetic can turn it back into a
+ *     hot retry.</li>
+ * </ul>
+ * They combine: a payload that can never be decoded is {@code park(reason).notAnAttempt()}.
+ *
  * @author Antony Stubbs
  */
 // Hand-written ctors (not Lombok @StandardException) - see PCInternalRuntimeException for why.
 public class PCRetriableException extends RuntimeException {
+
+    /**
+     * The delay this throw asks for, or null to leave the choice to the configured provider. Written once at the
+     * throw site, on the thread that throws, and read on that same thread inside the failure path.
+     */
+    private Duration retryAfter;
+
+    private boolean countsAsAttempt = true;
+
+    private String parkReason;
 
     public PCRetriableException() {
         super();
@@ -36,6 +66,81 @@ public class PCRetriableException extends RuntimeException {
 
     public PCRetriableException(Throwable cause) {
         super(cause);
+    }
+
+    /**
+     * Retry this record after {@code delay} rather than after the configured retry delay.
+     *
+     * @throws IllegalArgumentException for a null or negative delay - a coding error, refused where it is written
+     *                                  rather than degraded silently at the point it would be applied
+     */
+    public PCRetriableException retryAfter(Duration delay) {
+        if (delay == null || delay.isNegative()) {
+            throw new IllegalArgumentException("retryAfter needs a non-negative delay, but was given " + delay);
+        }
+        this.retryAfter = delay;
+        return this;
+    }
+
+    /**
+     * This hand-back is not an attempt at the user's work, so it must not advance the record's failure count.
+     */
+    public PCRetriableException notAnAttempt() {
+        this.countsAsAttempt = false;
+        return this;
+    }
+
+    /**
+     * Park this record: never due again until something acts on it, with {@code reason} recorded on the record for
+     * whoever lists the parked set.
+     *
+     * @param reason why it parked, in one phrase; not null - a record an operator cannot be told anything about is
+     *               not one they can be asked to act on
+     */
+    public PCRetriableException park(String reason) {
+        if (reason == null) {
+            throw new IllegalArgumentException("A park needs a reason: it is what an operator reads when they "
+                    + "find the record, and a park with nothing to say is one nobody can act on");
+        }
+        this.parkReason = reason;
+        return this;
+    }
+
+    /**
+     * @return the delay this throw asked for, or null when it asked for none and the configured provider decides
+     */
+    public Duration getRetryAfter() {
+        return retryAfter;
+    }
+
+    public boolean countsAsAttempt() {
+        return countsAsAttempt;
+    }
+
+    /**
+     * @return whether this record must never become due again on its own, which is what a park is
+     */
+    public boolean isParked() {
+        return parkReason != null;
+    }
+
+    /**
+     * @return why the record parked, or null when this throw is not a park
+     */
+    public String getParkReason() {
+        return parkReason;
+    }
+
+    /**
+     * The instance carrying the facts above, found the same way {@link #isPresentIn(Throwable)} classifies a failure -
+     * PC's own pass-through wrappers are peeled and the failure underneath is tested, so a genuinely different
+     * exception that merely has one further down its chain carries nothing.
+     *
+     * @return the carrying exception, or null when this failure says nothing beyond "it failed"
+     */
+    public static PCRetriableException handbackIn(Throwable t) {
+        Throwable unwrapped = ThrowableUtils.unwrapTransparentWrappers(t);
+        return unwrapped instanceof PCRetriableException ? (PCRetriableException) unwrapped : null;
     }
 
     /**

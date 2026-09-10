@@ -30,27 +30,10 @@ import static com.google.common.truth.Truth.assertThat;
  * commit.
  */
 @Timeout(120)
-class RetryAndParkTest {
+class RetryAndParkTest extends AbstractFluentEngineTest {
 
-    private static final String TOPIC = "orders";
 
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
 
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "retry-and-park-test");
-        return properties;
-    }
 
     /**
      * AE1's first clause. Retry-forever is opt-in, and it is the classic API's behaviour: the record is retried
@@ -109,11 +92,14 @@ class RetryAndParkTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "the record that never succeeds");
 
         RouteDispatcher dispatcher = pc.dispatcher();
+        // On the parked VIEW rather than the park counter: the counter moves on the worker thread at the moment of
+        // the hand-back, and the record reaches the engine's retry queue - which is the view - a moment later on the
+        // control thread. Waiting on one and reading the other is a race that only shows up under load.
         Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(dispatcher.parkedCount()).isEqualTo(1));
+                assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
 
         assertThat(attempts.get()).isEqualTo(11);
-        assertThat(dispatcher.ledger().attempts(TOPIC, 0, 0)).isEqualTo(11);
+        assertThat(dispatcher.parkedForRoute(TOPIC).get(0).attempts()).isEqualTo(11);
     }
 
     /**
@@ -143,12 +129,11 @@ class RetryAndParkTest {
 
         RouteDispatcher dispatcher = pc.dispatcher();
         Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
-            assertThat(dispatcher.parkedCount()).isEqualTo(1);
+            assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1);
             assertThat(dispatcher.succeededCount()).isEqualTo(2);
         });
 
         assertThat(attempts.get()).isEqualTo(3);
-        assertThat(dispatcher.ledger().attempts(TOPIC, 0, 0)).isEqualTo(3);
 
         // It is in the parked view, which is what an operator reads to decide between resume and export (R28).
         assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1);
@@ -198,35 +183,39 @@ class RetryAndParkTest {
     }
 
     /**
-     * R10's per-assignment rule, with the cross-check KTD4 asks for: after a revoke and a re-assignment the
-     * facade's count restarts at one, and the engine's own count - rebuilt on reassignment - agrees with it at
-     * every hand-back.
+     * R10's per-assignment rule: after a revoke and a re-assignment the record's attempt count restarts.
      * <p>
-     * The two are different numbers by design ({@link AttemptLedger}), and in this milestone they agree because
-     * every hand-back here is a real failure. This is the test that would go red if a later unit added a hand-back
-     * that is not an attempt and forgot to keep the ledger out of it.
+     * There is one count and it is the engine's - the facade kept a second one until the throw could say "this
+     * hand-back was not an attempt", and the pair needed a cross-check to stay believable. What the reset rests on
+     * now is the engine's own bookkeeping: a revoked partition's containers go, and the record that comes back is a
+     * fresh container counting from zero. This test is what would go red if that stopped being true.
+     * <p>
+     * The count is read where a user would read it - the number of attempts the record's context reports - so the
+     * assertion is over the same figure the retry limit is measured against.
      */
     @Test
-    void afterARevokeAndReassignmentTheCountRestartsAtOneAndTheEnginesCountAgrees() {
+    void afterARevokeAndReassignmentTheAttemptCountRestarts() {
+        var attemptsSeen = new java.util.concurrent.CopyOnWriteArrayList<Integer>();
         var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC)
                 .retryForever()
-                .retryDelay(Duration.ofMillis(400))
+                .retryDelay(Duration.ofMillis(200))
                 .process(context -> {
+                    attemptsSeen.add(context.failedAttempts());
                     throw new FakeRuntimeException("this record never succeeds");
                 });
 
         handle = runtime.startAndAssign(pc, 1);
         runtime.publish(TOPIC, 0, 0, "key-0", "the record that never succeeds");
 
-        RouteDispatcher dispatcher = pc.dispatcher();
-        // Two hand-backs before the rebalance, so the counts are unambiguously above one when it happens.
+        // Three runs before the rebalance, so the count is unambiguously above zero when it happens: the third run
+        // sees two prior failures.
         Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(dispatcher.attemptCountsAtLastHandBack(TOPIC, 0, 0)).isEqualTo(new int[]{2, 2}));
+                assertThat(attemptsSeen).contains(2));
 
         var partition = new TopicPartition(TOPIC, 0);
         runtime.mockConsumer().revoke(Collections.singletonList(partition));
-        assertThat(dispatcher.ledger().attempts(TOPIC, 0, 0)).isEqualTo(0);
+        attemptsSeen.clear();
 
         runtime.mockConsumer().assign(Collections.singletonList(partition));
         // The new assignee starts from the committed position and the record is delivered again.
@@ -234,6 +223,7 @@ class RetryAndParkTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "the record that never succeeds");
 
         Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(dispatcher.attemptCountsAtLastHandBack(TOPIC, 0, 0)).isEqualTo(new int[]{1, 1}));
+                assertThat(attemptsSeen).isNotEmpty());
+        assertThat(attemptsSeen.get(0)).isEqualTo(0);
     }
 }

@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.fluent;
 
 import bz.stub.parallelconsumer.FakeRuntimeException;
 import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.awaitility.Awaitility;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,13 +31,14 @@ import static com.google.common.truth.Truth.assertThat;
  * F6, AE14).
  *
  * <h2>What is actually being tested</h2>
- * Stop is five steps in a fixed order, and each of them is here because a simpler design does not work (KTD6):
+ * Stop is four steps in a fixed order, and each of them is here because a simpler design does not work (KTD6):
  * <ul>
- *     <li><b>The mark</b> - a far-future retry delay, so a drain does not re-invoke the stopping record in the
- *     window before the close.</li>
- *     <li><b>The fence</b> - a flag every dispatch reads, because the engine's pause stops the control thread
- *     handing out work and does nothing about the tasks already queued in the worker pool.</li>
- *     <li><b>The pause</b> - non-blocking, so no further record is dispatched while the close gets going.</li>
+ *     <li><b>The mark</b> - the stopping record is handed back never-due and without spending an attempt, so a
+ *     drain does not re-invoke it in the window before the close.</li>
+ *     <li><b>The pause</b> - non-blocking, and it stops both halves: the controller hands out no further work, and
+ *     the controller takes back the batches already queued in the worker pool. The facade used to need a flag of
+ *     its own for that second half; the engine does it now (KTD14), and
+ *     {@link #stopBoundsDispatchWithThousandsBufferedBehindIt()} is what measures it.</li>
  *     <li><b>The close, from a thread of its own</b> - a worker cannot close the engine it runs in, because the
  *     close awaits the worker pool it belongs to. The close-duration bound in
  *     {@link #theDontDrainPathCompletesInFlightWorkAndStartsNothingNew()} is what would catch a regression to an
@@ -44,29 +47,12 @@ import static com.google.common.truth.Truth.assertThat;
  * </ul>
  */
 @Timeout(180)
-class StopTheInstanceTest {
+class StopTheInstanceTest extends AbstractFluentEngineTest {
 
-    private static final String TOPIC = "orders";
 
     private static final String OTHER_TOPIC = "audit";
 
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
 
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "stop-test");
-        return properties;
-    }
 
     /**
      * AE14 and F6. The dont-drain path: in-flight work completes and commits, nothing new starts, and the stopping
@@ -74,6 +60,7 @@ class StopTheInstanceTest {
      */
     @Test
     void theDontDrainPathCompletesInFlightWorkAndStartsNothingNew() {
+        int concurrency = 2;
         var holdEntered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         var laterInvoked = new AtomicInteger();
@@ -84,7 +71,7 @@ class StopTheInstanceTest {
                 .defaultOrdering(ProcessingOrder.UNORDERED)
                 // Two workers: one holds a record in flight while the other reaches the stopping record, which is
                 // the situation AE14 describes - in-flight work and a stop at the same moment.
-                .defaultConcurrency(2);
+                .defaultConcurrency(concurrency);
         pc.string(TOPIC).process(context -> {
             String value = context.value();
             if ("hold".equals(value)) {
@@ -125,10 +112,11 @@ class StopTheInstanceTest {
         Duration closeTook = Duration.between(releasedAt, Instant.now());
         handle = null;
 
-        // Nothing new started. Whether the fence had to catch anything depends on how much the engine had already
-        // handed to the worker pool when the stop landed - with two workers it is often nothing, so the fence's own
-        // counter is asserted in stopBoundsDispatchWithThousandsBufferedBehindIt, where queued work is certain.
-        assertThat(laterInvoked.get()).isEqualTo(0);
+        // Almost nothing new started, and the bound is what AE14 now says rather than zero: the stop is reported on
+        // a worker thread and the controller takes the queued batches back on its next pass, so the records already
+        // handed to this two-worker pool can still start in that window. Fifty of the fifty-two published records
+        // are "later" ones, so anything approaching them would mean the pause reached nothing at all.
+        assertThat(laterInvoked.get()).isAtMost(concurrency * 2);
         // The in-flight record completed, and its offset committed: offset 0 succeeded, so the commit is 1 - which
         // is also the proof that the stopping record's own offset did NOT commit.
         assertThat(holdCompleted.get()).isEqualTo(1);
@@ -136,7 +124,7 @@ class StopTheInstanceTest {
         // Well inside the ten-second shutdown timeout: a close made from the worker thread itself would wait for
         // the pool it is standing in, and spend all of it.
         assertThat(closeTook).isLessThan(Duration.ofSeconds(8));
-        // Not a terminal outcome of the record: it is neither parked nor succeeded.
+        // Not a terminal outcome of the record: it is neither parked nor succeeded (R24, R7).
         assertThat(pc.dispatcher().parkedCount()).isEqualTo(0);
     }
 
@@ -177,8 +165,15 @@ class StopTheInstanceTest {
     }
 
     /**
-     * The fence, measured. Two thousand records buffered behind a stop on the fifth: what bounds the damage is the
-     * flag, not luck - the engine's pause cannot recall the tasks already handed to the worker pool.
+     * The pause, measured. Two thousand records buffered behind a stop on the fifth: what bounds the damage is the
+     * pause reaching the worker pool, not luck - the batches the controller had already handed over would otherwise
+     * run to completion however far down the instance was.
+     * <p>
+     * <b>The engine's take-back count is printed here, not asserted on.</b> How many batches are queued in the pool
+     * at the instant of a stop depends on the dynamic load factor, which starts at one - so the queue is often
+     * empty and the count is legitimately zero. Measured: two failures in sixteen runs when it was asserted to be
+     * at least one. {@code PausedWorkIsTakenBackOutOfThePoolTest} asserts the mechanism where it can be made
+     * certain, by driving the controller's pass directly; what this test asserts is the consequence.
      */
     @Test
     void stopBoundsDispatchWithThousandsBufferedBehindIt() {
@@ -190,9 +185,11 @@ class StopTheInstanceTest {
                 .closePath(ClosePath.DONT_DRAIN_FIRST)
                 .defaultOrdering(ProcessingOrder.UNORDERED)
                 .defaultConcurrency(concurrency);
+        var invokedWhenTheStopWasReported = new AtomicInteger(-1);
         pc.string(TOPIC).process(context -> {
             invokedOffsets.add(context.offset());
             if (context.offset() == 4) {
+                invokedWhenTheStopWasReported.set(invokedOffsets.size());
                 return Outcome.stop("the fifth record asked to stop");
             }
             return Outcome.succeeded();
@@ -206,17 +203,25 @@ class StopTheInstanceTest {
         Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() ->
                 assertThat(handle.stopRequest().isPresent()).isTrue());
         assertThat(handle.awaitShutdown(Duration.ofSeconds(60))).isTrue();
+        ConsumerHandle stopped = handle;
         handle = null;
 
         int invoked = invokedOffsets.size();
-        System.out.printf("Stop bounds dispatch: %d of %d records reached the function before the fence held%n",
-                invoked, records);
-        // Only the records already inside the function at the moment of the mark can get through, and the pool
-        // holds at most `concurrency` of those plus whatever it had queued. Two thousand records is what would be
-        // processed with no fence at all, so the margin here is what is being asserted, not an exact figure.
+        long takenBack = ((AbstractParallelEoSStreamProcessor<?, ?>) stopped.processor())
+                .getRecordsPurgedWhilePaused();
+        int afterTheStop = invoked - invokedWhenTheStopWasReported.get();
+        System.out.printf("Stop bounds dispatch: %d of %d records reached the function, %d of them after the stop "
+                + "was reported, %d taken back out of the pool%n", invoked, records, afterTheStop, takenBack);
+
+        // The bound that matters, and the one AE14 is about. It is a bound rather than zero on purpose: the stop is
+        // reported on a worker thread and the controller takes the queued batches back on its next pass, so a batch
+        // that starts in that window runs to completion. What can run is therefore the batches inside a worker plus
+        // whatever the pool started in that window - bounded by the pool's parallelism, not by the backlog - so
+        // four times the concurrency is generous and still thirty times tighter than the two thousand records that
+        // would run with no pause reaching the pool at all.
+        assertThat(afterTheStop).isAtMost(concurrency * 4);
         assertThat(invoked).isLessThan(records / 4);
-        assertThat(pc.dispatcher().fencedCount()).isAtLeast(1L);
-        // The fenced records were never completed, so a restart delivers every one of them again.
+        // Those records were never completed, so a restart delivers every one of them again.
         assertThat(runtime.committedOffset(TOPIC, 0)).isAtMost(4L);
     }
 
@@ -251,9 +256,16 @@ class StopTheInstanceTest {
         assertThat(stop.offset()).isEqualTo(0);
         assertThat(stop.reason()).contains("ran out of attempts after 3 attempt(s)");
         assertThat(stop.reason()).contains(TOPIC + "-0@0");
-        // It stopped instead of parking, so the parked count did not move and the parked view is empty.
+        // It stopped instead of parking, so the parked OUTCOME count did not move: a stop is a request about the
+        // instance, not a terminal outcome of the record (R24, R7).
         assertThat(pc.dispatcher().parkedCount()).isEqualTo(0);
-        assertThat(pc.dispatcher().parkedAcrossAllRoutes()).isEmpty();
+        // The record itself is held where it is, and the parked view is where an operator finds it - which is what
+        // they want when they are asking why the instance stopped. It carries the stop as its reason, so the view
+        // does not read as "this record ran out of attempts".
+        List<ParkedRecord> heldBack = pc.dispatcher().parkedAcrossAllRoutes();
+        assertThat(heldBack).hasSize(1);
+        assertThat(heldBack.get(0).offset()).isEqualTo(0);
+        assertThat(heldBack.get(0).reason()).contains("asked the instance to stop");
         assertThat(runtime.committedOffset(TOPIC, 0)).isLessThan(1L);
     }
 

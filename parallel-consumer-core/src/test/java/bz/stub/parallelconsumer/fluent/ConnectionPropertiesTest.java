@@ -133,10 +133,7 @@ class ConnectionPropertiesTest {
      */
     @Test
     void anExplicitAutoCommitIsRefusedBeforeAnythingIsOpened() {
-        Properties properties = props();
-        properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, true);
-        var pc = ParallelConsumer.connect(properties);
-        pc.string("orders").process(context -> Outcome.succeeded());
+        var pc = aDefinitionWithAutoCommitSetTo(true);
 
         var refusal = assertThrows(IllegalArgumentException.class, pc::validate);
         assertThat(refusal).hasMessageThat().contains(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG);
@@ -149,12 +146,7 @@ class ConnectionPropertiesTest {
      */
     @Test
     void anExplicitAutoCommitIsRefusedWhenItArrivesAsAString() {
-        Properties properties = props();
-        properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true");
-        var pc = ParallelConsumer.connect(properties);
-        pc.string("orders").process(context -> Outcome.succeeded());
-
-        assertThrows(IllegalArgumentException.class, pc::validate);
+        assertThrows(IllegalArgumentException.class, aDefinitionWithAutoCommitSetTo("true")::validate);
     }
 
     /**
@@ -163,11 +155,18 @@ class ConnectionPropertiesTest {
      */
     @Test
     void anExplicitlyDisabledAutoCommitIsAccepted() {
+        aDefinitionWithAutoCommitSetTo(false).validate();
+    }
+
+    /**
+     * A one-route definition whose connection properties name auto-commit, however the user spelled the value -
+     * Kafka accepts a boolean and the string form, and a properties file loaded from disk gives the string.
+     */
+    private static ParallelConsumerDefinition aDefinitionWithAutoCommitSetTo(Object value) {
         Properties properties = props();
-        properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, value);
         var pc = ParallelConsumer.connect(properties);
         pc.string("orders").process(context -> Outcome.succeeded());
-
-        pc.validate();
+        return pc;
     }
 }

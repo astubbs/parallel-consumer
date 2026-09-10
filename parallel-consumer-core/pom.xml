@@ -68,6 +68,16 @@
             <version>${jackson.fluent.version}</version>
             <optional>true</optional>
         </dependency>
+        <!-- Optional, and for the same helpers: Jackson refuses java.time types out of the box, so an Instant or
+             an OffsetDateTime on a JSON-typed record fails to write with an error telling the user to add this.
+             JacksonFormats calls findAndRegisterModules(), which picks this up through the ServiceLoader when it
+             is present and adds nothing when it is not. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+            <version>${jackson.fluent.version}</version>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>com.github.luben</groupId>
             <artifactId>zstd-jni</artifactId>

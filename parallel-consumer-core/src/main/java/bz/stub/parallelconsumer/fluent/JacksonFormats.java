@@ -22,8 +22,15 @@ final class JacksonFormats {
     /**
      * One mapper for every JSON format built here. Jackson's is documented thread-safe once configured, and
      * configuring one per route would cost a code-cache copy per topic for no benefit.
+     * <p>
+     * <b>{@code findAndRegisterModules()} is not optional decoration.</b> A bare mapper refuses every
+     * {@code java.time} type - an {@link java.time.Instant} field on an otherwise ordinary record fails to write
+     * with "not supported by default: add Module ..." - and a user reading the fluent API's one-line
+     * {@code json(Order.class)} has nowhere to add that module. This picks up every Jackson datatype module on the
+     * user's classpath through the {@link java.util.ServiceLoader}, which is how the JSR-310 one arrives, and does
+     * nothing at all when none is there.
      */
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();
 
     private JacksonFormats() {
     }

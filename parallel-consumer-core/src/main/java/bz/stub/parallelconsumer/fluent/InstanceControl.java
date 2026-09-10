@@ -31,10 +31,10 @@ interface InstanceControl {
      * A route asked the instance to stop for this record - from its function's {@link Outcome#stop(String)}, or
      * because the record ran out of attempts on a route whose reaction is {@link AfterRetries#stop()} (R24, R27).
      * <p>
-     * The caller has already marked the record with the far-future delay and raised the stopping flag, so nothing
-     * further will be run. What is left is the part a worker thread cannot do: record the reason, pause the engine
-     * so no further record is dispatched, and close on the declared close path from a thread of the
-     * implementation's own (KTD6).
+     * The caller has already handed the record back never-due, so a drain will not re-invoke it. What is left is
+     * the part a worker thread cannot do: record the reason, pause the engine - which stops both the controller
+     * handing out work and the batches already queued in the pool - and close on the declared close path from a
+     * thread of the implementation's own (KTD6).
      * <p>
      * The implementation must not block the calling thread - it is a worker thread, and the close it starts awaits
      * the worker pool this thread belongs to.

@@ -90,10 +90,13 @@ public interface ParallelConsumer<K, V> extends DrainingCloseable {
      * This operation only has an effect if the consumer is currently running. In all other cases calling this method
      * will be silent a no-op.
      * <p>
-     * Once the consumer is paused, the system will stop submitting work to the processing pool. Already submitted in
-     * flight work however will be finished. This includes work that is currently being processed inside a user function
-     * as well as work that has already been submitted to the processing pool but has not been picked up by a free
-     * worker yet.
+     * Once the consumer is paused, the system will stop submitting work to the processing pool, and work that is
+     * <b>already inside a user function</b> is finished.
+     * <p>
+     * Work that was submitted to the pool but has <b>not been picked up by a worker yet is handed back</b> rather
+     * than started: the user function is not called for it, no failed attempt is counted against it, and it is
+     * processed when the consumer resumes. Until 0.6, such a batch was started anyway, so a pause did not stop
+     * processing for as long as the pool's queue took to empty.
      * <p>
      * General remarks:
      * <ul>

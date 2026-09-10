@@ -32,27 +32,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * return.
  */
 @Timeout(180)
-class HandleLifecycleTest {
+class HandleLifecycleTest extends AbstractFluentEngineTest {
 
-    private static final String TOPIC = "orders";
 
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
 
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "handle-lifecycle-test");
-        return properties;
-    }
 
     /**
      * AE9. The block exits with work in flight and a backlog already fetched behind it; the close drains, and the

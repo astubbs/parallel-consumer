@@ -28,6 +28,17 @@ class FormatsTest {
     }
 
     /**
+     * The shape that a bare Jackson mapper refuses: a {@code java.time} field. Ordinary in a Kafka payload, and the
+     * first thing a returning developer puts on one.
+     */
+    public static class OrderWithATimestamp {
+
+        public String customerId = "";
+
+        public java.time.Instant placedAt;
+    }
+
+    /**
      * The refusal that matters most, because the alternative is a library that fails on the first record of a
      * production topic: neither Confluent serialiser is on Maven Central, so neither is on this project's classpath,
      * and the helper says which one it wanted and where it comes from.
@@ -44,6 +55,27 @@ class FormatsTest {
         assertThat(protobuf).hasMessageThat().contains("protobuf(Order)");
         assertThat(protobuf).hasMessageThat()
                 .contains("io.confluent.kafka.serializers.protobuf.KafkaProtobufDeserializer");
+    }
+
+    /**
+     * A bare {@code ObjectMapper} refuses every {@code java.time} type - "not supported by default: add Module
+     * com.fasterxml.jackson.datatype:jackson-datatype-jsr310" - and a user who wrote {@code json(Order.class)} has
+     * nowhere to add that module. {@code JacksonFormats} calls {@code findAndRegisterModules()} for exactly this,
+     * which picks up whatever datatype modules the user's classpath carries.
+     */
+    @Test
+    void theJsonHelperReadsAndWritesAJavaTimeField() {
+        Format<OrderWithATimestamp> format = Formats.json(OrderWithATimestamp.class);
+
+        OrderWithATimestamp order = new OrderWithATimestamp();
+        order.customerId = "c1";
+        order.placedAt = java.time.Instant.parse("2026-09-10T11:22:33Z");
+
+        byte[] bytes = format.serializer().serialize("orders", order);
+        OrderWithATimestamp read = format.deserializer().deserialize("orders", bytes);
+
+        assertThat(read.placedAt).isEqualTo(order.placedAt);
+        assertThat(read.customerId).isEqualTo("c1");
     }
 
     /**

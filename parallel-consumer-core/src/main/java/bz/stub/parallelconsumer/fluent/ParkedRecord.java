@@ -4,6 +4,8 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.PCRetriableException;
+import bz.stub.parallelconsumer.RecordContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.annotation.InterfaceStability;
@@ -17,56 +19,48 @@ import java.time.Instant;
  * resumed, exported, or a restart re-delivers it. This entry is the index into it - everything an operator needs to
  * decide which of those it deserves, without going back to the broker.
  *
- * <h2>Why it holds the raw record</h2>
- * The bytes and headers are what an export copies (R13), and they are the only thing a record parked by a permanent
- * decode failure has at all. Holding them is also what makes R27's small advantage of park in place real: the
- * instance can still resume or export a parked record after the broker's retention has removed it, because the
- * record never left memory. Only a restart loses it, since it can no longer be re-polled.
+ * <h2>It is a view, not a copy</h2>
+ * The engine holds the record: its bytes and headers, how many attempts it took, what the last failure was, when
+ * that was, and - since the throw that parked it said so - why it parked. All of that is read from the engine's own
+ * {@link RecordContext} rather than copied here, so the list an operator reads and the record the engine is holding
+ * cannot disagree. Two things are added, and only two, because the engine cannot know them: the {@link #key()} as
+ * this route's deserialiser reads it, and the {@link #cycles()} the record spent.
+ * <p>
+ * Holding the record is also what makes R27's small advantage of park in place real: the instance can still resume
+ * or export a parked record after the broker's retention has removed it, because the record never left memory. Only
+ * a restart loses it, since it can no longer be re-polled.
  *
  * @see ParkObserver
  */
 @InterfaceStability.Unstable
 public final class ParkedRecord {
 
-    private final ConsumerRecord<byte[], byte[]> raw;
+    private final RecordContext<byte[], byte[]> engineContext;
 
     private final Object key;
 
-    private final int attempts;
-
     private final int cycles;
 
-    private final Throwable failure;
-
-    private final String reason;
-
-    private final Instant parkedSince;
-
-    ParkedRecord(ConsumerRecord<byte[], byte[]> raw, Object key, int attempts, int cycles, Throwable failure,
-                 String reason, Instant parkedSince) {
-        this.raw = raw;
+    ParkedRecord(RecordContext<byte[], byte[]> engineContext, Object key, int cycles) {
+        this.engineContext = engineContext;
         this.key = key;
-        this.attempts = attempts;
         this.cycles = cycles;
-        this.failure = failure;
-        this.reason = reason;
-        this.parkedSince = parkedSince;
     }
 
     public String topic() {
-        return raw.topic();
+        return engineContext.topic();
     }
 
     public int partition() {
-        return raw.partition();
+        return engineContext.partition();
     }
 
     public long offset() {
-        return raw.offset();
+        return engineContext.offset();
     }
 
     TopicPartition topicPartition() {
-        return new TopicPartition(raw.topic(), raw.partition());
+        return new TopicPartition(topic(), partition());
     }
 
     /**
@@ -82,7 +76,7 @@ public final class ParkedRecord {
      * no attempts (R12).
      */
     public int attempts() {
-        return attempts;
+        return engineContext.getNumberOfFailedAttempts();
     }
 
     /**
@@ -95,21 +89,29 @@ public final class ParkedRecord {
 
     /**
      * The last failure, or null when the function asked for the park itself with {@link Outcome#park(String)}.
+     * <p>
+     * The engine's last failure is the throw that parked the record, which is the facade's own park exception; the
+     * failure a reader wants is the one underneath it.
      */
     public Throwable failure() {
-        return failure;
+        PCRetriableException park =
+                PCRetriableException.handbackIn(engineContext.getLastFailureReason().orElse(null));
+        return park == null ? null : park.getCause();
     }
 
     /**
      * Why it parked, in one phrase: it ran out of attempts, its payload can never be decoded, or the reason the
-     * function gave.
+     * function gave. This is the verdict the engine recorded when the throw said park.
      */
     public String reason() {
-        return reason;
+        return engineContext.getParkedReason().orElse(null);
     }
 
+    /**
+     * When it parked - the moment of the failure that parked it.
+     */
     public Instant parkedSince() {
-        return parkedSince;
+        return engineContext.getLastFailureAt().orElse(Instant.EPOCH);
     }
 
     /**
@@ -117,12 +119,12 @@ public final class ParkedRecord {
      * decoded has.
      */
     public ConsumerRecord<byte[], byte[]> raw() {
-        return raw;
+        return engineContext.getConsumerRecord();
     }
 
     @Override
     public String toString() {
-        return "ParkedRecord(" + topic() + "-" + partition() + "@" + offset() + ", attempts=" + attempts
-                + (cycles == 0 ? "" : ", cycles=" + cycles) + ", since=" + parkedSince + ", " + reason + ")";
+        return "ParkedRecord(" + topic() + "-" + partition() + "@" + offset() + ", attempts=" + attempts()
+                + (cycles == 0 ? "" : ", cycles=" + cycles) + ", since=" + parkedSince() + ", " + reason() + ")";
     }
 }

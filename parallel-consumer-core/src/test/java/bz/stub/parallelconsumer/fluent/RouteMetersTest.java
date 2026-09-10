@@ -205,8 +205,8 @@ class RouteMetersTest {
     @Test
     void deregisteringRemovesEveryMeterItRegistered() {
         PCMetrics metrics = new PCMetrics(registry, Collections.emptyList(), "route-meters-unit-test");
-        ParkedSnapshots snapshots = new ParkedSnapshots(new ParkedRecords());
-        FluentMeters meters = FluentMeters.registerFor(metrics, Collections.singletonList(TOPIC), snapshots);
+        FluentMeters meters = FluentMeters.registerFor(metrics, Collections.singletonList(TOPIC),
+                Collections::emptyList);
         meters.syncPartitionGauges(Collections.singleton(new TopicPartition(TOPIC, 0)));
 
         assertThat(Search.in(registry).name(OUTCOME_COUNTER).meters()).hasSize(4);

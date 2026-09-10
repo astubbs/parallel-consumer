@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Supplier;
 
 /**
  * The fluent API's meters: what each route did with its records, and what is parked right now (R19, KTD8).
@@ -42,7 +43,7 @@ import java.util.concurrent.ConcurrentMap;
  * The routed topics are known at start, so every topic-and-outcome counter exists from the first record - a meter
  * that appears only once something has gone wrong is a meter nobody has a dashboard for. Partitions are not known
  * until the assignment arrives, so the gauges are created and removed as partitions come and go, on the control
- * thread, from the same loop-end pass that takes the parked snapshot.
+ * thread, from the same loop-end pass that keeps the partition gauges in line with the assignment.
  */
 @Slf4j
 class FluentMeters {
@@ -68,10 +69,13 @@ class FluentMeters {
     private static final String OUTCOME_TAG = "outcome";
 
     /**
-     * Where the gauges read from: the same snapshot the parked view answers from, so a dashboard and a query never
-     * disagree.
+     * Where the gauges read from: the same parked set the parked view answers from - the engine's retry queue -
+     * so a dashboard and a query never disagree.
+     * <p>
+     * Held as a field rather than captured in each gauge's lambda because Micrometer keeps only a weak reference to
+     * the object a gauge reads, so a lambda nothing else holds would be collected and the gauge would go dead.
      */
-    private final ParkedSnapshots snapshots;
+    private final Supplier<List<ParkedRecord>> parkedSet;
 
     private final PCMetrics metrics;
 
@@ -81,16 +85,17 @@ class FluentMeters {
 
     private volatile boolean deregistered;
 
-    private FluentMeters(PCMetrics metrics, ParkedSnapshots snapshots) {
+    private FluentMeters(PCMetrics metrics, Supplier<List<ParkedRecord>> parkedSet) {
         this.metrics = metrics;
-        this.snapshots = snapshots;
+        this.parkedSet = parkedSet;
     }
 
     /**
      * Registers one counter per routed topic per outcome, and returns the handle the dispatch wrapper reports to.
      */
-    static FluentMeters registerFor(PCMetrics metrics, Collection<String> topics, ParkedSnapshots snapshots) {
-        FluentMeters meters = new FluentMeters(metrics, snapshots);
+    static FluentMeters registerFor(PCMetrics metrics, Collection<String> topics,
+                                    Supplier<List<ParkedRecord>> parkedSet) {
+        FluentMeters meters = new FluentMeters(metrics, parkedSet);
         for (String topic : topics) {
             for (String outcome : OUTCOMES) {
                 meters.countersByTopicAndOutcome.put(key(topic, outcome),
@@ -155,19 +160,19 @@ class FluentMeters {
     private List<Meter> registerGaugesFor(TopicPartition partition) {
         Tag[] tags = {Tag.of(TOPIC_TAG, partition.topic()),
                 Tag.of(PARTITION_TAG, String.valueOf(partition.partition()))};
-        Gauge parkedNow = metrics.gaugeFromMetricDef(PCMetricsDef.ROUTE_PARKED_RECORDS, snapshots,
-                taken -> countParked(taken, partition), tags);
-        Gauge oldest = metrics.gaugeFromMetricDef(PCMetricsDef.ROUTE_PARKED_OLDEST_AGE, snapshots,
-                taken -> oldestParkedAgeSeconds(taken, partition), tags);
+        Gauge parkedNow = metrics.gaugeFromMetricDef(PCMetricsDef.ROUTE_PARKED_RECORDS, parkedSet,
+                set -> countParked(set, partition), tags);
+        Gauge oldest = metrics.gaugeFromMetricDef(PCMetricsDef.ROUTE_PARKED_OLDEST_AGE, parkedSet,
+                set -> oldestParkedAgeSeconds(set, partition), tags);
         List<Meter> registered = new ArrayList<>(2);
         registered.add(parkedNow);
         registered.add(oldest);
         return registered;
     }
 
-    private static double countParked(ParkedSnapshots snapshots, TopicPartition partition) {
+    private static double countParked(Supplier<List<ParkedRecord>> parkedSet, TopicPartition partition) {
         int count = 0;
-        for (ParkedRecord parked : snapshots.current()) {
+        for (ParkedRecord parked : parkedSet.get()) {
             if (parked.partition() == partition.partition() && parked.topic().equals(partition.topic())) {
                 count++;
             }
@@ -180,9 +185,9 @@ class FluentMeters {
      * zero rather than NaN, because a gauge that disappears from a dashboard when the good news arrives reads as a
      * broken exporter
      */
-    private static double oldestParkedAgeSeconds(ParkedSnapshots snapshots, TopicPartition partition) {
+    private static double oldestParkedAgeSeconds(Supplier<List<ParkedRecord>> parkedSet, TopicPartition partition) {
         Instant oldest = null;
-        for (ParkedRecord parked : snapshots.current()) {
+        for (ParkedRecord parked : parkedSet.get()) {
             if (parked.partition() == partition.partition() && parked.topic().equals(partition.topic())
                     && (oldest == null || parked.parkedSince().isBefore(oldest))) {
                 oldest = parked.parkedSince();

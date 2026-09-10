@@ -23,10 +23,10 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 /**
  * What an operator can read about a set of parked records, and what they will be able to do about it (R28).
  * <p>
- * A view is a filter over the handle's last control-thread snapshot, not a live query: it spans <b>every partition
- * of its route by default</b>, because a parked record is a record and an operator is looking for records, not for
- * partitions. {@link #partition(int)} narrows to one, which is the rare case, and {@link #byPartition()} is the
- * per-partition roll-out for a log line or a dashboard.
+ * A view is a filter over the parked records the engine was holding when the handle was asked: it spans <b>every
+ * partition of its route by default</b>, because a parked record is a record and an operator is looking for records,
+ * not for partitions. {@link #partition(int)} narrows to one, which is the rare case, and {@link #byPartition()} is
+ * the per-partition roll-out for a log line or a dashboard.
  * <p>
  * It is a value, taken when it was asked for. Holding one and reading it later gives the answer as it stood, which
  * is what makes {@link #count()} and {@link #records()} agree with each other.
@@ -132,8 +132,8 @@ public final class ParkedView {
     }
 
     /**
-     * When the snapshot this view reads was taken on the control thread. The view is at most
-     * {@code ParkedSnapshots.INTERVAL} behind the parked set.
+     * When this view was taken. It is read from the engine's retry queue at the moment the handle is asked, so this
+     * is how long ago that was rather than how stale a cached answer is.
      */
     public Instant takenAt() {
         return takenAt;

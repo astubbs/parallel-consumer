@@ -7,18 +7,18 @@ package bz.stub.parallelconsumer.fluent;
 import bz.stub.parallelconsumer.FakeRuntimeException;
 import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
+import io.micrometer.core.instrument.Meter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.apache.kafka.common.TopicPartition;
 import org.awaitility.Awaitility;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
-import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -28,40 +28,35 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * The parked set as an operator reaches it: by route from the handle, with an instance-wide roll-up named apart
  * (R28, AE20's query half).
  * <p>
- * The view is served from a control-thread snapshot rather than read live, because the facade's parked map and the
- * engine's offset map are written by different threads and a caller reading both would see them mid-step - and
- * because reconciling the two is what removes phantom entries, which is only sound on the control thread (KTD4).
- * Every assertion here therefore waits for a snapshot rather than reading immediately.
+ * The view is read from the engine's own retry queue when the handle is asked, so there is one parked set rather
+ * than a facade copy kept in step with one. Assertions still wait rather than read immediately, because a record
+ * reaches the queue on the control thread a moment after the worker hands it back.
  */
 @Timeout(180)
-class ParkedViewOnTheHandleTest {
+class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
 
-    private static final String TOPIC = "orders";
 
     private static final String OTHER_TOPIC = "audit";
 
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
 
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "parked-view-on-the-handle-test");
-        return properties;
-    }
 
     /**
      * A route that parks everything on its first failure, so a test can put a known number of records in the
      * parked set without waiting out any retries.
      */
+    /**
+     * Start a definition that parks everything, publish one record, and hand back its route's parked view once the
+     * record is in it. Three of the scenarios below differ only in what they then ask that view.
+     */
+    private ParkedView oneParkedRecordOn(String topic) {
+        var pc = definitionThatParksEverything(topic);
+        handle = runtime.startAndAssign(pc, 1);
+        runtime.publish(topic, 0, 0, "key-0", "a hopeless order");
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(handle.topic(topic).parked().count()).isEqualTo(1));
+        return handle.topic(topic).parked();
+    }
+
     private ParallelConsumerDefinition definitionThatParksEverything(String... topics) {
         var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
         for (String topic : topics) {
@@ -121,13 +116,7 @@ class ParkedViewOnTheHandleTest {
      */
     @Test
     void resumeAndDlqRefuseAndSayWhy() {
-        var pc = definitionThatParksEverything(TOPIC);
-        handle = runtime.startAndAssign(pc, 1);
-        runtime.publish(TOPIC, 0, 0, "key-0", "a hopeless order");
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(handle.topic(TOPIC).parked().count()).isEqualTo(1));
-
-        ParkedView parked = handle.topic(TOPIC).parked();
+        ParkedView parked = oneParkedRecordOn(TOPIC);
         ParkedRecord record = parked.records().get(0);
 
         assertThat(assertThrows(UnsupportedOperationException.class, () -> parked.resume(record)))
@@ -149,13 +138,7 @@ class ParkedViewOnTheHandleTest {
      */
     @Test
     void thePayloadFiguresReadEmptyUntilTheEngineAccessorsLand() {
-        var pc = definitionThatParksEverything(TOPIC);
-        handle = runtime.startAndAssign(pc, 1);
-        runtime.publish(TOPIC, 0, 0, "key-0", "a hopeless order");
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(handle.topic(TOPIC).parked().count()).isEqualTo(1));
-
-        ParkedView parked = handle.topic(TOPIC).parked();
+        ParkedView parked = oneParkedRecordOn(TOPIC);
         assertThat(parked.payloadFraction().isPresent()).isFalse();
         assertThat(parked.estimatedTimeToExport().isPresent()).isFalse();
         assertThat(parked.heldBehind(parked.records().get(0)).isPresent()).isFalse();
@@ -211,55 +194,51 @@ class ParkedViewOnTheHandleTest {
     }
 
     /**
-     * Reconciliation (KTD4). A worker that finishes after its partition was revoked can leave an entry for a record
-     * the engine no longer holds incomplete - and the entry is not merely hidden from the view, it is dropped from
-     * the map, because it will never become true again.
+     * There is no second store to go stale, and this is what that buys (KTD14).
      * <p>
-     * The phantom is planted directly rather than raced into existence: the race is a revocation landing between a
-     * worker's throw and its park, which no test can schedule, and what is being tested is the reconciliation, not
-     * the race.
+     * The parked set is the engine's retry queue, read when it is asked for. A revocation takes the partition's
+     * containers out of that queue, so the parked view empties on its own - nothing has to notice the revocation
+     * and clear anything, and there is no window in which the view lists a record the engine is no longer holding.
+     * The predecessor of this test planted a phantom entry by hand in a facade-side map and asserted that a
+     * reconciliation pass dropped it; there is no map to plant one in any more.
      */
     @Test
-    void aParkedEntryTheEngineNoLongerHoldsIncompleteIsDropped() {
-        var processed = new AtomicInteger();
+    void revokingAPartitionEmptiesItsParkedViewWithNothingHavingToClearIt() {
         var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
-        pc.string(TOPIC).process(context -> {
-            processed.incrementAndGet();
-            return Outcome.succeeded();
-        });
+        pc.string(TOPIC)
+                .retryLimit(0)
+                .retryDelay(Duration.ofMillis(10))
+                .process(context -> Outcome.park("this record is hopeless"));
+
         handle = runtime.startAndAssign(pc, 1);
-        runtime.publish(TOPIC, 0, 0, "key-0", "an order that succeeds");
-        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> processed.get() == 1);
-        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() ->
-                handle.processor().workRemaining() == 0);
+        runtime.publish(TOPIC, 0, 0, "key-0", "an order that parks");
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(handle.topic(TOPIC).parked().count()).isEqualTo(1));
 
-        // A parked entry for the offset that just completed: exactly the shape a worker finishing after a
-        // revocation leaves behind.
-        ConsumerRecord<byte[], byte[]> phantomRecord = new ConsumerRecord<>(TOPIC, 0, 0, null, null);
-        boolean planted = pc.dispatcher().parkedRecords().park(new ParkedRecord(phantomRecord, "key-0", 1, 0,
-                new FakeRuntimeException("a failure that arrived after the record had completed"),
-                "it ran out of attempts", Instant.now()));
-        assertThat(planted).isTrue();
-        assertThat(pc.dispatcher().parkedRecords().count()).isEqualTo(1);
+        runtime.mockConsumer().revoke(Collections.singletonList(new TopicPartition(TOPIC, 0)));
 
-        // The next snapshot drops it - from the map, not just from the answer.
         Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             assertThat(handle.topic(TOPIC).parked().count()).isEqualTo(0);
-            assertThat(pc.dispatcher().parkedRecords().count()).isEqualTo(0);
+            assertThat(handle.parkedAllTopics().count()).isEqualTo(0);
         });
     }
 
     /**
      * The loop-end hook must never throw: the control loop runs its hooks as user code and a throw takes the
-     * instance down, so a reporting fault would stop consuming (KTD4).
+     * instance down, so a reporting fault would stop consuming.
      * <p>
-     * The engine's own accessor does not throw, so the only honest way to exercise the containment is to replace
-     * the half of the snapshot that reads it - which is what {@code ParkedSnapshots.engineOffsets} exists for.
+     * What the hook does now is bring the parked gauges into line with the assignment, and registering a gauge
+     * calls into the <b>user's</b> meter registry - third-party code, running inside PC's control loop, which is
+     * exactly the shape that must not be able to stop it. A registry that throws on every gauge is the honest way
+     * to exercise the containment: the parked read itself is a query on the caller's thread now, so a fault there
+     * can only fail the query.
      */
     @Test
-    void aSnapshotThatThrowsIsContainedAndTheInstanceKeepsRunning() {
+    void aMeterRegistryThatThrowsIsContainedAndTheInstanceKeepsRunning() {
         var processed = new AtomicInteger();
-        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props())
+                .defaultOrdering(ProcessingOrder.UNORDERED)
+                .meterRegistry(new ThrowingOnGaugeRegistry());
         pc.string(TOPIC).process(context -> {
             processed.incrementAndGet();
             return Outcome.succeeded();
@@ -268,21 +247,28 @@ class ParkedViewOnTheHandleTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
         Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> processed.get() == 1);
 
-        // Something for the snapshot to walk, so the throwing lookup is actually reached.
-        ConsumerRecord<byte[], byte[]> parkedRecord = new ConsumerRecord<>(TOPIC, 0, 5, null, null);
-        pc.dispatcher().parkedRecords().park(new ParkedRecord(parkedRecord, "key-5", 1, 0,
-                new FakeRuntimeException("a failure"), "it ran out of attempts", Instant.now()));
-        handle.parkedSnapshots().engineOffsets(parked -> {
-            throw new FakeRuntimeException("the engine accessor blew up");
-        });
-
-        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> handle.parkedSnapshots().hasFailed());
-
         // The instance is still consuming, and nobody awaiting it is told anything went wrong.
         runtime.publish(TOPIC, 0, 1, "key-1", "another order");
         Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> processed.get() == 2);
         assertThat(handle.awaitShutdown(Duration.ofMillis(500))).isFalse();
         assertThat(handle.failureCause().isPresent()).isFalse();
         assertThat(handle.processor().isClosedOrFailed()).isFalse();
+    }
+
+    /**
+     * A user's registry that refuses exactly the parked gauges - the ones the loop-end hook registers, and only
+     * those, so the engine's own meters still register and the instance starts normally. Refusing every gauge would
+     * fail the engine's construction instead, which is a different test.
+     */
+    private static class ThrowingOnGaugeRegistry extends SimpleMeterRegistry {
+
+        @Override
+        protected <T> io.micrometer.core.instrument.Gauge newGauge(Meter.Id id, T obj,
+                                                                   java.util.function.ToDoubleFunction<T> f) {
+            if (id.getName().contains("route.parked")) {
+                throw new FakeRuntimeException("this registry refuses the parked gauges");
+            }
+            return super.newGauge(id, obj, f);
+        }
     }
 }

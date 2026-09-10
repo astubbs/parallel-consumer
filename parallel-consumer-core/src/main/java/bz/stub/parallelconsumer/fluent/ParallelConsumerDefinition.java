@@ -158,7 +158,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     /**
      * The route-dispatching wrapper. Built by {@link #buildOptions}, because the retry-delay provider registered on
      * the options is one of its methods, and reused by {@link #start(ClientRuntime)} - one owner of the route
-     * table, the attempt ledger and the intent hook.
+     * table.
      */
     private RouteDispatcher dispatcher;
 
@@ -695,16 +695,23 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         PCModule<byte[], byte[]> module = new PCModule<>(built);
         ParallelEoSStreamProcessor<byte[], byte[]> processor = new ParallelEoSStreamProcessor<>(built, module);
 
-        ParkedSnapshots parkedSnapshots = new ParkedSnapshots(dispatcher.parkedRecords());
-        FluentMeters meters = FluentMeters.registerFor(module.pcMetrics(), topics(), parkedSnapshots);
+        // The gauges read the same parked set the parked view answers from, through the same wrapper - the engine's
+        // retry queue, once the handle has wired the dispatcher to it below (KTD8, KTD14).
+        FluentMeters meters = FluentMeters.registerFor(module.pcMetrics(), topics(),
+                dispatcher::parkedAcrossAllRoutes);
         dispatcher.meters(meters);
-        ConsumerHandle handle = new ConsumerHandle(processor, dispatcher, routeTopicsByTopic(), closePath, meters,
-                parkedSnapshots);
+        ConsumerHandle handle = new ConsumerHandle(processor, dispatcher, routeTopicsByTopic(), closePath, meters);
         dispatcher.instanceControl(handle);
         this.startedHandle = handle;
 
-        // The facade's listener first, the user's chained after it (KTD2).
-        processor.subscribe(subscriptionTopics(), dispatcher.rebalanceListener(usersRebalanceListener));
+        // The user's own rebalance listener, if the definition declared one (KTD2). The facade keeps no
+        // per-assignment state of its own to clear here any more: the attempt count and the parked set are both the
+        // engine's, and the engine already drops a revoked partition's records from both (KTD14).
+        if (usersRebalanceListener == null) {
+            processor.subscribe(subscriptionTopics());
+        } else {
+            processor.subscribe(subscriptionTopics(), usersRebalanceListener);
+        }
         // Before the poll, so the first control loop already carries the hook rather than the second.
         handle.startObserving();
         if (requiresProducer()) {
@@ -772,9 +779,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * Run this listener on every rebalance, after the facade's own (KTD2). The facade's clears the attempt ledger
-     * for partitions that are no longer ours, so a listener chained here always sees a consistent state; a throw
-     * from here propagates exactly as it does on the classic API.
+     * Run this listener on every rebalance (KTD2). It is handed to the engine as the classic API's own listener is,
+     * so it sees the same callbacks in the same order and a throw from it propagates exactly as it does there.
      */
     public ParallelConsumerDefinition rebalanceListener(ConsumerRebalanceListener listener) {
         this.usersRebalanceListener = Objects.requireNonNull(listener, "A rebalance listener must be supplied");
@@ -799,9 +805,11 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         options.commitMode(commitMode)
                 .ordering(defaultOrdering)
                 .maxConcurrency(totalAdmissionTarget())
-                // Park rides this hook: the wrapper records what it meant by a throw immediately before making it,
-                // and the engine calls this synchronously inside the failure path to find out (KTD4).
-                .retryDelayProvider(context -> dispatcher.retryDelayFor(context));
+                // One delay per route, answered from the topic (R6). What a throw MEANT - a park, a park cycle's
+                // own delay, a hand-back that is not an attempt - rides on the exception instead, so this stays a
+                // pure function and there is no note for it to find (KTD14).
+                .retryDelayProvider(context ->
+                        dispatcher.retryDelayFor(context.topic(), context.partition(), context.offset()));
         // The engine's own defaultMessageRetryDelay is deliberately left alone. It is deprecated, and it is only
         // reached when the provider above misbehaves - which the provider is written not to do, and which
         // EngineRetryDelayProviderContractTest pins. Setting it would make the fallback look intentional.

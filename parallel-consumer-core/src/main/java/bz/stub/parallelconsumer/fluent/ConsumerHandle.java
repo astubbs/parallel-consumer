@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.fluent;
  */
 
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
-import bz.stub.parallelconsumer.state.PartitionState;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -47,17 +47,12 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  *
  * <h2>What is observable while it runs</h2>
  * {@link #topic(String)} reaches one route's parked records and {@link #parkedAllTopics()} the instance-wide
- * roll-up, both from a control-thread snapshot (R28). The same figures are published as meters (R19).
+ * roll-up, both read from the engine's own retry queue (R28). The same figures are published as meters (R19).
  *
  * <h2>What this milestone does not do</h2>
- * A parked record is handed back to the engine as a retry with a far-future delay, and the engine's shard scan
- * cannot tell that from a record that is merely slow - so <b>parked records appear in the engine's slow-work
- * warning and its slow-records counter</b>, and its "records waiting" figures include them. The facade cannot
- * suppress it from outside; the small-tier engine change that skips a record whose retry delay has not elapsed is
- * what removes it. The package javadoc owns the operator-facing version of this statement.
- * <p>
- * The parked view's payload fraction, time-to-export estimate and held-behind count read empty for the same kind of
- * reason - see {@link ParkedView} - and {@link ParkedView#resume} and {@link ParkedView#dlq} refuse.
+ * The parked view's payload fraction, time-to-export estimate and held-behind count read empty - each needs an
+ * engine accessor that does not exist yet, see {@link ParkedView} - and {@link ParkedView#resume} and
+ * {@link ParkedView#dlq} refuse.
  */
 @Slf4j
 @InterfaceStability.Unstable
@@ -83,8 +78,6 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
 
     private final FluentMeters meters;
 
-    private final ParkedSnapshots parkedSnapshots;
-
     private final CountDownLatch shutdown = new CountDownLatch(1);
 
     private final AtomicBoolean closing = new AtomicBoolean();
@@ -109,51 +102,37 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
                    RouteDispatcher dispatcher,
                    Map<String, Set<String>> routeTopicsByTopic,
                    ClosePath closePath,
-                   FluentMeters meters,
-                   ParkedSnapshots parkedSnapshots) {
+                   FluentMeters meters) {
         this.processor = processor;
         this.dispatcher = dispatcher;
         this.routeTopicsByTopic = routeTopicsByTopic;
         this.closePath = closePath;
         this.meters = meters;
-        this.parkedSnapshots = parkedSnapshots;
     }
 
     /**
-     * Whether the engine has stopped holding this parked record outstanding, which is the other half of the parked
-     * view (KTD4).
+     * The parked containers the engine is holding, which is where the parked set lives (R28, KTD14).
      * <p>
-     * <b>This is engine state, read from the control thread only</b> - the loop-end hook is the one caller, and
-     * that is what makes reading a {@code PartitionState} here safe without a lock. Reached through the processor's
-     * public work-manager getter, which is how the observability work reaches partition state today.
-     * <p>
-     * It asks the engine's own predicate rather than reading the incomplete set and drawing a conclusion, and the
-     * difference is not stylistic. That predicate answers true only for an offset the partition has both moved past
-     * and does not hold incomplete, so a partition state that is fresh - assigned, nothing registered yet - answers
-     * false for everything. Reading the incomplete set instead and treating "not in it" as proof condemns every
-     * parked record on a partition whose state is momentarily empty, and it did: an empty read dropped a live
-     * parked entry under load, in a suite run where nothing else was different.
+     * There is no snapshot and no reconciliation, because there are no longer two answers to reconcile: a parked
+     * record is a record the engine will never make due again, so the engine's retry queue <em>is</em> the parked
+     * set, and a record that is revoked, completed or resumed leaves that queue without anybody having to notice.
+     * The read takes the queue's read lock and walks it, so it is a query rather than something to do per record.
      */
-    private boolean isNoLongerOutstanding(ParkedRecord parked) {
-        PartitionState<byte[], byte[]> state = processor.getWm().getPm().getPartitionState(parked.topicPartition());
-        if (state == null) {
-            // Not assigned, or not yet: "no state" condemns no parked entry.
-            return false;
-        }
-        return state.isRecordPreviouslyCompleted(parked.raw());
+    private List<WorkContainer<?, ?>> parkedContainers() {
+        return processor.getWm().getSm().getParkedWorkContainers();
     }
 
     /**
-     * The hook the control loop runs at the end of every pass: refresh the parked snapshot, bring the parked gauges
-     * into line with the assignment, and say once which routes were assigned nothing.
+     * The hook the control loop runs at the end of every pass: bring the parked gauges into line with the
+     * assignment, and say once which routes were assigned nothing.
      * <p>
      * <b>It never throws.</b> The control loop runs its hooks as user code and a throw takes the instance down, so
      * every fault here is contained and logged - observability must not be able to stop consuming.
      */
     void onControlLoopEnd() {
         try {
-            parkedSnapshots.refresh();
-            Set<TopicPartition> assigned = dispatcher.parkedRecords().assignedPartitions();
+            Set<TopicPartition> assigned = new LinkedHashSet<>(processor.getWm().getPm()
+                    .getAssignedPartitions().keySet());
             meters.syncPartitionGauges(assigned);
             logRoutesWithNoAssignment(assigned);
         } catch (Throwable hookFailed) { //NOSONAR - a throw from here is fatal to the control loop
@@ -168,7 +147,8 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
      * shares with another instance that took every partition (R28).
      */
     private void logRoutesWithNoAssignment(Set<TopicPartition> assigned) {
-        if (!dispatcher.parkedRecords().assignmentSeen() || assignmentGapsLogged.get()) {
+        if (assigned.isEmpty() || assignmentGapsLogged.get()) {
+            // Nothing assigned yet is not a gap - it is an instance whose first rebalance has not landed.
             return;
         }
         Set<String> assignedTopics = new LinkedHashSet<>();
@@ -313,10 +293,9 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
     }
 
     ParkedView parkedView(String name, Set<String> topics, Integer partition) {
-        // The snapshot and the moment it was taken are read as a pair, and in that order: a later timestamp against
-        // an earlier list would understate the view's age, which is the one thing its age is for.
-        List<ParkedRecord> snapshot = parkedSnapshots.current();
-        return new ParkedView(name, topics, partition, snapshot, parkedSnapshots.takenAt());
+        // Read the set first and stamp it second, so the view's age can only overstate how stale it is.
+        List<ParkedRecord> parked = dispatcher.parkedAcrossAllRoutes();
+        return new ParkedView(name, topics, partition, parked, Instant.now());
     }
 
     // ---------------------------------------------------------------- InstanceControl
@@ -339,9 +318,8 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
     }
 
     /**
-     * A route asked the instance to stop (R24, KTD6). The wrapper has already marked the record with the far-future
-     * delay and raised its stopping flag, so nothing further will be run; what is left is the part a worker thread
-     * cannot do.
+     * A route asked the instance to stop (R24, KTD6). The wrapper has already marked the stopping record never-due,
+     * so a drain will not re-invoke it; what is left is the part a worker thread cannot do.
      * <p>
      * Three things happen, in this order and for different reasons. The reason is <b>recorded first</b>, so that a
      * caller woken by the close that follows can already read why. The engine is then <b>paused</b>, which is
@@ -361,8 +339,9 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
                 record.topic(), record.topic(), record.partition(), record.offset(), reason);
         meters.recordOutcome(record.topic(), FluentMeters.STOPPED);
         try {
-            // Non-blocking: it moves the controller's state, it does not wait for anything. Records already queued
-            // in the worker pool are not stopped by it - the wrapper's stopping flag fences those.
+            // Non-blocking: it moves the controller's state and wakes it, it does not wait for anything. The
+            // controller then stops handing out new work AND takes the batches already queued in the worker pool
+            // back out of it, which is what bounds what can still run after this line (KTD14).
             processor.pauseIfRunning();
         } catch (RuntimeException pauseFailed) {
             log.warn("Could not pause the instance while stopping it - the close below still stops it", pauseFailed);
@@ -426,20 +405,15 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
         return processor;
     }
 
-    /**
-     * The parked-view snapshot, for the test that proves a throwing one cannot stop the instance.
-     */
-    ParkedSnapshots parkedSnapshots() {
-        return parkedSnapshots;
-    }
+
 
     /**
-     * Registers the control-thread hook and takes the first snapshot. Called by the definition once the engine is
-     * running, not from the constructor: a hook that ran before the processor was polling would find no state, and
-     * this handle must exist before the wrapper can be told about it.
+     * Points the wrapper's parked view at the engine, and registers the control-thread hook. Called by the
+     * definition once the engine is running, not from the constructor: this handle has to exist before the wrapper
+     * can be told about it.
      */
     void startObserving() {
-        parkedSnapshots.engineOffsets(this::isNoLongerOutstanding);
+        dispatcher.parkedContainers(this::parkedContainers);
         processor.addLoopEndCallBack(this::onControlLoopEnd);
     }
 }

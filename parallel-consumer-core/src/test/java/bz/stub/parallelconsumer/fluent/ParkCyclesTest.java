@@ -36,27 +36,10 @@ import static com.google.common.truth.Truth.assertThat;
  * can never be decoded (R12), and a record the function itself declared hopeless (R8).
  */
 @Timeout(120)
-class ParkCyclesTest {
+class ParkCyclesTest extends AbstractFluentEngineTest {
 
-    private static final String TOPIC = "orders";
 
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
 
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "park-cycles-test");
-        return properties;
-    }
 
     /**
      * The shape R27 describes: after each delay the record is attempted once more, and after the declared cycles it
@@ -78,12 +61,7 @@ class ParkCyclesTest {
                     throw new FakeRuntimeException("this record never succeeds");
                 });
 
-        handle = runtime.startAndAssign(pc, 1);
-        runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-
-        RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
+        RouteDispatcher dispatcher = runUntilOneRecordParks(pc, TOPIC, "an order");
 
         // One attempt to exhaust the limit, then one per cycle. The fourth never happens.
         assertThat(attempts.get()).isEqualTo(3);
@@ -123,15 +101,18 @@ class ParkCyclesTest {
         // The first attempt has exhausted the limit and the record is waiting out its one cycle.
         Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
                 assertThat(attempts.get()).isEqualTo(1));
+        // Not parked while a cycle is outstanding: it has an attempt coming, so it is not in the parked view and
+        // nothing has observed it.
         assertThat(dispatcher.parkedForRoute(TOPIC)).isEmpty();
         assertThat(dispatcher.parkedCount()).isEqualTo(0);
-        assertThat(dispatcher.parkedRecords().cyclesUsed(recordAt(0))).isEqualTo(1);
 
-        // ...and once the cycle's delay elapses it is attempted again and then parks.
+        // ...and once the cycle's delay elapses it is attempted again and then parks, reporting the one cycle it
+        // spent. The count is derived from the attempts beyond the limit, so it cannot disagree with them.
         Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             assertThat(attempts.get()).isEqualTo(2);
             assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1);
         });
+        assertThat(dispatcher.parkedForRoute(TOPIC).get(0).cycles()).isEqualTo(1);
     }
 
     /**
@@ -161,9 +142,11 @@ class ParkCyclesTest {
                 assertThat(dispatcher.succeededCount()).isEqualTo(1));
 
         assertThat(attempts.get()).isEqualTo(3);
+        // Completed, so it is in no parked view and the engine holds nothing for it - the cycle count went with the
+        // container rather than having to be forgotten by hand.
         assertThat(dispatcher.parkedForRoute(TOPIC)).isEmpty();
-        assertThat(dispatcher.parkedRecords().cyclesUsed(recordAt(0))).isEqualTo(0);
-        assertThat(dispatcher.ledger().attempts(TOPIC, 0, 0)).isEqualTo(0);
+        assertThat(dispatcher.parkedAcrossAllRoutes()).isEmpty();
+        assertThat(dispatcher.parkedCount()).isEqualTo(0);
     }
 
     /**
@@ -187,12 +170,7 @@ class ParkCyclesTest {
                     return Outcome.succeeded();
                 });
 
-        handle = runtime.startAndAssign(pc, 1);
-        runtime.publish(TOPIC, 0, 0, "key-0", "poison");
-
-        RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
+        RouteDispatcher dispatcher = runUntilOneRecordParks(pc, TOPIC, "poison");
 
         ParkedRecord parked = dispatcher.parkedForRoute(TOPIC).get(0);
         assertThat(parked.attempts()).isEqualTo(0);
@@ -218,24 +196,12 @@ class ParkCyclesTest {
                     return Outcome.park("the account was closed");
                 });
 
-        handle = runtime.startAndAssign(pc, 1);
-        runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-
-        RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
+        RouteDispatcher dispatcher = runUntilOneRecordParks(pc, TOPIC, "an order");
 
         assertThat(dispatcher.parkedForRoute(TOPIC).get(0).cycles()).isEqualTo(0);
         assertThat(dispatcher.parkedForRoute(TOPIC).get(0).reason()).isEqualTo("the account was closed");
         Awaitility.await().pollDelay(Duration.ofMillis(500)).atMost(Duration.ofSeconds(5))
                 .untilAsserted(() -> assertThat(attempts.get()).isEqualTo(1));
-    }
-
-    /**
-     * A stand-in for the record at an offset, purely to ask the cycle map about it by coordinates.
-     */
-    private static ConsumerRecord<byte[], byte[]> recordAt(long offset) {
-        return new ConsumerRecord<>(TOPIC, 0, offset, new byte[0], new byte[0]);
     }
 
     private static Deserializer<String> rejecting() {
@@ -247,4 +213,21 @@ class ParkCyclesTest {
             return value;
         };
     }
+
+    /**
+     * Start the definition, publish the one record the scenario needs, and wait for it to reach the parked view.
+     * The scenarios here differ in the policy they declare and in what they then ask the parked entry, not in these
+     * three steps.
+     *
+     * @return the wrapper, which is what every assertion below reads
+     */
+    private RouteDispatcher runUntilOneRecordParks(ParallelConsumerDefinition pc, String topic, String value) {
+        handle = runtime.startAndAssign(pc, 1);
+        runtime.publish(topic, 0, 0, "key-0", value);
+        RouteDispatcher dispatcher = pc.dispatcher();
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(dispatcher.parkedForRoute(topic)).hasSize(1));
+        return dispatcher;
+    }
+
 }

@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.fluent;
  */
 
 import bz.stub.parallelconsumer.FakeRuntimeException;
+import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.RecordContext;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
@@ -32,9 +33,10 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *     the failure time is <b>replaced by the engine's own default, with a warning and nothing else</b> - so a
  *     facade fault of any of those four shapes is invisible except as records retrying every second.</li>
  * </ol>
- * The second is the dangerous one: it is a safety net for the user's provider and a silent trap for the facade's.
- * {@code RetryIntentHookTest} pins that the facade's provider never presents any of the four shapes; this pins
- * that presenting one would in fact cost the backoff, so that claim keeps its teeth.
+ * The second is the dangerous one: it is a safety net for the user's provider and would be a silent trap for the
+ * facade's. The facade's provider is now a pure function of the topic - it answers the route's retry delay and
+ * nothing else - so it cannot present any of the four shapes; this pins that presenting one would in fact cost the
+ * backoff, which is why a park is a state rather than a very long delay.
  * <p>
  * These are deliberately written against {@link WorkContainer} and a test module rather than a running engine:
  * what is under test is the provider contract, and a full instance would add a scheduler to the evidence without
@@ -67,16 +69,23 @@ class EngineRetryDelayProviderContractTest {
     }
 
     /**
-     * A hundred years is far future <em>and</em> representable, which is the whole reason the park delay is spelled
-     * that way rather than as a forever.
+     * The provider is not how a park is expressed, and this is the arm that says so: a park is a state the throw
+     * carries, so it never reaches the provider at all and no arithmetic over a delay can turn it back into a
+     * retry (KTD14). {@code WorkContainerHandbackTest} owns the park's own behaviour.
      */
     @Test
-    void theFacadesParkDelayIsAppliedRatherThanReplaced() {
-        var container = containerWithProvider(context -> RouteDispatcher.PARKED_UNTIL_RESUMED);
+    void aParkIsNotExpressedAsADelayAndDoesNotConsultTheProvider() {
+        var asked = new java.util.concurrent.atomic.AtomicInteger();
+        var container = containerWithProvider(context -> {
+            asked.incrementAndGet();
+            return Duration.ofMinutes(7);
+        });
 
-        container.onUserFunctionFailure(new FakeRuntimeException("failed"));
+        container.onUserFunctionFailure(new PCRetriableException("out of attempts").park("it ran out of attempts"));
 
-        assertThat(container.getDelayUntilRetryDue()).isEqualTo(RouteDispatcher.PARKED_UNTIL_RESUMED);
+        assertThat(asked.get()).isEqualTo(0);
+        assertThat(container.isParked()).isTrue();
+        assertThat(container.isDelayPassed()).isFalse();
     }
 
     // ------------------------------------------------------------------ the four broken shapes
@@ -125,8 +134,8 @@ class EngineRetryDelayProviderContractTest {
     }
 
     /**
-     * A delay too large for {@code failedAt.plus(delay)} - the shape a "park forever" reaches for, and the reason
-     * {@link RouteDispatcher#PARKED_UNTIL_RESUMED} is a hundred years instead.
+     * A delay too large for {@code failedAt.plus(delay)} - the shape a "park forever" expressed as a duration
+     * reaches for, and the reason a park is a state on the container instead.
      */
     private static final class ChronoUnitForeverIsNotRepresentable {
         static final Duration FOREVER_ISH = Duration.ofDays(Long.MAX_VALUE / 100_000);

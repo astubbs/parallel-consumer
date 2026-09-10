@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.fluent;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.RecordContext;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -80,7 +81,8 @@ class RouteTypingAndDefaultsTest {
         order.customerId = "c1";
         var record = new ConsumerRecord<>("orders", 0, 0L,
                 "k".getBytes(StandardCharsets.UTF_8), "{}".getBytes(StandardCharsets.UTF_8));
-        Outcome<Long, OrderEvent> outcome = function.process(new ProcessContext<>(record, "k1", order));
+        Outcome<Long, OrderEvent> outcome = function.process(
+                new ProcessContext<>(contextFor(record), "k1", order));
 
         assertThat(outcome.kind()).isEqualTo(Outcome.Kind.PRODUCE);
         ProducerRecord<Long, OrderEvent> produced = outcome.records().get(0);
@@ -89,6 +91,15 @@ class RouteTypingAndDefaultsTest {
         assertThat(producedKey).isEqualTo(7L);
         assertThat(producedCustomer).isEqualTo("c1");
         assertThat(pc.route("orders").producesRecords()).isTrue();
+    }
+
+    /**
+     * A {@link ProcessContext} is a view over the engine's own {@link RecordContext}, so building one by hand needs
+     * one of those. This test asks it only about the record - what is under test is the compiler's view of the
+     * route's types - so it is built over the record alone, with no work container behind it.
+     */
+    private static RecordContext<byte[], byte[]> contextFor(ConsumerRecord<byte[], byte[]> record) {
+        return new RecordContext<>(null, record);
     }
 
     /**

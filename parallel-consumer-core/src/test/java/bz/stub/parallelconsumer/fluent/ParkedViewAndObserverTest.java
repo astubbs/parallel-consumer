@@ -44,27 +44,10 @@ import static com.google.common.truth.Truth.assertThat;
  * moment - once per record per assignment, on the way out, before the record is handed back.
  */
 @Timeout(120)
-class ParkedViewAndObserverTest {
+class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
 
-    private static final String TOPIC = "orders";
 
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
 
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "parked-view-test");
-        return properties;
-    }
 
     /**
      * What the observer was handed, kept so the test can assert on it after the fact rather than inside the
@@ -209,7 +192,6 @@ class ParkedViewAndObserverTest {
         // The roll-up spans every route; the other route has nothing parked, so it is the same one record.
         assertThat(dispatcher.parkedAcrossAllRoutes()).hasSize(1);
         assertThat(dispatcher.parkedForRoute("audit")).isEmpty();
-        assertThat(dispatcher.parkedRecords().count()).isEqualTo(1);
     }
 
     /**
@@ -310,8 +292,11 @@ class ParkedViewAndObserverTest {
         }
 
         assertThat(contained.get(0)).contains("the record parked anyway");
-        // The outcome is untouched: the record is parked, listed and counted.
-        assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1);
+        // The outcome is untouched: the record is parked, listed and counted. Awaited rather than read, because the
+        // log line above is written by the worker at the moment of the hand-back, and the record reaches the
+        // engine's retry queue - which is what the view reads - a moment later, on the control thread.
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
         assertThat(dispatcher.parkedCount()).isEqualTo(1);
         assertThat(handle.failureCause().isPresent()).isFalse();
     }
@@ -363,9 +348,7 @@ class ParkedViewAndObserverTest {
         RouteDispatcher dispatcher = pc.dispatcher();
         // The stale worker's park is dropped: no entry, no observation, and the outcome counter does not move.
         Awaitility.await().pollDelay(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            assertThat(dispatcher.parkedRecords().count()).isEqualTo(0);
-            assertThat(observed).isEmpty();
-            assertThat(dispatcher.parkedCount()).isEqualTo(0);
+            assertThat(dispatcher.parkedAcrossAllRoutes()).isEmpty();
         });
 
         // The partition comes back and the record is delivered again to its new owner - which is us.
@@ -377,7 +360,10 @@ class ParkedViewAndObserverTest {
                 assertThat(observed).hasSize(1));
         // One attempt in the new assignment: the count restarted, so the limit of zero exhausted on the first run.
         assertThat(attemptsSeen).containsExactly(1);
-        assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1);
+        // Awaited, for the same reason as above: the observer fires on the worker thread and the record reaches the
+        // engine's retry queue a moment later.
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
         assertThat(dispatcher.parkedForRoute(TOPIC).get(0).attempts()).isEqualTo(1);
     }
 

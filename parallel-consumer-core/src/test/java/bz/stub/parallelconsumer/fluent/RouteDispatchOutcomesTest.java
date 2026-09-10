@@ -28,27 +28,10 @@ import static com.google.common.truth.Truth.assertThat;
  * test that called the wrapper directly would be asserting the wrapper's arithmetic instead.
  */
 @Timeout(60)
-class RouteDispatchOutcomesTest {
+class RouteDispatchOutcomesTest extends AbstractFluentEngineTest {
 
-    private static final String TOPIC = "orders";
 
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
 
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "route-dispatch-outcomes-test");
-        return properties;
-    }
 
     /**
      * AE5, F3. A filtered record completes and commits exactly as a success does, and is counted apart from one -

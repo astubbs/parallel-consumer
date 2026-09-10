@@ -488,6 +488,17 @@ public class ShardManager<K, V> {
      *
      * @see ProcessingShard#isResident(WorkContainer)
      */
+    /**
+     * A delivery that never started, handed back to its shard so the record can be selected again (KTD14).
+     * <p>
+     * The shard-side half of {@link WorkManager#onAbandonedBeforeStarting}: re-include it in selection, and
+     * <b>nothing else</b>. It is deliberately not {@link #onFailure}: that also puts the container in the retry
+     * queue, which is where a record waits out a backoff it earned by failing. This one never ran.
+     */
+    public void onAbandonedBeforeStarting(WorkContainer<?, ?> wc) {
+        getShard(computeShardKey(wc)).ifPresent(shard -> shard.onAbandonedBeforeStarting(wc));
+    }
+
     public void onFailure(WorkContainer<?, ?> wc) {
         log.debug("Work FAILED");
 
@@ -528,6 +539,29 @@ public class ShardManager<K, V> {
     }
 
     /**
+     * Every record this instance is holding <b>parked</b>: incomplete, holding no worker, and never due again on its
+     * own until something acts on it (KTD14).
+     * <p>
+     * The retry queue is the store - a parked record is a failed record with no deadline, so it is already here and
+     * nothing has to keep a second copy of it. Reading it walks the queue under its read lock, which is why callers
+     * take it on a cadence rather than per query.
+     *
+     * @return a snapshot list, safe to hold after the lock is released
+     */
+    public List<WorkContainer<?, ?>> getParkedWorkContainers() {
+        List<WorkContainer<?, ?>> parked = new ArrayList<>();
+        try (RetryQueue.RetryQueueIterator entries = this.retryQueue.iterator()) {
+            while (entries.hasNext()) {
+                WorkContainer<?, ?> workContainer = entries.next();
+                if (workContainer.isParked()) {
+                    parked.add(workContainer);
+                }
+            }
+        }
+        return parked;
+    }
+
+    /**
      * @return none if there are no messages to retry
      */
     public Optional<Duration> getLowestRetryTime() {
@@ -535,6 +569,12 @@ public class ShardManager<K, V> {
         try (RetryQueue.RetryQueueIterator retryQueueIterator = this.retryQueue.iterator()) {
             while (retryQueueIterator.hasNext()) {
                 WorkContainer<?, ?> workContainer = retryQueueIterator.next();
+                if (workContainer.isParked()) {
+                    // A parked record has no retry time - it waits for somebody to act on it, not for a clock - so
+                    // it can say nothing about how long the controller may block. They sort last, so this skips
+                    // only the tail.
+                    continue;
+                }
                 // Would only be in edge case of race between picking container for work (when its marked in-flight) and
                 // updating retryQueue - so still double-checking here to only consider not inflight ones.
                 if (workContainer.isNotInFlight())
