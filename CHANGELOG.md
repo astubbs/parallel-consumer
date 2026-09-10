@@ -14,9 +14,20 @@ A high level summary of noteworthy changes in each version.
 
 ## 0.6.0.0
 
-First release of the community fork of [confluentinc/parallel-consumer](https://github.com/confluentinc/parallel-consumer), which is no longer maintained, published to Maven Central as `bz.stub.parallelconsumer`. For most users, upgrading from upstream 0.5.x is the pom and the imports: the Maven groupId and the Java package every import names both change. It is not source-compatible beyond that - the Breaking section below is short and worth reading once. Most of it narrows the internal controller's subclass surface, but a commit that exhausts its budget now throws a PC exception type rather than Kafka's, the JStream result stream now blocks until close, an internal exception is renamed, and `RecordContext` equality is now identity. The committed offset format is unchanged, so an existing consumer group upgrades in place without resetting or migrating offsets. Upstream's last release on Maven Central is 0.5.3.2; its `0.5.3.3` section below was tagged but never published, and everything merged upstream after it - the Mutiny module, the commit-failure log detail, the metrics fix - reaches users here for the first time.
+First release of the community fork of [confluentinc/parallel-consumer](https://github.com/confluentinc/parallel-consumer), which is no longer maintained. Published to Maven Central as `bz.stub.parallelconsumer`.
 
-**This is a stability release, and that is the point.** The change set since 0.5.3.3 is the largest this codebase has shipped in one version, and almost all of it is fixes: the commit-path deadlock behind the long-standing "consumption stops after a rebalance" reports, a family of torn reads that lost records silently in every 0.5.x line, the metrics leak, offset accuracy on assignment, an asynchronous commit recorded before the broker answered, and the test lanes that now guard each of them. For the users this library serves, that is the release that matters. The capabilities are queued behind it, and the What comes next section lists them by how far each has got. The bar applied was: every known critical defect resolved, each with a named regression guard that passes. Two known critical defects sit outside that bar, both in the transactional producer mode only, and are named under Known limitations below alongside what the test suite still cannot see. Every fix below was reproduced deterministically and shown to fail before the fix and pass after it; the write-up behind each is in the linked PR.
+- **Upgrading from upstream 0.5.x** means changing the Maven groupId and the package your imports name. The Breaking section below is short; read it once.
+- **Committed offsets are unchanged.** An existing consumer group upgrades in place, with no reset and no migration.
+- **Everything upstream merged after its last published release ships here for the first time.** Upstream's last release on Maven Central is 0.5.3.2; its `0.5.3.3` section below was tagged but never published.
+
+**This is a stability release, and that is the point.** The change set is the largest this codebase has shipped in one version, and almost all of it is fixes:
+
+- the commit-path deadlock behind the long-standing "consumption stops after a rebalance" reports
+- a family of torn reads that silently lost records in every 0.5.x line
+- the metrics leak, offset accuracy on assignment, and an asynchronous commit recorded before the broker answered
+- the test lanes that now guard each of them
+
+The bar was every known critical defect resolved, each with a named regression guard that passes. Every fix was reproduced deterministically and shown to fail before and pass after; the write-up behind each is in its linked PR. Two known critical defects sit outside that bar, both in the transactional producer mode only, and are named under Known limitations. New capabilities are queued behind this release; What comes next lists them by how far each has got.
 
 ### Breaking
 
