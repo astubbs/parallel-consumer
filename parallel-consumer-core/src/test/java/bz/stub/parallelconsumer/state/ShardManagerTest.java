@@ -155,6 +155,43 @@ class ShardManagerTest {
                 .that(retryQueue.contains(container)).isFalse();
     }
 
+    /**
+     * The parked view is a read of the retry queue, and the rebalance callbacks deliberately do not touch that
+     * queue (astubbs/parallel-consumer#431) - so a revoked container is still in it, still carrying its park
+     * reason, until {@code purgeDepartedRetryEntries()} runs. The reader is what has to know, because that purge is
+     * reached only while the instance is RUNNING or DRAINING: paused or closing without draining, it never runs at
+     * all and the view would report another consumer's records for as long as the instance stays there.
+     * <p>
+     * Downstream this is the sandbox bound's only defence against over-counting - it satisfies
+     * {@code published == completed + parked} from this view - so an over-count ends a run early.
+     */
+    @Test
+    void aParkedRecordWhosePartitionWasRevokedLeavesTheParkedView() {
+        PCModuleTestEnv module = mu.getModule();
+        ShardManager<String, String> sm = wm.getSm();
+        var consumerRecord = new ConsumerRecord<>(topic, partition, 9L, "a-key", "a-value");
+
+        sm.addWorkContainer(wm.getPm().getEpochOfPartition(tp), consumerRecord);
+        var container = sm.getShard(ShardKey.of(consumerRecord, module.options().getOrdering()))
+                .orElseThrow(() -> new AssertionError("the shard the record was just added to"))
+                .getWorkContainerAtOffset(9L)
+                .orElseThrow(() -> new AssertionError("the container that was just added"));
+
+        container.onUserFunctionFailure(new PCRetriableException("hopeless").park("it ran out of attempts"));
+        sm.onFailure(container);
+        assertWithMessage("PRECONDITION: the parked record is in the view while its partition is ours")
+                .that(sm.getParkedWorkContainers()).containsExactly(container);
+
+        wm.onPartitionsRevoked(UniLists.of(tp));
+
+        assertWithMessage("PRECONDITION: the revocation leaves the retry queue entry alone, by design")
+                .that(container.isParked()).isTrue();
+        assertWithMessage("PRECONDITION: and the container knows its partition went away")
+                .that(container.isStale()).isTrue();
+        assertWithMessage("a record that now belongs to another consumer is not this instance's to report")
+                .that(sm.getParkedWorkContainers()).isEmpty();
+    }
+
     @Test
     void retryQueueOrdering() {
         String topic = "topic";

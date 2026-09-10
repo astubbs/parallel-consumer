@@ -115,8 +115,17 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
      * <p>
      * There is no snapshot and no reconciliation, because there are no longer two answers to reconcile: a parked
      * record is a record the engine will never make due again, so the engine's retry queue <em>is</em> the parked
-     * set, and a record that is revoked, completed or resumed leaves that queue without anybody having to notice.
-     * The read takes the queue's read lock and walks it, so it is a query rather than something to do per record.
+     * set, and nothing here has to be kept in step with it. The read takes the queue's read lock and walks it, so
+     * it is a query rather than something to do per record.
+     * <p>
+     * <b>What leaves this view, and what does not.</b> A revoked record leaves it because
+     * {@code ShardManager.getParkedWorkContainers()} excludes a stale container - the rebalance callbacks do not
+     * touch the retry queue itself, so the entry outlives the revocation and the reader is what has to know. There
+     * is no <em>resume</em> path in this release at all: nothing in the engine unparks a record, and a parked
+     * record can never reach the later ordinary failure that would clear its reason, because it is never due
+     * again. So a park is released by a restart or a rebalance and by nothing else, which is what the README's
+     * park section says under "What releases a parked record today"; {@code resume} and {@code dlq} on this handle
+     * refuse for that reason and arrive with the engine commands they need.
      */
     private List<WorkContainer<?, ?>> parkedContainers() {
         return processor.getWm().getSm().getParkedWorkContainers();

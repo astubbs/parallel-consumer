@@ -545,6 +545,17 @@ public class ShardManager<K, V> {
      * The retry queue is the store - a parked record is a failed record with no deadline, so it is already here and
      * nothing has to keep a second copy of it. Reading it walks the queue under its read lock, which is why callers
      * take it on a cadence rather than per query.
+     * <p>
+     * <b>A revoked record is not one of ours to report, and staleness is what says so.</b> The rebalance callbacks
+     * deliberately leave this queue alone - that is the recorded astubbs/parallel-consumer#431 design, so the poll
+     * thread never waits on the write lock - and {@link #purgeDepartedRetryEntries()} collects the departed entries
+     * on the controller's next pass. So between a revocation and that pass the queue still holds containers whose
+     * partition now belongs to another consumer, and asking only {@link WorkContainer#isParked()} hands them to a
+     * user as though they were still this instance's to act on. Worse, the purge is reached only from
+     * {@link #getWorkIfAvailable(int)}, which the controller calls only while RUNNING or DRAINING: pause the
+     * instance, or close it without draining, after a revocation and nothing ever collects them.
+     * {@link WorkContainer#isStale()} is the same question the worker's own {@code RecordContext.isStale()} asks,
+     * and it needs no pass to have run.
      *
      * @return a snapshot list, safe to hold after the lock is released
      */
@@ -553,7 +564,7 @@ public class ShardManager<K, V> {
         try (RetryQueue.RetryQueueIterator entries = this.retryQueue.iterator()) {
             while (entries.hasNext()) {
                 WorkContainer<?, ?> workContainer = entries.next();
-                if (workContainer.isParked()) {
+                if (workContainer.isParked() && !workContainer.isStale()) {
                     parked.add(workContainer);
                 }
             }
