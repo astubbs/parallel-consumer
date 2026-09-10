@@ -2,7 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: release-gate -->
-<!-- inflight-vetted: 2026-09-07 - neither module is listed in the root pom.xml modules block and neither directory exists, so the records are still correctly held; docs/features/staging/kafka-streams-integration.yaml is present and the Connect record still arrives with astubbs#269 (open), astubbs#255 and astubbs#240 both open - delete-when unmet -->
+<!-- inflight-state: deferred - after v6; the owner decided on 2026-09-07 that neither module ships in 0.6.0.0, so the records return with whichever next-0x release lands them -->
 
 
 `docs/features/kafka-streams-experimental.yaml` and `kafka-connect-experimental.yaml` were written and

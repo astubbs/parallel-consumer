@@ -128,7 +128,7 @@ worth.
 
 At release, when the changelog section is regenerated, check both survived into `### Breaking`:
 generation reads the commit log, so they are only as findable as those commit bodies. The rename side
-of that same check is in [`release-0600-blockers.md`](release-0600-blockers.md).
+of that same check is in [`release-v6-scope.md`](release-v6-scope.md), under the tag-day artefact checks.
 **Checked 2026-09-09, on regeneration:** all three survived - the `setupWorkerPool` and `setState`
 narrowings share one `### Breaking` bullet that opens by saying only subclasses of the internal
 controller are affected, and the `getSuccessfulWorkListeners()` removal sits in the astubbs#267 bullet
