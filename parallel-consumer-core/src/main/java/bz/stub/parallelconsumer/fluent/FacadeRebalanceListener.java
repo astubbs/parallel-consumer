@@ -14,10 +14,10 @@ import java.util.Collection;
  * The facade's own rebalance listener, with the user's chained after it (KTD2).
  *
  * <h2>Three properties, and why each is load-bearing</h2>
- * <b>It runs first.</b> The attempt ledger is per assignment (R10), so a partition that is no longer ours must stop
- * counting before anything else looks at it. Chaining the user's listener after this one is what lets a user
- * listener see a state that is already consistent - and a user listener that throws still cannot prevent the clear,
- * because it has already happened.
+ * <b>It runs first.</b> The attempt ledger and the parked set are per assignment (R10, R27), so a partition that is
+ * no longer ours must stop counting and stop being listed before anything else looks at either. Chaining the user's
+ * listener after this one is what lets a user listener see a state that is already consistent - and a user listener
+ * that throws still cannot prevent the clear, because it has already happened.
  * <p>
  * <b>It never blocks.</b> This runs on the poll thread inside Kafka's rebalance callback, where every millisecond
  * delays the whole consumer group's rebalance. It takes no lock of its own: the clear is one removal per revoked
@@ -34,12 +34,20 @@ class FacadeRebalanceListener implements ConsumerRebalanceListener {
     private final AttemptLedger ledger;
 
     /**
+     * The parked set, which learns the current assignment here and nowhere else: it is what keeps a worker
+     * finishing after a revoke from writing a phantom entry for a partition somebody else now owns.
+     */
+    private final ParkedRecords parkedRecords;
+
+    /**
      * The user's own listener, or null when the definition declared none.
      */
     private final ConsumerRebalanceListener usersListener;
 
-    FacadeRebalanceListener(AttemptLedger ledger, ConsumerRebalanceListener usersListener) {
+    FacadeRebalanceListener(AttemptLedger ledger, ParkedRecords parkedRecords,
+                            ConsumerRebalanceListener usersListener) {
         this.ledger = ledger;
+        this.parkedRecords = parkedRecords;
         this.usersListener = usersListener;
     }
 
@@ -71,6 +79,14 @@ class FacadeRebalanceListener implements ConsumerRebalanceListener {
     @Override
     public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
         forget(partitions, "assigned");
+        try {
+            // After the clear, never before: a partition arriving must start with no parked entries and then be
+            // marked ours, and doing it the other way round would leave a window where a stale entry reads as live.
+            parkedRecords.onAssigned(partitions);
+        } catch (RuntimeException trackingFailed) {
+            log.warn("Could not record the assignment of partitions {} in the fluent API's parked set", partitions,
+                    trackingFailed);
+        }
         if (usersListener != null) {
             usersListener.onPartitionsAssigned(partitions);
         }
@@ -83,6 +99,13 @@ class FacadeRebalanceListener implements ConsumerRebalanceListener {
             // A stale attempt count is worth a log line, never a failed rebalance.
             log.warn("Could not clear the fluent API's attempt ledger for {} partitions {} - attempt counts for "
                     + "those records may be stale until they complete", why, partitions, clearFailed);
+        }
+        try {
+            parkedRecords.onNoLongerOurs(partitions);
+        } catch (RuntimeException clearFailed) {
+            // Same reasoning as the ledger: a stale parked entry is a wrong list, never a failed rebalance.
+            log.warn("Could not clear the fluent API's parked set for {} partitions {} - they may still be listed "
+                    + "as parked on this instance", why, partitions, clearFailed);
         }
     }
 }

@@ -22,6 +22,12 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * worker, with the source topic as its store and the map as its index. Copying it to a topic - which this API spells
  * <em>dlq</em>, as a verb - is only needed when the map's capacity or the topic's retention forces it, so every
  * {@code dlq} call below is optional and a definition that makes none of them is complete.
+ *
+ * <h2>Park is also where scheduled retry lives</h2>
+ * A policy may grant an exhausted record more attempts, spaced out: {@link #thenRetryAfter(Duration)} says how long
+ * to wait and {@link #forCycles(int)} says how many such waits there are, after which the record parks with no
+ * delay at all. That is scheduled retry (astubbs#234) expressed as park rather than as a second mechanism - the
+ * record holds no worker while it waits either way.
  * <p>
  * The policy is data: no callbacks, nothing a wire contract could not carry (R18). It is a per-route setting with an
  * instance default, so each route takes a {@link #copy()} of the default unless it declares its own (R6).
@@ -69,6 +75,10 @@ public final class AfterRetries {
 
     private Integer payloadPercentage;
 
+    private Duration parkDelay;
+
+    private Integer parkCycles;
+
     private AfterRetries(Reaction reaction) {
         this.reaction = reaction;
     }
@@ -95,6 +105,41 @@ public final class AfterRetries {
      */
     public static AfterRetries dlqImmediately(String destination) {
         return park().dlqTo(destination).dlqImmediately();
+    }
+
+    /**
+     * Wait this long, then attempt the record once more - which is what scheduled retry is (astubbs#234). Declared
+     * together with {@link #forCycles(int)}: the delay says how long each cycle waits, the cycle count says how
+     * many of them there are, and one without the other is refused at definition time.
+     * <p>
+     * After the last cycle the record parks with no delay at all, meaning until it is resumed or exported (R27). A
+     * permanent decode failure never takes this path - there is nothing a wait could change about a payload that
+     * can never be read (R12).
+     */
+    public AfterRetries thenRetryAfter(Duration delay) {
+        requireParking("thenRetryAfter");
+        Objects.requireNonNull(delay, "A park delay must be supplied");
+        if (delay.isNegative() || delay.isZero()) {
+            throw new IllegalArgumentException(msg("thenRetryAfter ({}) must be positive - it is how long a parked "
+                    + "record waits before its next attempt", delay));
+        }
+        this.parkDelay = delay;
+        return this;
+    }
+
+    /**
+     * How many times {@link #thenRetryAfter(Duration)} grants the record another attempt before it parks for good
+     * (R27).
+     */
+    public AfterRetries forCycles(int cycles) {
+        requireParking("forCycles");
+        if (cycles < 1) {
+            throw new IllegalArgumentException(msg("forCycles ({}) must be at least one - it counts the attempts a "
+                    + "park delay grants; leave it out for a record that parks as soon as its retries run out",
+                    cycles));
+        }
+        this.parkCycles = cycles;
+        return this;
     }
 
     /**
@@ -172,6 +217,28 @@ public final class AfterRetries {
     }
 
     /**
+     * @return how long each park cycle waits, or null when no cycles were declared
+     */
+    public Duration parkDelay() {
+        return parkDelay;
+    }
+
+    /**
+     * @return how many park cycles this policy grants, zero when none were declared
+     */
+    public int parkCycles() {
+        return parkCycles == null ? 0 : parkCycles;
+    }
+
+    /**
+     * Whether a delay or a cycle count was declared at all - the two must be declared together, and this is what
+     * lets the definition say so rather than silently ignoring the half that arrived (R27).
+     */
+    boolean declaresAnyParkCycle() {
+        return parkDelay != null || parkCycles != null;
+    }
+
+    /**
      * @return the declared percentage, or empty when none was declared and the instance default applies
      */
     public OptionalInt payloadPercentage() {
@@ -196,12 +263,15 @@ public final class AfterRetries {
         copy.immediately = immediately;
         copy.olderThan = olderThan;
         copy.payloadPercentage = payloadPercentage;
+        copy.parkDelay = parkDelay;
+        copy.parkCycles = parkCycles;
         return copy;
     }
 
     @Override
     public String toString() {
         return "AfterRetries(" + reaction + ", destination=" + destination + ", immediately=" + immediately
-                + ", olderThan=" + olderThan + ", payloadPercentage=" + payloadPercentage + ")";
+                + ", olderThan=" + olderThan + ", payloadPercentage=" + payloadPercentage
+                + ", parkDelay=" + parkDelay + ", parkCycles=" + parkCycles + ")";
     }
 }

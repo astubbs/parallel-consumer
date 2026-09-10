@@ -131,6 +131,19 @@ public final class Route<K, V, PK, PV> {
     }
 
     /**
+     * Be told once when a record on this route parks: after its last attempt, before its offset commits (R16).
+     * <p>
+     * Optional sugar over the parked outcome, not a second construct the definition needs - the park is counted and
+     * queryable whether anybody observes it or not (KD3, R28). Overrides the instance default for this route only.
+     *
+     * @see ParkObserver for what arrives, and what a throw from it does (nothing)
+     */
+    public Route<K, V, PK, PV> onParked(ParkObserver<K, V> observer) {
+        state.ownParkObserver(Objects.requireNonNull(observer, "A park observer must be supplied"));
+        return this;
+    }
+
+    /**
      * A breaker for this route alone: no breaker state is shared between routes (R29).
      */
     public Route<K, V, PK, PV> circuitBreaker(CircuitBreakerPolicy policy) {

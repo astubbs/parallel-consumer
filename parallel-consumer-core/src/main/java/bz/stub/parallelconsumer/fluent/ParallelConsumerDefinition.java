@@ -117,6 +117,8 @@ public class ParallelConsumerDefinition implements DefinitionView {
 
     private CircuitBreakerPolicy defaultCircuitBreaker;
 
+    private ParkObserver<?, ?> defaultParkObserver;
+
     private Integer instancePayloadPercentage;
 
     private boolean preBuiltConsumerSupplied;
@@ -255,6 +257,18 @@ public class ParallelConsumerDefinition implements DefinitionView {
      */
     public ParallelConsumerDefinition defaultCircuitBreaker(CircuitBreakerPolicy policy) {
         this.defaultCircuitBreaker = Objects.requireNonNull(policy, "A circuit breaker policy must be supplied");
+        return this;
+    }
+
+    /**
+     * The park observer every route copies, told once when one of its records parks (R16).
+     * <p>
+     * Typed {@code Object} on both sides because it is one observer over routes whose consumed types differ: an
+     * instance default cannot know them. Declare it on a route with {@link Route#onParked} to see that route's own
+     * types.
+     */
+    public ParallelConsumerDefinition defaultOnParked(ParkObserver<Object, Object> observer) {
+        this.defaultParkObserver = Objects.requireNonNull(observer, "A park observer must be supplied");
         return this;
     }
 
@@ -506,6 +520,7 @@ public class ParallelConsumerDefinition implements DefinitionView {
         for (RouteState route : routes) {
             AfterRetries policy = route.afterRetries();
             String topic = route.describeTopics();
+            refuseHalfAParkCycle(policy, topic);
             if (policy.payloadPercentage().isPresent()) {
                 throw refusedPercentage("dlqWhenOffsetPayloadReaches", policy.payloadPercentage().getAsInt(), topic);
             }
@@ -539,6 +554,29 @@ public class ParallelConsumerDefinition implements DefinitionView {
                         + "loop. Park in place under this commit mode, or use a consumer commit mode (R14).",
                         topic, policy.destination(), commitMode));
             }
+        }
+    }
+
+    /**
+     * A park delay and a cycle count mean nothing apart: a delay with no cycles grants no attempt, and cycles with
+     * no delay is scheduled retry with no schedule. Either would be a setting that silently does nothing, which is
+     * the one thing this definition refuses to produce (R27, AE7).
+     */
+    private void refuseHalfAParkCycle(AfterRetries policy, String topic) {
+        if (!policy.declaresAnyParkCycle()) {
+            return;
+        }
+        if (policy.parkDelay() == null) {
+            throw new IllegalArgumentException(msg("Topic {} declares forCycles({}) with no park delay - a cycle is "
+                            + "a wait followed by one more attempt, so declare thenRetryAfter(...) beside it, or "
+                            + "drop it and let the record park as soon as its retries run out (R27).",
+                    topic, policy.parkCycles()));
+        }
+        if (policy.parkCycles() == 0) {
+            throw new IllegalArgumentException(msg("Topic {} declares thenRetryAfter({}) with no cycle count - "
+                            + "nothing would ever wait that long, because no attempt has been granted. Declare "
+                            + "forCycles(...) beside it, or drop it (R27).",
+                    topic, policy.parkDelay()));
         }
     }
 
@@ -790,6 +828,10 @@ public class ParallelConsumerDefinition implements DefinitionView {
 
     CircuitBreakerPolicy defaultCircuitBreakerValue() {
         return defaultCircuitBreaker;
+    }
+
+    ParkObserver<?, ?> defaultParkObserverValue() {
+        return defaultParkObserver;
     }
 
     @Override

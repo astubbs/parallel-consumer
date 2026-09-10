@@ -10,6 +10,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -70,6 +71,7 @@ class RebalanceListenerChainTest {
     @Test
     void theLedgerIsClearedBeforeTheUsersListenerRuns() {
         var ledger = new AttemptLedger();
+        var parked = new ParkedRecords();
         ledger.advance(record(0, 5));
         var users = new RecordingListener(null) {
             @Override
@@ -80,7 +82,8 @@ class RebalanceListenerChainTest {
             }
         };
 
-        new FacadeRebalanceListener(ledger, users).onPartitionsRevoked(Collections.singletonList(PARTITION_ZERO));
+        new FacadeRebalanceListener(ledger, parked, users)
+                .onPartitionsRevoked(Collections.singletonList(PARTITION_ZERO));
 
         assertThat(users.calls).containsExactly("revoked [orders-0]", "ledger held 0").inOrder();
     }
@@ -93,10 +96,11 @@ class RebalanceListenerChainTest {
     @Test
     void aUserListenerThatThrowsStillLeavesTheLedgerCleared() {
         var ledger = new AttemptLedger();
+        var parked = new ParkedRecords();
         ledger.advance(record(0, 5));
         var users = new RecordingListener(new FakeRuntimeException("the user's listener is broken"));
 
-        var chain = new FacadeRebalanceListener(ledger, users);
+        var chain = new FacadeRebalanceListener(ledger, parked, users);
         var thrown = assertThrows(FakeRuntimeException.class,
                 () -> chain.onPartitionsRevoked(Collections.singletonList(PARTITION_ZERO)));
 
@@ -111,22 +115,53 @@ class RebalanceListenerChainTest {
     @Test
     void aLostPartitionIsClearedToo() {
         var ledger = new AttemptLedger();
+        var parked = new ParkedRecords();
         ledger.advance(record(0, 5));
         var users = new RecordingListener(null);
 
-        new FacadeRebalanceListener(ledger, users).onPartitionsLost(Collections.singletonList(PARTITION_ZERO));
+        new FacadeRebalanceListener(ledger, parked, users)
+                .onPartitionsLost(Collections.singletonList(PARTITION_ZERO));
 
         assertThat(ledger.attempts(TOPIC, 0, 5)).isEqualTo(0);
         assertThat(users.calls).containsExactly("lost [orders-0]");
     }
 
+    /**
+     * The parked set is per assignment for the same reason the ledger is: a parked record belongs to whoever owns
+     * its partition now, and a fresh owner is the only party that can resume or export it (R10, R27).
+     */
+    @Test
+    void aRevokedPartitionsParkedRecordsGoWithIt() {
+        var ledger = new AttemptLedger();
+        var parked = new ParkedRecords();
+        parked.onAssigned(Collections.singletonList(PARTITION_ZERO));
+        parked.spendCycle(record(0, 5));
+        assertThat(parked.park(parkedRecord(0, 5))).isTrue();
+
+        new FacadeRebalanceListener(ledger, parked, new RecordingListener(null))
+                .onPartitionsRevoked(Collections.singletonList(PARTITION_ZERO));
+
+        assertThat(parked.count()).isEqualTo(0);
+        assertThat(parked.cyclesUsed(record(0, 5))).isEqualTo(0);
+        // And the partition is no longer ours, so a worker still finishing on it cannot write a phantom entry.
+        assertThat(parked.isOurs(PARTITION_ZERO)).isFalse();
+        assertThat(parked.park(parkedRecord(0, 5))).isFalse();
+    }
+
+    private static ParkedRecord parkedRecord(int partition, long offset) {
+        return new ParkedRecord(record(partition, offset), "key", 3, 1, new FakeRuntimeException("it failed"),
+                "it ran out of attempts", Instant.now());
+    }
+
     @Test
     void anAssignedPartitionStartsCountingFromZeroEvenIfARevokeWasMissed() {
         var ledger = new AttemptLedger();
+        var parked = new ParkedRecords();
         ledger.advance(record(0, 5));
         var users = new RecordingListener(null);
 
-        new FacadeRebalanceListener(ledger, users).onPartitionsAssigned(Collections.singletonList(PARTITION_ZERO));
+        new FacadeRebalanceListener(ledger, parked, users)
+                .onPartitionsAssigned(Collections.singletonList(PARTITION_ZERO));
 
         assertThat(ledger.attempts(TOPIC, 0, 5)).isEqualTo(0);
         assertThat(users.calls).containsExactly("assigned [orders-0]");
@@ -135,9 +170,10 @@ class RebalanceListenerChainTest {
     @Test
     void aDefinitionWithNoUserListenerRebalancesJustTheSame() {
         var ledger = new AttemptLedger();
+        var parked = new ParkedRecords();
         ledger.advance(record(0, 5));
 
-        var chain = new FacadeRebalanceListener(ledger, null);
+        var chain = new FacadeRebalanceListener(ledger, parked, null);
         chain.onPartitionsRevoked(Collections.singletonList(PARTITION_ZERO));
         chain.onPartitionsAssigned(Collections.singletonList(PARTITION_ZERO));
         chain.onPartitionsLost(Collections.singletonList(PARTITION_ZERO));

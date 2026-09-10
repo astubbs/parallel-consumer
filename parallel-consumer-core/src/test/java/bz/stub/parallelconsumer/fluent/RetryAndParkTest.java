@@ -150,6 +150,14 @@ class RetryAndParkTest {
         assertThat(attempts.get()).isEqualTo(3);
         assertThat(dispatcher.ledger().attempts(TOPIC, 0, 0)).isEqualTo(3);
 
+        // It is in the parked view, which is what an operator reads to decide between resume and export (R28).
+        assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1);
+        ParkedRecord parked = dispatcher.parkedForRoute(TOPIC).get(0);
+        assertThat(parked.offset()).isEqualTo(0);
+        assertThat(parked.key()).isEqualTo("hopeless");
+        assertThat(parked.attempts()).isEqualTo(3);
+        assertThat(parked.failure()).isInstanceOf(FakeRuntimeException.class);
+
         // The parked record stays incomplete, so the committed base offset cannot move past it...
         Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
                 assertThat(runtime.committedMetadata(TOPIC, 0)).isNotEmpty());

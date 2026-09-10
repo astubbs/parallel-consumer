@@ -55,6 +55,8 @@ class RouteState implements RouteView {
 
     private CircuitBreakerPolicy ownCircuitBreaker;
 
+    private ParkObserver<?, ?> ownParkObserver;
+
     private boolean resolved;
 
     private OptionalInt resolvedRetryLimit;
@@ -66,6 +68,8 @@ class RouteState implements RouteView {
     private AfterRetries resolvedAfterRetries;
 
     private CircuitBreakerPolicy resolvedCircuitBreaker;
+
+    private ParkObserver<?, ?> resolvedParkObserver;
 
     RouteState(ParallelConsumerDefinition owner, Set<String> topics, Format<?> consumedKey, Format<?> consumedValue) {
         this.owner = owner;
@@ -92,6 +96,9 @@ class RouteState implements RouteView {
         CircuitBreakerPolicy breaker =
                 ownCircuitBreaker != null ? ownCircuitBreaker : owner.defaultCircuitBreakerValue();
         resolvedCircuitBreaker = breaker == null ? null : breaker.copy();
+        // Not copied: an observer is the user's own object, and there is nothing about it a route could override
+        // part of. It is wired like every other setting - the route's own, or the instance default (R6, R16).
+        resolvedParkObserver = ownParkObserver != null ? ownParkObserver : owner.defaultParkObserverValue();
         resolved = true;
     }
 
@@ -168,6 +175,18 @@ class RouteState implements RouteView {
         return function;
     }
 
+    /**
+     * The observer told once when a record on this route parks, or null when neither the route nor the definition
+     * declared one (R16).
+     * <p>
+     * Deliberately <b>not</b> on {@link RouteView}: that view is the wire-shaped read of a route, and an observer is
+     * a callback rather than data (R18). The dispatch wrapper reads it from here.
+     */
+    ParkObserver<?, ?> parkObserver() {
+        resolveDefaults();
+        return resolvedParkObserver;
+    }
+
     boolean hasFunction() {
         return function != null;
     }
@@ -222,6 +241,11 @@ class RouteState implements RouteView {
 
     void ownCircuitBreaker(CircuitBreakerPolicy policy) {
         this.ownCircuitBreaker = policy;
+        invalidateResolution();
+    }
+
+    void ownParkObserver(ParkObserver<?, ?> observer) {
+        this.ownParkObserver = observer;
         invalidateResolution();
     }
 

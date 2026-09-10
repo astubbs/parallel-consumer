@@ -334,4 +334,75 @@ class DefinitionRefusalTest {
         assertThat(thrown).hasMessageThat().contains("dlqTo");
         assertThat(thrown).hasMessageThat().contains("stop()");
     }
+
+    /**
+     * A park delay and a cycle count are one setting written as two calls (R27): a delay with no cycles grants no
+     * attempt and a cycle count with no delay has no schedule, so either alone is a setting that does nothing.
+     */
+    @Test
+    void aParkCycleCountWithNoDelayNamesTheSettingAndTheTopic() {
+        var definition = define();
+        definition.string("orders").afterRetries(park().forCycles(3)).process(context -> Outcome.succeeded());
+
+        var thrown = refusal(definition);
+
+        assertThat(thrown).hasMessageThat().contains("forCycles(3)");
+        assertThat(thrown).hasMessageThat().contains("thenRetryAfter");
+        assertThat(thrown).hasMessageThat().contains("orders");
+    }
+
+    @Test
+    void aParkDelayWithNoCycleCountNamesTheSettingAndTheTopic() {
+        var definition = define();
+        definition.string("orders")
+                .afterRetries(park().thenRetryAfter(Duration.ofMinutes(5)))
+                .process(context -> Outcome.succeeded());
+
+        var thrown = refusal(definition);
+
+        assertThat(thrown).hasMessageThat().contains("thenRetryAfter");
+        assertThat(thrown).hasMessageThat().contains("forCycles");
+        assertThat(thrown).hasMessageThat().contains("orders");
+    }
+
+    /**
+     * The same pair declared as the instance default is refused just the same, because every route took a copy of
+     * it (R6) - the refusal names the route that carries it.
+     */
+    @Test
+    void theInstanceDefaultParkCycleIsRefusedThroughTheRouteThatCopiedIt() {
+        var definition = define().defaultAfterRetries(park().forCycles(2));
+        definition.string("orders").process(context -> Outcome.succeeded());
+
+        var thrown = refusal(definition);
+
+        assertThat(thrown).hasMessageThat().contains("forCycles(2)");
+        assertThat(thrown).hasMessageThat().contains("orders");
+    }
+
+    @Test
+    void aParkCycleSettingOnAStoppingPolicyNamesTheSetting() {
+        var thrown = assertThrows(IllegalArgumentException.class,
+                () -> AfterRetries.stop().thenRetryAfter(Duration.ofMinutes(1)));
+
+        assertThat(thrown).hasMessageThat().contains("thenRetryAfter");
+        assertThat(thrown).hasMessageThat().contains("stop()");
+    }
+
+    @Test
+    void aNonPositiveParkDelayIsRefusedWhereItIsWritten() {
+        var thrown = assertThrows(IllegalArgumentException.class,
+                () -> park().thenRetryAfter(Duration.ZERO));
+
+        assertThat(thrown).hasMessageThat().contains("thenRetryAfter");
+        assertThat(thrown).hasMessageThat().contains("positive");
+    }
+
+    @Test
+    void aCycleCountBelowOneIsRefusedWhereItIsWritten() {
+        var thrown = assertThrows(IllegalArgumentException.class, () -> park().forCycles(0));
+
+        assertThat(thrown).hasMessageThat().contains("forCycles");
+        assertThat(thrown).hasMessageThat().contains("at least one");
+    }
 }
