@@ -571,7 +571,11 @@ public class ParallelConsumerDefinition implements DefinitionView {
                 ParallelStreamProcessor.createEosStreamProcessor(buildOptions(runtime));
         processor.subscribe(subscriptionTopics());
         dispatch(processor);
-        return new ConsumerHandle(processor);
+        ConsumerHandle handle = new ConsumerHandle(processor);
+        // After the subscription, so a fake consumer's partitions can be assigned to a listener that now exists,
+        // and with the handle, so a generator with a bound can close the instance when it reaches one (KTD9).
+        runtime.started(handle);
+        return handle;
     }
 
     /**

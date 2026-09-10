@@ -32,10 +32,13 @@ public final class Format<T> implements Serde<T> {
 
     private final String description;
 
-    private Format(Deserializer<T> deserializer, Serializer<T> serializer, String description) {
+    private final Class<T> type;
+
+    private Format(Deserializer<T> deserializer, Serializer<T> serializer, String description, Class<T> type) {
         this.deserializer = deserializer;
         this.serializer = serializer;
         this.description = description;
+        this.type = type;
     }
 
     /**
@@ -43,7 +46,17 @@ public final class Format<T> implements Serde<T> {
      */
     public static <T> Format<T> reading(Deserializer<T> deserializer) {
         Objects.requireNonNull(deserializer, "A deserializer must be supplied");
-        return new Format<>(deserializer, null, deserializer.getClass().getSimpleName());
+        return new Format<>(deserializer, null, deserializer.getClass().getSimpleName(), null);
+    }
+
+    /**
+     * A format that can only read, naming the Java type it reads into.
+     *
+     * @see #type()
+     */
+    public static <T> Format<T> reading(Deserializer<T> deserializer, Class<T> type) {
+        Objects.requireNonNull(deserializer, "A deserializer must be supplied");
+        return new Format<>(deserializer, null, deserializer.getClass().getSimpleName(), type);
     }
 
     /**
@@ -51,7 +64,7 @@ public final class Format<T> implements Serde<T> {
      */
     public static <T> Format<T> writing(Serializer<T> serializer) {
         Objects.requireNonNull(serializer, "A serializer must be supplied");
-        return new Format<>(null, serializer, serializer.getClass().getSimpleName());
+        return new Format<>(null, serializer, serializer.getClass().getSimpleName(), null);
     }
 
     /**
@@ -60,7 +73,19 @@ public final class Format<T> implements Serde<T> {
     public static <T> Format<T> of(Deserializer<T> deserializer, Serializer<T> serializer) {
         Objects.requireNonNull(deserializer, "A deserializer must be supplied");
         Objects.requireNonNull(serializer, "A serializer must be supplied");
-        return new Format<>(deserializer, serializer, deserializer.getClass().getSimpleName());
+        return new Format<>(deserializer, serializer, deserializer.getClass().getSimpleName(), null);
+    }
+
+    /**
+     * A format that can read and write, naming the Java type it carries - which is what lets the sandbox generate
+     * records for a route declared with hand-written serialisers.
+     *
+     * @see #type()
+     */
+    public static <T> Format<T> of(Deserializer<T> deserializer, Serializer<T> serializer, Class<T> type) {
+        Objects.requireNonNull(deserializer, "A deserializer must be supplied");
+        Objects.requireNonNull(serializer, "A serializer must be supplied");
+        return new Format<>(deserializer, serializer, deserializer.getClass().getSimpleName(), type);
     }
 
     /**
@@ -72,11 +97,18 @@ public final class Format<T> implements Serde<T> {
             return already;
         }
         Objects.requireNonNull(serde, "A serde must be supplied");
-        return new Format<>(serde.deserializer(), serde.serializer(), serde.getClass().getSimpleName());
+        return new Format<>(serde.deserializer(), serde.serializer(), serde.getClass().getSimpleName(), null);
     }
 
     static <T> Format<T> named(Deserializer<T> deserializer, Serializer<T> serializer, String description) {
-        return new Format<>(deserializer, serializer, description);
+        return new Format<>(deserializer, serializer, description, null);
+    }
+
+    static <T> Format<T> named(Deserializer<T> deserializer,
+                               Serializer<T> serializer,
+                               String description,
+                               Class<T> type) {
+        return new Format<>(deserializer, serializer, description, type);
     }
 
     /**
@@ -108,6 +140,20 @@ public final class Format<T> implements Serde<T> {
      */
     public boolean hasSerializer() {
         return serializer != null;
+    }
+
+    /**
+     * The Java type this format reads into, when it is known, and null when it is not.
+     * <p>
+     * A {@link Formats} helper always knows - {@code json(Order.class)} was told. A format built from a bare
+     * {@link Deserializer} or a Kafka {@link Serde} does not: the type is erased and nothing here can recover it.
+     * <p>
+     * Nothing in the facade needs this. <b>The sandbox does</b>, because generating a record means filling an
+     * instance of a class, and a route whose type it cannot name is refused there naming the topic (KTD9) - the
+     * cure being either a format helper or the {@code Class}-taking factories above.
+     */
+    public Class<T> type() {
+        return type;
     }
 
     /**

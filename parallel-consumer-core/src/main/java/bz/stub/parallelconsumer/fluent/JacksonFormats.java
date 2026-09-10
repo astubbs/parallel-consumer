@@ -29,7 +29,7 @@ final class JacksonFormats {
     }
 
     static <T> Format<T> of(Class<T> type) {
-        return Format.named(deserializer(type), serializer(), "json(" + type.getSimpleName() + ")");
+        return Format.named(deserializer(type), serializer(), "json(" + type.getSimpleName() + ")", type);
     }
 
     /**
@@ -39,7 +39,8 @@ final class JacksonFormats {
     static Format<Map<String, Object>> ofMap() {
         @SuppressWarnings({"unchecked", "rawtypes"})
         Class<Map<String, Object>> mapType = (Class) LinkedHashMap.class;
-        return Format.named(deserializer(mapType), JacksonFormats.<Map<String, Object>>serializer(), "json(map)");
+        return Format.named(deserializer(mapType), JacksonFormats.<Map<String, Object>>serializer(), "json(map)",
+                mapType);
     }
 
     private static <T> Deserializer<T> deserializer(Class<T> type) {

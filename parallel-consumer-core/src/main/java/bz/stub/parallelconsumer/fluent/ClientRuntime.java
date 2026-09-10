@@ -51,6 +51,23 @@ public interface ClientRuntime {
     Optional<Producer<byte[], byte[]>> producer(DefinitionView definition);
 
     /**
+     * Called once the instance is running, with the handle its caller is about to be given. Does nothing by
+     * default, and a runtime that only builds clients never needs it.
+     * <p>
+     * It exists because a fake needs a moment that a client factory method cannot give it: <b>after</b> the engine
+     * has subscribed, so a mock consumer's partitions can be assigned to a listener that now exists, and with the
+     * handle in hand, so a generator with a bound can close the instance when it reaches one. Without it the
+     * sandbox would need its own entry point and {@code definition.start(runtime)} would silently run unbounded
+     * (R33, KTD9).
+     * <p>
+     * It runs on the thread that called {@code start}, before that call returns, so an implementation that blocks
+     * blocks the caller.
+     */
+    default void started(ConsumerHandle handle) {
+        // Most runtimes hand over clients and take no further part.
+    }
+
+    /**
      * The default: a real Kafka consumer built from the definition's connection properties with the raw-bytes
      * deserialisers the facade requires, and no producer instance - so Parallel Consumer builds its own and
      * producer recovery stays available.
