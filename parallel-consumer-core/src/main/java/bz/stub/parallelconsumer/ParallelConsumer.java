@@ -5,13 +5,16 @@ package bz.stub.parallelconsumer;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.DrainingCloseable;
 import lombok.Data;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.util.Collection;
+import java.util.Properties;
 import java.util.regex.Pattern;
 
 // tag::javadoc[]
@@ -27,6 +30,28 @@ import java.util.regex.Pattern;
  */
 // end::javadoc[]
 public interface ParallelConsumer<K, V> extends DrainingCloseable {
+
+    /**
+     * Begin a definition on the <b>fluent API</b>: connection properties in, one typed route per topic with its own
+     * processing function and policy, and a handle out.
+     * <p>
+     * The fluent API ships beside the options-builder API above it as an equal - neither is deprecated, both are
+     * documented, and this factory is the one addition the classic surface takes for it. The classic API remains the
+     * right choice for a running application that needs nothing new; an existing user with hand-built clients can
+     * pass them to a definition with {@code consumer(...)} and {@code producer(...)} rather than migrate.
+     * <p>
+     * <b>Incubating.</b> Everything the returned definition exposes is
+     * {@link org.apache.kafka.common.annotation.InterfaceStability.Unstable} while the surface settles - see
+     * {@link bz.stub.parallelconsumer.fluent} for what that means and when it changes.
+     *
+     * @param connectionProperties the consumer, and where needed producer, configuration; the facade sets the
+     *                             serialisers itself, since each route applies its own
+     * @see ParallelConsumerDefinition
+     */
+    @InterfaceStability.Unstable
+    static ParallelConsumerDefinition define(Properties connectionProperties) {
+        return new ParallelConsumerDefinition(connectionProperties);
+    }
 
     /**
      * @return true if the system has either closed, or has crashed
