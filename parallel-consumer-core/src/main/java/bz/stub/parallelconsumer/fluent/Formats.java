@@ -51,14 +51,15 @@ public final class Formats {
      * Raw bytes: no decoding at all. Always available.
      */
     public static Format<byte[]> bytes() {
-        return Format.named(Serdes.ByteArray().deserializer(), Serdes.ByteArray().serializer(), "bytes()");
+        return Format.named(Serdes.ByteArray().deserializer(), Serdes.ByteArray().serializer(), "bytes()",
+                byte[].class);
     }
 
     /**
      * UTF-8 strings. Always available, and the default key type of every format-named route.
      */
     public static Format<String> string() {
-        return Format.named(Serdes.String().deserializer(), Serdes.String().serializer(), "string()");
+        return Format.named(Serdes.String().deserializer(), Serdes.String().serializer(), "string()", String.class);
     }
 
     /**
@@ -97,7 +98,7 @@ public final class Formats {
                 "io.confluent:kafka-avro-serializer (Confluent's repository, not Maven Central)");
         Map<String, Object> extra = new HashMap<>();
         extra.put("specific.avro.reader", true);
-        return reflective(label, AVRO_DESERIALIZER, AVRO_SERIALIZER, extra);
+        return reflective(label, AVRO_DESERIALIZER, AVRO_SERIALIZER, extra, type);
     }
 
     /**
@@ -114,7 +115,7 @@ public final class Formats {
         Map<String, Object> extra = new HashMap<>();
         extra.put("specific.protobuf.value.type", type.getName());
         extra.put("derive.type", true);
-        return reflective(label, PROTOBUF_DESERIALIZER, PROTOBUF_SERIALIZER, extra);
+        return reflective(label, PROTOBUF_DESERIALIZER, PROTOBUF_SERIALIZER, extra, type);
     }
 
     /**
@@ -130,7 +131,7 @@ public final class Formats {
         Objects.requireNonNull(classifier, "A classifier must be supplied");
         Format<T> wrapped = Format.of(inner);
         Deserializer<T> classifying = new ClassifyingDeserializer<>(wrapped.deserializer(), classifier);
-        return Format.named(classifying, wrapped.serializer(), "classified(" + wrapped + ")");
+        return Format.named(classifying, wrapped.serializer(), "classified(" + wrapped + ")", wrapped.type());
     }
 
     /**
@@ -141,7 +142,8 @@ public final class Formats {
     private static <T> Format<T> reflective(String label,
                                             String deserializerClass,
                                             String serializerClass,
-                                            Map<String, Object> extraConfig) {
+                                            Map<String, Object> extraConfig,
+                                            Class<T> type) {
         @SuppressWarnings("unchecked")
         Deserializer<T> deserializer = (Deserializer<T>) instantiate(deserializerClass, Deserializer.class, label);
         Serializer<T> serializer = null;
@@ -150,7 +152,7 @@ public final class Formats {
             Serializer<T> resolved = (Serializer<T>) instantiate(serializerClass, Serializer.class, label);
             serializer = new ConfigMergingSerializer<>(resolved, extraConfig);
         }
-        return Format.named(new ConfigMergingDeserializer<>(deserializer, extraConfig), serializer, label);
+        return Format.named(new ConfigMergingDeserializer<>(deserializer, extraConfig), serializer, label, type);
     }
 
     private static Object instantiate(String className, Class<?> expected, String label) {

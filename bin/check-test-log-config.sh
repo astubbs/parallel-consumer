@@ -40,6 +40,7 @@ MODULES=(
     parallel-consumer-vertx
     parallel-consumer-reactor
     parallel-consumer-mutiny
+    parallel-consumer-sandbox
 )
 
 # Allow the self-test to point the gate at a fixture tree.
