@@ -211,13 +211,35 @@ final class RecordGenerator implements AutoCloseable {
 
     /**
      * Stops generating without running the bound's close - the caller is closing this down itself.
+     *
+     * <h2>An interrupt is for a generator that is still generating, and for nothing else</h2>
+     * The interrupt exists to end a {@link #sleepUntil} between two ticks. If the bound has already been reached
+     * the thread is somewhere else entirely: inside {@link #onBoundReached}, which waits for the instance to
+     * account for what was published and then closes it. Interrupting it there turns an orderly end into a
+     * possibly-uncommitted one - {@link SandboxConsumer#awaitEveryPublishedRecordCommitted(Duration)} catches the
+     * interrupt, re-arms the flag and returns as though it had succeeded, and {@code handle.close()} then runs on
+     * a thread carrying an interrupt. Parallel Consumer's close path is interrupt-sensitive by design, and says
+     * so: "Control thread carries an interrupt into the close sequence ... If the transactional commit lock
+     * cannot be acquired below, this is the likely reason". The final commit can be skipped, and the offsets the
+     * test is about to assert on are then missing - which reads as a flake, attributed to the engine.
+     * <p>
+     * The shape that hits it is ordinary: a run reaches its bound and, in the same instant, the test exits its
+     * try-with-resources.
+     * <p>
+     * So the bound sequence is waited out rather than interrupted, and the join below is what waits. A window
+     * remains between {@code boundReached} being decided and {@link #boundWasReached} being published, in which a
+     * close still interrupts; it is one field write wide, it needs the close to land inside it, and closing it
+     * would mean waiting on {@link #finished} before every ordinary close instead - which is the far commoner
+     * path and has nothing to wait for.
      */
     @Override
     public void close() {
         running.set(false);
         Thread generator = thread;
         if (generator != null && generator != Thread.currentThread()) {
-            generator.interrupt();
+            if (!boundWasReached.get()) {
+                generator.interrupt();
+            }
             try {
                 generator.join(Duration.ofSeconds(10).toMillis());
             } catch (InterruptedException e) {
@@ -226,7 +248,9 @@ final class RecordGenerator implements AutoCloseable {
             if (generator.isAlive()) {
                 // Loud, because a generator that outlives its sandbox goes on publishing into a closed consumer
                 // and the resulting exception is attributed to whatever runs next.
-                log.error("The sandbox generator thread did not stop after being interrupted");
+                log.error("The sandbox generator thread did not stop within the close's ten seconds (bound "
+                        + "reached: {} - if true it was waited out rather than interrupted, and what it is "
+                        + "waiting for is the instance accounting for what was published)", boundWasReached.get());
             }
         }
         finished.countDown();
