@@ -118,17 +118,26 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
      * set, and nothing here has to be kept in step with it. The read takes the queue's read lock and walks it, so
      * it is a query rather than something to do per record.
      * <p>
-     * <b>What leaves this view, and what does not.</b> A revoked record leaves it because
-     * {@code ShardManager.getParkedWorkContainers()} excludes a stale container - the rebalance callbacks do not
-     * touch the retry queue itself, so the entry outlives the revocation and the reader is what has to know. There
-     * is no <em>resume</em> path in this release at all: nothing in the engine unparks a record, and a parked
-     * record can never reach the later ordinary failure that would clear its reason, because it is never due
-     * again. So a park is released by a restart or a rebalance and by nothing else, which is what the README's
-     * park section says under "What releases a parked record today"; {@code resume} and {@code dlq} on this handle
-     * refuse for that reason and arrive with the engine commands they need.
+     * <b>What leaves this view, and what does not.</b> While the instance is consuming, a revoked record leaves it:
+     * the rebalance callbacks deliberately do not touch the retry queue, so the entry outlives the revocation and
+     * the reader is what has to know it is no longer ours. Once the instance has STOPPED, nothing is filtered,
+     * because closing a consumer revokes its whole assignment and a filter would then answer empty for ever - see
+     * the comment on the read below. There is no <em>resume</em> path in this release at all: nothing in the
+     * engine unparks a record, and a parked record can never reach the later ordinary failure that would clear
+     * its reason, because it is never due again. So a park is released by a restart or a rebalance and by nothing
+     * else, which is what the README's park section says under "What releases a parked record today";
+     * {@code resume} and {@code dlq} on this handle refuse for that reason and arrive with the engine commands
+     * they need.
      */
     private List<WorkContainer<?, ?>> parkedContainers() {
-        return processor.getWm().getSm().getParkedWorkContainers();
+        // A revoked record belongs to whoever holds its partition now, so it is not on the list of what THIS
+        // instance can be asked to act on - but only while there still is such a list. Closing a consumer revokes
+        // its whole assignment, so once the instance has stopped every parked container reads as revoked and this
+        // view becomes a report of the run that was: what parked, and why. Emptying it there would take the
+        // operator's report away at the one moment they are most likely to read it, which is what the quickstart
+        // and the README's park section show them doing.
+        boolean stillConsuming = !processor.isClosedOrFailed();
+        return processor.getWm().getSm().getParkedWorkContainers(stillConsuming);
     }
 
     /**

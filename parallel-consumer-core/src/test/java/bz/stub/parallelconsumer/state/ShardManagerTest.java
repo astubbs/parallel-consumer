@@ -180,7 +180,7 @@ class ShardManagerTest {
         container.onUserFunctionFailure(new PCRetriableException("hopeless").park("it ran out of attempts"));
         sm.onFailure(container);
         assertWithMessage("PRECONDITION: the parked record is in the view while its partition is ours")
-                .that(sm.getParkedWorkContainers()).containsExactly(container);
+                .that(sm.getParkedWorkContainers(true)).containsExactly(container);
 
         wm.onPartitionsRevoked(UniLists.of(tp));
 
@@ -189,7 +189,10 @@ class ShardManagerTest {
         assertWithMessage("PRECONDITION: and the container knows its partition went away")
                 .that(container.isStale()).isTrue();
         assertWithMessage("a record that now belongs to another consumer is not this instance's to report")
-                .that(sm.getParkedWorkContainers()).isEmpty();
+                .that(sm.getParkedWorkContainers(true)).isEmpty();
+        assertWithMessage("...but it is still HELD, and a caller that is reporting on the run rather than asking "
+                + "what it can act on - a closed instance, whose whole assignment has been revoked - still sees it")
+                .that(sm.getParkedWorkContainers(false)).containsExactly(container);
     }
 
     @Test

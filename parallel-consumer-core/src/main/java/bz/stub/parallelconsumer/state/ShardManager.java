@@ -556,15 +556,27 @@ public class ShardManager<K, V> {
      * instance, or close it without draining, after a revocation and nothing ever collects them.
      * {@link WorkContainer#isStale()} is the same question the worker's own {@code RecordContext.isStale()} asks,
      * and it needs no pass to have run.
+     * <p>
+     * <b>Which is why the caller says whether to apply it, rather than this method deciding.</b> Closing a
+     * consumer revokes its whole assignment - a real one leaves the group, and
+     * {@code LongPollingMockConsumer.close} fires the same callback for fidelity - so after a close EVERY
+     * container here is stale and an unconditional filter would answer empty for the rest of the process. A
+     * closed instance's parked set is a report of the run that was, and the run's own report is what the
+     * quickstart and its README section show an operator reading; a running instance's is a list of what it can
+     * still be asked to act on, and a revoked record is not on it. {@code ConsumerHandle.parkedContainers()} is
+     * the one production caller and picks by the instance's state.
      *
+     * @param excludingRevoked leave out containers whose partition this instance no longer holds. True while the
+     *                         instance is still consuming; false once it has stopped, when nothing is anyone's to
+     *                         act on and the set is history
      * @return a snapshot list, safe to hold after the lock is released
      */
-    public List<WorkContainer<?, ?>> getParkedWorkContainers() {
+    public List<WorkContainer<?, ?>> getParkedWorkContainers(boolean excludingRevoked) {
         List<WorkContainer<?, ?>> parked = new ArrayList<>();
         try (RetryQueue.RetryQueueIterator entries = this.retryQueue.iterator()) {
             while (entries.hasNext()) {
                 WorkContainer<?, ?> workContainer = entries.next();
-                if (workContainer.isParked() && !workContainer.isStale()) {
+                if (workContainer.isParked() && !(excludingRevoked && workContainer.isStale())) {
                     parked.add(workContainer);
                 }
             }
