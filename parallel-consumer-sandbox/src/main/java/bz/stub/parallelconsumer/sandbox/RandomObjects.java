@@ -7,9 +7,11 @@ package bz.stub.parallelconsumer.sandbox;
 import org.apache.kafka.common.annotation.InterfaceStability;
 import org.instancio.Instancio;
 import org.instancio.InstancioApi;
+import org.instancio.Model;
 import org.instancio.Select;
 import org.instancio.settings.Keys;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -61,6 +63,23 @@ public final class RandomObjects {
 
     private final FieldValues fieldValues;
 
+    /**
+     * One Instancio model per type this generator has been asked for, because building one is the expensive half
+     * and it does not depend on the record.
+     * <p>
+     * A model is the settings and the whole rule table registered as selectors - twenty-odd of them - and none of
+     * that changes between two records of the same type; only the seed does, and a seed is given to
+     * {@link Instancio#of(Model)} per record rather than baked into the model. So the table is built once per
+     * type instead of once per record.
+     * <p>
+     * <b>Per generator, never static.</b> The selectors are method references bound to <em>this</em> generator's
+     * {@link FieldValues}, which holds the {@link #random} this class re-seeds before every record. A model shared
+     * between two generators would draw its values from whichever one built it, and two seeds would stop
+     * differing - which is the whole of what a seed is for. A plain map rather than a concurrent one for the same
+     * reason the re-seeding is safe: one generator is driven by one thread, its own.
+     */
+    private final Map<Class<?>, Model<?>> models = new HashMap<>();
+
     private RandomObjects(long seed) {
         this.seed = seed;
         this.random = new Random(seed);
@@ -110,8 +129,21 @@ public final class RandomObjects {
     }
 
     private <T> T instancio(Class<T> type, long recordSeed) {
+        Model<?> cached = models.get(type);
+        if (cached == null) {
+            cached = modelFor(type);
+            models.put(type, cached);
+        }
+        @SuppressWarnings("unchecked") Model<T> model = (Model<T>) cached;
+        return Instancio.of(model).withSeed(recordSeed).create();
+    }
+
+    /**
+     * The settings and the rule table for one type, as a model that can be created from repeatedly. No seed: the
+     * seed belongs to the record, and {@link #instancio} supplies it per record.
+     */
+    private <T> Model<T> modelFor(Class<T> type) {
         InstancioApi<T> api = Instancio.of(type);
-        api.withSeed(recordSeed);
         api.withSetting(Keys.COLLECTION_MAX_SIZE, MAX_COLLECTION_SIZE);
         api.withSetting(Keys.COLLECTION_MIN_SIZE, 1);
         api.withSetting(Keys.MAP_MAX_SIZE, MAX_COLLECTION_SIZE);
@@ -130,7 +162,7 @@ public final class RandomObjects {
             FieldValues.Rule rule = rules.get(i);
             api.supply(Select.fields(rule::matches), rule::value);
         }
-        return api.create();
+        return api.toModel();
     }
 
     /**
