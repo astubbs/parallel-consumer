@@ -31,6 +31,12 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * gauge registered by a facade would leave the classic API with no way to see one. Registering at the source also
  * removes the only reason a facade needed a loop-end pass at all: the assignment changes on a rebalance, which is
  * exactly the event {@code onPartitionsAssigned} / {@code onPartitionsRemoved} already deliver.
+ * <p>
+ * <b>Proved by sabotage, not by assumption</b>, per the test-tree rules. Deleting the two
+ * {@code removeMeter} calls from {@code deregisterMetrics} turns the first two tests red and leaves the third
+ * green; making both gauge functions return zero unconditionally turns the last two red and leaves the first
+ * green. So each test detects the half of the contract its name claims, and neither passes on the strength of
+ * the other's behaviour.
  *
  * @see PartitionState#initMetrics()
  * @see ShardManager#getParkedWorkContainers(boolean)
