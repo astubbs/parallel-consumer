@@ -140,7 +140,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * one control task, on its way out, and this one exists because the submitted {@link Future} cannot be
      * composed. A caller that wants "whichever of these two happens first" - a close through some other handle, or
      * the control thread dying on its own - otherwise has no option but to poll, which is exactly what the fluent
-     * API's {@code ConsumerHandle.awaitShutdown} was doing at 200ms.
+     * API's {@code ParallelConsumerInstance.awaitShutdown} was doing at 200ms.
      * <p>
      * {@code final}, and {@link CompletableFuture} is itself thread-safe, so there is no lock to name and no
      * {@code @GuardedBy} to write: completion is a single atomic transition, whichever thread reaches it, and

@@ -8,7 +8,8 @@ import bz.stub.parallelconsumer.ParallelConsumerException;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 /**
- * The instance's control thread died, and this is what {@link ConsumerHandle#awaitShutdown()} throws to say so
+ * The instance's control thread died, and this is what {@link ParallelConsumerInstance#awaitShutdown()} throws
+ * to say so
  * (R17).
  *
  * <h2>What an instance is</h2>
@@ -33,7 +34,8 @@ public class InstanceFailedException extends ParallelConsumerException {
     private static final long serialVersionUID = 1L;
 
     /**
-     * Package-private: only {@link ConsumerHandle#awaitShutdown()} builds one, wrapping the checked cause it read off
+     * Package-private: only {@link ParallelConsumerInstance#awaitShutdown()} builds one, wrapping the checked
+     * cause it read off
      * the engine's failure record. A cause is always supplied - an instance failure with nothing under it would say
      * nothing that the return of the await did not already say.
      */

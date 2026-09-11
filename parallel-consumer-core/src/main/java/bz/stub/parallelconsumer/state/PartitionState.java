@@ -1400,7 +1400,8 @@ public class PartitionState<K, V> {
      * The discriminator is that {@link ShardManager#getParkedWorkContainers(boolean)} takes the queue's READ
      * lock for the walk and hands back a snapshot list, and the controller adds under the matching write lock,
      * so the walk never observes a partly-linked entry and never holds the lock past its own return. It is the
-     * same contract {@code ConsumerHandle.parkedContainers()} already relies on from a user's own thread. What
+     * same contract {@code ParallelConsumerInstance.parkedContainers()} already relies on from a user's own
+     * thread. What
      * would reopen it: a parked store that is not the retry queue, or a collector here that reaches a container
      * by some route other than that method - and nothing would go red, because no gate can see which edge a
      * read arrived by.

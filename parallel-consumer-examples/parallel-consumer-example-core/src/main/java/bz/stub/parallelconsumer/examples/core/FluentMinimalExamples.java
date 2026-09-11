@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.examples.core;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.fluent.ParkedRecord;
@@ -55,8 +55,8 @@ public class FluentMinimalExamples {
                     return Outcome.succeeded();
                 });
 
-        try (ConsumerHandle handle = pc.start()) {
-            handle.awaitShutdown();
+        try (ParallelConsumerInstance instance = pc.start()) {
+            instance.awaitShutdown();
         }
         // end::minimalProcess[]
     }
@@ -78,12 +78,12 @@ public class FluentMinimalExamples {
                     throw new IllegalStateException("the parcel-tracking service is not reachable");
                 });
 
-        try (ConsumerHandle handle = pc.start()) {
+        try (ParallelConsumerInstance instance = pc.start()) {
             // Named because it is deliberately ignored: the point is to run for a minute and then look, and this
             // instance is not expected to have shut down by then.
-            boolean ignoredShutDown = handle.awaitShutdown(Duration.ofMinutes(1));
+            boolean ignoredShutDown = instance.awaitShutdown(Duration.ofMinutes(1));
 
-            ParkedView parked = handle.topic("parcel-scans").parked();
+            ParkedView parked = instance.topic("parcel-scans").parked();
             System.out.println(parked.count() + " scans parked");
             for (ParkedRecord record : parked.records()) {
                 System.out.println("  offset " + record.offset() + " after "
@@ -110,8 +110,8 @@ public class FluentMinimalExamples {
                                 context.value().getOrderId(),
                                 Dispatch.of(context.value()))));
 
-        try (ConsumerHandle handle = pc.start()) {
-            handle.awaitShutdown();
+        try (ParallelConsumerInstance instance = pc.start()) {
+            instance.awaitShutdown();
         }
         // end::minimalProduce[]
     }

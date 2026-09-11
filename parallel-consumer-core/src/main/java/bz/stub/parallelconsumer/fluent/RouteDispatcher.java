@@ -87,7 +87,7 @@ class RouteDispatcher {
     private final String preBuiltConsumerDescription;
 
     /**
-     * Replaced at start with the handle. Until then, and in a test that drives the wrapper directly, a fault has
+     * Replaced at start with the instance. Until then, and in a test that drives the wrapper directly, a fault has
      * nowhere to go but the log.
      */
     private volatile InstanceControl instance = new LoggingOnlyInstanceControl();
@@ -98,7 +98,7 @@ class RouteDispatcher {
     private volatile FluentMeters meters = FluentMeters.none();
 
     /**
-     * Where the parked set is read from: the engine's retry queue, through the handle. Empty until the handle wires
+     * Where the parked set is read from: the engine's retry queue, through the instance. Empty until it wires
      * it, because a wrapper with no engine behind it has nothing parked.
      */
     private volatile Supplier<List<WorkContainer<?, ?>>> parkedContainers = Collections::emptyList;
@@ -150,7 +150,7 @@ class RouteDispatcher {
 
     /**
      * Replace the logging-only stand-in with the instance this wrapper runs in, so a fatal fault or a stop request
-     * reaches something that can act on it. Wired by the handle before anything polls, which is what makes it true
+     * reaches something that can act on it. Wired by the instance before anything polls, which is what makes it true
      * that the first record already has somewhere to report to.
      */
     void instanceControl(InstanceControl instance) {
@@ -221,7 +221,7 @@ class RouteDispatcher {
     }
 
     /**
-     * The one wording of "you asked about a topic this instance does not route", so the handle and the wrapper
+     * The one wording of "you asked about a topic this instance does not route", so the instance and the wrapper
      * cannot answer the same mistake in two different sentences. A misspelled topic answered with an empty parked
      * set would read as good news, which is why it is a refusal at all.
      */
@@ -672,7 +672,7 @@ class RouteDispatcher {
      *     <em>and</em> hands back the batches already queued in the worker pool, so nothing further reaches a
      *     route's function - that second half is the engine change this facade used to work around with a flag of
      *     its own (KTD14).</li>
-     *     <li><b>Close</b>, also through the handle, on a thread of its own because this one is a worker and the
+     *     <li><b>Close</b>, also through the instance, on a thread of its own because this one is a worker and the
      *     close awaits the worker pool.</li>
      *     <li><b>Throw</b>, which is the only way to hand a record back, leaving it incomplete so a restart
      *     delivers it again.</li>
@@ -693,7 +693,7 @@ class RouteDispatcher {
     /**
      * A pre-built consumer that is not configured for raw bytes: a definition fault, never a retry (KTD3, R1).
      * <p>
-     * {@link InstanceControl#fatal} is what makes it fatal; the handle closes the instance and surfaces this
+     * {@link InstanceControl#fatal} is what makes it fatal; the instance closes itself and surfaces this
      * exception to whoever is awaiting shutdown. The throw itself matters either way: the record must not complete,
      * because it was never processed.
      */
@@ -824,7 +824,7 @@ class RouteDispatcher {
     }
 
     /**
-     * Where a fault goes before the handle exists, or when the wrapper is driven directly by a test.
+     * Where a fault goes before the instance exists, or when the wrapper is driven directly by a test.
      */
     @Slf4j
     private static class LoggingOnlyInstanceControl implements InstanceControl {

@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.examples.core;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.fluent.ParkedRecord;
@@ -43,7 +43,7 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
  *       sequentially succeeded - so consumer-group lag reads as stuck at the oldest parked record for the life of
  *       the assignment. The README's park section owns that consequence. No dead-letter topic is
  *       involved, and none is declared - export at capacity is a later milestone.</li>
- *   <li><b>The parked set.</b> {@link #reportParked} asks the handle what is parked and why.</li>
+ *   <li><b>The parked set.</b> {@link #reportParked} asks the instance what is parked and why.</li>
  *   <li><b>Typed routes.</b> Two topics, two value types, one function each - no casts, no {@code instanceof} on a
  *       shared handler, no hand-rolled deserialisation.</li>
  *   <li><b>Outcomes.</b> A normal return is success; a returned {@link Outcome#filtered()} completes the record
@@ -104,21 +104,21 @@ public class FluentQuickstartApp {
         // end::quickstart[]
 
         // tag::quickstartRun[]
-        try (ConsumerHandle handle = pc.start()) { // <1>
-            handle.awaitShutdown(); // <2>
+        try (ParallelConsumerInstance instance = pc.start()) { // <1>
+            instance.awaitShutdown(); // <2>
         }
         // end::quickstartRun[]
     }
 
     // tag::quickstartParked[]
-    void reportParked(ConsumerHandle handle) {
-        ParkedView parked = handle.topic("parcel-scans").parked(); // <1>
+    void reportParked(ParallelConsumerInstance instance) {
+        ParkedView parked = instance.topic("parcel-scans").parked(); // <1>
         log.info("{} scans parked, oldest {}", parked.count(), parked.oldestAge().orElse(Duration.ZERO));
         for (ParkedRecord record : parked.records()) { // <2>
             log.info("  partition {} offset {} key {} after {} attempts: {}",
                     record.partition(), record.offset(), record.key(), record.attempts(), record.reason());
         }
-        log.info("{} records parked across every route", handle.parkedAllTopics().count()); // <3>
+        log.info("{} records parked across every route", instance.parkedAllTopics().count()); // <3>
     }
     // end::quickstartParked[]
 

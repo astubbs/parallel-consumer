@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <h2>The three ways an instance ends</h2>
  * {@link #awaitShutdown()} returns for exactly one of them, and each leaves a different trace:
  * <ol>
- *     <li><b>Somebody closed it</b> - this handle's {@link #close()}, or the engine's own close. Await returns and
+ *     <li><b>Somebody closed it</b> - this instance's own {@link #close()}, or the engine's own close. Await returns and
  *     {@link #stopRequest()} and {@link #failureCause()} are both empty.</li>
  *     <li><b>A route asked it to stop</b> (R24) - await returns normally and {@link #stopRequest()} names the
  *     record and the reason. It is not an exception because nothing failed: the definition's author asked for
@@ -59,17 +59,17 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @Slf4j
 @InterfaceStability.Unstable
-public class ConsumerHandle implements AutoCloseable {
+public class ParallelConsumerInstance implements AutoCloseable {
 
     /**
-     * The engine this handle is the face of. Every question answered here - whether it is still consuming, what is
+     * The engine this instance is the face of. Every question answered here - whether it is still consuming, what is
      * parked, what failed - is put to the engine rather than mirrored into a field of this class, because the
      * facade deliberately owns no state the engine already owns.
      */
     private final ParallelEoSStreamProcessor<byte[], byte[]> processor;
 
     /**
-     * The dispatch wrapper every record passes through. This handle reaches it for two things: to hand it the
+     * The dispatch wrapper every record passes through. This instance reaches it for two things: to hand it the
      * parked-set supplier and the callbacks it may make back ({@link #startObserving()}), and to read what is
      * parked on a given set of topics ({@link #parkedView}).
      */
@@ -77,7 +77,7 @@ public class ConsumerHandle implements AutoCloseable {
 
     /**
      * Every routed topic mapped to the topics of the route that claims it, so
-     * {@code handle.topic("audit-replay")} answers with the whole route a set-declared topic belongs to (R5).
+     * {@code instance.topic("audit-replay")} answers with the whole route a set-declared topic belongs to (R5).
      */
     private final Map<String, Set<String>> routeTopicsByTopic;
 
@@ -88,7 +88,7 @@ public class ConsumerHandle implements AutoCloseable {
     private final ClosePath closePath;
 
     /**
-     * The instance's meters, held so that this handle can take them out of the user's registry at a moment of its
+     * The instance's meters, held so that this instance can take them out of the user's registry at a moment of its
      * own choosing rather than depending on the engine's shutdown reaching its metrics step.
      */
     private final FluentMeters meters;
@@ -97,14 +97,14 @@ public class ConsumerHandle implements AutoCloseable {
      * Completed by whichever of the three close paths ran, so a caller has something to block on.
      * <p>
      * A {@link CompletableFuture} rather than the latch it was, because a latch cannot be composed and this is only
-     * half the answer: an engine that ended without passing through this handle completes nothing here, so the wait
+     * half the answer: an engine that ended without passing through this instance completes nothing here, so the wait
      * has to be for <em>either</em> this or the engine's own ending - see {@link #ended}.
      */
     private final CompletableFuture<Void> shutdown = new CompletableFuture<>();
 
     /**
-     * Whichever ends this instance first: the shutdown this handle ran, or the engine's control thread ending on
-     * its own - a close that went round this handle, or a control-thread failure (KTD6).
+     * Whichever ends this instance first: the shutdown this object ran, or the engine's control thread ending on
+     * its own - a close that went round it, or a control-thread failure (KTD6).
      * <p>
      * Composed once, in the constructor, rather than per wait: each composition registers a dependent on the
      * engine's completion that is only discharged when that completes, so a caller polling
@@ -151,13 +151,13 @@ public class ConsumerHandle implements AutoCloseable {
     private final AtomicBoolean anAssignmentHasLanded = new AtomicBoolean();
 
     /**
-     * Package-private: a handle is only ever built by the definition that started the engine, which is what makes
+     * Package-private: one is only ever built by the definition that started the engine, which is what makes
      * "a started definition hands one back" the only way a user gets one.
      * <p>
-     * The handle is not observing anything when it returns. {@link #startObserving()} does that, and is separate
+     * It is not observing anything when it returns. {@link #startObserving()} does that, and is separate
      * because this object has to exist before the dispatch wrapper can be told where to report.
      */
-    ConsumerHandle(ParallelEoSStreamProcessor<byte[], byte[]> processor,
+    ParallelConsumerInstance(ParallelEoSStreamProcessor<byte[], byte[]> processor,
                    RouteDispatcher dispatcher,
                    Map<String, Set<String>> routeTopicsByTopic,
                    ClosePath closePath,
@@ -186,7 +186,7 @@ public class ConsumerHandle implements AutoCloseable {
      * engine unparks a record, and a parked record can never reach the later ordinary failure that would clear
      * its reason, because it is never due again. So a park is released by a restart or a rebalance and by nothing
      * else, which is what the README's park section says under "What releases a parked record today";
-     * {@code resume} and {@code dlq} on this handle refuse for that reason and arrive with the engine commands
+     * {@code resume} and {@code dlq} on this instance refuse for that reason and arrive with the engine commands
      * they need.
      */
     private List<WorkContainer<?, ?>> parkedContainers() {
@@ -324,7 +324,7 @@ public class ConsumerHandle implements AutoCloseable {
      * start. What is <b>not</b> shared is what happens when it fails: a caller who asked for the close is told, and
      * the self-close has nobody to tell, so it logs.
      * <p>
-     * The meters go before the engine's close, so they are gone at a moment this handle chooses rather than only if
+     * The meters go before the engine's close, so they are gone at a moment this instance chooses rather than only if
      * the engine's shutdown reaches its own metrics step.
      */
     private void shutTheEngineDown(ClosePath path) {
@@ -557,7 +557,7 @@ public class ConsumerHandle implements AutoCloseable {
     // ---------------------------------------------------------------- seams
 
     /**
-     * The engine underneath, for the units that grow this handle. Not part of the fluent surface.
+     * The engine underneath, for the units that grow this class. Not part of the fluent surface.
      */
     ParallelEoSStreamProcessor<byte[], byte[]> processor() {
         return processor;
@@ -566,7 +566,7 @@ public class ConsumerHandle implements AutoCloseable {
     /**
      * Points the wrapper's parked view at the engine, hands it the two callbacks it may make, and registers the
      * control-thread hook. Called by the definition once the engine is running, not from the constructor: this
-     * handle has to exist before the wrapper can be told about it.
+     * instance has to exist before the wrapper can be told about it.
      * <p>
      * <b>The callbacks go through an adapter rather than this class implementing {@link InstanceControl}.</b> The
      * interface is package-private, but a public class implementing it must make its methods public - which put
@@ -578,22 +578,22 @@ public class ConsumerHandle implements AutoCloseable {
         dispatcher.instanceControl(new InstanceControl() {
 
             /**
-             * Satisfies {@link InstanceControl#fatal} by forwarding to the enclosing handle's private method of the
+             * Satisfies {@link InstanceControl#fatal} by forwarding to the enclosing instance's private method of the
              * same name, which is the whole reason this adapter exists: the decision stays where it is written, and
              * off this public class's surface.
              */
             @Override
             public void fatal(Throwable definitionFault) {
-                ConsumerHandle.this.fatal(definitionFault);
+                ParallelConsumerInstance.this.fatal(definitionFault);
             }
 
             /**
-             * Satisfies {@link InstanceControl#stopRequested} by forwarding to the enclosing handle, for the same
+             * Satisfies {@link InstanceControl#stopRequested} by forwarding to the enclosing instance, for the same
              * reason as {@link #fatal(Throwable)} above.
              */
             @Override
             public void stopRequested(ConsumerRecord<byte[], byte[]> record, String reason) {
-                ConsumerHandle.this.stopRequested(record, reason);
+                ParallelConsumerInstance.this.stopRequested(record, reason);
             }
         });
         processor.addLoopEndCallBack(this::onControlLoopEnd);

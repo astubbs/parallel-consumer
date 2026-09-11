@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * reaches the queue on the control thread a moment after the worker hands it back.
  */
 @Timeout(180)
-class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
+class ParkedViewOnTheInstanceTest extends AbstractFluentEngineTest {
 
 
     private static final String OTHER_TOPIC = "audit";

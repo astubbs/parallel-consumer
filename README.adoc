@@ -192,11 +192,11 @@ What 1.0 is waiting on is a settled API surface, the functionality still intende
 .Starting it, against a broker:
 [source,java,indent=0]
 ----
-        try (ConsumerHandle handle = pc.start()) { // <1>
-            handle.awaitShutdown(); // <2>
+        try (ParallelConsumerInstance instance = pc.start()) { // <1>
+            instance.awaitShutdown(); // <2>
         }
 ----
-<1> A handle out, usable with try-with-resources. Its close drains.
+<1> A running instance out, usable with try-with-resources. Its close drains.
 <2> Blocks until the instance has shut down -- closed, stopped by a route, or failed.
 
 This is the <<fluent-api,fluent API>>, which is *incubating* -- see that section for what that means, for what park in place costs and does not cost, and for the classic API this library shipped first, which is unchanged and not deprecated.
@@ -368,7 +368,7 @@ without operational burden or harming the cluster's performance
 * Client side queueing system on top of Apache Kafka consumer
 ** Efficient individual message acknowledgement system (without local or third party external system state storage) to massively reduce (and usually completely eliminate) message replay upon failure - see <<offset_map>> section for more details
 * Solution for the https://en.wikipedia.org/wiki/Head-of-line_blocking["head of line"] blocking problem where continued failure of a single message, prevents progress for messages behind it in the queue
-* A <<fluent-api,fluent API>> (incubating) beside the classic options-builder one: connection properties in, one typed route per topic with its own function and policy, and a handle out
+* A <<fluent-api,fluent API>> (incubating) beside the classic options-builder one: connection properties in, one typed route per topic with its own function and policy, and a running instance out
 ** <<park-in-place,Park in place>> - a record that runs out of attempts stays where it is, holding no worker, while the partition commits past it, so a dead-letter topic is a relief valve rather than a requirement
 ** Terminal outcomes counted apart: succeeded, filtered, parked, stopped
 ** A queryable parked set per route, with metrics beside it
@@ -564,7 +564,7 @@ Where `${project.version}` is the version to be used:
 
 Two APIs ship side by side and neither is deprecated.
 The *classic API* is the options builder this library shipped first: one processing function per instance, over records the consumer has already deserialised.
-The *fluent API* is the one the example at the top of this page uses: connection properties in, one typed route per topic with its own function and its own policy, and a handle out.
+The *fluent API* is the one the example at the top of this page uses: connection properties in, one typed route per topic with its own function and its own policy, and a running instance out.
 
 [IMPORTANT]
 ====
@@ -608,33 +608,33 @@ That default is only safe because parking costs offset-map capacity rather than 
 
 Three more consequences, none of them defects, all of them things an operator will see:
 
-* *Consumer-group lag reads as stuck at the oldest parked record.* The committed offset cannot advance past an incomplete one, so `kafka-consumer-groups` shows the distance from that offset even while everything after it is being processed and committed in the metadata. The honest figure is on the handle -- the count of unresolved records -- and in the parked-count metric.
+* *Consumer-group lag reads as stuck at the oldest parked record.* The committed offset cannot advance past an incomplete one, so `kafka-consumer-groups` shows the distance from that offset even while everything after it is being processed and committed in the metadata. The honest figure is on the instance -- the count of unresolved records -- and in the parked-count metric.
 * *A parked record is reported as slow work in this release.* Parking is, over today's engine, a retry with a far-future delay, so the shard scan counts every parked record against its partition's slow-records meter and names its topic in the periodic "records in the queue have been waiting longer than" warning. It is noise rather than a symptom. Removing it is a small engine change, and a test pins today's behaviour so the change shows up rather than happening in silence.
-* *A close that drains waits for records queued behind a parked key.* The handle closes draining by default, and a drain waits for the work the shards still hold. Under `KEY` ordering, records queued behind a parked key are work the engine can never take, so such a close waits out its whole drain timeout and then reports the timeout. Either close without draining, or keep in mind that the wait is bounded by `drainTimeout` and nothing is lost by it.
+* *A close that drains waits for records queued behind a parked key.* The instance closes draining by default, and a drain waits for the work the shards still hold. Under `KEY` ordering, records queued behind a parked key are work the engine can never take, so such a close waits out its whole drain timeout and then reports the timeout. Either close without draining, or keep in mind that the wait is bounded by `drainTimeout` and nothing is lost by it.
 
 *What releases a parked record today.* A restart or a rebalance, and nothing else: the attempt count is per assignment, so a record delivered again after either is attempted afresh.
-`resume` and `dlq` on the handle refuse in this release and say so -- they need engine commands that do not exist yet, and they arrive in the next milestone.
+`resume` and `dlq` on the instance refuse in this release and say so -- they need engine commands that do not exist yet, and they arrive in the next milestone.
 A parked record that the broker's retention deletes while the instance runs is unaffected, because the engine still holds it in memory and can still act on it; only a restart loses it, since it cannot be polled again.
 *A route whose parked records must survive a restart parks with a dead-letter destination or an age bound.*
 
 [[parked-set]]
 === Dead-lettering, and the parked set
 
-A store nobody can see is a leak, so the parked set is queryable per route from the handle.
+A store nobody can see is a leak, so the parked set is queryable per route from the instance.
 
 [source,java,indent=0]
 ----
-    void reportParked(ConsumerHandle handle) {
-        ParkedView parked = handle.topic("parcel-scans").parked(); // <1>
+    void reportParked(ParallelConsumerInstance instance) {
+        ParkedView parked = instance.topic("parcel-scans").parked(); // <1>
         log.info("{} scans parked, oldest {}", parked.count(), parked.oldestAge().orElse(Duration.ZERO));
         for (ParkedRecord record : parked.records()) { // <2>
             log.info("  partition {} offset {} key {} after {} attempts: {}",
                     record.partition(), record.offset(), record.key(), record.attempts(), record.reason());
         }
-        log.info("{} records parked across every route", handle.parkedAllTopics().count()); // <3>
+        log.info("{} records parked across every route", instance.parkedAllTopics().count()); // <3>
     }
 ----
-<1> One route's parked set, across every partition it is assigned. `handle.topic(...)` names a route by any of its topics, and a topic nothing routes is refused rather than answered with an empty set.
+<1> One route's parked set, across every partition it is assigned. `instance.topic(...)` names a route by any of its topics, and a topic nothing routes is refused rather than answered with an empty set.
 <2> Everything an operator needs to decide what to do about a record: offset, key, attempts, the last failure, how long it has been parked.
 <3> The instance-wide roll-up, named apart so the per-route accessor is never overloaded.
 
@@ -783,22 +783,22 @@ An existing user with hand-built clients reaches the fluent API without changing
 <1> The consumer must be unsubscribed -- the library subscribes it -- and configured for raw bytes, because each route deserialises its own records. That second one cannot be checked at definition time, since a consumer's type parameters are erased, so a consumer configured for anything else stops the instance on its first record with a message naming its deserialisers, rather than retrying for ever.
 <2> A supplied producer is an instance rather than a configuration, and *producer recovery does not run on an instance path*. A definition that supplies its own producer forgoes recovery; one that supplies only properties gets it.
 
-[[fluent-handle]]
-==== The handle
+[[fluent-instance]]
+==== The running instance
 
 [source,java,indent=0]
 ----
-        try (ConsumerHandle handle = pc.start()) {              // <1>
-            handle.awaitShutdown();                             // <2>
-            handle.stopRequest().ifPresent(stop ->              // <3>
+        try (ParallelConsumerInstance instance = pc.start()) {  // <1>
+            instance.awaitShutdown();                           // <2>
+            instance.stopRequest().ifPresent(stop ->            // <3>
                     log.warn("A route stopped the instance: {}", stop.reason()));
-            handle.failureCause().ifPresent(cause ->            // <4>
+            instance.failureCause().ifPresent(cause ->          // <4>
                     log.error("The instance failed", cause));
         }
 ----
 <1> Usable with try-with-resources. The close *drains* by default, bounded by the drain timeout, with the shutdown timeout bounding the close that follows -- which differs from the classic API, whose plain `close()` does not drain.
 <2> Blocks until the instance has shut down, however it ended.
-<3> An instance can end in three ways, and the handle says which: closed by you, stopped by a route, or failed. This is the second.
+<3> An instance can end in three ways, and it says which: closed by you, stopped by a route, or failed. This is the second.
 <4> And this is the third.
 
 [[fluent-migration]]
@@ -1391,7 +1391,7 @@ Much of the retry epic is delivered on the <<fluent-api,fluent API>>: a max-retr
 What is still open:
 
 * Dead-lettering itself -- the API is settled and refused at start until the engine accessor it reads exists (<<parked-set,Dead-lettering, and the parked set>>).
-* `resume` and `dlq` as commands on the handle, so a parked record can be acted on without a restart.
+* `resume` and `dlq` as commands on the instance, so a parked record can be acted on without a restart.
 * A declared circuit breaker per route (<<circuit-breaker,Circuit Breaker Pattern>>).
 * A deserialisation-failure policy for the classic API's poll path, which is the one behaviour on this list that the classic API is getting rather than the fluent one.
 * https://github.com/confluentinc/parallel-consumer/issues/65[Enhanced retry epic confluentinc#65], which tracks the rest.

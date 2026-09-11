@@ -81,7 +81,7 @@ class FluentMeters {
     }
 
     /**
-     * Registers one counter per routed topic per outcome, and returns the handle the dispatch wrapper reports to.
+     * Registers one counter per routed topic per outcome, and returns the object the dispatch wrapper reports to.
      */
     static FluentMeters registerFor(PCMetrics metrics, Collection<String> topics) {
         FluentMeters meters = new FluentMeters(metrics);
@@ -127,8 +127,8 @@ class FluentMeters {
      * Take every meter this instance registered back out of the user's registry (R19).
      * <p>
      * The engine's own close sweeps them too, since they were registered through its {@link PCMetrics} - this is
-     * what makes the sweep happen at a moment the handle chooses rather than only inside the engine's shutdown, and
-     * what makes it true for a handle whose engine never got as far as closing cleanly.
+     * what makes the sweep happen at a moment the instance chooses rather than only inside the engine's shutdown,
+     * and what makes it true for an instance whose engine never got as far as closing cleanly.
      * <p>
      * Safe to call twice, without a flag to say it has run: the counters are registered once, at start, on the
      * thread that started the instance, so there is nothing that can register behind the sweep and a second removal

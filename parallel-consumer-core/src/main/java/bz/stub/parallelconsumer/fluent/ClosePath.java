@@ -12,7 +12,8 @@ import org.apache.kafka.common.annotation.InterfaceStability;
  * <p>
  * It is declared once per instance, as data, because it is a property of the deployment rather than of a record -
  * and because the stop outcome closes the instance from a thread of its own, with nobody there to pass an argument
- * (KTD6). The same choice governs {@link ConsumerHandle#close()}, so an instance has one answer to "what happens to
+ * (KTD6). The same choice governs {@link ParallelConsumerInstance#close()}, so an instance has one answer to
+ * "what happens to
  * the backlog", whoever asked it to stop.
  *
  * <h2>It maps one-to-one onto the engine's {@link DrainingMode}, and adds nothing</h2>
@@ -36,7 +37,8 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 public enum ClosePath {
 
     /**
-     * Process the records already fetched, then close - the default, and what makes the handle a graceful shutdown
+     * Process the records already fetched, then close - the default, and what makes the instance a graceful
+     * shutdown
      * (R17). Bounded by the options' drain timeout, with the shutdown timeout bounding the close that follows.
      * <p>
      * <b>A drain still dispatches the buffered backlog</b>, so "nothing new starts" is not what this gives you; that

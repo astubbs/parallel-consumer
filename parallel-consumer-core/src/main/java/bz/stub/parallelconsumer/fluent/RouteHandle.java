@@ -9,7 +9,7 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 import java.util.Set;
 
 /**
- * One route on a running instance: what {@link ConsumerHandle#topic(String)} hands back (R28).
+ * One route on a running instance: what {@link ParallelConsumerInstance#topic(String)} hands back (R28).
  * <p>
  * It exists so the parked set is retrieved <em>by the route's name</em> - {@code handle.topic("orders").parked()} -
  * rather than through an overloaded accessor that means one thing with an argument and another without. The
@@ -25,7 +25,7 @@ public final class RouteHandle {
      * The instance this route belongs to. The handle owns the parked state, so nothing is cached here and a route
      * handle held past the instance's close answers the way the instance does rather than from a stale copy.
      */
-    private final ConsumerHandle handle;
+    private final ParallelConsumerInstance handle;
 
     /**
      * Every topic the route binds, not the one that was asked for: a route declared over a set answers under any of
@@ -34,10 +34,11 @@ public final class RouteHandle {
     private final Set<String> topics;
 
     /**
-     * Package-private: a route handle is only minted by {@link ConsumerHandle#topic(String)}, which is what refuses a
+     * Package-private: a route handle is only minted by {@link ParallelConsumerInstance#topic(String)}, which is
+     * what refuses a
      * topic no route claims before a handle for it can exist.
      */
-    RouteHandle(ConsumerHandle handle, Set<String> topics) {
+    RouteHandle(ParallelConsumerInstance handle, Set<String> topics) {
         this.handle = handle;
         this.topics = topics;
     }

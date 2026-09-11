@@ -92,7 +92,7 @@ class ParkedRecordsHoldTheKeyNotThePartitionTest extends AbstractFluentEngineTes
      * <p>
      * <b>This is the reason the shared harness closes without draining elsewhere</b> - a test with parked or
      * unbounded work uses {@link RecordingClientRuntime#closeWithoutDraining}. Here the draining close is the thing
-     * under test, so it is the one place that calls {@link ConsumerHandle#close()} on a parked instance.
+     * under test, so it is the one place that calls {@link ParallelConsumerInstance#close()} on a parked instance.
      */
     @Test
     void aDrainingCloseWithOnlyParkedRecordsDoesNotWaitTheDrainTimeout() {

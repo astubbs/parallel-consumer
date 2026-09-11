@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * return.
  */
 @Timeout(180)
-class HandleLifecycleTest extends AbstractFluentEngineTest {
+class InstanceLifecycleTest extends AbstractFluentEngineTest {
 
 
 
@@ -70,7 +70,7 @@ class HandleLifecycleTest extends AbstractFluentEngineTest {
             return Outcome.succeeded();
         });
 
-        ConsumerHandle started = runtime.startAndAssign(pc, 1);
+        ParallelConsumerInstance started = runtime.startAndAssign(pc, 1);
         handle = started;
         for (int offset = 0; offset < records; offset++) {
             runtime.publish(TOPIC, 0, offset, "key-" + offset, "an order");
@@ -78,7 +78,7 @@ class HandleLifecycleTest extends AbstractFluentEngineTest {
 
         int enteredAtExit;
         long backlogAtExit;
-        try (ConsumerHandle inBlock = started) {
+        try (ParallelConsumerInstance inBlock = started) {
             // Work in flight, everything fetched, and nothing finished yet - which is what pins the exit to the
             // FIRST wave of records. Waiting on a looser condition let the block exit two waves in, with almost
             // nothing left to drain, and the drain assertion below then failed on load rather than on behaviour.
@@ -110,7 +110,7 @@ class HandleLifecycleTest extends AbstractFluentEngineTest {
     void awaitReturnsWhenAnotherThreadClosesTheHandle() throws Exception {
         var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> Outcome.succeeded());
-        ConsumerHandle started = runtime.startAndAssign(pc, 1);
+        ParallelConsumerInstance started = runtime.startAndAssign(pc, 1);
         handle = started;
 
         var returned = new CountDownLatch(1);
@@ -150,7 +150,7 @@ class HandleLifecycleTest extends AbstractFluentEngineTest {
     void awaitRethrowsAControlThreadFailureWrapped() {
         var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> Outcome.succeeded());
-        ConsumerHandle started = runtime.startAndAssign(pc, 1);
+        ParallelConsumerInstance started = runtime.startAndAssign(pc, 1);
         handle = started;
 
         started.processor().addLoopEndCallBack(() -> {
@@ -187,7 +187,7 @@ class HandleLifecycleTest extends AbstractFluentEngineTest {
     void aControlThreadFailureReachesTheWaiterWithoutAPollInterval() throws Exception {
         var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> Outcome.succeeded());
-        ConsumerHandle started = runtime.startAndAssign(pc, 1);
+        ParallelConsumerInstance started = runtime.startAndAssign(pc, 1);
         handle = started;
 
         assertWithMessage("the handle waits ON the engine's completion, so it is registered as a dependent of it - "
@@ -250,7 +250,7 @@ class HandleLifecycleTest extends AbstractFluentEngineTest {
     void aStopRequestThatEndsItFirstReleasesTheWaiterCleanly() throws Exception {
         var pc = ParallelConsumer.connect(props()).whenClosing(ClosePath.DONT_DRAIN_FIRST);
         pc.string(TOPIC).process(context -> Outcome.stop("the deployment cannot handle this record"));
-        ConsumerHandle started = runtime.startAndAssign(pc, 1);
+        ParallelConsumerInstance started = runtime.startAndAssign(pc, 1);
         handle = started;
 
         var thrown = new AtomicReference<Throwable>();
@@ -291,7 +291,7 @@ class HandleLifecycleTest extends AbstractFluentEngineTest {
     void doubleCloseIsIdempotent() {
         var pc = ParallelConsumer.connect(props());
         pc.string(TOPIC).process(context -> Outcome.succeeded());
-        ConsumerHandle started = runtime.startAndAssign(pc, 1);
+        ParallelConsumerInstance started = runtime.startAndAssign(pc, 1);
         handle = started;
 
         started.close();
@@ -350,7 +350,7 @@ class HandleLifecycleTest extends AbstractFluentEngineTest {
             processed.incrementAndGet();
             return Outcome.succeeded();
         });
-        ConsumerHandle started = runtime.startAndAssign(pc, 1);
+        ParallelConsumerInstance started = runtime.startAndAssign(pc, 1);
         handle = started;
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
         Awaitility.await().atMost(defaultTimeout).until(() -> processed.get() == 1);

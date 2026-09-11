@@ -24,7 +24,7 @@ import org.apache.kafka.common.serialization.Serde;
  * necessarily a connection property on
  * {@link bz.stub.parallelconsumer.ParallelConsumer#connect(java.util.Properties) connect}, and a per-route value
  * would be a promise one consumer cannot keep. A <b>source name</b> would be redundant by construction: a topic
- * carries exactly one route (KD11) and a route's parked set is asked for as {@code handle.topic("orders")}, so the
+ * carries exactly one route (KD11) and a route's parked set is asked for as {@code instance.topic("orders")}, so the
  * topic already is the route's name.
  * <p>
  * <b>Both halves are required and there is no configuration-level default.</b> The original accepts a null half and

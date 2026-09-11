@@ -137,7 +137,7 @@ class RouteMetersTest extends AbstractFluentEngineTest {
                     throw new FakeRuntimeException("this record parks");
                 });
 
-        ConsumerHandle started = runtime.startAndAssign(pc, 1);
+        ParallelConsumerInstance started = runtime.startAndAssign(pc, 1);
         handle = started;
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
         Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
@@ -191,7 +191,7 @@ class RouteMetersTest extends AbstractFluentEngineTest {
         pc.string(UNASSIGNED_TOPIC).process(context -> Outcome.succeeded());
 
         List<String> warnings;
-        try (LogCapture logs = LogCapture.of(ConsumerHandle.class, Level.WARN)) {
+        try (LogCapture logs = LogCapture.of(ParallelConsumerInstance.class, Level.WARN)) {
             Map<TopicPartition, Long> beginning = new HashMap<>();
             beginning.put(new TopicPartition(TOPIC, 0), 0L);
             runtime.mockConsumer().updateBeginningOffsets(beginning);
@@ -230,7 +230,7 @@ class RouteMetersTest extends AbstractFluentEngineTest {
         var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(UNASSIGNED_ONLY_TOPIC).process(context -> Outcome.succeeded());
 
-        try (LogCapture logs = LogCapture.of(ConsumerHandle.class, Level.WARN)) {
+        try (LogCapture logs = LogCapture.of(ParallelConsumerInstance.class, Level.WARN)) {
             handle = pc.start(runtime);
 
             // Before any rebalance: an empty assignment is an instance that has not joined yet, and saying

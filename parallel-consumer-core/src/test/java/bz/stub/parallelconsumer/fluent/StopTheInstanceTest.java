@@ -157,7 +157,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
             restartSaw.incrementAndGet();
             return Outcome.stop("the schema is not supported");
         });
-        ConsumerHandle restartHandle = restartRuntime.startAndAssign(restarted, 1);
+        ParallelConsumerInstance restartHandle = restartRuntime.startAndAssign(restarted, 1);
         restartRuntime.publish(TOPIC, 0, 0, "key-0", "an order");
         assertThat(restartHandle.awaitShutdown(Duration.ofSeconds(30))).isTrue();
 
@@ -218,7 +218,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() ->
                 assertThat(handle.stopRequest().isPresent()).isTrue());
         assertThat(handle.awaitShutdown(Duration.ofSeconds(60))).isTrue();
-        ConsumerHandle stopped = handle;
+        ParallelConsumerInstance stopped = handle;
         handle = null;
 
         int invoked = invokedOffsets.size();
@@ -262,7 +262,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
 
         assertThat(handle.awaitShutdown(Duration.ofSeconds(30))).isTrue();
-        ConsumerHandle stopped = handle;
+        ParallelConsumerInstance stopped = handle;
         handle = null;
 
         // A limit of two allows three runs, and the third is the one that stops the instance.
@@ -323,7 +323,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
 
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
         assertThat(handle.awaitShutdown(Duration.ofSeconds(30))).isTrue();
-        ConsumerHandle stopped = handle;
+        ParallelConsumerInstance stopped = handle;
         handle = null;
 
         assertThat(stopped.stopRequest().get().topic()).isEqualTo(TOPIC);

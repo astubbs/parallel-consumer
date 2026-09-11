@@ -13,13 +13,14 @@ import java.time.Instant;
  * Why this instance stopped: the record that asked and the reason it gave (R24).
  * <p>
  * A stop is a request about the <em>instance</em>, not a terminal outcome of the record, so it is recorded here
- * rather than in the parked view. It is what lets a caller of {@link ConsumerHandle#awaitShutdown()} tell a stop
+ * rather than in the parked view. It is what lets a caller of {@link ParallelConsumerInstance#awaitShutdown()}
+ * tell a stop
  * apart from an ordinary close - both return normally, and only this says which happened.
  * <p>
  * Recorded once. The first record to ask wins: the pause it triggers stops every record dispatched after it, so a
  * second request would name a record that was on its way out anyway.
  *
- * @see ConsumerHandle#stopRequest()
+ * @see ParallelConsumerInstance#stopRequest()
  */
 @InterfaceStability.Unstable
 public final class StopRequest {
@@ -95,7 +96,8 @@ public final class StopRequest {
     }
 
     /**
-     * When the request was made. Read against the moment {@link ConsumerHandle#awaitShutdown()} returned, it says how
+     * When the request was made. Read against the moment {@link ParallelConsumerInstance#awaitShutdown()}
+     * returned, it says how
      * long the declared {@link ClosePath} took.
      */
     public Instant requestedAt() {

@@ -37,7 +37,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
  * A Parallel Consumer being defined: connection properties in, one typed route per topic, policy as data, and a
- * handle out. Start it from {@link ParallelConsumer#connect(Properties)}.
+ * running instance out. Start it from {@link ParallelConsumer#connect(Properties)}.
  *
  * <h2>What happens when</h2>
  * <b>Defining opens nothing.</b> Every check this class makes runs before a client exists, in a fixed order - routes,
@@ -65,8 +65,9 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * holds the per-route defaults a route resolves against, and {@link DefinitionRules} holds every refusal
  * {@link #validate()} makes. Nothing about the public surface moved: this class still answers every call it did.
  *
- * <h2>It is closeable, and so is the handle</h2>
- * {@link #start()} hands back a {@link ConsumerHandle}, which is what the README holds in try-with-resources. This
+ * <h2>It is closeable, and so is the instance</h2>
+ * {@link #start()} hands back a {@link ParallelConsumerInstance}, which is what the README holds in
+ * try-with-resources. This
  * definition is {@link AutoCloseable} too, for a caller who would rather hold one thing than two: closing it closes
  * the instance it started, and closes nothing at all if it never started one.
  *
@@ -151,7 +152,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
 
     /**
      * How this instance shuts down, whoever asked it to (R17, R24). Draining by default, which is what makes the
-     * handle a graceful shutdown.
+     * instance a graceful shutdown.
      */
     private ClosePath closePath = ClosePath.DRAIN_FIRST;
 
@@ -162,10 +163,10 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     private MissingTopic whenTopicMissing = MissingTopic.FAIL;
 
     /**
-     * The handle {@link #start} produced, so that a definition held in try-with-resources closes the instance it
+     * The instance {@link #start} produced, so that a definition held in try-with-resources closes the instance it
      * started. Null until it starts one.
      */
-    private volatile ConsumerHandle startedHandle;
+    private volatile ParallelConsumerInstance startedInstance;
 
     /**
      * The user's own rebalance listener, chained after the facade's (KTD2). Null when none was declared.
@@ -516,7 +517,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     /**
      * Validate, build the clients this definition needs, and run (F1).
      */
-    public ConsumerHandle start() {
+    public ParallelConsumerInstance start() {
         return start(ClientRuntime.kafka());
     }
 
@@ -524,7 +525,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * Validate and run against clients from the given runtime - which is how the sandbox runs a definition with no
      * broker, changing nothing else about it (R33, KTD9).
      */
-    public ConsumerHandle start(ClientRuntime runtime) {
+    public ParallelConsumerInstance start(ClientRuntime runtime) {
         refuseExportUntilItLands();
         ParallelConsumerOptions<byte[], byte[]> built = buildOptions(runtime);
         // The module, not the static factory: it is what owns this instance's PCMetrics, and registering the
@@ -537,10 +538,11 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         // by the partition that owns the records (KTD8).
         FluentMeters meters = FluentMeters.registerFor(module.pcMetrics(), topics());
         dispatcher.meters(meters);
-        ConsumerHandle handle = new ConsumerHandle(processor, dispatcher, routeTopicsByTopic(), closePath, meters);
-        // The wrapper's two callbacks into this handle are wired by startObserving() below, with the parked view
-        // and the loop-end hook - before anything polls, and so the handle need not publish them itself.
-        this.startedHandle = handle;
+        ParallelConsumerInstance instance = new ParallelConsumerInstance(processor, dispatcher,
+                routeTopicsByTopic(), closePath, meters);
+        // The wrapper's two callbacks into this instance are wired by startObserving() below, with the parked view
+        // and the loop-end hook - before anything polls, and so the instance need not publish them itself.
+        this.startedInstance = instance;
 
         // The facade's own listener, with the user's chained behind it when the definition declared one (KTD2).
         // The facade still keeps no per-assignment state to clear on a revocation - the attempt count and the
@@ -548,22 +550,22 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         // (KTD14). What it does need is to know that a rebalance has LANDED, because an assignment that is empty
         // because nothing was given to this member and one that is empty because nothing has happened yet are the
         // same set, and only the first is worth warning about.
-        processor.subscribe(subscriptionTopics(), handle.rebalanceListener(usersRebalanceListener));
+        processor.subscribe(subscriptionTopics(), instance.rebalanceListener(usersRebalanceListener));
         // Before the poll, so the first control loop already carries the hook rather than the second.
-        handle.startObserving();
+        instance.startObserving();
         if (requiresProducer()) {
             processor.pollAndProduceMany(dispatcher::dispatch);
         } else {
             processor.poll(dispatcher::dispatchWithoutProducing);
         }
         // After the subscription, so a fake consumer's partitions can be assigned to a listener that now exists,
-        // and with the handle, so a generator with a bound can close the instance when it reaches one (KTD9).
-        runtime.started(handle);
-        return handle;
+        // and with the instance, so a generator with a bound can close it when it reaches one (KTD9).
+        runtime.started(instance);
+        return instance;
     }
 
     /**
-     * Every routed topic mapped to the whole route's topics, so that asking the handle about any one topic of a
+     * Every routed topic mapped to the whole route's topics, so that asking the instance about any one topic of a
      * set-declared route answers for the route rather than for that topic alone (R5, R28).
      */
     private Map<String, Set<String>> routeTopicsByTopic() {
@@ -584,12 +586,12 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      */
     @Override
     public void close() {
-        ConsumerHandle handle = this.startedHandle;
-        if (handle == null) {
+        ParallelConsumerInstance instance = this.startedInstance;
+        if (instance == null) {
             log.debug("Nothing to close: this definition was never started");
             return;
         }
-        handle.close();
+        instance.close();
     }
 
     /**
@@ -725,7 +727,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
 
     /**
      * Null for an unrouted topic, as the view's contract says: a reader asks this to find out <em>whether</em> a
-     * topic is routed, so a refusal would make the ordinary answer an exception. The handle and the dispatch
+     * topic is routed, so a refusal would make the ordinary answer an exception. The instance and the dispatch
      * wrapper are the ones that refuse, because there the question is about a topic the caller believes it owns.
      */
     @Override

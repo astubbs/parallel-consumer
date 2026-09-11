@@ -24,7 +24,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 /**
  * What an operator can read about a set of parked records, and what they will be able to do about it (R28).
  * <p>
- * A view is a filter over the parked records the engine was holding when the handle was asked: it spans <b>every
+ * A view is a filter over the parked records the engine was holding when the instance was asked: it spans <b>every
  * partition of its route by default</b>, because a parked record is a record and an operator is looking for records,
  * not for partitions. {@link #partition(int)} narrows to one, which is the rare case, and {@link #byPartition()} is
  * the per-partition roll-out for a log line or a dashboard.
@@ -39,8 +39,8 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * its shard. All three arrive with the small-tier engine accessors, and until then an empty answer is the honest
  * one - a fabricated number an operator acted on would be worse than none.
  *
- * @see ConsumerHandle#topic(String)
- * @see ConsumerHandle#parkedAllTopics()
+ * @see ParallelConsumerInstance#topic(String)
+ * @see ParallelConsumerInstance#parkedAllTopics()
  */
 @InterfaceStability.Unstable
 public final class ParkedView {
@@ -84,7 +84,7 @@ public final class ParkedView {
 
     /**
      * The filtering form, used by the handle: it is handed everything parked and works out which of it is this
-     * view's. Package-private because a view is only ever taken from a handle, never built by a user.
+     * view's. Package-private because a view is only ever taken from an instance, never built by a user.
      */
     ParkedView(String name, Set<String> topics, Integer partition, List<ParkedRecord> allParked, Instant takenAt) {
         this(name, Collections.unmodifiableSet(new LinkedHashSet<>(topics)), partition, takenAt,
@@ -184,7 +184,8 @@ public final class ParkedView {
     }
 
     /**
-     * When this view was taken. It is read from the engine's retry queue at the moment the handle is asked, so this
+     * When this view was taken. It is read from the engine's retry queue at the moment the instance is asked, so
+     * this
      * is how long ago that was rather than how stale a cached answer is.
      */
     public Instant takenAt() {
@@ -197,7 +198,7 @@ public final class ParkedView {
     public ParkedView partition(int partition) {
         if (this.partition != null && this.partition != partition) {
             throw new IllegalArgumentException(msg("This view is already narrowed to partition {}, so it cannot be "
-                    + "narrowed to {} - take a fresh view from the handle", this.partition, partition));
+                    + "narrowed to {} - take a fresh view from the instance", this.partition, partition));
         }
         return new ParkedView(name, topics, partition, records, takenAt);
     }

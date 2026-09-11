@@ -105,10 +105,10 @@ class RecordingClientRuntime implements ClientRuntime {
      *
      * @param partitionsPerTopic how many partitions each of the definition's topics is assigned
      */
-    ConsumerHandle startAndAssign(ParallelConsumerDefinition definition, int partitionsPerTopic) {
+    ParallelConsumerInstance startAndAssign(ParallelConsumerDefinition definition, int partitionsPerTopic) {
         List<String> topics = new ArrayList<>(definition.topics());
         seedBeginningOffsets(topics, partitionsPerTopic);
-        ConsumerHandle handle = definition.start(this);
+        ParallelConsumerInstance handle = definition.start(this);
         commitOften(handle);
         consumer.subscribeWithRebalanceAndAssignment(topics, partitionsPerTopic);
         return handle;
@@ -135,13 +135,14 @@ class RecordingClientRuntime implements ClientRuntime {
     /**
      * Teardown's close, and deliberately <b>not</b> the handle's.
      * <p>
-     * {@link ConsumerHandle#close()} drains first (R17), and a scenario about parking or retrying leaves work that
+     * {@link ParallelConsumerInstance#close()} drains first (R17), and a scenario about parking or retrying
+     * leaves work that
      * by definition never completes - a parked record is incomplete until somebody resumes it, and a record under
      * an unbounded limit never stops failing. Draining those waits out the whole drain timeout and reports a
      * {@code TimeoutException} from the teardown of a test that passed. Teardown also runs on the failure path, so
      * it must not be able to hang; the classic test base closes without draining for the same reason.
      */
-    static void closeWithoutDraining(ConsumerHandle handle) {
+    static void closeWithoutDraining(ParallelConsumerInstance handle) {
         ((AbstractParallelEoSStreamProcessor<?, ?>) handle.processor()).closeDontDrainFirst();
     }
 
@@ -151,7 +152,7 @@ class RecordingClientRuntime implements ClientRuntime {
      * commit interval - and it is what the classic test base uses for the same reason.
      */
     @SuppressWarnings("deprecation")
-    private static void commitOften(ConsumerHandle handle) {
+    private static void commitOften(ParallelConsumerInstance handle) {
         ((AbstractParallelEoSStreamProcessor<?, ?>) handle.processor())
                 .setTimeBetweenCommits(Duration.ofMillis(100));
     }

@@ -70,19 +70,19 @@ public interface ClientRuntime {
     }
 
     /**
-     * Called once the instance is running, with the handle its caller is about to be given. Does nothing by
+     * Called once the instance is running, with the object its caller is about to be given. Does nothing by
      * default, and a runtime that only builds clients never needs it.
      * <p>
      * It exists because a fake needs a moment that a client factory method cannot give it: <b>after</b> the engine
      * has subscribed, so a mock consumer's partitions can be assigned to a listener that now exists, and with the
-     * handle in hand, so a generator with a bound can close the instance when it reaches one. Without it the
+     * instance in hand, so a generator with a bound can close it when it reaches one. Without it the
      * sandbox would need its own entry point and {@code definition.start(runtime)} would silently run unbounded
      * (R33, KTD9).
      * <p>
      * It runs on the thread that called {@code start}, before that call returns, so an implementation that blocks
      * blocks the caller.
      */
-    default void started(ConsumerHandle handle) {
+    default void started(ParallelConsumerInstance instance) {
         // Most runtimes hand over clients and take no further part.
     }
 

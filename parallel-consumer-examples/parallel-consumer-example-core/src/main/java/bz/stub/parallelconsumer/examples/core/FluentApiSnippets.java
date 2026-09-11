@@ -7,7 +7,7 @@ package bz.stub.parallelconsumer.examples.core;
 import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.fluent.Consumed;
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.fluent.Produced;
@@ -214,20 +214,20 @@ public class FluentApiSnippets {
     }
 
     /**
-     * The handle: what a running instance offers, and how it ends.
+     * The running instance: what it offers, and how it ends.
      */
-    void theHandle() {
+    void theInstance() {
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties());
         pc.json("orders", Order.class).process(context -> Outcome.succeeded());
-        // tag::fluentHandle[]
-        try (ConsumerHandle handle = pc.start()) {              // <1>
-            handle.awaitShutdown();                             // <2>
-            handle.stopRequest().ifPresent(stop ->              // <3>
+        // tag::fluentInstance[]
+        try (ParallelConsumerInstance instance = pc.start()) {  // <1>
+            instance.awaitShutdown();                           // <2>
+            instance.stopRequest().ifPresent(stop ->            // <3>
                     log.warn("A route stopped the instance: {}", stop.reason()));
-            handle.failureCause().ifPresent(cause ->            // <4>
+            instance.failureCause().ifPresent(cause ->          // <4>
                     log.error("The instance failed", cause));
         }
-        // end::fluentHandle[]
+        // end::fluentInstance[]
     }
 
     private static void warehouse(Order order) {

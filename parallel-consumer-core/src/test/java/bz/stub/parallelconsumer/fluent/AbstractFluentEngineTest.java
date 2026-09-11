@@ -35,7 +35,7 @@ abstract class AbstractFluentEngineTest {
      * The handle under test. Set it when a test starts one, and clear it when the test closes it itself, so the
      * teardown below does not close an instance twice.
      */
-    ConsumerHandle handle;
+    ParallelConsumerInstance handle;
 
     /**
      * Teardown's close, and deliberately <b>not</b> the handle's - see
