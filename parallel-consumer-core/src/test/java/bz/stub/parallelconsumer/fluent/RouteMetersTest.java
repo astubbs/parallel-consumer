@@ -64,10 +64,10 @@ class RouteMetersTest extends AbstractFluentEngineTest {
      * of pre-registering them, and a counter that was never registered would otherwise surface as a
      * NullPointerException out of the search rather than as the missing meter it is.
      */
-    private double counter(String topic, String outcome) {
+    private double counter(String topic, OutcomeTag outcome) {
         Counter counter = Search.in(registry).name(OUTCOME_COUNTER)
-                .tag("topic", topic).tag("outcome", outcome).counter();
-        assertWithMessage("counter %s with topic=%s outcome=%s", OUTCOME_COUNTER, topic, outcome)
+                .tag("topic", topic).tag("outcome", outcome.tagValue()).counter();
+        assertWithMessage("counter %s with topic=%s outcome=%s", OUTCOME_COUNTER, topic, outcome.tagValue())
                 .that(counter).isNotNull();
         return counter.count();
     }
@@ -97,21 +97,21 @@ class RouteMetersTest extends AbstractFluentEngineTest {
 
         handle = runtime.startAndAssign(pc, 1);
         // Registered at start, before any record: all four outcomes are there reading zero.
-        assertThat(counter(TOPIC, FluentMeters.SUCCEEDED)).isEqualTo(0d);
-        assertThat(counter(TOPIC, FluentMeters.FILTERED)).isEqualTo(0d);
-        assertThat(counter(TOPIC, FluentMeters.PARKED)).isEqualTo(0d);
-        assertThat(counter(TOPIC, FluentMeters.STOPPED)).isEqualTo(0d);
+        assertThat(counter(TOPIC, OutcomeTag.SUCCEEDED)).isEqualTo(0d);
+        assertThat(counter(TOPIC, OutcomeTag.FILTERED)).isEqualTo(0d);
+        assertThat(counter(TOPIC, OutcomeTag.PARKED)).isEqualTo(0d);
+        assertThat(counter(TOPIC, OutcomeTag.STOPPED)).isEqualTo(0d);
 
         runtime.publish(TOPIC, 0, 0, "key-0", "succeed");
         runtime.publish(TOPIC, 0, 1, "key-1", "filter");
         runtime.publish(TOPIC, 0, 2, "key-2", "park");
 
         Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
-            assertThat(counter(TOPIC, FluentMeters.SUCCEEDED)).isEqualTo(1d);
-            assertThat(counter(TOPIC, FluentMeters.FILTERED)).isEqualTo(1d);
-            assertThat(counter(TOPIC, FluentMeters.PARKED)).isEqualTo(1d);
+            assertThat(counter(TOPIC, OutcomeTag.SUCCEEDED)).isEqualTo(1d);
+            assertThat(counter(TOPIC, OutcomeTag.FILTERED)).isEqualTo(1d);
+            assertThat(counter(TOPIC, OutcomeTag.PARKED)).isEqualTo(1d);
         });
-        assertThat(counter(TOPIC, FluentMeters.STOPPED)).isEqualTo(0d);
+        assertThat(counter(TOPIC, OutcomeTag.STOPPED)).isEqualTo(0d);
     }
 
     /**
@@ -143,7 +143,7 @@ class RouteMetersTest extends AbstractFluentEngineTest {
         });
         // A gauge exists for every assigned partition, whether or not anything is parked on it.
         assertThat(Search.in(registry).name(PARKED_GAUGE).gauges()).hasSize(2);
-        assertThat(counter(TOPIC, FluentMeters.PARKED)).isEqualTo(3d);
+        assertThat(counter(TOPIC, OutcomeTag.PARKED)).isEqualTo(3d);
     }
 
     private double gauge(String name, int partition) {
@@ -173,7 +173,7 @@ class RouteMetersTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
         Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
             assertThat(Search.in(registry).name(PARKED_GAUGE).gauges()).isNotEmpty();
-            assertThat(counter(TOPIC, FluentMeters.PARKED)).isEqualTo(1d);
+            assertThat(counter(TOPIC, OutcomeTag.PARKED)).isEqualTo(1d);
         });
 
         // Not the handle's drain: a parked record never completes, so a drain would wait out the drain timeout.

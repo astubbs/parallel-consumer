@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,38 +60,6 @@ import java.util.function.Supplier;
  */
 @Slf4j
 class FluentMeters {
-
-    /**
-     * The values of the {@code outcome} tag: the terminal outcomes of R7, plus the stop request of R24, which is
-     * not a terminal outcome of the record but is counted beside them.
-     */
-    static final String SUCCEEDED = "succeeded";
-
-    /**
-     * Records the route deliberately skipped ({@link Outcome#filtered()}). Counted apart from
-     * {@link #SUCCEEDED} although both complete and commit, because "nothing happened to it" and "it was processed"
-     * are different answers to the only question an operator is asking (R8).
-     */
-    static final String FILTERED = "filtered";
-
-    /**
-     * Records that ran out of attempts and park cycles, or that a function parked outright. This is the count of
-     * park <em>events</em> and it never goes down; the size of the set an operator can act on is the gauge below.
-     */
-    static final String PARKED = "parked";
-
-    /**
-     * Counted against the record whose route asked the instance to stop (R24). Not a terminal outcome of that
-     * record - it is left incomplete - but it is counted here because the tag answers "what became of a record on
-     * this topic", and an instance that stopped has exactly one of these.
-     */
-    static final String STOPPED = "stopped";
-
-    /**
-     * The outcomes to pre-register a counter for, in the order a dashboard reads best. Iterated at start rather
-     * than consulted per record, so the order costs nothing on the hot path.
-     */
-    private static final String[] OUTCOMES = {SUCCEEDED, FILTERED, PARKED, STOPPED};
 
     /**
      * The tag every meter here carries, because a route is named by its topic and that is how a user asks about it.
@@ -132,14 +101,15 @@ class FluentMeters {
      * <p>
      * Nested rather than keyed on a composed {@code topic + separator + outcome} string, which is what it was:
      * that built a fresh String for every terminal record, on the hottest path this library has, purely to look a
-     * counter up. Two lookups of interned constants allocate nothing. (The separator in that composed key was also
+     * counter up. A hash lookup of an interned topic and an {@link EnumMap} index allocate nothing. (The separator
+     * in that composed key was also
      * a raw NUL byte, which made this file read as binary to {@code grep} and to {@code file}, so every tree-wide
      * sweep silently skipped it.)
      * <p>
      * Populated entirely inside {@code registerFor} before this object is published, so the plain maps need no
      * synchronisation.
      */
-    private final Map<String, Map<String, Counter>> countersByTopic = new LinkedHashMap<>();
+    private final Map<String, Map<OutcomeTag, Counter>> countersByTopic = new LinkedHashMap<>();
 
     /**
      * The gauge pair registered for each assigned partition, kept so that a partition this instance loses can have
@@ -172,10 +142,10 @@ class FluentMeters {
                                     Supplier<List<WorkContainer<?, ?>>> parkedContainers) {
         FluentMeters meters = new FluentMeters(metrics, parkedContainers);
         for (String topic : topics) {
-            Map<String, Counter> counters = new LinkedHashMap<>();
-            for (String outcome : OUTCOMES) {
+            Map<OutcomeTag, Counter> counters = new EnumMap<>(OutcomeTag.class);
+            for (OutcomeTag outcome : OutcomeTag.values()) {
                 counters.put(outcome, metrics.getCounterFromMetricDef(PCMetricsDef.ROUTE_RECORDS,
-                        Tag.of(TOPIC_TAG, topic), Tag.of(OUTCOME_TAG, outcome)));
+                        Tag.of(TOPIC_TAG, topic), Tag.of(OUTCOME_TAG, outcome.tagValue())));
             }
             meters.countersByTopic.put(topic, counters);
         }
@@ -196,11 +166,11 @@ class FluentMeters {
      * Called from a worker thread, in the outcome path of a record. A topic that is not there - one this instance
      * does not route, which cannot happen - is a missing count, never a failed record.
      */
-    void recordOutcome(String topic, String outcome) {
+    void recordOutcome(String topic, OutcomeTag outcome) {
         if (metrics == null) {
             return;
         }
-        Map<String, Counter> counters = countersByTopic.get(topic);
+        Map<OutcomeTag, Counter> counters = countersByTopic.get(topic);
         Counter counter = counters == null ? null : counters.get(outcome);
         if (counter == null) {
             log.debug("No {} counter for topic {} - not counting it", outcome, topic);
@@ -346,7 +316,7 @@ class FluentMeters {
             return;
         }
         deregistered = true;
-        for (Map<String, Counter> counters : countersByTopic.values()) {
+        for (Map<OutcomeTag, Counter> counters : countersByTopic.values()) {
             for (Counter counter : counters.values()) {
                 metrics.removeMeter(counter);
             }

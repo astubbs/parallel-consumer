@@ -457,17 +457,17 @@ class RouteDispatcher {
         switch (outcome.kind()) {
             case SUCCEEDED:
                 succeeded.increment();
-                meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
+                meters.recordOutcome(record.topic(), OutcomeTag.SUCCEEDED);
                 return emptyProduce();
             case FILTERED:
                 // Completes and commits exactly as a success does, and is counted apart from one (R8).
                 filtered.increment();
-                meters.recordOutcome(record.topic(), FluentMeters.FILTERED);
+                meters.recordOutcome(record.topic(), OutcomeTag.FILTERED);
                 return emptyProduce();
             case PRODUCE:
                 List<ProducerRecord<byte[], byte[]>> serialised = serialise(route, outcome.records());
                 succeeded.increment();
-                meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
+                meters.recordOutcome(record.topic(), OutcomeTag.SUCCEEDED);
                 producedRecords.add(serialised.size());
                 return serialised;
             case PARK:
@@ -605,7 +605,7 @@ class RouteDispatcher {
 
         notifyObserver(route, context, failure, attempts);
         parked.increment();
-        meters.recordOutcome(record.topic(), FluentMeters.PARKED);
+        meters.recordOutcome(record.topic(), OutcomeTag.PARKED);
         if (failure == null) {
             // Nothing failed: the function asked for this, so it is not a warning.
             log.info(message);

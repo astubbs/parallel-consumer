@@ -398,7 +398,7 @@ public class ConsumerHandle implements AutoCloseable {
         log.warn("Stopping this instance: the route for {} asked at {}-{}@{}: {}. The record is left incomplete, so "
                         + "a restart delivers it again - and will stop again unless the definition changes.",
                 record.topic(), record.topic(), record.partition(), record.offset(), reason);
-        meters.recordOutcome(record.topic(), FluentMeters.STOPPED);
+        meters.recordOutcome(record.topic(), OutcomeTag.STOPPED);
         try {
             // Non-blocking: it moves the controller's state and wakes it, it does not wait for anything. The
             // controller then stops handing out new work AND takes the batches already queued in the worker pool
