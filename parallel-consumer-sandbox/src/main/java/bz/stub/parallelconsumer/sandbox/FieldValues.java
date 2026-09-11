@@ -123,18 +123,15 @@ final class FieldValues {
         // Money, as BigDecimal or as a double.
         table.add(new Rule("money(BigDecimal)",
                 (name, type) -> BigDecimal.class.equals(type) && mentionsMoney(name),
-                () -> BigDecimal.valueOf(faker.number().randomDouble(2, 1, 2500))
-                        .setScale(2, RoundingMode.HALF_UP)));
+                () -> amountBetween(1, 2500)));
         table.add(new Rule("money(double)",
                 (name, type) -> isDouble(type) && mentionsMoney(name),
-                () -> BigDecimal.valueOf(faker.number().randomDouble(2, 1, 2500))
-                        .setScale(2, RoundingMode.HALF_UP).doubleValue()));
+                () -> amountBetween(1, 2500).doubleValue()));
 
         // Parcel weights and dimensions, which look nothing like money.
         table.add(new Rule("weight",
                 (name, type) -> isDouble(type) && containsAny(name, "weight", "mass", "kg"),
-                () -> BigDecimal.valueOf(faker.number().randomDouble(2, 1, 30))
-                        .setScale(2, RoundingMode.HALF_UP).doubleValue()));
+                () -> amountBetween(1, 30).doubleValue()));
 
         // Counts: a quantity of one to a dozen reads as a real order; Instancio's own int is nine digits.
         table.add(new Rule("quantity",
@@ -175,10 +172,21 @@ final class FieldValues {
         payload.put("email", faker.internet().emailAddress());
         payload.put("city", faker.address().city());
         payload.put("status", oneOf(PARCEL_STATUSES));
-        payload.put("totalAmount", BigDecimal.valueOf(faker.number().randomDouble(2, 1, 2500))
-                .setScale(2, RoundingMode.HALF_UP));
+        payload.put("totalAmount", amountBetween(1, 2500));
         payload.put("placedAt", recentInstant().toString());
         return payload;
+    }
+
+    /**
+     * A two-decimal amount in a range, which is what both the money rules and the weight rule want and what none
+     * of them should be spelling out separately: one Datafaker draw, then the rounding, so that moving the range
+     * cannot accidentally move the draw.
+     *
+     * @param min the lowest value the draw can take, inclusive
+     * @param max the highest value the draw can take
+     */
+    private BigDecimal amountBetween(int min, int max) {
+        return BigDecimal.valueOf(faker.number().randomDouble(2, min, max)).setScale(2, RoundingMode.HALF_UP);
     }
 
     private Instant recentInstant() {

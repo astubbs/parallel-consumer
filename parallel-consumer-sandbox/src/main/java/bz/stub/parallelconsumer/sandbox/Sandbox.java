@@ -287,9 +287,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     private static Map<TopicPartition, Long> parkedCountsByPartition(ConsumerHandle handle) {
         Map<TopicPartition, Long> counts = new LinkedHashMap<>();
         for (ParkedRecord parked : handle.parkedAllTopics().records()) {
-            TopicPartition partition = new TopicPartition(parked.topic(), parked.partition());
-            Long already = counts.get(partition);
-            counts.put(partition, already == null ? 1L : already + 1L);
+            counts.merge(new TopicPartition(parked.topic(), parked.partition()), 1L, Long::sum);
         }
         return counts;
     }
