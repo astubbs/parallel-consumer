@@ -4,7 +4,6 @@ package bz.stub.parallelconsumer.sandbox;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.fluent.Consumed;
 import bz.stub.parallelconsumer.fluent.ConsumerHandle;
 import bz.stub.parallelconsumer.fluent.Format;
@@ -18,7 +17,6 @@ import org.junit.jupiter.api.Timeout;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Properties;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -48,7 +46,7 @@ class RouteRefusalTest {
 
     @Test
     void aRouteWhoseFormatCanOnlyReadIsRefusedNamingItsTopic() {
-        ParallelConsumerDefinition definition = ParallelConsumer.connect(new Properties());
+        ParallelConsumerDefinition definition = SandboxFixtures.definition();
         definition.topic("legacy")
                 .consumed(Consumed.with(Formats.string(), Format.reading(SHOUTY_READER)))
                 .process(context -> Outcome.succeeded());
@@ -63,7 +61,7 @@ class RouteRefusalTest {
 
     @Test
     void theSameRouteWithASerialiserAndATypeGeneratesAndEncodes() {
-        ParallelConsumerDefinition definition = ParallelConsumer.connect(new Properties());
+        ParallelConsumerDefinition definition = SandboxFixtures.definition();
         definition.topic("legacy")
                 .consumed(Consumed.with(Formats.string(), Format.of(SHOUTY_READER, SHOUTY_WRITER, String.class)))
                 .process(context -> Outcome.succeeded());
@@ -113,7 +111,7 @@ class RouteRefusalTest {
      * A definition may only be started once, so each arm of the test above needs its own.
      */
     private static ParallelConsumerDefinition untypedRoute() {
-        ParallelConsumerDefinition definition = ParallelConsumer.connect(new Properties());
+        ParallelConsumerDefinition definition = SandboxFixtures.definition();
         definition.topic("legacy")
                 .consumed(Consumed.with(Formats.string(), Format.of(SHOUTY_READER, SHOUTY_WRITER)))
                 .process(context -> Outcome.succeeded());

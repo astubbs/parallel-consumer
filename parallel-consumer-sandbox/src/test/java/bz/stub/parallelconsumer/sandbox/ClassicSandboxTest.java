@@ -56,16 +56,12 @@ class ClassicSandboxTest {
                 .build();
 
         try (ClassicSandbox<String, Order> classic = sandbox.classic(String.class, Order.class, "orders")) {
-            ParallelEoSStreamProcessor<String, Order> pc = new ParallelEoSStreamProcessor<>(
-                    ParallelConsumerOptions.<String, Order>builder()
-                            // The one line that differs from the broker form.
-                            .consumer(classic.consumer())
-                            .ordering(ProcessingOrder.PARTITION)
-                            .build());
-            pc.subscribe(classic.topics());
-            pc.poll(context -> seen.add(context.getSingleRecord().value()));
+            // SandboxFixtures.partitionOrdered is the ordinary options builder with one line changed - the
+            // consumer is this sandbox's - which is the whole of what a classic application alters.
+            ParallelEoSStreamProcessor<String, Order> pc = SandboxFixtures.startClassic(classic,
+                    SandboxFixtures.partitionOrdered(classic),
+                    context -> seen.add(context.getSingleRecord().value()));
 
-            classic.startGenerating(pc);
             assertThat(classic.awaitBound(Duration.ofSeconds(30))).isTrue();
             pc.closeDrainFirst();
         }
@@ -91,20 +87,20 @@ class ClassicSandboxTest {
 
         try (ClassicSandbox<String, Order> classic = sandbox.classic(String.class, Order.class, "orders")) {
             var producer = classic.producer(new StringSerializer(), ORDER_WRITER);
-            ParallelEoSStreamProcessor<String, Order> pc = new ParallelEoSStreamProcessor<>(
+            ParallelEoSStreamProcessor<String, Order> pc = SandboxFixtures.startClassic(classic,
                     ParallelConsumerOptions.<String, Order>builder()
                             .consumer(classic.consumer())
                             .producer(producer)
                             .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
                             .ordering(ProcessingOrder.PARTITION)
-                            .build());
+                            .build(),
+                    context -> log.debug("{}", context.getSingleRecord().value()));
 
+            // Read after the instance was constructed, which is when the producer wrapper decides: the flag is a
+            // latch, so asking once the run has started says the same thing as asking a moment earlier.
             assertWithMessage("the producer wrapper initialises transactions when the commit mode asks for them")
                     .that(producer.transactionInitialized()).isTrue();
 
-            pc.subscribe(classic.topics());
-            pc.poll(context -> log.debug("{}", context.getSingleRecord().value()));
-            classic.startGenerating(pc);
             assertThat(classic.awaitBound(Duration.ofSeconds(30))).isTrue();
             pc.closeDrainFirst();
 

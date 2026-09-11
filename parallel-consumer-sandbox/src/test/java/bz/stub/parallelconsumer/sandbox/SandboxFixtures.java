@@ -5,13 +5,19 @@ package bz.stub.parallelconsumer.sandbox;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.Properties;
+import java.util.function.Consumer;
 
 /**
  * The setup every sandbox run-level test repeats: an empty definition, a route that always succeeds, and the
@@ -44,6 +50,53 @@ final class SandboxFixtures {
                                                               Class<V> valueType) {
         definition.json(topic, valueType).process(context -> Outcome.succeeded());
         return definition;
+    }
+
+    /**
+     * The options every classic sandbox test that is not about the options themselves builds: this sandbox's
+     * consumer, and partition ordering because a classic test asserting on what arrived wants the order a broker
+     * would have given it.
+     */
+    static <K, V> ParallelConsumerOptions<K, V> partitionOrdered(ClassicSandbox<K, V> classic) {
+        return ParallelConsumerOptions.<K, V>builder()
+                .consumer(classic.consumer())
+                .ordering(ProcessingOrder.PARTITION)
+                .build();
+    }
+
+    /**
+     * Builds a classic instance over a sandbox and starts generating into it - the four lines every classic test
+     * repeated, which the duplicate-code check flagged as an eighteen-line clone.
+     * <p>
+     * The options are the caller's, because what a classic test varies is exactly the options; the poll function
+     * is the caller's, because that is where the test's evidence is collected; and the instance is returned
+     * rather than closed here, because a bound closes it and a test that reaches its bound still calls
+     * {@code closeDrainFirst()} afterwards to cover the run that did not.
+     */
+    static <K, V> ParallelEoSStreamProcessor<K, V> startClassic(ClassicSandbox<K, V> classic,
+                                                                ParallelConsumerOptions<K, V> options,
+                                                                Consumer<PollContext<K, V>> onPoll) {
+        ParallelEoSStreamProcessor<K, V> pc = new ParallelEoSStreamProcessor<>(options);
+        pc.subscribe(classic.topics());
+        pc.poll(onPoll);
+        classic.startGenerating(pc);
+        return pc;
+    }
+
+    /**
+     * A sandbox consumer with one topic, already subscribed and assigned, for a test that drives the consumer
+     * directly rather than through a run.
+     * <p>
+     * {@code SeededOffsetsTest} deliberately does not use this and spells the same two calls out inline: the
+     * order of seeding and assignment is that file's subject, so a reader has to see it.
+     */
+    static <K, V> SandboxConsumer<K, V> assignedConsumer(String topic, int partitions) {
+        SandboxConsumer<K, V> consumer = new SandboxConsumer<>(Collections.singletonList(topic), partitions);
+        // MockConsumer#rebalance is the DYNAMIC assignment path and refuses to run before something has
+        // subscribed - which in a real run is the engine, in ClientRuntime#started.
+        consumer.subscribe(Collections.singletonList(topic));
+        consumer.assignAfterSeeding();
+        return consumer;
     }
 
     /**

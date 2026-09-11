@@ -4,8 +4,6 @@ package bz.stub.parallelconsumer.sandbox;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.fluent.Consumed;
 import bz.stub.parallelconsumer.fluent.ConsumerHandle;
@@ -131,19 +129,14 @@ class KeyPartitioningTest {
                 .build();
 
         try (ClassicSandbox<byte[], Order> classic = sandbox.classic(byte[].class, Order.class, TOPIC)) {
-            ParallelEoSStreamProcessor<byte[], Order> pc = new ParallelEoSStreamProcessor<>(
-                    ParallelConsumerOptions.<byte[], Order>builder()
-                            .consumer(classic.consumer())
-                            .ordering(ProcessingOrder.PARTITION)
-                            .build());
-            pc.subscribe(classic.topics());
-            pc.poll(context -> {
-                var record = context.getSingleRecord();
-                placements.computeIfAbsent(new String(record.key(), StandardCharsets.UTF_8),
-                        absent -> ConcurrentHashMap.newKeySet()).add(record.partition());
-            });
+            ParallelEoSStreamProcessor<byte[], Order> pc = SandboxFixtures.startClassic(classic,
+                    SandboxFixtures.partitionOrdered(classic),
+                    context -> {
+                        var record = context.getSingleRecord();
+                        placements.computeIfAbsent(new String(record.key(), StandardCharsets.UTF_8),
+                                absent -> ConcurrentHashMap.newKeySet()).add(record.partition());
+                    });
 
-            classic.startGenerating(pc);
             assertWithMessage("the record bound should have been reached")
                     .that(classic.awaitBound(Duration.ofSeconds(60))).isTrue();
             pc.closeDrainFirst();

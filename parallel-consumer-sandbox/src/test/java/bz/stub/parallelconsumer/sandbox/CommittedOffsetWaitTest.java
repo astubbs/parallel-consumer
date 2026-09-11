@@ -58,7 +58,7 @@ class CommittedOffsetWaitTest {
 
     @Test
     void aSandboxThatPublishedNothingHasNothingToWaitFor() {
-        SandboxConsumer<String, String> consumer = assignedConsumer(1);
+        SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 1);
 
         consumer.awaitEveryPublishedRecordCommitted(IMPATIENT);
 
@@ -67,7 +67,7 @@ class CommittedOffsetWaitTest {
 
     @Test
     void theWaitReturnsOnceEachPartitionsCommittedOffsetHasReachedItsPublishedCount() {
-        SandboxConsumer<String, String> consumer = assignedConsumer(2);
+        SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 2);
         consumer.publish("orders", 0, "a", "1");
         consumer.publish("orders", 0, "b", "2");
         consumer.publish("orders", 1, "c", "3");
@@ -80,7 +80,7 @@ class CommittedOffsetWaitTest {
 
     @Test
     void aPartiallyCommittedPartitionFailsTheWaitNamingItAndTheShortfall() {
-        SandboxConsumer<String, String> consumer = assignedConsumer(2);
+        SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 2);
         consumer.publish("orders", 0, "a", "1");
         consumer.publish("orders", 0, "b", "2");
         consumer.publish("orders", 0, "c", "3");
@@ -105,7 +105,7 @@ class CommittedOffsetWaitTest {
      */
     @Test
     void aPartitionWhoseOnlyOutstandingRecordIsParkedIsAccountedFor() {
-        SandboxConsumer<String, String> consumer = assignedConsumer(1);
+        SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 1);
         consumer.publish("orders", 0, "a", "1");
         consumer.countingParkedRecordsWith(() -> Collections.singletonMap(ORDERS_0, 1L));
 
@@ -123,7 +123,7 @@ class CommittedOffsetWaitTest {
      */
     @Test
     void aParkedRecordInsideTheEncodedRangeIsCountedOnceAndNotTwice() {
-        SandboxConsumer<String, String> consumer = assignedConsumer(1);
+        SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 1);
         // Offset 0 parks; 1 and 2 succeed; 3 is still in flight.
         consumer.publish("orders", 0, "a", "1");
         consumer.publish("orders", 0, "b", "2");
@@ -148,7 +148,7 @@ class CommittedOffsetWaitTest {
      */
     @Test
     void aParkedRecordInsideTheEncodedRangeSatisfiesTheWaitOnceTheRestHaveCompleted() {
-        SandboxConsumer<String, String> consumer = assignedConsumer(1);
+        SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 1);
         consumer.publish("orders", 0, "a", "1");
         consumer.publish("orders", 0, "b", "2");
         consumer.publish("orders", 0, "c", "3");
@@ -176,7 +176,7 @@ class CommittedOffsetWaitTest {
      */
     @Test
     void twoCommitsAtOneOffsetKeepTheOneThatAccountsForMore() {
-        SandboxConsumer<String, String> consumer = assignedConsumer(1);
+        SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 1);
         // Offset 0 parks, so the committed offset can never move past it; 1, 2 and 3 complete.
         consumer.publish("orders", 0, "a", "1");
         consumer.publish("orders", 0, "b", "2");
@@ -226,7 +226,7 @@ class CommittedOffsetWaitTest {
      */
     @Test
     void offsetsCommittedInsideAProducerTransactionCountAsCommitted() {
-        SandboxConsumer<String, String> consumer = assignedConsumer(1);
+        SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 1);
         consumer.publish("orders", 0, "a", "1");
         consumer.publish("orders", 0, "b", "2");
 
@@ -255,23 +255,13 @@ class CommittedOffsetWaitTest {
      */
     @Test
     void aConsumerClosedUnderTheWaitEndsItRatherThanFailingIt() {
-        SandboxConsumer<String, String> consumer = assignedConsumer(1);
+        SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 1);
         consumer.publish("orders", 0, "a", "1");
         consumer.close();
 
         consumer.awaitEveryPublishedRecordCommitted(IMPATIENT);
 
         assertThat(consumer.highestCommittedOffsets()).doesNotContainKey(ORDERS_0);
-    }
-
-    private static SandboxConsumer<String, String> assignedConsumer(int partitions) {
-        SandboxConsumer<String, String> consumer =
-                new SandboxConsumer<>(Collections.singletonList("orders"), partitions);
-        // MockConsumer#rebalance is the DYNAMIC assignment path and refuses to run before something has
-        // subscribed - which in a real run is the engine, in ClientRuntime#started.
-        consumer.subscribe(Collections.singletonList("orders"));
-        consumer.assignAfterSeeding();
-        return consumer;
     }
 
     private static Map<TopicPartition, OffsetAndMetadata> offsets(TopicPartition first, long firstOffset,

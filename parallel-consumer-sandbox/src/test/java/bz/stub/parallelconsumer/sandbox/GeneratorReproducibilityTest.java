@@ -4,8 +4,6 @@ package bz.stub.parallelconsumer.sandbox;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.sandbox.demo.Order;
 import org.junit.jupiter.api.Test;
@@ -136,14 +134,9 @@ class GeneratorReproducibilityTest {
                 .build();
 
         try (ClassicSandbox<String, Order> classic = sandbox.classic(String.class, Order.class, "orders")) {
-            ParallelEoSStreamProcessor<String, Order> pc = new ParallelEoSStreamProcessor<>(
-                    ParallelConsumerOptions.<String, Order>builder()
-                            .consumer(classic.consumer())
-                            .ordering(ProcessingOrder.PARTITION)
-                            .build());
-            pc.subscribe(classic.topics());
-            pc.poll(context -> seen.add(context.getSingleRecord().value()));
-            classic.startGenerating(pc);
+            ParallelEoSStreamProcessor<String, Order> pc = SandboxFixtures.startClassic(classic,
+                    SandboxFixtures.partitionOrdered(classic),
+                    context -> seen.add(context.getSingleRecord().value()));
             // The bound waits for every published record to commit and then closes this instance itself, so this
             // returning true is already the end of the run rather than the middle of it.
             assertThat(classic.awaitBound(Duration.ofSeconds(30))).isTrue();
