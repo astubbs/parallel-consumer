@@ -169,6 +169,10 @@ class FluentQuickstartAppTest {
                 + "leaves that line of the example unproven; the generator fills the status field from a known set "
                 + "of parcel statuses, one of which is RETURNED. Counters at close: %s", outcomesAtClose)
                 .that(outcome(FluentQuickstartApp.ORDERS_TOPIC, "filtered")).isGreaterThan(0.0);
+        // Absent and zero are the same reading here - outcome() defaults a missing counter to 0.0, and the
+        // counters are created on first use, so a route that never parks has no parked counter at all. What
+        // keeps this from passing over a broken meter sweep or a renamed tag is the pair of assertions around
+        // it: the orders tag is proven live above, and the parked tag is proven live below.
         assertWithMessage("a healthy route parks nothing")
                 .that(outcome(FluentQuickstartApp.ORDERS_TOPIC, "parked")).isEqualTo(0.0);
         assertWithMessage("every scan's downstream is down, so every scan that ran out of attempts parked")
@@ -192,7 +196,9 @@ class FluentQuickstartAppTest {
             assertThat(record.attempts()).isEqualTo(3);
             assertThat(record.failure()).isInstanceOf(IllegalStateException.class);
         });
-        assertThat(handle.parkedAllTopics().count()).isAtLeast(parked.count());
+        assertWithMessage("the scans route is the only one that parks in this run, so the all-topics view holds "
+                + "exactly what the one-topic view does - isAtLeast would have been true by construction")
+                .that(handle.parkedAllTopics().count()).isEqualTo(parked.count());
 
         app.reportParked(handle);
     }
