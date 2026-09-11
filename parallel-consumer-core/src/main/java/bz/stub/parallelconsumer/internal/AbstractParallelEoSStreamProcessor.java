@@ -505,6 +505,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     protected AbstractParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> newOptions, PCModule<K, V> module) {
         requireNonNull(newOptions, "Options must be supplied");
+        // Before anything is built from them: on the configuration path the module constructs the consumer, and a
+        // refusal that names the option the caller set is worth more than the client constructor's own complaint
+        // about a key they never typed. Pure checks, so running them here rather than inside
+        // validateConfiguration() changes nothing for a valid configuration.
+        newOptions.validate();
         this.module = module;
         this.mdcPropagation = module.mdcPropagation();
         options = newOptions;
@@ -556,11 +561,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     private void validateConfiguration() {
-        options.validate();
-
+        // options.validate() has already run, at the top of the constructor - these three need the consumer, which
+        // on the configuration path does not exist until the module builds it.
         checkGroupIdConfigured();
-        checkNotSubscribed(options.getConsumer());
-        checkAutoCommitIsDisabled(options.getConsumer());
+        checkNotSubscribed(module.consumer());
+        checkAutoCommitIsDisabled(module.consumer());
     }
 
     private void checkGroupIdConfigured() {

@@ -14,6 +14,8 @@ import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 
@@ -135,8 +137,43 @@ public class PCModule<K, V> {
         return optionsInstance.getProducer();
     }
 
+    private Consumer<K, V> resolvedConsumer;
+
+    /**
+     * The consumer PC uses: the caller's instance, or the one PC builds from
+     * {@link ParallelConsumerOptions#getConsumerConfig()}. Memoised, so every collaborator that asks - the
+     * {@link ConsumerManager} that wraps it, the start-up checks, the offset codec - polls the same client.
+     */
     public Consumer<K, V> consumer() {
-        return optionsInstance.getConsumer();
+        if (this.resolvedConsumer == null) {
+            this.resolvedConsumer = options().isConsumerInstanceSupplied()
+                    ? options().getConsumer()
+                    : buildConsumer(withAutoCommitOff(new LinkedHashMap<>(options().getConsumerConfig())));
+        }
+        return resolvedConsumer;
+    }
+
+    /**
+     * Constructs the consumer on the configuration path: {@code new KafkaConsumer<>(config)}, deserializers and all,
+     * exactly as the caller would have. The substitution seam for a test that needs the consumer PC builds to be a
+     * {@link org.apache.kafka.clients.consumer.MockConsumer}. The map is a copy, so an override may read or edit it
+     * without touching the options, and it already has {@code enable.auto.commit} set false.
+     */
+    protected Consumer<K, V> buildConsumer(Map<String, Object> consumerConfig) {
+        return new KafkaConsumer<>(consumerConfig);
+    }
+
+    /**
+     * PC coordinates offsets itself, so a consumer it builds must not also commit them - two committers on one group
+     * member is the double-commit this library exists to avoid. An explicit true never reaches here:
+     * {@link ParallelConsumerOptions#validate()} refuses it, at the point that can name the option. So the only
+     * values this replaces are absent and an explicit false, and neither is worth acting on.
+     */
+    private Map<String, Object> withAutoCommitOff(Map<String, Object> consumerConfig) {
+        Object ignoredPreviousValue = consumerConfig.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        log.debug("Setting {}=false on the consumer PC is building - PC commits offsets itself",
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG);
+        return consumerConfig;
     }
 
     private ConsumerManager<K, V> consumerManager;
@@ -147,7 +184,7 @@ public class PCModule<K, V> {
             // by the poll thread when BrokerPollSystem.controlLoop starts. Before that,
             // init-time calls (subscribe, groupMetadata) are allowed from any thread.
             // See confluentinc#857.
-            var confinedConsumer = new ThreadConfinedConsumer<>(optionsInstance.getConsumer());
+            var confinedConsumer = new ThreadConfinedConsumer<>(consumer());
             consumerManager = new ConsumerManager<>(confinedConsumer,
                     optionsInstance.getOffsetCommitTimeout(),
                     optionsInstance.getSaslAuthenticationRetryTimeout(),
