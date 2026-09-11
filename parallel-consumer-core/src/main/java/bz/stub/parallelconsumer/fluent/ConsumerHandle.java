@@ -149,8 +149,9 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
      */
     void onControlLoopEnd() {
         try {
-            Set<TopicPartition> assigned = new LinkedHashSet<>(processor.getWm().getPm()
-                    .getAssignedPartitions().keySet());
+            // Not copied: getAssignedPartitions() builds a fresh unmodifiable map on every call, so its key set is
+            // already a stable, private view - and this runs on every pass of the control loop.
+            Set<TopicPartition> assigned = processor.getWm().getPm().getAssignedPartitions().keySet();
             meters.syncPartitionGauges(assigned);
             logRoutesWithNoAssignment(assigned);
         } catch (Throwable hookFailed) { //NOSONAR - a throw from here is fatal to the control loop

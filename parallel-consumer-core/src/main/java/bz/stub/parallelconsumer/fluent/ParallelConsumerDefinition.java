@@ -692,10 +692,11 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         // The gauges read the same parked set the parked view answers from, through the same wrapper - the engine's
         // retry queue, once the handle has wired the dispatcher to it below (KTD8, KTD14).
         FluentMeters meters = FluentMeters.registerFor(module.pcMetrics(), topics(),
-                dispatcher::parkedAcrossAllRoutes);
+                dispatcher::parkedContainersNow);
         dispatcher.meters(meters);
         ConsumerHandle handle = new ConsumerHandle(processor, dispatcher, routeTopicsByTopic(), closePath, meters);
-        dispatcher.instanceControl(handle);
+        // The wrapper's two callbacks into this handle are wired by startObserving() below, with the parked view
+        // and the loop-end hook - before anything polls, and so the handle need not publish them itself.
         this.startedHandle = handle;
 
         // The user's own rebalance listener, if the definition declared one (KTD2). The facade keeps no

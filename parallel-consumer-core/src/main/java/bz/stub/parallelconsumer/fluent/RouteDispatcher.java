@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
 import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.RecordContext;
+import bz.stub.parallelconsumer.internal.UserFunctions;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -22,7 +23,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.Set;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Supplier;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
@@ -102,13 +104,13 @@ class RouteDispatcher {
     // counters so a test can assert the outcome of a thousand records without standing up a meter registry, and
     // they are what the wrapper's own tests read.
 
-    private final AtomicLong succeeded = new AtomicLong();
+    private final LongAdder succeeded = new LongAdder();
 
-    private final AtomicLong filtered = new AtomicLong();
+    private final LongAdder filtered = new LongAdder();
 
-    private final AtomicLong parked = new AtomicLong();
+    private final LongAdder parked = new LongAdder();
 
-    private final AtomicLong producedRecords = new AtomicLong();
+    private final LongAdder producedRecords = new LongAdder();
 
     RouteDispatcher(Map<String, RouteState> routesByTopic, Duration fallbackRetryDelay,
                     String preBuiltConsumerDescription) {
@@ -138,18 +140,7 @@ class RouteDispatcher {
      * @param topic any topic of the route
      */
     List<ParkedRecord> parkedForRoute(String topic) {
-        RouteState route = routesByTopic.get(topic);
-        if (route == null) {
-            throw new IllegalArgumentException(msg("No route claims topic {} - this instance routes {}", topic,
-                    routesByTopic.keySet()));
-        }
-        List<ParkedRecord> found = new ArrayList<>();
-        for (ParkedRecord record : parkedAcrossAllRoutes()) {
-            if (route.topics().contains(record.topic())) {
-                found.add(record);
-            }
-        }
-        return Collections.unmodifiableList(found);
+        return parkedFor(routeFor(topic).topics());
     }
 
     /**
@@ -157,7 +148,52 @@ class RouteDispatcher {
      * per-route accessor is never overloaded (R28).
      */
     List<ParkedRecord> parkedAcrossAllRoutes() {
-        return parkedRecordsFrom(parkedContainers.get());
+        return parkedRecordsFrom(parkedContainers.get(), null);
+    }
+
+    /**
+     * The engine's parked containers, straight through: what {@link FluentMeters}' gauges read, and the only
+     * caller that wants containers rather than the {@link ParkedRecord} view over them - it needs a topic, a
+     * partition and a park time, none of which costs a key deserialisation.
+     */
+    List<WorkContainer<?, ?>> parkedContainersNow() {
+        return parkedContainers.get();
+    }
+
+    /**
+     * The parked records of a named set of topics, filtered <b>before</b> anything is built rather than after.
+     * <p>
+     * It matters because building one entry decodes the record's key: answering a single route's query by
+     * materialising every route's parked records and discarding the rest decoded the whole instance's parked set to
+     * report on one topic of it.
+     *
+     * @param topics the topics to report on; null for every routed topic
+     */
+    List<ParkedRecord> parkedFor(Set<String> topics) {
+        return parkedRecordsFrom(parkedContainers.get(), topics);
+    }
+
+    /**
+     * This instance's route for a topic.
+     *
+     * @throws IllegalArgumentException naming the routed topics, when nothing routes this one
+     */
+    private RouteState routeFor(String topic) {
+        RouteState route = routesByTopic.get(topic);
+        if (route == null) {
+            throw noRouteClaims(topic, routesByTopic.keySet());
+        }
+        return route;
+    }
+
+    /**
+     * The one wording of "you asked about a topic this instance does not route", so the handle and the wrapper
+     * cannot answer the same mistake in two different sentences. A misspelled topic answered with an empty parked
+     * set would read as good news, which is why it is a refusal at all.
+     */
+    static IllegalArgumentException noRouteClaims(String topic, Set<String> routedTopics) {
+        return new IllegalArgumentException(msg("No route claims topic {} - this instance routes {}", topic,
+                routedTopics));
     }
 
     /**
@@ -165,18 +201,21 @@ class RouteDispatcher {
      * <p>
      * Everything on a {@link ParkedRecord} comes from the container or from the route, and nothing from a store:
      * the raw record, the failure and the moment it parked are the container's failure history; the reason is the
-     * verdict the engine recorded when the throw said {@code park}; the key is decoded from the raw bytes on
-     * demand; and the park cycles are arithmetic over the attempt count (see {@link #cyclesUsed}).
+     * verdict the engine recorded when the throw said {@code park}; the key is decoded from the raw bytes as
+     * the view is built; and the park cycles are arithmetic over the attempt count (see {@link #cyclesUsed}).
      * <p>
      * A container for a topic this instance does not route is skipped rather than reported: the engine's queue is
      * the whole instance's, and a definition only ever answers for its own routes.
+     *
+     * @param wanted the topics to report on, or null for every routed topic. Applied here rather than by the
+     *               caller because everything below it costs a key deserialisation.
      */
-    List<ParkedRecord> parkedRecordsFrom(List<WorkContainer<?, ?>> containers) {
+    private List<ParkedRecord> parkedRecordsFrom(List<WorkContainer<?, ?>> containers, Set<String> wanted) {
         List<ParkedRecord> view = new ArrayList<>(containers.size());
         for (WorkContainer<?, ?> container : containers) {
             RecordContext<byte[], byte[]> engineContext = contextOf(container);
             RouteState route = routesByTopic.get(engineContext.topic());
-            if (route == null) {
+            if (route == null || (wanted != null && !wanted.contains(engineContext.topic()))) {
                 continue;
             }
             view.add(new ParkedRecord(engineContext, decodeKeyQuietly(route, engineContext.getConsumerRecord()),
@@ -225,19 +264,19 @@ class RouteDispatcher {
     }
 
     long succeededCount() {
-        return succeeded.get();
+        return succeeded.sum();
     }
 
     long filteredCount() {
-        return filtered.get();
+        return filtered.sum();
     }
 
     long parkedCount() {
-        return parked.get();
+        return parked.sum();
     }
 
     long producedRecordCount() {
-        return producedRecords.get();
+        return producedRecords.sum();
     }
 
     // ---------------------------------------------------------------- the engine function
@@ -260,11 +299,16 @@ class RouteDispatcher {
      * invariant rather than a user-facing refusal.
      */
     void dispatchWithoutProducing(PollContext<byte[], byte[]> poll) {
-        List<ProducerRecord<byte[], byte[]>> produced = dispatch(poll);
-        if (!produced.isEmpty()) {
+        // Counted rather than collected: this arm runs for every record of a non-producing definition, and the
+        // list it used to build existed only to be asserted empty.
+        int produced = 0;
+        for (RecordContext<byte[], byte[]> context : poll.getContextsFlattened()) {
+            produced += dispatchOne(context).size();
+        }
+        if (produced != 0) {
             throw new IllegalStateException(msg("A route returned {} records to produce on an instance that opened "
                     + "no producer. A route that declares produced types is what makes a definition need one, so "
-                    + "this is a bug in the fluent API rather than in the definition.", produced.size()));
+                    + "this is a bug in the fluent API rather than in the definition.", produced));
         }
     }
 
@@ -328,19 +372,19 @@ class RouteDispatcher {
         ConsumerRecord<byte[], byte[]> record = context.raw();
         switch (outcome.kind()) {
             case SUCCEEDED:
-                succeeded.incrementAndGet();
+                succeeded.increment();
                 meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
                 return emptyProduce();
             case FILTERED:
                 // Completes and commits exactly as a success does, and is counted apart from one (R8).
-                filtered.incrementAndGet();
+                filtered.increment();
                 meters.recordOutcome(record.topic(), FluentMeters.FILTERED);
                 return emptyProduce();
             case PRODUCE:
                 List<ProducerRecord<byte[], byte[]>> serialised = serialise(route, outcome.records());
-                succeeded.incrementAndGet();
+                succeeded.increment();
                 meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
-                producedRecords.addAndGet(serialised.size());
+                producedRecords.add(serialised.size());
                 return serialised;
             case PARK:
                 // The function already knows this record is hopeless, so its remaining attempts are skipped - and
@@ -472,7 +516,7 @@ class RouteDispatcher {
         }
 
         notifyObserver(route, context, failure, attempts);
-        parked.incrementAndGet();
+        parked.increment();
         meters.recordOutcome(record.topic(), FluentMeters.PARKED);
         if (failure == null) {
             // Nothing failed: the function asked for this, so it is not a warning.
@@ -668,7 +712,7 @@ class RouteDispatcher {
         if (failure instanceof Error) {
             throw (Error) failure;
         }
-        return new ExceptionInUserFunctionException("Error occurred in code supplied by user", failure);
+        return new ExceptionInUserFunctionException(UserFunctions.MSG, failure);
     }
 
     /**

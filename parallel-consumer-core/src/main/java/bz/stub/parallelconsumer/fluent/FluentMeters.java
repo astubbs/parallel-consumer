@@ -6,17 +6,21 @@ package bz.stub.parallelconsumer.fluent;
 
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.Tag;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,13 +48,26 @@ import java.util.function.Supplier;
  * that appears only once something has gone wrong is a meter nobody has a dashboard for. Partitions are not known
  * until the assignment arrives, so the gauges are created and removed as partitions come and go, on the control
  * thread, from the same loop-end pass that keeps the partition gauges in line with the assignment.
+ *
+ * <h2>The gauges read containers, not parked records</h2>
+ * They are handed the engine's own {@link WorkContainer}s rather than the {@link ParkedRecord} view built over
+ * them, because the only three things they need - topic, partition, and when it parked - are on the container
+ * already. Building the view instead cost a {@code RecordContext}, a {@code ParkedRecord} and a <b>full key
+ * deserialisation</b> per parked record, per gauge, per scrape: two gauges per assigned partition, each walking the
+ * whole retry queue, so a two-dozen-partition instance holding a thousand parked records decoded tens of thousands
+ * of keys every time a dashboard refreshed. The gauge values are identical either way.
  */
 @Slf4j
 class FluentMeters {
 
     /**
-     * The values of the {@code outcome} tag. They are the terminal outcomes of R7 plus the stop request of R24,
-     * which is not a terminal outcome of the record but is counted beside them.
+     * The values of the {@code outcome} tag: the terminal outcomes of R7, plus the stop request of R24, which is
+     * not a terminal outcome of the record but is counted beside them.
+     * <p>
+     * Named constants rather than an enum on purpose. The Truth assertion generator sweeps every enum reachable
+     * from this module and writes a {@code Subject} for it into the public {@code bz.stub.parallelconsumer}
+     * package, so an enum here - even nested inside this package-private class - would have to be public, and this
+     * is the meters' internal vocabulary rather than part of the fluent API.
      */
     static final String SUCCEEDED = "succeeded";
 
@@ -69,39 +86,52 @@ class FluentMeters {
     private static final String OUTCOME_TAG = "outcome";
 
     /**
-     * Where the gauges read from: the same parked set the parked view answers from - the engine's retry queue -
-     * so a dashboard and a query never disagree.
+     * Where the gauges read from: the engine's retry queue, through the handle - the same set the parked view
+     * answers from, so a dashboard and a query never disagree.
      * <p>
      * Held as a field rather than captured in each gauge's lambda because Micrometer keeps only a weak reference to
      * the object a gauge reads, so a lambda nothing else holds would be collected and the gauge would go dead.
      */
-    private final Supplier<List<ParkedRecord>> parkedSet;
+    private final Supplier<List<WorkContainer<?, ?>>> parkedContainers;
 
     private final PCMetrics metrics;
 
-    private final Map<String, Counter> countersByTopicAndOutcome = new LinkedHashMap<>();
+    /**
+     * One topic's counters, by outcome tag.
+     * <p>
+     * Nested rather than keyed on a composed {@code topic + separator + outcome} string, which is what it was:
+     * that built a fresh String for every terminal record, on the hottest path this library has, purely to look a
+     * counter up. Two lookups of interned constants allocate nothing. (The separator in that composed key was also
+     * a raw NUL byte, which made this file read as binary to {@code grep} and to {@code file}, so every tree-wide
+     * sweep silently skipped it.)
+     * <p>
+     * Populated entirely inside {@code registerFor} before this object is published, so the plain maps need no
+     * synchronisation.
+     */
+    private final Map<String, Map<String, Counter>> countersByTopic = new LinkedHashMap<>();
 
     private final ConcurrentMap<TopicPartition, List<Meter>> gaugesByPartition = new ConcurrentHashMap<>();
 
     private volatile boolean deregistered;
 
-    private FluentMeters(PCMetrics metrics, Supplier<List<ParkedRecord>> parkedSet) {
+    private FluentMeters(PCMetrics metrics, Supplier<List<WorkContainer<?, ?>>> parkedContainers) {
         this.metrics = metrics;
-        this.parkedSet = parkedSet;
+        this.parkedContainers = parkedContainers;
     }
 
     /**
      * Registers one counter per routed topic per outcome, and returns the handle the dispatch wrapper reports to.
      */
     static FluentMeters registerFor(PCMetrics metrics, Collection<String> topics,
-                                    Supplier<List<ParkedRecord>> parkedSet) {
-        FluentMeters meters = new FluentMeters(metrics, parkedSet);
+                                    Supplier<List<WorkContainer<?, ?>>> parkedContainers) {
+        FluentMeters meters = new FluentMeters(metrics, parkedContainers);
         for (String topic : topics) {
+            Map<String, Counter> counters = new LinkedHashMap<>();
             for (String outcome : OUTCOMES) {
-                meters.countersByTopicAndOutcome.put(key(topic, outcome),
-                        metrics.getCounterFromMetricDef(PCMetricsDef.ROUTE_RECORDS,
-                                Tag.of(TOPIC_TAG, topic), Tag.of(OUTCOME_TAG, outcome)));
+                counters.put(outcome, metrics.getCounterFromMetricDef(PCMetricsDef.ROUTE_RECORDS,
+                        Tag.of(TOPIC_TAG, topic), Tag.of(OUTCOME_TAG, outcome)));
             }
+            meters.countersByTopic.put(topic, counters);
         }
         return meters;
     }
@@ -117,14 +147,15 @@ class FluentMeters {
     /**
      * One record on this topic reached this outcome.
      * <p>
-     * Called from a worker thread, in the outcome path of a record. A meter that is not there - an outcome for a
-     * topic this instance does not route, which cannot happen - is a missing count, never a failed record.
+     * Called from a worker thread, in the outcome path of a record. A topic that is not there - one this instance
+     * does not route, which cannot happen - is a missing count, never a failed record.
      */
     void recordOutcome(String topic, String outcome) {
         if (metrics == null) {
             return;
         }
-        Counter counter = countersByTopicAndOutcome.get(key(topic, outcome));
+        Map<String, Counter> counters = countersByTopic.get(topic);
+        Counter counter = counters == null ? null : counters.get(outcome);
         if (counter == null) {
             log.debug("No {} counter for topic {} - not counting it", outcome, topic);
             return;
@@ -143,6 +174,11 @@ class FluentMeters {
         if (metrics == null || deregistered) {
             return;
         }
+        if (gaugesByPartition.keySet().equals(assigned)) {
+            // The common case by a wide margin - the assignment only moves on a rebalance, and this runs on every
+            // pass of the control loop.
+            return;
+        }
         for (TopicPartition partition : assigned) {
             gaugesByPartition.computeIfAbsent(partition, this::registerGaugesFor);
         }
@@ -158,22 +194,26 @@ class FluentMeters {
     }
 
     private List<Meter> registerGaugesFor(TopicPartition partition) {
+        if (deregistered) {
+            // Re-checked inside the mapping function, not only at the top of syncPartitionGauges: deregister()
+            // runs on the closing thread and sweeps the map, so a control thread that passed the outer check
+            // before the sweep would otherwise register gauges nothing here will ever remove.
+            return Collections.emptyList();
+        }
         Tag[] tags = {Tag.of(TOPIC_TAG, partition.topic()),
                 Tag.of(PARTITION_TAG, String.valueOf(partition.partition()))};
-        Gauge parkedNow = metrics.gaugeFromMetricDef(PCMetricsDef.ROUTE_PARKED_RECORDS, parkedSet,
-                set -> countParked(set, partition), tags);
-        Gauge oldest = metrics.gaugeFromMetricDef(PCMetricsDef.ROUTE_PARKED_OLDEST_AGE, parkedSet,
-                set -> oldestParkedAgeSeconds(set, partition), tags);
-        List<Meter> registered = new ArrayList<>(2);
-        registered.add(parkedNow);
-        registered.add(oldest);
-        return registered;
+        Gauge parkedNow = metrics.gaugeFromMetricDef(PCMetricsDef.ROUTE_PARKED_RECORDS, parkedContainers,
+                parked -> countParked(parked, partition), tags);
+        Gauge oldest = metrics.gaugeFromMetricDef(PCMetricsDef.ROUTE_PARKED_OLDEST_AGE, parkedContainers,
+                parked -> oldestParkedAgeSeconds(parked, partition), tags);
+        return Arrays.<Meter>asList(parkedNow, oldest);
     }
 
-    private static double countParked(Supplier<List<ParkedRecord>> parkedSet, TopicPartition partition) {
+    private static double countParked(Supplier<List<WorkContainer<?, ?>>> parkedContainers,
+                                      TopicPartition partition) {
         int count = 0;
-        for (ParkedRecord parked : parkedSet.get()) {
-            if (parked.partition() == partition.partition() && parked.topic().equals(partition.topic())) {
+        for (WorkContainer<?, ?> container : parkedContainers.get()) {
+            if (isOn(container, partition)) {
                 count++;
             }
         }
@@ -185,18 +225,33 @@ class FluentMeters {
      * zero rather than NaN, because a gauge that disappears from a dashboard when the good news arrives reads as a
      * broken exporter
      */
-    private static double oldestParkedAgeSeconds(Supplier<List<ParkedRecord>> parkedSet, TopicPartition partition) {
+    private static double oldestParkedAgeSeconds(Supplier<List<WorkContainer<?, ?>>> parkedContainers,
+                                                 TopicPartition partition) {
         Instant oldest = null;
-        for (ParkedRecord parked : parkedSet.get()) {
-            if (parked.partition() == partition.partition() && parked.topic().equals(partition.topic())
-                    && (oldest == null || parked.parkedSince().isBefore(oldest))) {
-                oldest = parked.parkedSince();
+        for (WorkContainer<?, ?> container : parkedContainers.get()) {
+            if (!isOn(container, partition)) {
+                continue;
+            }
+            // The same instant ParkedRecord.parkedSince() reports: the moment of the failure that parked it.
+            Instant parkedSince = container.getLastFailedAt().orElse(Instant.EPOCH);
+            if (oldest == null || parkedSince.isBefore(oldest)) {
+                oldest = parkedSince;
             }
         }
         if (oldest == null) {
             return 0d;
         }
         return Duration.between(oldest, Instant.now()).toMillis() / 1000d;
+    }
+
+    /**
+     * Whether this parked container belongs to the partition a gauge is reporting on. Compared field by field
+     * rather than through {@code getTopicPartition()}, which builds a {@link TopicPartition} per call and would
+     * allocate one per parked record per gauge per scrape.
+     */
+    private static boolean isOn(WorkContainer<?, ?> container, TopicPartition partition) {
+        ConsumerRecord<?, ?> record = container.getCr();
+        return record.partition() == partition.partition() && record.topic().equals(partition.topic());
     }
 
     private void removeGaugesFor(TopicPartition partition) {
@@ -221,15 +276,13 @@ class FluentMeters {
             return;
         }
         deregistered = true;
-        for (Counter counter : countersByTopicAndOutcome.values()) {
-            metrics.removeMeter(counter);
+        for (Map<String, Counter> counters : countersByTopic.values()) {
+            for (Counter counter : counters.values()) {
+                metrics.removeMeter(counter);
+            }
         }
         for (TopicPartition partition : new ArrayList<>(gaugesByPartition.keySet())) {
             removeGaugesFor(partition);
         }
-    }
-
-    private static String key(String topic, String outcome) {
-        return topic + ' ' + outcome;
     }
 }

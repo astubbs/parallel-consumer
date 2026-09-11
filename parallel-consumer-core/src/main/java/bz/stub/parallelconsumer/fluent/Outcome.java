@@ -66,6 +66,19 @@ public final class Outcome<PK, PV> {
         STOP
     }
 
+    /**
+     * The two outcomes that carry nothing, so one instance of each serves every record and every route.
+     * <p>
+     * This class is immutable and defines no {@code equals}, so its identity is unobservable - the same reason
+     * {@code Collections.emptyList()} is a singleton. They were allocated per record on the success path, which is
+     * the hottest path this library has.
+     */
+    private static final Outcome<?, ?> SUCCEEDED_INSTANCE =
+            new Outcome<>(Kind.SUCCEEDED, Collections.emptyList(), null);
+
+    private static final Outcome<?, ?> FILTERED_INSTANCE =
+            new Outcome<>(Kind.FILTERED, Collections.emptyList(), null);
+
     private final Kind kind;
 
     private final List<ProducerRecord<PK, PV>> records;
@@ -81,15 +94,17 @@ public final class Outcome<PK, PV> {
     /**
      * The record was processed. Available on every route, producing or not.
      */
+    @SuppressWarnings("unchecked")
     public static <PK, PV> Outcome<PK, PV> succeeded() {
-        return new Outcome<>(Kind.SUCCEEDED, Collections.<ProducerRecord<PK, PV>>emptyList(), null);
+        return (Outcome<PK, PV>) SUCCEEDED_INSTANCE;
     }
 
     /**
      * The record was deliberately skipped: it completes and commits like a success and is counted separately (R8).
      */
+    @SuppressWarnings("unchecked")
     public static <PK, PV> Outcome<PK, PV> filtered() {
-        return new Outcome<>(Kind.FILTERED, Collections.<ProducerRecord<PK, PV>>emptyList(), null);
+        return (Outcome<PK, PV>) FILTERED_INSTANCE;
     }
 
     /**

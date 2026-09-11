@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.fluent;
  */
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import org.apache.kafka.common.errors.SerializationException;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serializer;
@@ -51,6 +52,10 @@ final class JacksonFormats {
     }
 
     private static <T> Deserializer<T> deserializer(Class<T> type) {
+        // Resolved once, when the format is built, rather than per record: readValue(bytes, Class) looks the type
+        // up and builds a reader on every call, and this one runs for every record of every route that declared a
+        // JSON format. The reader is immutable and thread-safe, which is what lets one serve every worker.
+        ObjectReader reader = MAPPER.readerFor(type);
         return new Deserializer<T>() {
             @Override
             public T deserialize(String topic, byte[] data) {
@@ -58,7 +63,7 @@ final class JacksonFormats {
                     return null;
                 }
                 try {
-                    return MAPPER.readValue(data, type);
+                    return reader.readValue(data);
                 } catch (Exception e) {
                     // Transient by default (R12) - a route that can tell corrupt from unavailable wraps this with
                     // Formats.classifyDecodeFailures.
