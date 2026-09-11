@@ -619,9 +619,14 @@ public class ShardManager<K, V> {
                 WorkContainer<?, ?> workContainer = retryQueueIterator.next();
                 if (workContainer.isParked()) {
                     // A parked record has no retry time - it waits for somebody to act on it, not for a clock - so
-                    // it can say nothing about how long the controller may block. They sort last, so this skips
-                    // only the tail.
-                    continue;
+                    // it can say nothing about how long the controller may block.
+                    //
+                    // STOPPING here rather than skipping on: every entry behind this one is parked too, so there
+                    // is nothing further to find. That is RetryQueue's parked-entries-sort-last invariant, which
+                    // its own javadoc states and RetryQueueParkedEntriesSortLastTest pins. Skipping instead walked
+                    // the whole parked tail on every control-loop pass, under the queue's read lock, and park's
+                    // steady state is a queue holding nothing else.
+                    break;
                 }
                 // Would only be in edge case of race between picking container for work (when its marked in-flight) and
                 // updating retryQueue - so still double-checking here to only consider not inflight ones.

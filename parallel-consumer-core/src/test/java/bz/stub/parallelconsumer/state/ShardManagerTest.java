@@ -195,6 +195,52 @@ class ShardManagerTest {
                 .that(sm.getParkedWorkContainers(false)).containsExactly(container);
     }
 
+    /**
+     * {@code getLowestRetryTime()} stops its walk at the first parked entry rather than skipping past it, which is
+     * only safe while parked entries sort last - so this is the behavioural half of that bet, and
+     * {@link RetryQueueParkedEntriesSortLastTest} is the ordering half.
+     * <p>
+     * The parked record is given the <b>lower offset</b> on purpose: offset is the comparator's last tiebreak, so a
+     * comparator that stopped leading with the retry deadline would sort the park in front and the walk would break
+     * out before reaching the record something is actually waiting for. The control loop would then block for its
+     * full timeout with work due, which nothing else here would notice.
+     */
+    @Test
+    void aParkedRecordDoesNotHideTheRecordTheControllerIsWaitingFor() {
+        PCModuleTestEnv module = mu.getModule();
+        ShardManager<String, String> sm = wm.getSm();
+        long epoch = wm.getPm().getEpochOfPartition(tp);
+
+        var parked = containerFor(sm, module, epoch, 1L);
+        parked.onUserFunctionFailure(new PCRetriableException("hopeless").park("it ran out of attempts"));
+        sm.onFailure(parked);
+
+        var due = containerFor(sm, module, epoch, 2L);
+        due.onUserFunctionFailure(new PCRetriableException("busy").retryAfter(Duration.ofMinutes(7)));
+        sm.onFailure(due);
+
+        assertWithMessage("PRECONDITION: the park sits at the LOWER offset, so only the deadline can order these")
+                .that(parked.getCr().offset()).isLessThan(due.getCr().offset());
+
+        Optional<Duration> lowest = sm.getLowestRetryTime();
+
+        assertWithMessage("the record with a real deadline must still be found past the parked one")
+                .that(lowest).isPresent();
+        // Within a tick of seven minutes: the deadline is the failure time plus the delay, and the clock has moved.
+        assertThat(lowest.get()).isGreaterThan(Duration.ofMinutes(6));
+        assertThat(lowest.get()).isAtMost(Duration.ofMinutes(7));
+    }
+
+    private WorkContainer<String, String> containerFor(ShardManager<String, String> sm, PCModuleTestEnv module,
+                                                       long epoch, long offset) {
+        var consumerRecord = new ConsumerRecord<>(topic, partition, offset, "key-" + offset, "a-value");
+        sm.addWorkContainer(epoch, consumerRecord);
+        return sm.getShard(ShardKey.of(consumerRecord, module.options().getOrdering()))
+                .orElseThrow(() -> new AssertionError("the shard the record was just added to"))
+                .getWorkContainerAtOffset(offset)
+                .orElseThrow(() -> new AssertionError("the container that was just added"));
+    }
+
     @Test
     void retryQueueOrdering() {
         String topic = "topic";
