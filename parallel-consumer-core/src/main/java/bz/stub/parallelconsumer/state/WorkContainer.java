@@ -403,7 +403,8 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      *   <li><b>controller to whoever reads the parked VIEW</b> - the widest reader, and the one the previous
      *       version of this javadoc did not cover - goes through the retry queue's write lock: the controller adds
      *       the container under it in {@code ShardManager.onFailure}, and
-     *       {@link ShardManager#getParkedWorkContainers()} walks the queue holding the matching read lock.</li>
+     *       {@link ShardManager#getParkedWorkContainers(boolean)} walks the queue holding the matching read
+     *       lock.</li>
      * </ul>
      * <b>What would reopen it:</b> a reader of this field that reaches a container by some route other than those
      * three - a second parked store, a direct handle from the facade to a container, a scan of the shard maps -
