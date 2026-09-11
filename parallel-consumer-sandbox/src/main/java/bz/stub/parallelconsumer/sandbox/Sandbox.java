@@ -72,14 +72,34 @@ import java.util.Optional;
 @InterfaceStability.Unstable
 public final class Sandbox implements ClientRuntime, AutoCloseable {
 
+    /**
+     * The declared rate, per source topic. Copied from the builder rather than read back through it, so a builder
+     * reused after {@code build()} cannot change a running sandbox.
+     */
     private final double perSecond;
 
+    /**
+     * When to stop - see {@link Bound}. Read by {@link #awaitBound(Duration)} to refuse an unbounded run, and
+     * handed to the generator to be asked per record.
+     */
     private final Bound bound;
 
+    /**
+     * The run's seed. Logged when the run starts, because it is the one number a reader needs to reproduce what
+     * they just saw.
+     */
     private final long seed;
 
+    /**
+     * Partitions per source topic, which is what makes key ordering observable - with one partition every key
+     * lands in the same place whatever the hash said.
+     */
     private final int partitionsPerTopic;
 
+    /**
+     * How many distinct keys the generator draws from, so that keys repeat and a shard has more than one record
+     * to order.
+     */
     private final int keyCardinality;
 
     /**
@@ -88,6 +108,12 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      */
     private final Map<String, Class<?>> declaredTypes;
 
+    /**
+     * The instance's producer, built up front rather than on demand because it is also where the transactional
+     * commit mode's offsets go - so the consumer's wait has to be able to read it whether or not the definition
+     * produces anything. Byte serialisers on both sides: the engine below the fluent facade produces raw bytes,
+     * already encoded by the route.
+     */
     private final MockProducer<byte[], byte[]> producer =
             new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
 
@@ -97,12 +123,24 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     @SuppressWarnings("NullAway.Init")
     private SandboxConsumer<byte[], byte[]> consumer;
 
+    /**
+     * The definition this sandbox was handed, kept from whichever client call came first: it is what the generator
+     * reads to learn the topics, the types and the serialisers.
+     */
     @SuppressWarnings("NullAway.Init")
     private DefinitionView definition;
 
+    /**
+     * Null until the instance starts - see {@link #started(ConsumerHandle)}. Every public method that touches it
+     * either null-checks it or refuses, because "this sandbox has not been started" is a better answer than a
+     * null pointer.
+     */
     @SuppressWarnings("NullAway.Init")
     private RecordGenerator generator;
 
+    /**
+     * Private: a sandbox is built through {@link #builder()}, which is what documents the defaults.
+     */
     private Sandbox(Builder builder) {
         this.perSecond = builder.perSecond;
         this.bound = builder.bound;
@@ -112,6 +150,10 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         this.declaredTypes = new LinkedHashMap<>(builder.declaredTypes);
     }
 
+    /**
+     * The one way to build a sandbox. Every setting is optional - see {@link Builder} for what the defaults are
+     * and why they are those.
+     */
     public static Builder builder() {
         return new Builder();
     }
@@ -307,6 +349,15 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         return feeds;
     }
 
+    /**
+     * Refuses, at start-up, every route this sandbox could not generate for - naming the topic and what to do
+     * about it.
+     * <p>
+     * Up front rather than at the first record, because a generator that skipped a topic it could not fill would
+     * present as a definition whose route never fires, which is a far harder thing to diagnose than a refusal
+     * naming the topic. The cure is on the definition: a format helper that carries its type, a declared type on
+     * the builder, or a serialiser for a route that only reads.
+     */
     private void refuseRoutesTheGeneratorCannotFeed(DefinitionView view) {
         for (RouteView route : view.routes()) {
             for (String topic : route.topics()) {
@@ -333,6 +384,12 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         }
     }
 
+    /**
+     * Refuses a format the generator could read from but not write to. The sandbox has to <em>produce</em> the
+     * records the definition consumes, so a read-only format leaves it with a value it cannot put on the wire.
+     *
+     * @param side "key" or "value", so the refusal names which half of the record is the problem
+     */
     private static void requireWritable(String topic, Format<?> format, String side) {
         if (!format.hasSerializer()) {
             throw new IllegalArgumentException("The sandbox cannot generate records for topic " + topic
@@ -348,24 +405,60 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      */
     private static final class RouteFeed implements TopicFeed {
 
+        /**
+         * The topic this feed publishes into. One feed per topic, not per route: a route with two topics gets two.
+         */
         private final String topic;
 
+        /**
+         * The route's own key format, used to encode - so what the engine polls is exactly what that route's
+         * deserialiser will be asked to read back.
+         */
         private final Format<?> keyFormat;
 
+        /**
+         * The route's own value format, for the same reason as {@link #keyFormat}.
+         */
         private final Format<?> valueFormat;
 
+        /**
+         * The Java type behind the key format, resolved once at start-up - {@link ValueTypes} owns how, and the
+         * route was already refused if the answer was nothing.
+         */
         private final Class<?> keyType;
 
+        /**
+         * The Java type to fill for the value: the one declared on the builder if there was one, otherwise the one
+         * the format carries.
+         */
         private final Class<?> valueType;
 
+        /**
+         * Where published records go. The same consumer every feed publishes into, which is what makes the
+         * published counts one ledger rather than several.
+         */
         private final SandboxConsumer<byte[], byte[]> consumer;
 
+        /**
+         * This feed's own generator, seeded with the run's seed, so record <em>n</em> of this topic depends on the
+         * seed and <em>n</em> and not on how the topics interleaved.
+         */
         private final RandomObjects random;
 
+        /**
+         * Partitions on this topic, the divisor the key hash is taken modulo.
+         */
         private final int partitions;
 
+        /**
+         * The size of the key pool this feed draws from.
+         */
         private final int keyCardinality;
 
+        /**
+         * @param declaredValueType the type declared on the builder for this topic, or null to use the one the
+         *                          format carries
+         */
         private RouteFeed(String topic,
                           RouteView route,
                           SandboxConsumer<byte[], byte[]> consumer,
@@ -384,11 +477,21 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
             this.keyCardinality = keyCardinality;
         }
 
+        /**
+         * Named in the generator's log when a publish reports the consumer closed.
+         */
         @Override
         public String topic() {
             return topic;
         }
 
+        /**
+         * One record: generate the key and value, encode both with the route's own serialisers, place it by the
+         * encoded key's hash, publish.
+         *
+         * @param index this feed's record index, which is what makes the record reproducible
+         * @return false once the consumer has closed, which is how the generator learns the run is over
+         */
         @Override
         public boolean publish(long index) {
             Object key = random.key(keyType, index, keyCardinality);
@@ -412,6 +515,11 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
             return consumer.publish(topic, partition, keyBytes, valueBytes) >= 0;
         }
 
+        /**
+         * The route's serialiser applied to a generated value. The cast is unchecked because a {@code Format<?>}
+         * has lost the link between its serialiser and the type resolved beside it; what makes it safe is that
+         * both came from the same route and the type came from that format.
+         */
         @SuppressWarnings("unchecked")
         private byte[] encode(Format<?> format, Object value) {
             Serializer<Object> serializer = (Serializer<Object>) format.serializer();
@@ -426,18 +534,45 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     @InterfaceStability.Unstable
     public static final class Builder {
 
+        /**
+         * Fifty a second per topic: fast enough that a demo shows something immediately, slow enough that its
+         * console output can be read as it goes.
+         */
         private double perSecond = 50;
 
+        /**
+         * No bound by default, because the default caller is a demo that stops when its handle is closed. A test
+         * declares one.
+         */
         private Bound bound = Bound.none();
 
+        /**
+         * Zero unless asked otherwise - a fixed default rather than a random one, so that two runs of an
+         * unchanged program are the same run.
+         */
         private long seed;
 
+        /**
+         * One partition, which is the simplest thing that works. More is what a run demonstrating key ordering
+         * across partitions asks for.
+         */
         private int partitionsPerTopic = 1;
 
+        /**
+         * Ten keys: enough that keys repeat and a shard has records to order, few enough that a console reader can
+         * see the repetition.
+         */
         private int keyCardinality = 10;
 
+        /**
+         * Value types declared by topic, for routes whose format cannot name one. Ordered, so a refusal listing
+         * what was declared lists it the way it was written.
+         */
         private final Map<String, Class<?>> declaredTypes = new LinkedHashMap<>();
 
+        /**
+         * Private: reached through {@link Sandbox#builder()}.
+         */
         private Builder() {
         }
 
@@ -500,6 +635,10 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
             return this;
         }
 
+        /**
+         * The sandbox these settings describe. The builder may be reused afterwards - the sandbox copies what it
+         * needs, so a later change here does not reach a run already built.
+         */
         public Sandbox build() {
             return new Sandbox(this);
         }

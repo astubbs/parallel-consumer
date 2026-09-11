@@ -50,8 +50,16 @@ public final class RandomObjects {
 
     private static final String PROTOBUF_PACKAGE = "com.google.protobuf.";
 
+    /**
+     * Matched by name rather than by class, for the reason {@link #isAvroSpecificRecord(Class)} gives: naming the
+     * interface in code would load Avro, which is optional here.
+     */
     private static final String AVRO_SPECIFIC_RECORD = "org.apache.avro.specific.SpecificRecord";
 
+    /**
+     * The run's seed. Every record's own seed is derived from it and the record's index - see {@link #seedFor} -
+     * so it is kept rather than only consumed at construction.
+     */
     private final long seed;
 
     /**
@@ -93,6 +101,9 @@ public final class RandomObjects {
         return new RandomObjects(seed);
     }
 
+    /**
+     * The seed this generator was built with, so a sandbox can log the number a reader needs to reproduce the run.
+     */
     public long seed() {
         return seed;
     }
@@ -128,6 +139,9 @@ public final class RandomObjects {
         return mixed ^ (mixed >>> 33);
     }
 
+    /**
+     * One record of an ordinary Java type, from the cached model plus this record's seed.
+     */
     private <T> T instancio(Class<T> type, long recordSeed) {
         Model<?> cached = models.get(type);
         if (cached == null) {
@@ -180,6 +194,14 @@ public final class RandomObjects {
         return false;
     }
 
+    /**
+     * Throws if the type is a Protobuf message, naming it.
+     * <p>
+     * Walks the hierarchy rather than testing the class itself, because a generated message's own package is the
+     * user's: what marks it is {@code com.google.protobuf.GeneratedMessageV3} above it, or a Protobuf interface
+     * beside it. Checked before the Avro question so that a type which somehow answered both is refused rather
+     * than filled badly.
+     */
     private static void refuseProtobuf(Class<?> type) {
         for (Class<?> current = type; current != null; current = current.getSuperclass()) {
             if (current.getName().startsWith(PROTOBUF_PACKAGE) || implementsProtobuf(current)) {
@@ -192,6 +214,10 @@ public final class RandomObjects {
         }
     }
 
+    /**
+     * Whether one level of the hierarchy implements a Protobuf interface - {@code MessageOrBuilder} and its kin,
+     * which a generated message carries even where its superclass has been shaded away.
+     */
     private static boolean implementsProtobuf(Class<?> type) {
         for (Class<?> implemented : type.getInterfaces()) {
             if (implemented.getName().startsWith(PROTOBUF_PACKAGE)) {

@@ -153,6 +153,10 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
         updateEndOffsets(zero);
     }
 
+    /**
+     * Every partition this sandbox holds, in the order they were built - topic by topic, partition by partition.
+     * Handed to {@code rebalance} when the engine above has subscribed, and used by tests that need to name one.
+     */
     public List<TopicPartition> partitions() {
         return partitions;
     }
@@ -209,6 +213,10 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
         return new LinkedHashMap<>(nextOffsets);
     }
 
+    /**
+     * How many records this sandbox has published in total, across every partition. The number the wait is about,
+     * and the one its refusal opens with.
+     */
     public long publishedRecords() {
         return publishedRecords.get();
     }
@@ -473,6 +481,14 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
         }
     }
 
+    /**
+     * What the wait says when it runs out: the whole accounting rather than a timeout.
+     * <p>
+     * It names what was published, which partitions never got there and by how much, what has been committed, and
+     * how many records were handed out of poll - because those three separate the cases a reader has to tell
+     * apart: the engine never fetched them, it fetched them and did not finish them, or this sandbox is reading
+     * the wrong ledger. A bare "timed out" would send every one of those to the same place.
+     */
     private String shortfallMessage(Map<TopicPartition, PartitionAccount> outstanding, Duration budget) {
         return "The sandbox published " + publishedRecords.get() + " record(s) and waited " + budget
                 + " for the instance to account for them, and these partitions never got there: " + outstanding
@@ -529,20 +545,39 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
 
         private final long published;
 
+        /**
+         * What the partition's highest commit says is finished - the committed offset plus whatever the offset map
+         * beside it accounts for above that. See {@link #completedOn}.
+         */
         private final long completed;
 
+        /**
+         * What is parked on the partition at the moment it was read. Zero on the classic path, which has no park.
+         */
         private final long parked;
 
+        /**
+         * @param published what this sandbox published to the partition
+         */
         private PartitionAccount(long published, long completed, long parked) {
             this.published = published;
             this.completed = completed;
             this.parked = parked;
         }
 
+        /**
+         * What the instance still owes: published, less what it finished, less what it parked. Zero or below means
+         * the partition is done - below because the parked view is read a moment after the commits, so a record
+         * that completed in between can appear in both halves.
+         */
         private long unaccounted() {
             return published - completed - parked;
         }
 
+        /**
+         * The whole sum as the refusal renders it, so a reader sees which term is short rather than only that
+         * something was.
+         */
         @Override
         public String toString() {
             return "published " + published + ", completed " + completed + ", parked " + parked + ", so "

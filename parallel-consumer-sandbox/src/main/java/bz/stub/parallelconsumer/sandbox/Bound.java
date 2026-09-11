@@ -33,12 +33,29 @@ import java.util.Objects;
 @InterfaceStability.Unstable
 public final class Bound {
 
+    /**
+     * The unbounded bound, shared because it holds nothing - see {@link #none()}.
+     */
     private static final Bound NONE = new Bound(-1, null);
 
+    /**
+     * The record count to stop after, or -1 when this bound is not a count. A count rather than an
+     * {@code OptionalLong} because this type is on the Java 8 release target and is compared on a hot enough path
+     * to be worth staying primitive; -1 is the not-declared value because {@link #afterRecords(long)} refuses
+     * anything below one.
+     */
     private final long records;
 
+    /**
+     * The wall-clock span to stop after, or null when this bound is not a duration. The two fields are exclusive:
+     * every factory below sets exactly one of them, which is why there is no third field saying which.
+     */
     private final Duration duration;
 
+    /**
+     * Private because the three factories are the whole of the vocabulary - a bound is none, a count, or a
+     * duration, and a caller assembling one from two raw values could ask for a fourth thing that has no meaning.
+     */
     private Bound(long records, Duration duration) {
         this.records = records;
         this.duration = duration;
@@ -76,18 +93,38 @@ public final class Bound {
         return new Bound(-1, duration);
     }
 
+    /**
+     * Whether this bound will ever be reached. {@link Sandbox#awaitBound(Duration)} refuses an unbounded run
+     * rather than waiting out a timeout that could never have been satisfied.
+     */
     boolean isBounded() {
         return records > 0 || duration != null;
     }
 
+    /**
+     * Whether this many records reaches a count bound. Answers false for a duration bound and for none, so the
+     * generator can ask both questions of every bound without asking first which kind it holds.
+     *
+     * @param generated records generated so far, across every topic
+     */
     boolean reachedByCount(long generated) {
         return records > 0 && generated >= records;
     }
 
+    /**
+     * Whether this much elapsed time reaches a duration bound. False for a count bound and for none, for the same
+     * reason as {@link #reachedByCount(long)}.
+     *
+     * @param elapsedNanos nanoseconds since the first record, measured as a difference of two
+     *                     {@code System.nanoTime()} readings rather than against a wall clock
+     */
     boolean reachedByTime(long elapsedNanos) {
         return duration != null && elapsedNanos >= durationNanos();
     }
 
+    /**
+     * The duration bound in nanoseconds, to compare against the generator's own elapsed-nanos reading.
+     */
     private long durationNanos() {
         // No check of our own, deliberately: Duration.toNanos() THROWS ArithmeticException past about 292 years
         // rather than wrapping, so a nonsense bound already fails loudly and a guard here would only restate it.
@@ -95,6 +132,10 @@ public final class Bound {
         return duration.toNanos();
     }
 
+    /**
+     * Rendered into the run's opening log line and into the generator's "did not stop" error, so it reads as the
+     * end of a sentence about what the run is doing.
+     */
     @Override
     public String toString() {
         if (records > 0) {

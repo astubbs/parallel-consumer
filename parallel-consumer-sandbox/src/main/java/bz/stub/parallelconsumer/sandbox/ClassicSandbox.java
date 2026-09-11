@@ -57,22 +57,57 @@ import java.util.Objects;
 @InterfaceStability.Unstable
 public final class ClassicSandbox<K, V> implements AutoCloseable {
 
+    /**
+     * The key type to generate. Declared by the caller rather than read from a definition, because a classic
+     * application's types live in its options builder's generics and erasure has taken them by the time anything
+     * here could look.
+     */
     private final Class<K> keyType;
 
+    /**
+     * The value type to generate, declared for the same reason as {@link #keyType}.
+     */
     private final Class<V> valueType;
 
+    /**
+     * The topics to generate into - the ones the caller will subscribe its instance to. Unmodifiable, because the
+     * consumer below was built with these exact partitions and a later addition would have nowhere to go.
+     */
     private final List<String> topics;
 
+    /**
+     * Partitions per topic, which is what makes key ordering visible: with one partition every key lands in the
+     * same place and {@code floorMod(anything, 1)} is zero.
+     */
     private final int partitionsPerTopic;
 
+    /**
+     * The declared rate, per topic, handed to the generator when the run starts.
+     */
     private final double perSecond;
 
+    /**
+     * When to stop - see {@link Bound}. Kept because {@link #awaitBound(Duration)} refuses an unbounded run rather
+     * than waiting for something that will never happen.
+     */
     private final Bound bound;
 
+    /**
+     * The run's seed, given to each feed's own {@link RandomObjects} so that two runs of a seed generate the same
+     * records.
+     */
     private final long seed;
 
+    /**
+     * How many distinct keys to draw from. A pool rather than a key per record, because repeating keys is what
+     * makes shard behaviour something a sandbox run can show.
+     */
     private final int keyCardinality;
 
+    /**
+     * The broker. Built in the constructor rather than on demand, because the caller hands it to its options
+     * builder before anything else happens and its beginning offsets have to be recorded before assignment.
+     */
     private final SandboxConsumer<K, V> consumer;
 
     // Both stay null until asked for - a definition that produces nothing never builds a producer, and nothing
@@ -80,9 +115,18 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     @SuppressWarnings("NullAway.Init")
     private MockProducer<K, V> producer;
 
+    /**
+     * Null until {@link #startGenerating}, which is what {@link #awaitBound(Duration)} and
+     * {@link #generatedRecords()} each check before reaching for it - a sandbox asked about a run that has not
+     * started should say so.
+     */
     @SuppressWarnings("NullAway.Init")
     private RecordGenerator generator;
 
+    /**
+     * Package-private: a classic sandbox is built by {@link Sandbox#classic(Class, Class, String...)}, so that the
+     * settings below come from one builder rather than from eight arguments at a call site.
+     */
     ClassicSandbox(Class<K> keyType,
                    Class<V> valueType,
                    Collection<String> topics,
@@ -110,6 +154,10 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         return consumer;
     }
 
+    /**
+     * The topics to subscribe the instance to - {@code pc.subscribe(classic.topics())}. The same list the
+     * generator publishes into, so a subscription and a feed cannot come to disagree.
+     */
     public List<String> topics() {
         return topics;
     }
@@ -180,6 +228,10 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         generator.start();
     }
 
+    /**
+     * How many records have been generated. Zero before {@link #startGenerating}, rather than a refusal: a caller
+     * asking what a run produced before it started has its answer.
+     */
     public long generatedRecords() {
         return generator == null ? 0 : generator.generatedRecords();
     }
@@ -198,6 +250,10 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         return generator.awaitBound(timeout);
     }
 
+    /**
+     * Stops generating. Does <b>not</b> close the instance - the caller built it and owns it, and on this path
+     * closing it is {@code pc.close()} or the bound's own close.
+     */
     @Override
     public void close() {
         if (generator != null) {
@@ -210,19 +266,40 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      */
     private final class TypedFeed implements TopicFeed {
 
+        /**
+         * The topic this feed publishes into, which is also the only thing that distinguishes two feeds of a
+         * classic sandbox - the types are the sandbox's, not the route's.
+         */
         private final String topic;
 
+        /**
+         * A generator per feed, each seeded with the run's seed, so that record <em>n</em> of a topic depends on
+         * the seed and <em>n</em> alone and not on how the topics interleaved.
+         */
         private final RandomObjects random = RandomObjects.seededWith(seed);
 
+        /**
+         * @param topic one of the sandbox's topics
+         */
         private TypedFeed(String topic) {
             this.topic = topic;
         }
 
+        /**
+         * Named in the generator's log line when the run ends because the consumer closed under it.
+         */
         @Override
         public String topic() {
             return topic;
         }
 
+        /**
+         * One record: a key from the pool, a value filled from the declared type, and a partition chosen by the
+         * key's value hash so the key sticks to it.
+         *
+         * @param index the record's index in this feed's sequence, which is what makes it reproducible
+         * @return false once the consumer has closed, which is how the generator learns the run is over
+         */
         @Override
         public boolean publish(long index) {
             K key = random.key(keyType, index, keyCardinality);

@@ -15,6 +15,10 @@ package bz.stub.parallelconsumer.sandbox;
  */
 interface TopicFeed {
 
+    /**
+     * The topic this feed publishes into, for the generator's logging - the generator itself never routes on it,
+     * because a feed already knows where its records go.
+     */
     String topic();
 
     /**

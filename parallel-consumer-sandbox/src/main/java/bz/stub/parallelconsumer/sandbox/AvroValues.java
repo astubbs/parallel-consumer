@@ -35,6 +35,9 @@ import java.io.IOException;
  */
 final class AvroValues {
 
+    /**
+     * No instances: this is a conversion, and it holds nothing between calls.
+     */
     private AvroValues() {
     }
 
@@ -55,6 +58,14 @@ final class AvroValues {
         }
     }
 
+    /**
+     * Avro's own generic-to-specific conversion, written out because Avro has no single call for it: encode the
+     * generic record and decode it as the specific one, over the same schema on both sides.
+     *
+     * @param type   the generated class to end up with
+     * @param schema the schema both halves of the round trip read, so neither side can drift from the other
+     * @param generic what {@link RandomData} produced
+     */
     private static <T> T toSpecific(Class<T> type, Schema schema, Object generic) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         BinaryEncoder encoder = EncoderFactory.get().binaryEncoder(buffer, null);

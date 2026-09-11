@@ -46,15 +46,36 @@ final class FieldValues {
      */
     private static final Instant SANDBOX_NOW = Instant.parse("2026-01-01T00:00:00Z");
 
+    /**
+     * The demo domain's parcel statuses, which a field called {@code status} is filled from. A closed set rather
+     * than a random word, because the README's quickstart filters on one of these - a route that filtered on a
+     * value the generator never produces would demonstrate nothing.
+     */
     private static final String[] PARCEL_STATUSES = {
             "CREATED", "COLLECTED", "IN_TRANSIT", "OUT_FOR_DELIVERY", "DELIVERED", "RETURNED"};
 
+    /**
+     * Datafaker, which knows what an email address or a city looks like. Built once per generator: it loads its
+     * value dictionaries on construction, which is far too much work to repeat per record.
+     */
     private final Faker faker;
 
+    /**
+     * The randomness both halves share. Held as well as handed to {@link #faker} because {@link #oneOf} draws from
+     * it directly, and because {@link RandomObjects} re-seeds this instance before every record - which re-seeds
+     * the faker with it, since Datafaker keeps the reference rather than a copy.
+     */
     private final Random random;
 
+    /**
+     * The rule table, built once. Ordered most specific first, which is how it reads and the reverse of how
+     * Instancio applies it - {@link RandomObjects} registers it backwards and explains why there.
+     */
     private final List<Rule> rules;
 
+    /**
+     * @param random the generator's own randomness, re-seeded per record by its owner rather than by this class
+     */
     FieldValues(Random random) {
         this.random = random;
         // Datafaker holds this Random rather than copying it, so RandomObjects re-seeding it re-seeds the faker.
@@ -62,6 +83,11 @@ final class FieldValues {
         this.rules = buildRules();
     }
 
+    /**
+     * The table, for {@link RandomObjects} to register as Instancio selectors. Returned as it is rather than
+     * copied: the caller is one class in this package, and copying a table of twenty-odd rules per model would be
+     * work for nobody.
+     */
     List<Rule> rules() {
         return rules;
     }
@@ -71,12 +97,27 @@ final class FieldValues {
      */
     static final class Rule {
 
+        /**
+         * What this rule is called, for {@link #toString()} - which is what a reader sees when a filled object
+         * looks wrong and they print the table to find out which rule claimed the field.
+         */
         private final String name;
 
+        /**
+         * Whether this rule claims a field: its name, already lower-cased, and its type.
+         */
         private final BiPredicate<String, Class<?>> test;
 
+        /**
+         * The value, drawn fresh on every call - the rule is registered once per model and asked once per field
+         * per record.
+         */
         private final Supplier<Object> supplier;
 
+        /**
+         * Private: rules are only built by {@link #buildRules()} and {@link #text}, so the table stays the one
+         * place the vocabulary is defined.
+         */
         private Rule(String name, BiPredicate<String, Class<?>> test, Supplier<Object> supplier) {
             this.name = name;
             this.test = test;
@@ -90,16 +131,28 @@ final class FieldValues {
             return test.test(field.getName().toLowerCase(Locale.ROOT), field.getType());
         }
 
+        /**
+         * One value for a field this rule claimed. Not cached: two fields matching the same rule should not get
+         * the same value.
+         */
         Object value() {
             return supplier.get();
         }
 
+        /**
+         * The rule's name alone, so that {@link FieldValues#toString()} renders the table as a readable list.
+         */
         @Override
         public String toString() {
             return name;
         }
     }
 
+    /**
+     * The table itself: every field name this module recognises, and what it puts there. Written most specific
+     * first - {@code firstName} before {@code name}, {@code email} before {@code address} - because that is the
+     * order it reads in; the registration reverses it.
+     */
     private List<Rule> buildRules() {
         List<Rule> table = new ArrayList<>();
 
@@ -189,6 +242,10 @@ final class FieldValues {
         return BigDecimal.valueOf(faker.number().randomDouble(2, min, max)).setScale(2, RoundingMode.HALF_UP);
     }
 
+    /**
+     * A time in the month before {@link #SANDBOX_NOW}. Recent rather than uniform across the epoch, because a
+     * timestamp field in a demo is nearly always meant to be read as "just now, give or take".
+     */
     private Instant recentInstant() {
         return SANDBOX_NOW.minus(Duration.ofMinutes(faker.number().numberBetween(0, 60 * 24 * 30)));
     }
@@ -201,12 +258,25 @@ final class FieldValues {
         return candidates[random.nextInt(candidates.length)];
     }
 
+    /**
+     * Adds the commonest shape of rule - a {@code String} field whose name contains any of these fragments -
+     * so the table reads as a list of vocabulary rather than as twenty repetitions of the same lambda.
+     *
+     * @param table     the table being built
+     * @param ruleName  the name this rule answers to when the table is printed
+     * @param supplier  the value for a field it claims
+     * @param fragments lower-case fragments, any one of which claims the field
+     */
     private static void text(List<Rule> table, String ruleName, Supplier<Object> supplier, String... fragments) {
         table.add(new Rule(ruleName,
                 (name, type) -> String.class.equals(type) && containsAny(name, fragments),
                 supplier));
     }
 
+    /**
+     * @param fieldName a field name already lower-cased by {@link Rule#matches(Field)}, so no rule has to
+     *                  remember to do it
+     */
     private static boolean containsAny(String fieldName, String... fragments) {
         for (String fragment : fragments) {
             if (fieldName.contains(fragment)) {
@@ -216,26 +286,48 @@ final class FieldValues {
         return false;
     }
 
+    /**
+     * The money vocabulary, shared by the {@code BigDecimal} rule and the {@code double} one so that the two
+     * cannot come to disagree about what a money field is called.
+     */
     private static boolean mentionsMoney(String fieldName) {
         return containsAny(fieldName, "amount", "price", "total", "cost", "fee", "charge", "value", "balance");
     }
 
+    /**
+     * The time vocabulary, shared by the rules for the several ways a time is spelled in a bean - an
+     * {@code Instant}, a {@code long} of epoch millis, a {@code String}.
+     */
     private static boolean mentionsTime(String fieldName) {
         return containsAny(fieldName, "time", "date", "at", "when", "since", "instant", "stamp");
     }
 
+    /**
+     * Both spellings of a double, because a demo bean uses whichever its author preferred and a rule that matched
+     * only the boxed one would silently skip half of them. Same for {@link #isInt} and {@link #isLong}.
+     */
     private static boolean isDouble(Class<?> type) {
         return double.class.equals(type) || Double.class.equals(type);
     }
 
+    /**
+     * @see #isDouble(Class)
+     */
     private static boolean isInt(Class<?> type) {
         return int.class.equals(type) || Integer.class.equals(type);
     }
 
+    /**
+     * @see #isDouble(Class)
+     */
     private static boolean isLong(Class<?> type) {
         return long.class.equals(type) || Long.class.equals(type);
     }
 
+    /**
+     * The rule names in table order, which is what to print when a generated object has a field nobody expected -
+     * it says which rules existed and in which order they were considered.
+     */
     @Override
     public String toString() {
         return "FieldValues" + Arrays.toString(rules.toArray());

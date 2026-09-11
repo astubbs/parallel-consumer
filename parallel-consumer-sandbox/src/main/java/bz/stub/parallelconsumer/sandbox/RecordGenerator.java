@@ -30,12 +30,27 @@ import java.util.concurrent.atomic.AtomicLong;
 @Slf4j
 final class RecordGenerator implements AutoCloseable {
 
+    /**
+     * Named rather than written as a literal beside the division that turns a rate into an interval, which is the
+     * one place a factor-of-a-thousand slip would go unnoticed - the run would simply be a thousand times slower.
+     */
     private static final long NANOS_PER_SECOND = 1_000_000_000L;
 
+    /**
+     * One feed per topic, served in order within a tick. The list is the definition's topics, so a topic no route
+     * claims is not in it and never gets a record.
+     */
     private final List<TopicFeed> feeds;
 
+    /**
+     * The gap between ticks, derived once from the declared rate. Per topic, not in total: a two-topic definition
+     * at a hundred a second generates two hundred records a second.
+     */
     private final long intervalNanos;
 
+    /**
+     * When to stop, asked after every record and after every tick - see {@link Bound}.
+     */
     private final Bound bound;
 
     /**
@@ -49,12 +64,31 @@ final class RecordGenerator implements AutoCloseable {
      */
     private final Runnable onBoundReached;
 
+    /**
+     * Records published across every topic. Atomic because a caller reads it from its own thread while this
+     * generator's thread increments it, and because the count bound is tested against the value the increment
+     * returned rather than against a later read of it.
+     */
     private final AtomicLong generated = new AtomicLong();
 
+    /**
+     * Whether the generating loop should keep going. Set by {@link #start()} with a compare-and-set, so a second
+     * start is refused rather than quietly running two threads over one set of feeds; cleared by {@link #close()}
+     * and by the loop's own exit.
+     */
     private final AtomicBoolean running = new AtomicBoolean();
 
+    /**
+     * Counted down when the run is over - <b>after</b> the bound's close, not after the last record - so that a
+     * caller waiting on it sees the end of the run rather than the end of generating.
+     */
     private final CountDownLatch finished = new CountDownLatch(1);
 
+    /**
+     * Whether the loop ended by reaching its bound rather than by being closed. Read by {@link #close()} to decide
+     * whether an interrupt is safe, and by {@link #awaitBound(Duration)} to tell a bound that was reached from a
+     * wait that merely returned.
+     */
     private final AtomicBoolean boundWasReached = new AtomicBoolean();
 
     /**
@@ -77,6 +111,14 @@ final class RecordGenerator implements AutoCloseable {
      */
     private volatile Thread thread;
 
+    /**
+     * @param feeds             one per topic the definition routes, each knowing how to generate and publish its
+     *                          own record
+     * @param perSecondPerTopic the declared rate, which refuses zero and below rather than generating nothing and
+     *                          leaving the caller to work out why
+     * @param bound             when to stop, or {@link Bound#none()}
+     * @param onBoundReached    what reaching the bound starts - see the field
+     */
     RecordGenerator(List<TopicFeed> feeds, double perSecondPerTopic, Bound bound, Runnable onBoundReached) {
         if (perSecondPerTopic <= 0) {
             throw new IllegalArgumentException("A generator rate of " + perSecondPerTopic + " records per second "
@@ -88,6 +130,12 @@ final class RecordGenerator implements AutoCloseable {
         this.onBoundReached = onBoundReached;
     }
 
+    /**
+     * Starts generating on a thread of this generator's own, and returns immediately.
+     *
+     * @throws IllegalStateException if it is already running - two threads over one set of feeds would interleave
+     *                               their record indices, and a seeded run would stop being reproducible
+     */
     void start() {
         if (!running.compareAndSet(false, true)) {
             throw new IllegalStateException("This generator is already running");
@@ -99,10 +147,17 @@ final class RecordGenerator implements AutoCloseable {
         thread.start();
     }
 
+    /**
+     * Records published so far, across every topic - a live count while the run is going, and the run's total
+     * afterwards.
+     */
     long generatedRecords() {
         return generated.get();
     }
 
+    /**
+     * Whether the run ended at its bound rather than by being closed. False for an unbounded run, always.
+     */
     boolean boundWasReached() {
         return boundWasReached.get();
     }
@@ -157,6 +212,14 @@ final class RecordGenerator implements AutoCloseable {
         return finishedInTime && boundWasReached();
     }
 
+    /**
+     * The generating loop, which is the whole of what the generator thread does.
+     * <p>
+     * One record per feed per tick, the bound asked after each record and on both sides of the sleep - before it
+     * so a reached duration does not wait out one more interval first, after it because the sleep is where the
+     * time passes. Every exit runs the finally below, which is what publishes {@link #boundWasReached}, starts the
+     * bound's close and counts {@link #finished} down; there is no return from this method that skips it.
+     */
     private void generate() {
         long startNanos = System.nanoTime();
         long tick = 0;

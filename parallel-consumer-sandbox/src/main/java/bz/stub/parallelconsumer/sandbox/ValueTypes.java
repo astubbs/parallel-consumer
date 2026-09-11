@@ -34,8 +34,14 @@ import java.util.UUID;
  */
 final class ValueTypes {
 
+    /**
+     * Built once: the table never changes, and {@link #of(Format)} is asked for every route at start-up.
+     */
     private static final Map<String, Class<?>> KAFKA_DESERIALIZERS = kafkaDeserializers();
 
+    /**
+     * No instances: this class is one question asked of a format.
+     */
     private ValueTypes() {
     }
 
@@ -54,6 +60,14 @@ final class ValueTypes {
         return KAFKA_DESERIALIZERS.get(deserializer.getClass().getName());
     }
 
+    /**
+     * Kafka's own deserialisers and the type each reads into - the whole of {@code Serdes}.
+     * <p>
+     * <b>Keyed by class name rather than by {@code Class}</b>, deliberately: a name matches a deserialiser loaded
+     * by a different classloader, which is an ordinary shape for a library embedded in a container, and a
+     * {@code Class} key would quietly fail to. The cost is that a typo here compiles;
+     * {@code ValueTypesTest} names every one of these as a class so that it cannot.
+     */
     private static Map<String, Class<?>> kafkaDeserializers() {
         Map<String, Class<?>> known = new LinkedHashMap<>();
         String pkg = "org.apache.kafka.common.serialization.";
