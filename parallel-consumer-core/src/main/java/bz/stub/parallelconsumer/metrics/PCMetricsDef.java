@@ -66,10 +66,10 @@ public enum PCMetricsDef {
     PAYLOAD_RATIO_USED("payload.ratio.used", "Ratio between offset metadata payload size and offsets encoded", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY),
 
     // The fluent API's routes. Registered by that package, through this instance's PCMetrics, so they land in the
-    // user's own registry beside every meter above and are swept by the same close.
-    ROUTE_RECORDS("route.records", "Total number of records that reached each terminal outcome on a fluent API route - counts events, so it never decreases", PCMetricsSubsystem.ROUTES, COUNTER, tag("topic", "topicName"), tag("outcome", "succeeded|filtered|parked|stopped")),
-    ROUTE_PARKED_RECORDS("route.parked.records", "Number of records parked in place right now on this partition - the size of the set an operator can act on, which is not the parked counter above", PCMetricsSubsystem.ROUTES, GAUGE, topicPartitionTags()),
-    ROUTE_PARKED_OLDEST_AGE("route.parked.oldest.age", "Age in seconds of the oldest record parked on this partition, or zero when none is parked", PCMetricsSubsystem.ROUTES, GAUGE, topicPartitionTags());
+    // user's own registry beside every meter above and are swept by the same close. Outcome events only: the LIVE
+    // parked set is PARTITION_PARKED_RECORDS and PARTITION_PARKED_OLDEST_AGE above, published by the partition that
+    // owns the records rather than by a route that would have to walk the whole retry queue to find them.
+    ROUTE_RECORDS("route.records", "Total number of records that reached each terminal outcome on a fluent API route - counts events, so it never decreases", PCMetricsSubsystem.ROUTES, COUNTER, tag("topic", "topicName"), tag("outcome", "succeeded|filtered|parked|stopped"));
 
     public static final String PC_INSTANCE_TAG = "pcinstance";
 

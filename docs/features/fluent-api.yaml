@@ -33,8 +33,8 @@ setup:
     - Per route with an instance default - retryLimit, retryDelay, concurrency, afterRetries, onParked.
   observe:
     - pc.route.records
-    - pc.route.parked.records
-    - pc.route.parked.oldest.age
+    - pc.partition.parked.records
+    - pc.partition.parked.oldest.age
 opt_in:
   mechanism: Call ParallelConsumer.connect(properties) instead of building ParallelConsumerOptions. Both APIs ship in the same artifact and neither is deprecated.
   isolated_from_stable_modules: false

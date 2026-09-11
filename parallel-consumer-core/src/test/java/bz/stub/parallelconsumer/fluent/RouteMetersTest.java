@@ -11,7 +11,6 @@ import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import ch.qos.logback.classic.Level;
 import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.search.Search;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -34,7 +33,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
- * The fluent API's meters (R19, KTD8): what each route did with its records, and what is parked right now.
+ * The fluent API's meters (R19, KTD8): what each route did with its records.
  * <p>
  * They register through the {@code PCModule} the definition builds, which is what puts them in the user's own
  * registry beside every engine meter and has them swept by the same close - so what is asserted here is both that
@@ -44,16 +43,24 @@ import static com.google.common.truth.Truth.assertWithMessage;
 class RouteMetersTest extends AbstractFluentEngineTest {
 
     /**
-     * Unique to this test: {@link LogCapture} reads a logger shared with every other test in this module, so the
-     * filter has to be something only this test can produce.
+     * Unique to {@link #aRouteWithNoAssignmentIsLoggedOnce()}, and the reason there are two of these rather than
+     * one constant shared by the two tests that look for this warning.
+     * <p>
+     * {@link LogCapture} reads a logger shared with every other test in this module, and this module runs its tests
+     * on several threads - so a topic name two tests can both produce makes each of them able to read the other's
+     * warning. The shared name was doing exactly that: the first of these two tests warns about its dark route
+     * while the second is inside the window where it asserts that <em>nothing</em> has been said yet, and the
+     * second failed on a message it did not cause. Seen on 2026-09-11; it is a collision between the two tests and
+     * not a fault in the warning, which is why the fix is a name apiece rather than a looser assertion.
      */
-    private static final String UNASSIGNED_TOPIC = "audit-nobody-assigns";
+    private static final String UNASSIGNED_TOPIC = "audit-nobody-assigns-beside-an-assigned-route";
+
+    /**
+     * Unique to {@link #theOnlyRouteIsReportedWhenTheInstanceIsAssignedNothingAtAll()}, for the reason above.
+     */
+    private static final String UNASSIGNED_ONLY_TOPIC = "audit-nobody-assigns-and-it-is-the-only-route";
 
     private static final String OUTCOME_COUNTER = "pc.route.records";
-
-    private static final String PARKED_GAUGE = "pc.route.parked.records";
-
-    private static final String OLDEST_AGE_GAUGE = "pc.route.parked.oldest.age";
 
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
@@ -115,44 +122,6 @@ class RouteMetersTest extends AbstractFluentEngineTest {
     }
 
     /**
-     * The gauges are the live parked set, per partition - which is a different figure from the parked counter, and
-     * R19 asks for both. The counter counts park events and never goes down; this is the size of the set an
-     * operator can act on.
-     */
-    @Test
-    void parkedGaugesCarryTheTopicAndPartitionAndReadTheLiveSet() {
-        var pc = ParallelConsumer.connect(props())
-                .meterRegistry(registry)
-                .defaultOrdering(ProcessingOrder.UNORDERED);
-        pc.string(TOPIC)
-                .retryLimit(0)
-                .retryDelay(Duration.ofMillis(10))
-                .process(context -> {
-                    throw new FakeRuntimeException("this record parks");
-                });
-
-        handle = runtime.startAndAssign(pc, 2);
-        runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-        runtime.publish(TOPIC, 0, 1, "key-1", "another order");
-        runtime.publish(TOPIC, 1, 0, "key-2", "an order on the other partition");
-
-        Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
-            assertThat(gauge(PARKED_GAUGE, 0)).isEqualTo(2d);
-            assertThat(gauge(PARKED_GAUGE, 1)).isEqualTo(1d);
-            assertThat(gauge(OLDEST_AGE_GAUGE, 0)).isGreaterThan(0d);
-        });
-        // A gauge exists for every assigned partition, whether or not anything is parked on it.
-        assertThat(Search.in(registry).name(PARKED_GAUGE).gauges()).hasSize(2);
-        assertThat(counter(TOPIC, OutcomeTag.PARKED)).isEqualTo(3d);
-    }
-
-    private double gauge(String name, int partition) {
-        Gauge gauge = Search.in(registry).name(name).tag("topic", TOPIC)
-                .tag("partition", String.valueOf(partition)).gauge();
-        return gauge == null ? Double.NaN : gauge.value();
-    }
-
-    /**
      * Closing takes every meter this instance registered back out of the user's registry - the registry outlives
      * the instance, so anything left behind is a leak reported for ever at its last value.
      */
@@ -171,10 +140,8 @@ class RouteMetersTest extends AbstractFluentEngineTest {
         ConsumerHandle started = runtime.startAndAssign(pc, 1);
         handle = started;
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-        Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
-            assertThat(Search.in(registry).name(PARKED_GAUGE).gauges()).isNotEmpty();
-            assertThat(counter(TOPIC, OutcomeTag.PARKED)).isEqualTo(1d);
-        });
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
+                assertThat(counter(TOPIC, OutcomeTag.PARKED)).isEqualTo(1d));
 
         // Not the handle's drain: a parked record never completes, so a drain would wait out the drain timeout.
         RecordingClientRuntime.closeWithoutDraining(started);
@@ -182,8 +149,6 @@ class RouteMetersTest extends AbstractFluentEngineTest {
         handle = null;
 
         assertThat(Search.in(registry).name(OUTCOME_COUNTER).meters()).isEmpty();
-        assertThat(Search.in(registry).name(PARKED_GAUGE).meters()).isEmpty();
-        assertThat(Search.in(registry).name(OLDEST_AGE_GAUGE).meters()).isEmpty();
     }
 
     /**
@@ -198,21 +163,17 @@ class RouteMetersTest extends AbstractFluentEngineTest {
     @Test
     void deregisteringRemovesEveryMeterItRegistered() {
         PCMetrics metrics = new PCMetrics(registry, Collections.emptyList(), "route-meters-unit-test");
-        FluentMeters meters = FluentMeters.registerFor(metrics, Collections.singletonList(TOPIC),
-                Collections::emptyList);
-        meters.syncPartitionGauges(Collections.singleton(new TopicPartition(TOPIC, 0)));
+        FluentMeters meters = FluentMeters.registerFor(metrics, Collections.singletonList(TOPIC));
 
         assertThat(Search.in(registry).name(OUTCOME_COUNTER).meters()).hasSize(4);
-        assertThat(Search.in(registry).name(PARKED_GAUGE).meters()).hasSize(1);
-        assertThat(Search.in(registry).name(OLDEST_AGE_GAUGE).meters()).hasSize(1);
 
         meters.deregister();
 
         assertThat(Search.in(registry).name(OUTCOME_COUNTER).meters()).isEmpty();
-        assertThat(Search.in(registry).name(PARKED_GAUGE).meters()).isEmpty();
-        assertThat(Search.in(registry).name(OLDEST_AGE_GAUGE).meters()).isEmpty();
-        // Idempotent: a handle that closes twice must not go back to the registry a second time.
+        // A handle that closes twice deregisters twice, and the second sweep must neither throw nor put anything
+        // back: removing an already-removed meter is a no-op in the registry, which is why this needs no flag.
         meters.deregister();
+        assertThat(Search.in(registry).name(OUTCOME_COUNTER).meters()).isEmpty();
     }
 
     /**
@@ -267,7 +228,7 @@ class RouteMetersTest extends AbstractFluentEngineTest {
     @Test
     void theOnlyRouteIsReportedWhenTheInstanceIsAssignedNothingAtAll() {
         var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
-        pc.string(UNASSIGNED_TOPIC).process(context -> Outcome.succeeded());
+        pc.string(UNASSIGNED_ONLY_TOPIC).process(context -> Outcome.succeeded());
 
         try (LogCapture logs = LogCapture.of(ConsumerHandle.class, Level.WARN)) {
             handle = pc.start(runtime);
@@ -275,14 +236,14 @@ class RouteMetersTest extends AbstractFluentEngineTest {
             // Before any rebalance: an empty assignment is an instance that has not joined yet, and saying
             // anything here would fire on every healthy start. Half a second is many control-loop passes.
             Awaitility.await().pollDelay(Duration.ofMillis(500)).atMost(defaultTimeout).until(() ->
-                    logs.messagesAt(Level.WARN, "assigned no partition", UNASSIGNED_TOPIC).isEmpty());
+                    logs.messagesAt(Level.WARN, "assigned no partition", UNASSIGNED_ONLY_TOPIC).isEmpty());
 
             // The rebalance that gives this member nothing at all - no partition of the one routed topic, and so
             // an empty assignment for the whole instance. Kafka delivers it; the facade's listener records it.
             runtime.mockConsumer().rebalance(Collections.emptyList());
 
             Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
-                    assertThat(logs.messagesAt(Level.WARN, "assigned no partition", UNASSIGNED_TOPIC))
+                    assertThat(logs.messagesAt(Level.WARN, "assigned no partition", UNASSIGNED_ONLY_TOPIC))
                             .isNotEmpty());
         }
     }

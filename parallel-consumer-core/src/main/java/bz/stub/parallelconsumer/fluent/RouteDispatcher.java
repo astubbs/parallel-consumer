@@ -195,15 +195,6 @@ class RouteDispatcher {
     }
 
     /**
-     * The engine's parked containers, straight through: what {@link FluentMeters}' gauges read, and the only
-     * caller that wants containers rather than the {@link ParkedRecord} view over them - it needs a topic, a
-     * partition and a park time, none of which costs a key deserialisation.
-     */
-    List<WorkContainer<?, ?>> parkedContainersNow() {
-        return parkedContainers.get();
-    }
-
-    /**
      * The parked records of a named set of topics, filtered <b>before</b> anything is built rather than after.
      * <p>
      * It matters because building one entry decodes the record's key: answering a single route's query by

@@ -26,7 +26,7 @@ setup:
     - retryLimit(n) and retryDelay(d) per route, or defaultRetryLimit and defaultRetryDelay for the instance.
   observe:
     - handle.topic(name).parked() for one route, handle.parkedAllTopics() for the instance.
-    - pc.route.parked.records and pc.route.parked.oldest.age, tagged by topic and partition.
+    - pc.partition.parked.records and pc.partition.parked.oldest.age, tagged by topic and partition.
     - onParked, which fires once per record per assignment.
 opt_in:
   mechanism: The default reaction on any fluent-API route. The classic API is unaffected.

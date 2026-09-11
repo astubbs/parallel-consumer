@@ -245,8 +245,12 @@ public class ConsumerHandle implements AutoCloseable {
     }
 
     /**
-     * The hook the control loop runs at the end of every pass: bring the parked gauges into line with the
-     * assignment, and say once which routes were assigned nothing.
+     * The hook the control loop runs at the end of every pass: say once which routes were assigned nothing.
+     * <p>
+     * It used to keep a gauge per assigned partition in step with the assignment as well, which is why it runs on
+     * every pass rather than from the rebalance callback; those gauges are the engine's now, registered by the
+     * partition that owns the records. What is left needs the assignment and nothing else, so this stays a
+     * loop-end hook rather than becoming a third thing the rebalance listener does.
      * <p>
      * <b>It never throws.</b> The control loop runs its hooks as user code and a throw takes the instance down, so
      * every fault here is contained and logged - observability must not be able to stop consuming.
@@ -256,11 +260,10 @@ public class ConsumerHandle implements AutoCloseable {
             // Not copied: getAssignedPartitions() builds a fresh unmodifiable map on every call, so its key set is
             // already a stable, private view - and this runs on every pass of the control loop.
             Set<TopicPartition> assigned = processor.getWm().getPm().getAssignedPartitions().keySet();
-            meters.syncPartitionGauges(assigned);
             logRoutesWithNoAssignment(assigned);
         } catch (Throwable hookFailed) { //NOSONAR - a throw from here is fatal to the control loop
-            log.warn("The fluent API's loop-end hook failed and is contained - the parked view and its meters may "
-                    + "be stale. This cannot stop the instance.", hookFailed);
+            log.warn("The fluent API's loop-end hook failed and is contained - the report of routes assigned no "
+                    + "partition may not be made. This cannot stop the instance.", hookFailed);
         }
     }
 

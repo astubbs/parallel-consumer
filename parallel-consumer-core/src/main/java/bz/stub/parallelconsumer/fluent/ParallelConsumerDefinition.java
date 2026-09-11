@@ -510,10 +510,9 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         PCModule<byte[], byte[]> module = new PCModule<>(built);
         ParallelEoSStreamProcessor<byte[], byte[]> processor = new ParallelEoSStreamProcessor<>(built, module);
 
-        // The gauges read the same parked set the parked view answers from, through the same wrapper - the engine's
-        // retry queue, once the handle has wired the dispatcher to it below (KTD8, KTD14).
-        FluentMeters meters = FluentMeters.registerFor(module.pcMetrics(), topics(),
-                dispatcher::parkedContainersNow);
+        // Outcome counters only, one per routed topic per outcome: the live parked figures are the engine's, gauged
+        // by the partition that owns the records (KTD8).
+        FluentMeters meters = FluentMeters.registerFor(module.pcMetrics(), topics());
         dispatcher.meters(meters);
         ConsumerHandle handle = new ConsumerHandle(processor, dispatcher, routeTopicsByTopic(), closePath, meters);
         // The wrapper's two callbacks into this handle are wired by startObserving() below, with the parked view

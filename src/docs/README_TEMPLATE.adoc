@@ -588,7 +588,7 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 <2> Everything an operator needs to decide what to do about a record: offset, key, attempts, the last failure, how long it has been parked.
 <3> The instance-wide roll-up, named apart so the per-route accessor is never overloaded.
 
-The same figures are published through the <<metrics,metrics integration>>, under the `routes` subsystem: outcome counts tagged by topic and outcome, and the parked count and oldest parked age tagged by topic and partition.
+The same figures are published through the <<metrics,metrics integration>>: outcome counts under the `routes` subsystem, tagged by topic and outcome, and the live parked count and oldest parked age under the `partitions` subsystem, tagged by topic and partition.
 
 *Copying a record to another topic is called `dlq` here, and it is a verb.*
 It is the relief valve for park rather than the first resort: `dlqTo` names the destination, `dlqWhenOffsetPayloadReaches` fires when a partition's offset-map payload reaches a percentage of Kafka's commit-metadata cap, `dlqOlderThan` fires before the topic's retention could delete a parked record, and `dlqImmediately` is the classic dead-letter queue -- export on the dispatch after exhaustion, with no park in between.
@@ -1446,18 +1446,6 @@ Ratio between offset metadata payload size and offsets encoded
 Counter `pc.route.records{subsystem=routes, topic="topicName", outcome="succeeded|filtered|parked|stopped"}`
 
 Total number of records that reached each terminal outcome on a fluent API route - counts events, so it never decreases
-
-**Route Parked Records**
-
-Gauge `pc.route.parked.records{subsystem=routes, topic="topicName", partition="partitionNumber"}`
-
-Number of records parked in place right now on this partition - the size of the set an operator can act on, which is not the parked counter above
-
-**Route Parked Oldest Age**
-
-Gauge `pc.route.parked.oldest.age{subsystem=routes, topic="topicName", partition="partitionNumber"}`
-
-Age in seconds of the oldest record parked on this partition, or zero when none is parked
 
 === Example Metrics setup steps
 Meter registry that metrics should be bound has to be set using Parallel Consumer Options along with any common tags that identify the PC instance.
