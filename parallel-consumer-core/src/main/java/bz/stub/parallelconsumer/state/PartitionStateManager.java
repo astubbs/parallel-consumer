@@ -487,7 +487,15 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         return dirties;
     }
 
-    private Map<TopicPartition, PartitionState<K, V>> getAssignedPartitions() {
+    /**
+     * The partitions this instance currently holds - every one it has state for, minus the ones a revocation
+     * removed.
+     * <p>
+     * Public so a caller that needs to know what is assigned reads it here rather than keeping its own copy in a
+     * rebalance listener, which is a second answer to a question this class already answers. Read it from the
+     * control thread, as everything else that reads partition state does.
+     */
+    public Map<TopicPartition, PartitionState<K, V>> getAssignedPartitions() {
         return Collections.unmodifiableMap(this.partitionStates.entrySet().stream()
                 .filter(e -> !e.getValue().isRemoved())
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
