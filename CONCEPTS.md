@@ -259,7 +259,9 @@ attributes; neither bounds the fleet. The word is deliberately wider than a cons
 the people who ask fleet questions run deployments, not groups.
 
 A fleet has one place its state fans in to: an elected controller node, which is the same node
-that coordinates named shared resources across applications. No instance holds the fleet's state,
+that coordinates named shared resources across applications. The controller is a role, not a
+kind of process: it runs inside one of the application instances or as a standalone process that
+hosts no application, and the two are the same code. No instance holds the fleet's state,
 and no instance pulls from every other - either shape is quadratic in the fleet's size. A question
 about the fleet goes to the controller; a question about one instance is answered by that instance.
 
