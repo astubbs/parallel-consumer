@@ -63,11 +63,6 @@ class FluentMeters {
     /**
      * The values of the {@code outcome} tag: the terminal outcomes of R7, plus the stop request of R24, which is
      * not a terminal outcome of the record but is counted beside them.
-     * <p>
-     * Named constants rather than an enum on purpose. The Truth assertion generator sweeps every enum reachable
-     * from this module and writes a {@code Subject} for it into the public {@code bz.stub.parallelconsumer}
-     * package, so an enum here - even nested inside this package-private class - would have to be public, and this
-     * is the meters' internal vocabulary rather than part of the fluent API.
      */
     static final String SUCCEEDED = "succeeded";
 
