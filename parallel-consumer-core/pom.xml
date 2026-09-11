@@ -97,6 +97,19 @@
         </dependency>
 
         <!-- Testing -->
+        <!-- MockAdminClient, for the start-time topic-existence check (bz.stub.parallelconsumer.fluent).
+             Kafka ships it in the test classifier of the artifact this module already depends on, at the same
+             ${kafka.version}, so the double and the interface it doubles can never be different versions.
+             Written by hand instead it would be some sixty stubbed methods returning result types whose
+             constructors are package-private in Kafka - a fake of the AdminClient contract rather than a use
+             of it. Test scope: nothing in main/ sees it, and it is not published. -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>${kafka.version}</version>
+            <classifier>test</classifier>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>

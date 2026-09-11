@@ -4,6 +4,8 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -53,6 +55,29 @@ class KafkaClientRuntime implements ClientRuntime {
         Map<String, Object> withoutAutoCommit = new LinkedHashMap<>(config);
         withoutAutoCommit.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         return withoutAutoCommit;
+    }
+
+    /**
+     * A real admin client on the definition's connection properties, for the start-time topic-existence check.
+     * <p>
+     * <b>The properties are filtered to the ones an admin client knows.</b> The connection properties are a
+     * consumer's, so they carry keys this client has no use for - the group id above all - and every one of them
+     * would be logged as "supplied but isn't a known config" at start, which reads as a misconfiguration in a
+     * definition that has none. Everything an admin client needs to reach a secured broker is a known config and
+     * survives the filter; what does not is a schema-registry URL and the consumer's own settings, neither of
+     * which it would have used.
+     */
+    @Override
+    public Optional<Admin> admin(DefinitionView definition) {
+        Map<String, Object> config = definition.connectionProperties();
+        requireConnection(config);
+        Map<String, Object> adminConfig = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> property : config.entrySet()) {
+            if (AdminClientConfig.configNames().contains(property.getKey())) {
+                adminConfig.put(property.getKey(), property.getValue());
+            }
+        }
+        return Optional.of(Admin.create(adminConfig));
     }
 
     /**

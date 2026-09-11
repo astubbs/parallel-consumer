@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.common.annotation.InterfaceStability;
@@ -49,6 +50,24 @@ public interface ClientRuntime {
      * producer recovery (R1, astubbs#410). A fake, which has no recovery to lose, returns its instance.
      */
     Optional<Producer<byte[], byte[]>> producer(DefinitionView definition);
+
+    /**
+     * A short-lived admin client for the one question the facade asks the cluster before it starts: whether the
+     * topics this definition's routes name are there (see {@link MissingTopic}). Called once, at start, and the
+     * facade closes what it is given - it is built for that question and nothing else holds it.
+     * <p>
+     * <b>Empty means there is no cluster to ask</b>, and the check is then skipped rather than faked: that is the
+     * right answer for a runtime that serves records from memory, where every topic a definition names exists by
+     * construction. It is the default for the same reason - a runtime written before this existed has no cluster
+     * this method could reach.
+     *
+     * @param definition the validated definition, the same view the client methods above are handed
+     * @return an admin client for this definition's cluster, or empty when this runtime has no cluster
+     */
+    default Optional<Admin> admin(DefinitionView definition) {
+        // A runtime that fabricates records has nothing to describe and nothing to create.
+        return Optional.empty();
+    }
 
     /**
      * Called once the instance is running, with the handle its caller is about to be given. Does nothing by

@@ -156,6 +156,12 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     private ClosePath closePath = ClosePath.DRAIN_FIRST;
 
     /**
+     * What a start does about a route naming a topic the cluster does not have (owner decision, 2026-09-11).
+     * Refusing by default - see {@link MissingTopic#FAIL} for the silence it replaces.
+     */
+    private MissingTopic whenTopicMissing = MissingTopic.FAIL;
+
+    /**
      * The handle {@link #start} produced, so that a definition held in try-with-resources closes the instance it
      * started. Null until it starts one.
      */
@@ -206,12 +212,29 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
+     * What the start does about a route naming a topic the cluster does not have: refuse it, create it, or say so
+     * and carry on. {@link MissingTopic#FAIL} unless the definition says otherwise, and
+     * {@link MissingTopic} carries why.
+     * <p>
+     * <b>Instance-wide rather than per route with an instance default</b>, which is where KD11 would have put it
+     * and where {@code docs/refactoring.md} said it would go. Directed by the owner on 2026-09-11, and the reason
+     * it is the better shape: this is one question asked once of one cluster, before any route is running, and two
+     * routes of one definition disagreeing about whether a missing topic is fatal describes an instance that is
+     * half-started - which is not a state this API has. A route that may legitimately be absent is a definition
+     * that declares {@link MissingTopic#IGNORE} and reads its route's parked view, not a per-route flag.
+     */
+    public ParallelConsumerDefinition whenTopicMissing(MissingTopic policy) {
+        this.whenTopicMissing = Objects.requireNonNull(policy, "A missing-topic policy must be supplied");
+        return this;
+    }
+
+    /**
      * Where this instance's meters go (R19). Without one, Parallel Consumer registers into a no-op registry and
      * nothing is published.
      * <p>
-     * The fluent API's own meters - what each route did with its records, and what is parked right now - register
-     * here alongside every engine meter, under the {@code routes} subsystem, and are removed when the instance
-     * closes.
+     * The fluent API's own meters - what each route did with its records - register here alongside every engine
+     * meter, under the {@code routes} subsystem, and are removed when the instance closes. The live parked figures
+     * are the engine's, gauged per partition under the {@code partitions} subsystem.
      */
     public ParallelConsumerDefinition meterRegistry(MeterRegistry registry) {
         Objects.requireNonNull(registry, "A meter registry must be supplied");
@@ -613,6 +636,11 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
                     + "second instance");
         }
         started = true;
+
+        // Before any client of the instance exists, and after the definition has been refused for its own faults:
+        // a topic that is not there is a fault of the definition too, and the start that carries on regardless is
+        // the one this replaces (owner decision, 2026-09-11).
+        TopicExistenceCheck.enforce(whenTopicMissing, topics(), runtime, this);
 
         this.dispatcher = new RouteDispatcher(routesByTopic, defaults.retryDelay(), preBuiltConsumerDescription);
 

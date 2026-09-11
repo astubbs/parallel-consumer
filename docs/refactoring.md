@@ -764,13 +764,6 @@ but not this.*
 - `AVERAGE_USER_PROCESSING_TIME` / `AVERAGE_WAITING_TIME`: two unimplemented metric definitions -
   implement or drop.
 
-### fluent/ConsumerHandle.java
-- `TODO(refactor)` on the no-assignment warning: a **topic-existence policy at start** - fail,
-  create, or ignore - would say which of the two causes the warning names is the real one, instead
-  of naming both. Needs a short-lived `AdminClient` describe (and create) in `KafkaClientRuntime`
-  beside `requireConnection`, which the library makes nowhere today; its default is an owner
-  decision, and under KD11 its placement is per route with an instance default.
-
 ---
 
 ### Test infrastructure - `MockConsumerTestBase` assumes one partition and one key

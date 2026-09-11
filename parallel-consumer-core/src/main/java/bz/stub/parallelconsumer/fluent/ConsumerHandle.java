@@ -271,6 +271,11 @@ public class ConsumerHandle implements AutoCloseable {
      * A route whose topic was assigned no partition processes nothing and says nothing, which reads as a broken
      * function rather than as a subscription that matched nothing - a misspelled topic name, or a topic this group
      * shares with another instance that took every partition (R28).
+     * <p>
+     * <b>It still names both causes, and by the time it fires the first one has usually been ruled out.</b> The
+     * start-time {@link MissingTopic} check answers the does-it-exist half before the instance runs, and refuses
+     * the start by default - so a definition on the defaults that reaches this warning is being told about the
+     * other cause. A definition that declared {@link MissingTopic#IGNORE} can still reach it for either.
      */
     private void logRoutesWithNoAssignment(Set<TopicPartition> assigned) {
         // Nothing assigned yet is not a gap; assigned nothing is. Both are an empty set here, so the wait is for a
@@ -293,9 +298,6 @@ public class ConsumerHandle implements AutoCloseable {
                             + "routes will process nothing: {}. Either the topic does not exist, or another member "
                             + "of the group holds every partition of it. Assigned: {}",
                     unassigned, assigned);
-            // TODO(refactor): a topic-existence policy at start - fail, create, or ignore - would say WHICH of the
-            // two causes this is instead of naming both; its default is an owner decision and it needs an
-            // AdminClient call this library does not make today.
         }
     }
 
