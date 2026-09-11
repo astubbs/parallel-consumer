@@ -26,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
@@ -108,6 +109,22 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
      * supplies the handle's parked view; {@link ClassicSandbox} supplies nothing and gets the empty answer.
      */
     private volatile Supplier<Map<TopicPartition, Long>> parkedCounts = Collections::emptyMap;
+
+    /**
+     * How much each commit accounts for, worked out once per commit rather than once per look.
+     * <p>
+     * {@link #completedOn} is a pure function of the commit - a base64 decode and an offset-map deserialisation -
+     * and {@link #awaitEveryPublishedRecordCommitted(Duration)} asks it every {@link #WAIT_INTERVAL_MS} while the
+     * engine commits on a five-second cadence, so the same immutable {@code OffsetAndMetadata} is decoded about a
+     * thousand times for an answer that cannot have changed. The run that pays most for that is the one this wait
+     * was rewritten for: a parked record pins its partition's committed offset, successive commits then tie on the
+     * offset, and {@link #accountsForMore} breaks each tie by decoding <em>both</em> sides.
+     * <p>
+     * It holds one entry per distinct commit, which is the same order as the commit history the mock consumer
+     * keeps for the life of the run anyway. Concurrent because {@link #highestCommittedOffsets()} is public and a
+     * test may read it from another thread while the generator thread waits.
+     */
+    private final Map<OffsetAndMetadata, Long> completedPerCommit = new ConcurrentHashMap<>();
 
     /**
      * Records every partition's beginning offset before anything can be assigned. Nothing is assigned yet - call
@@ -418,10 +435,23 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
      *               partition whose every record parked looks like: not one of them completed, so it was never
      *               dirty, so it never committed at all
      */
-    private static long completedOn(TopicPartition partition, OffsetAndMetadata commit) {
+    private long completedOn(TopicPartition partition, OffsetAndMetadata commit) {
         if (commit == null) {
             return 0;
         }
+        Long alreadyRead = completedPerCommit.get(commit);
+        if (alreadyRead != null) {
+            return alreadyRead;
+        }
+        long completed = decodeCompletedOn(partition, commit);
+        completedPerCommit.put(commit, completed);
+        return completed;
+    }
+
+    /**
+     * {@link #completedOn} without the memo in front of it - the decode itself.
+     */
+    private static long decodeCompletedOn(TopicPartition partition, OffsetAndMetadata commit) {
         long committedOffset = commit.offset();
         String offsetMap = commit.metadata();
         if (offsetMap == null || offsetMap.isEmpty()) {
@@ -468,8 +498,8 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
      * So a tie on the offset is broken by what the two commits account for, rather than by which was seen first.
      * The offset still decides where the offsets differ, which is every case the old comparison got right.
      */
-    private static void keepHighest(Map<TopicPartition, OffsetAndMetadata> into,
-                                    Map<TopicPartition, OffsetAndMetadata> commit) {
+    private void keepHighest(Map<TopicPartition, OffsetAndMetadata> into,
+                             Map<TopicPartition, OffsetAndMetadata> commit) {
         for (Map.Entry<TopicPartition, OffsetAndMetadata> entry : commit.entrySet()) {
             OffsetAndMetadata previous = into.get(entry.getKey());
             if (previous == null || accountsForMore(entry.getKey(), entry.getValue(), previous)) {
@@ -481,9 +511,9 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
     /**
      * @return whether {@code candidate} is the commit to keep over {@code previous} for {@code partition}
      */
-    private static boolean accountsForMore(TopicPartition partition,
-                                           OffsetAndMetadata candidate,
-                                           OffsetAndMetadata previous) {
+    private boolean accountsForMore(TopicPartition partition,
+                                    OffsetAndMetadata candidate,
+                                    OffsetAndMetadata previous) {
         if (candidate.offset() != previous.offset()) {
             return candidate.offset() > previous.offset();
         }
