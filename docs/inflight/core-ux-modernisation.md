@@ -121,6 +121,29 @@ issue the typed routes already answer, and the one whose classic-API counterpart
 really about - R26 deliberately gives the classic API no per-topic verb.
 <!-- file-refs: N/A - next-multi-topic-multi-function.md is branch-only; print it with bin/inflight.mjs docs show -->
 
+## A sighting: the stop test's publish loop races the stop's own close
+
+Seen once, 2026-09-11, on a loaded developer machine; never on CI.
+`StopTheInstanceTest.stopBoundsDispatchWithThousandsBufferedBehindIt` errored with
+`IllegalStateException: This consumer has already been closed.`, thrown from the test's own publish
+loop rather than from an assertion.
+
+The shape. The test publishes two thousand records on the calling thread while the route stops on
+offset four, and the stop closes the consumer from the handle's own thread (plan KTD6). The loop
+assumes it finishes publishing before that close lands, which holds whenever publishing outruns the
+stop. Under the whole core suite on a machine also running another build, it did not.
+
+Evidence, so the next reader does not re-derive it: five runs of the class alone, all green; the full
+core suite re-run immediately afterwards on the same tree, green. So it is not reproducible on
+demand, and it is not a main-code defect - the engine closing its consumer on stop is the behaviour
+this very test asserts. It reads as a latent race in the test's own setup, not in what it is testing.
+
+Deliberately not acted on. The fix would be to publish before starting, or to tolerate the close in
+the loop, and both change what the test exercises - so it wants its author rather than a passing
+session, and it is recorded here rather than fixed quietly. **Not a quarantine candidate**: quarantine
+is master-state, and this test does not exist on master yet. If it recurs, this paragraph is the
+second sighting.
+
 ## Related notes
 
 On master, each named for what it lends this work:
