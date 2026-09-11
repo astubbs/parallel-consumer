@@ -261,9 +261,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
             throw new IllegalStateException("This sandbox is unbounded, so it will never reach a bound - declare "
                     + "one with Sandbox.builder().bound(...), or close the handle to end the run");
         }
-        boolean finished = generator.awaitFinished(timeout);
-        generator.rethrowAnyFailure();
-        return finished && generator.boundWasReached();
+        return generator.awaitBound(timeout);
     }
 
     /**

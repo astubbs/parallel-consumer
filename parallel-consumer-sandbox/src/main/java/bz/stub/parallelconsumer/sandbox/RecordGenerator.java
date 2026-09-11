@@ -99,9 +99,10 @@ final class RecordGenerator implements AutoCloseable {
 
     /**
      * Rethrows whatever killed the generator thread, wrapped so the stack trace of the waiting thread is kept too.
-     * Called by anyone waiting on this generator, so a failure surfaces there rather than only in the log.
+     * Called from {@link #awaitBound(Duration)}, so a failure surfaces in front of whoever waited on the run
+     * rather than only in the log.
      */
-    void rethrowAnyFailure() {
+    private void rethrowAnyFailure() {
         Throwable died = failure;
         if (died != null) {
             throw new IllegalStateException("The sandbox generator failed after " + generated.get()
@@ -126,6 +127,24 @@ final class RecordGenerator implements AutoCloseable {
             Thread.currentThread().interrupt();
             return false;
         }
+    }
+
+    /**
+     * Waits for the run to reach its bound and finish what reaching it starts, and answers whether it got there.
+     * <p>
+     * The tail both sandboxes share, here rather than written twice: the wait, then the rethrow - so a generator
+     * that died puts its failure in front of the caller rather than being reported as a bound that was not
+     * reached - then the two conditions together, because a wait that ran out and a run that ended without its
+     * bound are both false and neither is a failure. The guard clauses stay with the callers: what is refused
+     * differs between the two APIs, and their tests assert those messages.
+     *
+     * @return false if the wait ran out, or if the run ended without reaching its bound
+     * @throws IllegalStateException wrapping whatever killed the generator thread
+     */
+    boolean awaitBound(Duration timeout) {
+        boolean finishedInTime = awaitFinished(timeout);
+        rethrowAnyFailure();
+        return finishedInTime && boundWasReached();
     }
 
     private void generate() {

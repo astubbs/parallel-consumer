@@ -195,9 +195,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
             throw new IllegalStateException("This classic sandbox is unbounded, so it will never reach a bound - "
                     + "declare one with Sandbox.builder().bound(...)");
         }
-        boolean finished = generator.awaitFinished(timeout);
-        generator.rethrowAnyFailure();
-        return finished && generator.boundWasReached();
+        return generator.awaitBound(timeout);
     }
 
     @Override
