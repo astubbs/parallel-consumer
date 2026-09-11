@@ -196,8 +196,22 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         });
 
         handle = runtime.startAndAssign(pc, 1);
-        for (int offset = 0; offset < records; offset++) {
-            runtime.publish(TOPIC, 0, offset, "key-" + offset, "an order");
+        // Publish the whole backlog under the mock consumer's own monitor.
+        //
+        // The stop closes the consumer from a thread of its own (KTD6), and MockConsumer synchronizes both
+        // addRecord and close on itself - so holding that monitor for the loop makes publishing atomic against
+        // the close this test's own route is about to cause. Without it the close can land mid-loop on a loaded
+        // machine and addRecord throws "This consumer has already been closed" out of the SETUP, which is not what
+        // this test asserts; seen once on 2026-09-11 and recorded in docs/inflight/core-ux-modernisation.md.
+        //
+        // It also makes the test's claim literally true rather than merely likely: the engine's poll thread cannot
+        // hold the monitor while this loop runs (its simulated long poll waits, which releases it), so all two
+        // thousand records are buffered before the first one is dispatched. Nothing here waits on the engine, so
+        // the engine cannot be waited on by it.
+        synchronized (runtime.mockConsumer()) {
+            for (int offset = 0; offset < records; offset++) {
+                runtime.publish(TOPIC, 0, offset, "key-" + offset, "an order");
+            }
         }
 
         Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() ->
