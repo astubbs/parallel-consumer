@@ -282,7 +282,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * pass an argument - and because an instance having two answers to "what happens to the backlog", one for its
      * caller and one for itself, is a difference nobody would predict correctly (KTD6).
      */
-    public ParallelConsumerDefinition closePath(ClosePath path) {
+    public ParallelConsumerDefinition whenClosing(ClosePath path) {
         this.closePath = Objects.requireNonNull(path, "A close path must be supplied");
         return this;
     }
@@ -600,13 +600,13 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         refuseConsumerAutoCommit();
         validateTransactionalId();
 
-        Map<String, Object> passThrough = passThroughProperties();
+        Map<String, Object> forFormats = formatProperties();
         for (RouteState route : routes) {
-            route.consumedKey().configure(passThrough, true);
-            route.consumedValue().configure(passThrough, false);
+            route.consumedKey().configure(forFormats, true);
+            route.consumedValue().configure(forFormats, false);
             if (route.producesRecords()) {
-                route.producedKey().configure(passThrough, true);
-                route.producedValue().configure(passThrough, false);
+                route.producedKey().configure(forFormats, true);
+                route.producedValue().configure(forFormats, false);
             }
         }
     }
@@ -1068,14 +1068,14 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
 
     /**
      * Built fresh each call from {@link #FACADE_OWNED_PROPERTIES}, so the one list of what the facade owns decides
-     * both what a deserialiser is configured with and what it is not - a schema-registry URL reaches a route's
-     * deserialisers, the bootstrap servers and the client serialisers do not (KTD7).
+     * both what a route's formats are configured with and what they are not - a schema-registry URL reaches them,
+     * the bootstrap servers and the client serialisers do not (KTD7).
      */
     @Override
-    public Map<String, Object> passThroughProperties() {
-        Map<String, Object> passThrough = new LinkedHashMap<>(properties);
-        passThrough.keySet().removeAll(FACADE_OWNED_PROPERTIES);
-        return Collections.unmodifiableMap(passThrough);
+    public Map<String, Object> formatProperties() {
+        Map<String, Object> withoutFacadeKeys = new LinkedHashMap<>(properties);
+        withoutFacadeKeys.keySet().removeAll(FACADE_OWNED_PROPERTIES);
+        return Collections.unmodifiableMap(withoutFacadeKeys);
     }
 
     /**

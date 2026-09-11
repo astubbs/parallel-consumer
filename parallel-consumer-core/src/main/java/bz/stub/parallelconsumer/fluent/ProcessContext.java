@@ -32,7 +32,7 @@ public final class ProcessContext<K, V> {
      * The engine's own record, delegated to rather than copied. Every question but the decoded key and value is
      * answered from here, so each has one answer rather than a snapshot that can drift from the engine's.
      */
-    private final RecordContext<byte[], byte[]> engineContext;
+    private final RecordContext<byte[], byte[]> recordContext;
 
     /**
      * The key as this route's deserialiser read it. Held because the engine below consumes raw bytes and cannot
@@ -50,8 +50,8 @@ public final class ProcessContext<K, V> {
      * Package-private: a context is only ever minted by dispatch, after this route's formats have decoded the
      * record, so a function cannot be handed types its route did not declare.
      */
-    ProcessContext(RecordContext<byte[], byte[]> engineContext, K key, V value) {
-        this.engineContext = engineContext;
+    ProcessContext(RecordContext<byte[], byte[]> recordContext, K key, V value) {
+        this.recordContext = recordContext;
         this.key = key;
         this.value = value;
     }
@@ -76,21 +76,21 @@ public final class ProcessContext<K, V> {
      * The topic the record arrived on - the one that selected this route, and so the one whose formats decoded it.
      */
     public String topic() {
-        return engineContext.topic();
+        return recordContext.topic();
     }
 
     /**
      * The partition the record arrived on, which under partition ordering is also the unit its ordering is kept in.
      */
     public int partition() {
-        return engineContext.partition();
+        return recordContext.partition();
     }
 
     /**
      * The record's offset, which stays uncommitted until the function reports a terminal outcome for it.
      */
     public long offset() {
-        return engineContext.offset();
+        return recordContext.offset();
     }
 
     /**
@@ -98,7 +98,7 @@ public final class ProcessContext<K, V> {
      * reports the same value on every attempt.
      */
     public long timestamp() {
-        return engineContext.timestamp();
+        return recordContext.timestamp();
     }
 
     /**
@@ -106,7 +106,7 @@ public final class ProcessContext<K, V> {
      * meaning is the function's own convention, so nothing here decodes one.
      */
     public Headers headers() {
-        return engineContext.headers();
+        return recordContext.headers();
     }
 
     /**
@@ -114,22 +114,22 @@ public final class ProcessContext<K, V> {
      * it is on without the definition counting for it (R10).
      */
     public int failedAttempts() {
-        return engineContext.getNumberOfFailedAttempts();
+        return recordContext.getNumberOfFailedAttempts();
     }
 
     /**
      * The record as it arrived, still in bytes.
      */
     public ConsumerRecord<byte[], byte[]> raw() {
-        return engineContext.getConsumerRecord();
+        return recordContext.getConsumerRecord();
     }
 
     /**
      * The engine's own view of this record, for a caller that wants what the classic API's {@code RecordContext}
      * answers - the last failure, when it happened, whether it is parked.
      */
-    public RecordContext<byte[], byte[]> engineContext() {
-        return engineContext;
+    public RecordContext<byte[], byte[]> recordContext() {
+        return recordContext;
     }
 
     /**

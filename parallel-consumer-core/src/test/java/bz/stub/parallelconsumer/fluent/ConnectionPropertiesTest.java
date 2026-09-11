@@ -64,7 +64,7 @@ class ConnectionPropertiesTest {
     }
 
     @Test
-    void passThroughPropertiesReachEachRoutesDeserialisersAndTheFacadesOwnKeysDoNot() {
+    void formatPropertiesReachEachRoutesDeserialisersAndTheFacadesOwnKeysDoNot() {
         RecordingDeserializer key = new RecordingDeserializer();
         RecordingDeserializer value = new RecordingDeserializer();
         var pc = ParallelConsumer.connect(props());
@@ -134,8 +134,8 @@ class ConnectionPropertiesTest {
         pc.string("orders").process(context -> Outcome.succeeded());
 
         assertThat(pc.connectionProperties()).containsEntry(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        assertThat(pc.passThroughProperties()).doesNotContainKey(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG);
-        assertThat(pc.passThroughProperties()).containsEntry("schema.registry.url", "http://registry:8081");
+        assertThat(pc.formatProperties()).doesNotContainKey(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG);
+        assertThat(pc.formatProperties()).containsEntry("schema.registry.url", "http://registry:8081");
     }
 
     /**

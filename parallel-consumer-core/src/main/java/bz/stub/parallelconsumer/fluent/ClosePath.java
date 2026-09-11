@@ -15,7 +15,7 @@ import org.apache.kafka.common.annotation.InterfaceStability;
  * (KTD6). The same choice governs {@link ConsumerHandle#close()}, so an instance has one answer to "what happens to
  * the backlog", whoever asked it to stop.
  *
- * @see ParallelConsumerDefinition#closePath(ClosePath)
+ * @see ParallelConsumerDefinition#whenClosing(ClosePath)
  */
 @InterfaceStability.Unstable
 public enum ClosePath {

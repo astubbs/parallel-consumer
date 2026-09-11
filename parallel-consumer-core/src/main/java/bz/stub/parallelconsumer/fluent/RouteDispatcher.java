@@ -256,13 +256,13 @@ class RouteDispatcher {
     private List<ParkedRecord> parkedRecordsFrom(List<WorkContainer<?, ?>> containers, Set<String> wanted) {
         List<ParkedRecord> view = new ArrayList<>(containers.size());
         for (WorkContainer<?, ?> container : containers) {
-            RecordContext<byte[], byte[]> engineContext = contextOf(container);
-            RouteState route = routesByTopic.get(engineContext.topic());
-            if (route == null || (wanted != null && !wanted.contains(engineContext.topic()))) {
+            RecordContext<byte[], byte[]> recordContext = contextOf(container);
+            RouteState route = routesByTopic.get(recordContext.topic());
+            if (route == null || (wanted != null && !wanted.contains(recordContext.topic()))) {
                 continue;
             }
-            view.add(new ParkedRecord(engineContext, decodeKeyQuietly(route, engineContext.getConsumerRecord()),
-                    cyclesUsed(route, engineContext.getNumberOfFailedAttempts())));
+            view.add(new ParkedRecord(recordContext, decodeKeyQuietly(route, recordContext.getConsumerRecord()),
+                    cyclesUsed(route, recordContext.getNumberOfFailedAttempts())));
         }
         return Collections.unmodifiableList(view);
     }
@@ -385,8 +385,8 @@ class RouteDispatcher {
      *
      * @return the records the engine should send for this one, empty when the record completes with nothing
      */
-    private List<ProducerRecord<byte[], byte[]>> dispatchOne(RecordContext<byte[], byte[]> engineContext) {
-        ConsumerRecord<byte[], byte[]> record = engineContext.getConsumerRecord();
+    private List<ProducerRecord<byte[], byte[]>> dispatchOne(RecordContext<byte[], byte[]> recordContext) {
+        ConsumerRecord<byte[], byte[]> record = recordContext.getConsumerRecord();
         RouteState route = routesByTopic.get(record.topic());
         if (route == null) {
             throw new IllegalStateException(msg("No route claims topic {}, yet a record from it was dispatched. The "
@@ -397,7 +397,7 @@ class RouteDispatcher {
 
         // The engine has failed this record `alreadyFailed` times; the run about to happen is the next attempt, and
         // that is the number the retry limit is measured against (R10, KTD14).
-        int alreadyFailed = engineContext.getNumberOfFailedAttempts();
+        int alreadyFailed = recordContext.getNumberOfFailedAttempts();
         int attempts = alreadyFailed + 1;
 
         // Whatever decoded before the failure, which is what the park observer and an export are given: both sides
@@ -410,20 +410,20 @@ class RouteDispatcher {
         } catch (PermanentDecodeFailureException permanent) {
             // No attempt is spent: the payload will never decode, so there is nothing to try again (R12). And no
             // park cycle either - a wait cannot change a payload that can never be read (R27).
-            throw park(new ProcessContext<>(engineContext, key, value), route, permanent, alreadyFailed,
+            throw park(new ProcessContext<>(recordContext, key, value), route, permanent, alreadyFailed,
                     "its payload can never be decoded", false);
         } catch (ClassCastException castFailed) {
             if (RawBytesConsumerFaultException.isRawBytesCastFailure(castFailed)) {
                 throw rawBytesFault(castFailed);
             }
-            throw afterAttempt(new ProcessContext<>(engineContext, key, value), route, castFailed, attempts);
+            throw afterAttempt(new ProcessContext<>(recordContext, key, value), route, castFailed, attempts);
         } catch (RuntimeException decodeFailed) {
             // A stock deserialiser cannot tell a corrupt payload from a registry outage, so this is transient by
             // default and costs an attempt (R12).
-            throw afterAttempt(new ProcessContext<>(engineContext, key, value), route, decodeFailed, attempts);
+            throw afterAttempt(new ProcessContext<>(recordContext, key, value), route, decodeFailed, attempts);
         }
 
-        ProcessContext<Object, Object> context = new ProcessContext<>(engineContext, key, value);
+        ProcessContext<Object, Object> context = new ProcessContext<>(recordContext, key, value);
         Outcome<Object, Object> outcome;
         try {
             outcome = run(route, context);
@@ -594,7 +594,7 @@ class RouteDispatcher {
                         + "holds no worker; offsets past it still commit under key and unordered processing.",
                 record.topic(), record.partition(), record.offset(), attempts, why);
 
-        if (context.engineContext().isStale()) {
+        if (context.recordContext().isStale()) {
             // A worker can finish after its partition was revoked. The engine will drop this container rather than
             // hold it parked, so there is nothing to list - and reporting it would tell an observer, and an
             // operator, about a record that belongs to whoever owns the partition now. The record is still handed

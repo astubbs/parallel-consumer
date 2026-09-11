@@ -77,11 +77,13 @@ public interface DefinitionView {
     Map<String, Object> connectionProperties();
 
     /**
-     * The properties each route's deserialisers are configured with: everything in
-     * {@link #connectionProperties()} except the keys the facade owns - the bootstrap servers, the group id and the
-     * client serialisers (R4, KTD7).
+     * The properties each route's <em>formats</em> are configured with - its deserialisers and, on a route that
+     * produces, its serialisers. Named for the formats rather than for the clients because that is the whole
+     * distinction it draws: it is everything in {@link #connectionProperties()} except the keys the facade owns and
+     * hands to the Kafka clients itself - the bootstrap servers, the group id and the client serialisers. A
+     * schema-registry URL reaches a route's formats; the bootstrap servers do not (R4, KTD7).
      */
-    Map<String, Object> passThroughProperties();
+    Map<String, Object> formatProperties();
 
     /**
      * What is known about a pre-built consumer supplied by the caller, for the message a raw-bytes cast failure

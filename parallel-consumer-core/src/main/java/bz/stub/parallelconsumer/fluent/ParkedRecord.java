@@ -39,7 +39,7 @@ public final class ParkedRecord {
      * answered from here, which is what stops the list an operator reads drifting from the record the engine holds -
      * and what lets a parked record be resumed or exported after the broker's retention has dropped it.
      */
-    private final RecordContext<byte[], byte[]> engineContext;
+    private final RecordContext<byte[], byte[]> recordContext;
 
     /**
      * The key as this route's deserialiser read it, or null when it never decoded. Untyped on purpose: the parked
@@ -58,8 +58,8 @@ public final class ParkedRecord {
      * Package-private: an entry is only ever minted from a record the engine has already parked, so there is no way
      * to describe a park that did not happen.
      */
-    ParkedRecord(RecordContext<byte[], byte[]> engineContext, Object key, int cycles) {
-        this.engineContext = engineContext;
+    ParkedRecord(RecordContext<byte[], byte[]> recordContext, Object key, int cycles) {
+        this.recordContext = recordContext;
         this.key = key;
         this.cycles = cycles;
     }
@@ -68,7 +68,7 @@ public final class ParkedRecord {
      * The topic the record arrived on, which also names the route that parked it - one topic has one function.
      */
     public String topic() {
-        return engineContext.topic();
+        return recordContext.topic();
     }
 
     /**
@@ -76,7 +76,7 @@ public final class ParkedRecord {
      * same partition complete, so a partition with a park in it is the unit an operator watches.
      */
     public int partition() {
-        return engineContext.partition();
+        return recordContext.partition();
     }
 
     /**
@@ -84,7 +84,7 @@ public final class ParkedRecord {
      * operator resumes or exports by.
      */
     public long offset() {
-        return engineContext.offset();
+        return recordContext.offset();
     }
 
     /**
@@ -100,7 +100,7 @@ public final class ParkedRecord {
      * no attempts (R12).
      */
     public int attempts() {
-        return engineContext.getNumberOfFailedAttempts();
+        return recordContext.getNumberOfFailedAttempts();
     }
 
     /**
@@ -119,7 +119,7 @@ public final class ParkedRecord {
      */
     public Throwable failure() {
         PCRetriableException park =
-                PCRetriableException.handbackIn(engineContext.getLastFailureReason().orElse(null));
+                PCRetriableException.handbackIn(recordContext.getLastFailureReason().orElse(null));
         return park == null ? null : park.getCause();
     }
 
@@ -128,14 +128,14 @@ public final class ParkedRecord {
      * function gave. This is the verdict the engine recorded when the throw said park.
      */
     public String reason() {
-        return engineContext.getParkedReason().orElse(null);
+        return recordContext.getParkedReason().orElse(null);
     }
 
     /**
      * When it parked - the moment of the failure that parked it.
      */
     public Instant parkedSince() {
-        return engineContext.getLastFailureAt().orElse(Instant.EPOCH);
+        return recordContext.getLastFailureAt().orElse(Instant.EPOCH);
     }
 
     /**
@@ -143,7 +143,7 @@ public final class ParkedRecord {
      * decoded has.
      */
     public ConsumerRecord<byte[], byte[]> raw() {
-        return engineContext.getConsumerRecord();
+        return recordContext.getConsumerRecord();
     }
 
     /**

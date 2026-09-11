@@ -68,7 +68,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         var holdCompleted = new AtomicInteger();
 
         var pc = ParallelConsumer.connect(props())
-                .closePath(ClosePath.DONT_DRAIN_FIRST)
+                .whenClosing(ClosePath.DONT_DRAIN_FIRST)
                 .defaultOrdering(ProcessingOrder.UNORDERED)
                 // Two workers: one holds a record in flight while the other reaches the stopping record, which is
                 // the situation AE14 describes - in-flight work and a stop at the same moment.
@@ -136,7 +136,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
     @Test
     void afterARestartTheStoppingRecordIsDeliveredAgain() {
         var firstRunSaw = new AtomicInteger();
-        var pc = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var pc = ParallelConsumer.connect(props()).whenClosing(ClosePath.DONT_DRAIN_FIRST);
         pc.string(TOPIC).process(context -> {
             firstRunSaw.incrementAndGet();
             return Outcome.stop("the schema is not supported");
@@ -152,7 +152,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
 
         var restartRuntime = new RecordingClientRuntime();
         var restartSaw = new AtomicInteger();
-        var restarted = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var restarted = ParallelConsumer.connect(props()).whenClosing(ClosePath.DONT_DRAIN_FIRST);
         restarted.string(TOPIC).process(context -> {
             restartSaw.incrementAndGet();
             return Outcome.stop("the schema is not supported");
@@ -183,7 +183,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         var invokedOffsets = ConcurrentHashMap.<Long>newKeySet();
 
         var pc = ParallelConsumer.connect(props())
-                .closePath(ClosePath.DONT_DRAIN_FIRST)
+                .whenClosing(ClosePath.DONT_DRAIN_FIRST)
                 .defaultOrdering(ProcessingOrder.UNORDERED)
                 .defaultConcurrency(concurrency);
         var invokedWhenTheStopWasReported = new AtomicInteger(-1);
@@ -248,7 +248,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
     @Test
     void aRouteMayStopTheInstanceWhenARecordRunsOutOfAttempts() {
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var pc = ParallelConsumer.connect(props()).whenClosing(ClosePath.DONT_DRAIN_FIRST);
         pc.string(TOPIC)
                 .retryLimit(2)
                 .retryDelay(Duration.ofMillis(10))
@@ -290,7 +290,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
      */
     @Test
     void theExhaustionReactionIsPerRoute() {
-        var pc = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var pc = ParallelConsumer.connect(props()).whenClosing(ClosePath.DONT_DRAIN_FIRST);
         pc.string(TOPIC)
                 .retryLimit(2)
                 .retryDelay(Duration.ofMillis(10))
