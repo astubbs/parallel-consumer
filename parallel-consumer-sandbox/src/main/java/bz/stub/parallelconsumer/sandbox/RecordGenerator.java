@@ -65,7 +65,17 @@ final class RecordGenerator implements AutoCloseable {
      */
     private volatile Throwable failure;
 
-    private Thread thread;
+    /**
+     * The generator's own thread, or null before {@link #start()}.
+     * <p>
+     * Volatile because {@link #close()} reads it from whatever thread closes the sandbox, and that is not always
+     * the thread that started it: a demo closes from a shutdown hook, and a handle can be closed by any caller
+     * holding it. A close that read a stale null would return having neither interrupted nor joined a generator
+     * that is still running - and a generator outliving its sandbox goes on publishing into a closed consumer.
+     * The tests do not reach the race, because a closer thread they start themselves inherits the write through
+     * {@code Thread.start()}'s own happens-before edge; a thread that already existed inherits nothing.
+     */
+    private volatile Thread thread;
 
     RecordGenerator(List<TopicFeed> feeds, double perSecondPerTopic, Bound bound, Runnable onBoundReached) {
         if (perSecondPerTopic <= 0) {
