@@ -54,7 +54,7 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
      */
     private static class ObservedPark {
 
-        final ProcessContext<?, ?> record;
+        final TypedRecordContext<?, ?> record;
 
         final Throwable failure;
 
@@ -62,7 +62,7 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
 
         final long committedOffsetAtTheTime;
 
-        ObservedPark(ProcessContext<?, ?> record, Throwable failure, int attempts, long committedOffsetAtTheTime) {
+        ObservedPark(TypedRecordContext<?, ?> record, Throwable failure, int attempts, long committedOffsetAtTheTime) {
             this.record = record;
             this.failure = failure;
             this.attempts = attempts;

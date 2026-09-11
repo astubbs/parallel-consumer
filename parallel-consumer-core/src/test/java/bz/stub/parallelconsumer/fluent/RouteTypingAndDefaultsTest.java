@@ -82,7 +82,7 @@ class RouteTypingAndDefaultsTest {
         var record = new ConsumerRecord<>("orders", 0, 0L,
                 "k".getBytes(StandardCharsets.UTF_8), "{}".getBytes(StandardCharsets.UTF_8));
         Outcome<Long, OrderEvent> outcome = function.process(
-                new ProcessContext<>(contextFor(record), "k1", order));
+                new TypedRecordContext<>(contextFor(record), "k1", order));
 
         assertThat(outcome.kind()).isEqualTo(Outcome.Kind.PRODUCE);
         ProducerRecord<Long, OrderEvent> produced = outcome.records().get(0);
@@ -94,7 +94,7 @@ class RouteTypingAndDefaultsTest {
     }
 
     /**
-     * A {@link ProcessContext} is a view over the engine's own {@link RecordContext}, so building one by hand needs
+     * A {@link TypedRecordContext} is a view over the engine's own {@link RecordContext}, so building one by hand needs
      * one of those. This test asks it only about the record - what is under test is the compiler's view of the
      * route's types - so it is built over the record alone, with no work container behind it.
      */

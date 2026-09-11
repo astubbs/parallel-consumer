@@ -21,12 +21,20 @@ import org.apache.kafka.common.header.Headers;
  * <p>
  * {@link #raw()} is the undecoded record, which is what an exported record carries and what the park observer
  * receives when decoding itself failed (R13, R16).
+ * <p>
+ * <b>Why the name says typed.</b> The obvious name is {@code RecordContext}, and it is taken - by the very class
+ * this delegates to, which is on the engine and is part of the classic API. The two could not share a name even if
+ * that one moved out of the way: under the byte-typed engine its {@code key()} returns {@code byte[]} while this
+ * one's returns the route's own {@code K}, so a type that both delegated and overrode would be two methods
+ * differing only in return type. So the name says what this adds rather than what it is a context of, and keeps
+ * the {@code *Context} family. It was {@code ProcessContext} until 2026-09-11, which named the thing it is handed
+ * to rather than the thing it carries; {@link ProcessFunction} keeps that word, correctly, for the same reason.
  *
  * @param <K> the route's consumed key type
  * @param <V> the route's consumed value type
  */
 @InterfaceStability.Unstable
-public final class ProcessContext<K, V> {
+public final class TypedRecordContext<K, V> {
 
     /**
      * The engine's own record, delegated to rather than copied. Every question but the decoded key and value is
@@ -50,7 +58,7 @@ public final class ProcessContext<K, V> {
      * Package-private: a context is only ever minted by dispatch, after this route's formats have decoded the
      * record, so a function cannot be handed types its route did not declare.
      */
-    ProcessContext(RecordContext<byte[], byte[]> recordContext, K key, V value) {
+    TypedRecordContext(RecordContext<byte[], byte[]> recordContext, K key, V value) {
         this.recordContext = recordContext;
         this.key = key;
         this.value = value;
@@ -138,6 +146,6 @@ public final class ProcessContext<K, V> {
      */
     @Override
     public String toString() {
-        return "ProcessContext(" + topic() + "-" + partition() + "@" + offset() + ")";
+        return "TypedRecordContext(" + topic() + "-" + partition() + "@" + offset() + ")";
     }
 }

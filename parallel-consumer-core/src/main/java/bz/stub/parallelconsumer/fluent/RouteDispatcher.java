@@ -401,20 +401,20 @@ class RouteDispatcher {
         } catch (PermanentDecodeFailureException permanent) {
             // No attempt is spent: the payload will never decode, so there is nothing to try again (R12). And no
             // park cycle either - a wait cannot change a payload that can never be read (R27).
-            throw park(new ProcessContext<>(recordContext, key, value), route, permanent, alreadyFailed,
+            throw park(new TypedRecordContext<>(recordContext, key, value), route, permanent, alreadyFailed,
                     "its payload can never be decoded", false);
         } catch (ClassCastException castFailed) {
             if (RawBytesConsumerFaultException.isRawBytesCastFailure(castFailed)) {
                 throw rawBytesFault(castFailed);
             }
-            throw afterAttempt(new ProcessContext<>(recordContext, key, value), route, castFailed, attempts);
+            throw afterAttempt(new TypedRecordContext<>(recordContext, key, value), route, castFailed, attempts);
         } catch (RuntimeException decodeFailed) {
             // A stock deserialiser cannot tell a corrupt payload from a registry outage, so this is transient by
             // default and costs an attempt (R12).
-            throw afterAttempt(new ProcessContext<>(recordContext, key, value), route, decodeFailed, attempts);
+            throw afterAttempt(new TypedRecordContext<>(recordContext, key, value), route, decodeFailed, attempts);
         }
 
-        ProcessContext<Object, Object> context = new ProcessContext<>(recordContext, key, value);
+        TypedRecordContext<Object, Object> context = new TypedRecordContext<>(recordContext, key, value);
         Outcome<Object, Object> outcome;
         try {
             outcome = run(route, context);
@@ -441,7 +441,7 @@ class RouteDispatcher {
      * @return the records for the engine to send, empty when the record completes with nothing
      */
     private List<ProducerRecord<byte[], byte[]>> apply(Outcome<Object, Object> outcome,
-                                                       ProcessContext<Object, Object> context,
+                                                       TypedRecordContext<Object, Object> context,
                                                        RouteState route,
                                                        int attempts) {
         ConsumerRecord<byte[], byte[]> record = context.raw();
@@ -493,7 +493,7 @@ class RouteDispatcher {
      * @return the exception to throw, so a caller reads as {@code throw afterAttempt(...)} and the compiler knows
      * the path ends
      */
-    private RuntimeException afterAttempt(ProcessContext<Object, Object> context, RouteState route,
+    private RuntimeException afterAttempt(TypedRecordContext<Object, Object> context, RouteState route,
                                           Throwable failure, int attempts) {
         ConsumerRecord<byte[], byte[]> record = context.raw();
         if (isExhausted(route, attempts)) {
@@ -578,7 +578,7 @@ class RouteDispatcher {
      * @param countsAsAttempt false for a park that spent no attempt at the user's work - a payload that can never
      *                        be decoded (R12)
      */
-    private RuntimeException park(ProcessContext<Object, Object> context, RouteState route, Throwable failure,
+    private RuntimeException park(TypedRecordContext<Object, Object> context, RouteState route, Throwable failure,
                                   int attempts, String why, boolean countsAsAttempt) {
         ConsumerRecord<byte[], byte[]> record = context.raw();
         String message = msg("Parked {}-{}@{} after {} attempt(s): {}. It stays incomplete in the offset map and "
@@ -633,7 +633,7 @@ class RouteDispatcher {
      * back - which is what makes "after the last attempt and before the offset commits" true: the commit happens
      * later, on the control thread, once this throw has been processed.
      */
-    private void notifyObserver(RouteState route, ProcessContext<Object, Object> context, Throwable failure,
+    private void notifyObserver(RouteState route, TypedRecordContext<Object, Object> context, Throwable failure,
                                 int attempts) {
         ParkObserver<?, ?> observer = route.parkObserver();
         if (observer == null) {
@@ -655,7 +655,7 @@ class RouteDispatcher {
      * values it is handed came from that same route's deserialisers, which is what makes it sound.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static void observe(ParkObserver<?, ?> observer, ProcessContext<Object, Object> context,
+    private static void observe(ParkObserver<?, ?> observer, TypedRecordContext<Object, Object> context,
                                 Throwable failure, int attempts) {
         ((ParkObserver) observer).onParked(context, failure, attempts);
     }
@@ -776,7 +776,7 @@ class RouteDispatcher {
      * wrapping of their own (R9).
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static Outcome<Object, Object> run(RouteState route, ProcessContext<?, ?> context) throws Exception {
+    private static Outcome<Object, Object> run(RouteState route, TypedRecordContext<?, ?> context) throws Exception {
         return ((ProcessFunction) route.function()).process(context);
     }
 
