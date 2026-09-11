@@ -41,9 +41,7 @@ import static com.google.common.truth.Truth.assertThat;
  * The figures are not asserted and will differ on other hardware; what is worth keeping is the shape.
  */
 @Timeout(300)
-class ThroughputWithThousandsParkedTest {
-
-    private static final String TOPIC = "orders";
+class ThroughputWithThousandsParkedTest extends AbstractFluentEngineTest {
 
     /**
      * The sizes measured, in order: the control arm, and the "several thousand" the plan asks for.
@@ -57,23 +55,6 @@ class ThroughputWithThousandsParkedTest {
     private static final int[] PARKED_SET_SIZES = {0, 3_000};
 
     private static final int HEALTHY_RECORDS = 2000;
-
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-            handle = null;
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "throughput-with-thousands-parked");
-        return properties;
-    }
 
     @Test
     void dispatchThroughputOfAHealthyRouteBesideThousandsOfParkedRecords() {

@@ -10,8 +10,6 @@ import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import ch.qos.logback.classic.Level;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.errors.SerializationException;
-import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
@@ -30,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 
 /**
@@ -95,7 +94,7 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
         handle = runtime.startAndAssign(pc, 1);
         runtime.publish(TOPIC, 0, 0, "hopeless", "an order nothing can process");
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(observed).hasSize(1));
 
         ObservedPark park = observed.get(0);
@@ -140,9 +139,9 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
                 });
 
         handle = runtime.startAndAssign(pc, 1);
-        runtime.publish(TOPIC, 0, 0, "key-0", "poison");
+        runtime.publish(TOPIC, 0, 0, "key-0", POISON);
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(observed).hasSize(1));
 
         ObservedPark park = observed.get(0);
@@ -151,7 +150,7 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
         assertThat(park.failure).isInstanceOf(PermanentDecodeFailureException.class);
         // Nothing decoded, so there is no typed value - and the bytes are all still there.
         assertThat(park.record.value()).isNull();
-        assertThat(new String(park.record.raw().value(), StandardCharsets.UTF_8)).isEqualTo("poison");
+        assertThat(new String(park.record.raw().value(), StandardCharsets.UTF_8)).isEqualTo(POISON);
         assertThat(park.record.raw().key()).isNotNull();
     }
 
@@ -175,7 +174,7 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 4, "customer-7", "an order");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
 
         ParkedRecord parked = dispatcher.parkedForRoute(TOPIC).get(0);
@@ -216,7 +215,7 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "an order from the future");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
 
         ParkedRecord parked = dispatcher.parkedForRoute(TOPIC).get(0);
@@ -256,7 +255,7 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
         runtime.publish("audit", 0, 0, "key-0", "an audit line");
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
             assertThat(toTheRoute).containsExactly(TOPIC);
             assertThat(toTheDefault).containsExactly("audit");
         });
@@ -286,7 +285,7 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
             runtime.publish(TOPIC, 0, 0, "key-0", "an order");
 
             dispatcher = pc.dispatcher();
-            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+            Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                     assertThat(logs.messagesAt(Level.WARN, "park observer", TOPIC)).hasSize(1));
             contained = logs.messagesAt(Level.WARN, "park observer", TOPIC);
         }
@@ -295,7 +294,7 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
         // The outcome is untouched: the record is parked, listed and counted. Awaited rather than read, because the
         // log line above is written by the worker at the moment of the hand-back, and the record reaches the
         // engine's retry queue - which is what the view reads - a moment later, on the control thread.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
         assertThat(dispatcher.parkedCount()).isEqualTo(1);
         assertThat(handle.failureCause().isPresent()).isFalse();
@@ -356,27 +355,15 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
         runtime.mockConsumer().seek(partition, 0);
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(observed).hasSize(1));
         // One attempt in the new assignment: the count restarted, so the limit of zero exhausted on the first run.
         assertThat(attemptsSeen).containsExactly(1);
         // Awaited, for the same reason as above: the observer fires on the worker thread and the record reaches the
         // engine's retry queue a moment later.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
         assertThat(dispatcher.parkedForRoute(TOPIC).get(0).attempts()).isEqualTo(1);
     }
 
-    /**
-     * A deserialiser that rejects one payload and reads every other one.
-     */
-    private static Deserializer<String> rejecting() {
-        return (topic, data) -> {
-            String value = new String(data, StandardCharsets.UTF_8);
-            if (value.equals("poison")) {
-                throw new SerializationException("this payload cannot be read");
-            }
-            return value;
-        };
-    }
 }

@@ -81,6 +81,35 @@ class ConnectionPropertiesTest {
     }
 
     /**
+     * A key supplied through a parent {@code Properties}' defaults reaches a route's deserialiser with its
+     * <b>value</b>, not with null.
+     * <p>
+     * {@code Properties.stringPropertyNames()} lists keys inherited from the defaults chain, but
+     * {@code Properties.get} is {@code Hashtable.get} and does not consult them - so reading the copy back with
+     * {@code get} stored {@code name -> null} for exactly those keys, and the null travelled on into
+     * {@code configure(...)} and the producer's configuration. Layering registry settings under a defaults parent
+     * is an ordinary way to write these, and nothing went red for it.
+     */
+    @Test
+    void aPropertySuppliedThroughDefaultsKeepsItsValue() {
+        Properties defaults = new Properties();
+        defaults.put("schema.registry.url", "http://from-defaults:8081");
+        Properties layered = new Properties(defaults);
+        layered.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        layered.put(ConsumerConfig.GROUP_ID_CONFIG, "connection-properties-defaults-test");
+
+        RecordingDeserializer key = new RecordingDeserializer();
+        RecordingDeserializer value = new RecordingDeserializer();
+        var pc = ParallelConsumer.connect(layered);
+        pc.topic("orders").consumed(Consumed.with(key, value)).process(context -> Outcome.succeeded());
+
+        pc.validate();
+
+        assertThat(key.configuredWith).containsEntry("schema.registry.url", "http://from-defaults:8081");
+        assertThat(value.configuredWith).containsEntry("schema.registry.url", "http://from-defaults:8081");
+    }
+
+    /**
      * Kafka's own deserialisers are told which side they are on, and a registry deserialiser reads different subject
      * settings for each; the facade passes the same signal.
      */

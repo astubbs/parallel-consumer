@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 
 /**
@@ -75,7 +76,7 @@ class ParkedRecordsAreNotSlowWorkTest extends AbstractFluentEngineTest {
             runtime.publish(SLOW_TOPIC, 0, 0, "key-0", "an order that keeps retrying");
 
             dispatcher = pc.dispatcher();
-            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+            Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                     assertThat(dispatcher.parkedForRoute(PARKED_TOPIC)).hasSize(1));
 
             // The threshold is ten seconds from when the record was last taken as work, which was its last attempt.

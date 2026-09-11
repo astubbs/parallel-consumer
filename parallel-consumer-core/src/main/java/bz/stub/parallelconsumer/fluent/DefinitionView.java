@@ -28,6 +28,10 @@ public interface DefinitionView {
      */
     Set<String> topics();
 
+    /**
+     * Every route, in the order they were declared, as an unmodifiable snapshot. A runtime that wants one topic's
+     * route asks {@link #route(String)} rather than scanning this.
+     */
     Collection<RouteView> routes();
 
     /**

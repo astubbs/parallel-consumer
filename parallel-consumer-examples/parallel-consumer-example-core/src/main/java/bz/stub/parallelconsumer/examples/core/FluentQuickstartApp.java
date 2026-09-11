@@ -20,8 +20,12 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
 
 /**
  * The README quickstart, and the build signal behind it: the fluent API's whole first screen, compiled on every
- * build and run on every build - broker-free in {@code FluentQuickstartAppTest}, and once against a real broker in
- * core's {@code FluentQuickstartIT}.
+ * build and run broker-free on every build by the sandbox module's {@code FluentQuickstartAppTest}.
+ * <p>
+ * Core cannot depend on the examples module, so core's {@code FluentQuickstartIT} re-states the same SHAPE
+ * against a real broker in the types core can read on its own - it does not run what is here. What this file
+ * is worth beyond the sandbox run is the compiler: if the fluent API drifts, the README's first example stops
+ * building.
  *
  * <h2>Why this class exists rather than a snippet in the README</h2>
  * The README's first example is the surface's primary success signal (KD7): if the fluent API drifts, this file
@@ -135,7 +139,7 @@ public class FluentQuickstartApp {
 
     /**
      * Run the quickstart against a broker. Point it at one with {@code --bootstrap-servers}, or leave it to the
-     * local default; the test runs the same definition with no broker at all.
+     * local default. Nothing in the build calls this - see the note on this class.
      */
     public static void main(String[] args) {
         String bootstrapServers = args.length > 0 ? args[0] : "localhost:9092";

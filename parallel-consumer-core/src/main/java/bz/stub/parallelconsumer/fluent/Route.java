@@ -36,8 +36,18 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 @InterfaceStability.Unstable
 public final class Route<K, V, PK, PV> {
 
+    /**
+     * The route itself. This class is only a typed view over it: {@link #consumed} and {@link #produced} each hand
+     * back a new {@code Route} wrapping this same object, so several views of different types can exist for one
+     * route and every one of them declares into the same state.
+     */
     private final RouteState state;
 
+    /**
+     * Package-private, so a route can only be started by the definition or re-typed by the two methods that hand a
+     * new view over existing state. A user-reachable constructor would be a route the definition never registered,
+     * and so a route that never runs.
+     */
     Route(RouteState state) {
         this.state = state;
     }
@@ -203,6 +213,13 @@ public final class Route<K, V, PK, PV> {
                 policy, state.describeTopics()));
     }
 
+    /**
+     * A consumed format must be able to read: a write-only {@link Format} on the consumed side is a route whose
+     * records nothing could decode, and it is refused here - at the call that declared it, naming the side and the
+     * topic - rather than surviving to the first record (R4).
+     *
+     * @param side {@code key} or {@code value}, so the refusal says which half of the pair is wrong
+     */
     private void requireReadable(Format<?> format, String side) {
         if (!format.hasDeserializer()) {
             throw new IllegalArgumentException(msg("Consumed {} format {} on topic {} has no deserializer, so "
@@ -210,6 +227,12 @@ public final class Route<K, V, PK, PV> {
         }
     }
 
+    /**
+     * Rejects a negative duration and returns the value, so the caller reads as one statement. Zero is allowed: a
+     * delay of none is a legitimate declaration, unlike a wait that runs backwards.
+     *
+     * @param setting the name the user wrote, so the refusal quotes their call and not an internal field
+     */
     private Duration requirePositive(Duration value, String setting) {
         Objects.requireNonNull(value, msg("A {} must be supplied", setting));
         if (value.isNegative()) {
@@ -219,6 +242,10 @@ public final class Route<K, V, PK, PV> {
         return value;
     }
 
+    /**
+     * Delegates, so that a route named in a message reads the same whichever typed view of it the reader happens to
+     * hold - the type parameters are the compiler's business and say nothing a user would recognise.
+     */
     @Override
     public String toString() {
         return state.toString();

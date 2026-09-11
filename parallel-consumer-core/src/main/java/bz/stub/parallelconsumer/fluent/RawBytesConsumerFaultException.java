@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ParallelConsumerException;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.common.annotation.InterfaceStability;
 import org.apache.kafka.common.serialization.Deserializer;
@@ -38,8 +39,12 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * calls when a cast fails.
  */
 @InterfaceStability.Unstable
-public class RawBytesConsumerFaultException extends RuntimeException {
+public class RawBytesConsumerFaultException extends ParallelConsumerException {
 
+    /**
+     * Pinned so that adding a field later does not change the serialised form - this travels as the cause of a stop,
+     * and a stop is reported to a caller that may not be running the same build.
+     */
     private static final long serialVersionUID = 1L;
 
     /**
@@ -49,6 +54,11 @@ public class RawBytesConsumerFaultException extends RuntimeException {
      */
     private static final int DESCRIBE_MAX_DEPTH = 3;
 
+    /**
+     * Package-private, so this fault can only be raised through {@link #from(ClassCastException, String)} and
+     * therefore always carries the one message that explains the diagnosis. A fault the user could construct would
+     * be a fault nobody had established, on a path whose only reaction is to stop the instance.
+     */
     RawBytesConsumerFaultException(String message, Throwable cause) {
         super(message, cause);
     }
@@ -100,6 +110,17 @@ public class RawBytesConsumerFaultException extends RuntimeException {
         }
     }
 
+    /**
+     * Walks a client's fields for the two deserialisers, stopping at the first of four bounds: a null, the depth
+     * limit, two found, or an object already visited. Each bound is there because this runs over internals that are
+     * not API and may hold cycles or an arbitrary object graph, and a diagnostic must cost less than the fault it
+     * explains.
+     *
+     * @param seen  identity-keyed, because client internals are not required to define {@code equals} and two
+     *              distinct objects that compare equal would silently truncate the walk
+     * @param found accumulates in field-declaration order, which for a consumer is key then value; two is the whole
+     *              answer, so the walk stops there rather than continuing to collect
+     */
     private static void collectDeserialisers(Object target, int depth, Map<Object, Boolean> seen, List<String> found) {
         if (target == null || depth > DESCRIBE_MAX_DEPTH || found.size() >= 2
                 || seen.put(target, Boolean.TRUE) != null) {
@@ -120,6 +141,11 @@ public class RawBytesConsumerFaultException extends RuntimeException {
         }
     }
 
+    /**
+     * One field, or null if it cannot be reached. Every way of failing here - a module that does not open, a
+     * security manager, a field that is not there in this client version - is the same answer to the caller: this
+     * field tells us nothing, carry on with the next one.
+     */
     private static Object read(Field field, Object target) {
         try {
             field.setAccessible(true);

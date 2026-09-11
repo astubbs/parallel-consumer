@@ -20,6 +20,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.annotation.InterfaceStability;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -36,6 +37,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.isBlank;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
@@ -76,25 +78,28 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * Connection properties the facade owns, so they are not passed on to a route's deserialisers: the two that
      * address the cluster, and the client serialisers, which the facade sets to raw bytes itself (KTD7).
      */
-    private static final Set<String> FACADE_OWNED_PROPERTIES = Collections.unmodifiableSet(new LinkedHashSet<>(
-            java.util.Arrays.asList(
-                    ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
-                    ConsumerConfig.GROUP_ID_CONFIG,
-                    ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
-                    ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG)));
+    private static final Set<String> FACADE_OWNED_PROPERTIES = UniSets.of(
+            ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
+            ConsumerConfig.GROUP_ID_CONFIG,
+            ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+            ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG);
 
     /**
      * Producer-side keys that mean nothing to a producer and would only log an unknown-configuration warning.
      */
-    private static final Set<String> CONSUMER_ONLY_PROPERTIES = Collections.unmodifiableSet(new LinkedHashSet<>(
-            java.util.Arrays.asList(
-                    ConsumerConfig.GROUP_ID_CONFIG,
-                    ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,
-                    ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
-                    ConsumerConfig.ISOLATION_LEVEL_CONFIG,
-                    ConsumerConfig.MAX_POLL_RECORDS_CONFIG,
-                    ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG)));
+    private static final Set<String> CONSUMER_ONLY_PROPERTIES = UniSets.of(
+            ConsumerConfig.GROUP_ID_CONFIG,
+            ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,
+            ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
+            ConsumerConfig.ISOLATION_LEVEL_CONFIG,
+            ConsumerConfig.MAX_POLL_RECORDS_CONFIG,
+            ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG);
 
+    /**
+     * The connection properties, copied at construction rather than held: a caller who goes on editing the
+     * {@link Properties} it passed in must not be able to change what this definition validates, or what its
+     * clients are built from, after the fact.
+     */
     private final Map<String, Object> properties;
 
     /**
@@ -104,14 +109,35 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     private final ParallelConsumerOptions.ParallelConsumerOptionsBuilder<byte[], byte[]> options =
             ParallelConsumerOptions.builder();
 
+    /**
+     * The routes in declaration order, which is the order validation walks them in - so a definition with two
+     * mistakes reports the one the author wrote first. It is also what the admission targets are summed over (R23).
+     */
     private final List<RouteState> routes = new ArrayList<>();
 
+    /**
+     * Every routed topic to its route: the index that refuses a topic a second time (R2), the table the dispatch
+     * wrapper is built from, and the set the instance subscribes to. A route declared over several topics appears
+     * once per topic and is the same object each time (R5).
+     */
     private final Map<String, RouteState> routesByTopic = new LinkedHashMap<>();
 
+    /**
+     * Instance-wide, because the engine has one consumer and one commit (KD11). Asynchronous consumer commits
+     * unless the definition says otherwise, which is the only mode that needs no producer of its own.
+     */
     private CommitMode commitMode = CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 
+    /**
+     * The ordering guarantee every route resolves to. Key ordering by default: it keeps a key's records in order
+     * while letting unrelated keys run at once, which is the guarantee this library exists to give.
+     */
     private ProcessingOrder defaultOrdering = ProcessingOrder.KEY;
 
+    /**
+     * The admission target a route copies when it declares none. The engine is given the sum over the routes, not
+     * this value, because routes do not compete for one shared limit (R23).
+     */
     private int defaultConcurrency = ParallelConsumerOptions.DEFAULT_MAX_CONCURRENCY;
 
     /**
@@ -120,20 +146,57 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      */
     private OptionalInt defaultRetryLimit = OptionalInt.of(10);
 
+    /**
+     * How long a failed record waits before its next attempt, on every route that declares no delay. It is also
+     * what the dispatch wrapper answers for a topic no route claims, which the engine can ask about while a
+     * partition is being revoked.
+     */
     private Duration defaultRetryDelay = Duration.ofSeconds(1);
 
+    /**
+     * What a route copies when it declares no after-retries policy of its own (R27). Null until something declares
+     * one, and a route that resolves against null parks in place - the default that holds the record and commits
+     * nothing past it, rather than one that discards work.
+     */
     private AfterRetries defaultAfterRetries;
 
+    /**
+     * The park observer a route copies when it declares none (R16). Wildcard-typed because one instance-wide
+     * observer spans routes whose consumed types differ, so there are no types it could be declared over.
+     */
     private ParkObserver<?, ?> defaultParkObserver;
 
+    /**
+     * The instance-wide export percentage as declared, held only so validation can refuse it by name: the trigger
+     * it would drive reads an engine accessor that does not exist yet (KTD5). Boxed so that null means nothing was
+     * declared - a zero would be a value somebody typed.
+     */
     private Integer instancePayloadPercentage;
 
+    /**
+     * Whether the caller supplied a finished consumer, so that start does not ask the runtime for one. A flag
+     * rather than the client: the client goes straight into the options builder and is never held in a field here,
+     * which is what keeps core's raw-client architecture rule intact (KTD3).
+     */
     private boolean preBuiltConsumerSupplied;
 
+    /**
+     * The deserialisers read off a supplied consumer at the moment it was supplied, for the message a raw-bytes
+     * fault carries later (KTD3). Read here because a consumer's configuration is not recoverable from the running
+     * client. Null when the definition builds its own consumer, which is what says the fault cannot arise.
+     */
     private String preBuiltConsumerDescription;
 
+    /**
+     * Whether the caller supplied a finished producer. It also settles that this instance forgoes producer
+     * recovery, which rebuilds from a configuration a finished producer no longer has (astubbs#410).
+     */
     private boolean preBuiltProducerSupplied;
 
+    /**
+     * One definition starts one instance. Set by {@link #buildOptions} so a second start is refused before any
+     * client is built - rather than after a second consumer has already joined the group.
+     */
     private boolean started;
 
     /**
@@ -168,8 +231,12 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     public ParallelConsumerDefinition(Properties connectionProperties) {
         Objects.requireNonNull(connectionProperties, "Connection properties must be supplied");
         Map<String, Object> copy = new LinkedHashMap<>();
+        // getProperty, not get: stringPropertyNames() includes keys inherited from a parent Properties' defaults,
+        // and Properties.get is Hashtable.get, which does not consult them - so a defaulted key was copied in
+        // with a NULL value, and the entrySet pass below cannot repair it because entrySet does not see defaults
+        // either. Those nulls reached the deserialisers' configure() and the producer's properties.
         for (String name : connectionProperties.stringPropertyNames()) {
-            copy.put(name, connectionProperties.get(name));
+            copy.put(name, connectionProperties.getProperty(name));
         }
         // Properties may carry non-String values when built programmatically; stringPropertyNames misses those.
         for (Map.Entry<Object, Object> entry : connectionProperties.entrySet()) {
@@ -450,7 +517,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             throw new IllegalArgumentException("A route must name at least one topic");
         }
         for (String topic : topics) {
-            if (topic == null || topic.trim().isEmpty()) {
+            if (isBlank(topic)) {
                 throw new IllegalArgumentException("A topic name must not be blank");
             }
             RouteState existing = routesByTopic.get(topic);
@@ -483,6 +550,14 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         validatePolicy();
     }
 
+    /**
+     * Routes first, because a definition with no route, or a topic with no function, is a mistake about the shape
+     * of the definition rather than about one setting - and saying so before the property and policy checks run
+     * stops those reporting on a definition that was never going to start (AE7).
+     * <p>
+     * Resolving each route's defaults here is what lets everything below read the values a route will actually run
+     * with, rather than the nulls that mean "take the instance's".
+     */
     private void validateRoutes() {
         if (routes.isEmpty()) {
             throw new IllegalArgumentException("This definition declares no routes - declare at least one topic with "
@@ -539,6 +614,13 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         }
     }
 
+    /**
+     * One wording for both deserialiser settings, so the key and the value halves of the same mistake cannot be
+     * answered in two different sentences. It names the routes that supersede the setting, because "it would never
+     * be used" is only actionable once the reader can see what is using its own types instead.
+     *
+     * @param setting the connection-properties key being refused
+     */
     private void refuseDeserialiserSetting(String setting) {
         if (properties.containsKey(setting)) {
             throw new IllegalArgumentException(msg("{} was supplied in the connection properties, and the routes for "
@@ -572,16 +654,25 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         }
     }
 
+    /**
+     * Policy last, once every route has resolved its defaults, so each check reads the policy the route will
+     * actually run with rather than the one it declared.
+     * <p>
+     * Everything refused here is a setting that could not be honoured - a trigger with no destination, a
+     * destination with no trigger, a destination this instance reads itself, or one under a commit mode that
+     * cannot recover from a failed export. Each refusal names its topic, because a policy mistake is a mistake
+     * about one route (R27, AE7).
+     */
     private void validatePolicy() {
         if (instancePayloadPercentage != null) {
-            throw refusedPercentage("dlqWhenOffsetPayloadReaches", instancePayloadPercentage, null);
+            throw refusedPercentage(instancePayloadPercentage, null);
         }
         for (RouteState route : routes) {
             AfterRetries policy = route.afterRetries();
             String topic = route.describeTopics();
             refuseHalfAParkCycle(policy, topic);
             if (policy.payloadPercentage().isPresent()) {
-                throw refusedPercentage("dlqWhenOffsetPayloadReaches", policy.payloadPercentage().getAsInt(), topic);
+                throw refusedPercentage(policy.payloadPercentage().getAsInt(), topic);
             }
             if (policy.destination() == null) {
                 if (policy.isDlqImmediately()) {
@@ -639,6 +730,14 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         }
     }
 
+    /**
+     * The shared wording for an export trigger declared with nothing to send to: two settings, one sentence, so
+     * the two cannot drift into answering the same mistake differently (R27).
+     *
+     * @param setting the trigger that was declared without a destination
+     * @param topic   the route's topics, named so the reader knows which route to fix
+     * @return the exception to throw, so the call site reads as {@code throw noDestination(...)}
+     */
     private IllegalArgumentException noDestination(String setting, String topic) {
         return new IllegalArgumentException(msg("Topic {} declares {} with no dead-letter destination - declare "
                 + "dlqTo(...) beside it, or drop it and let records park in place (R27)", topic, setting));
@@ -648,7 +747,10 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * One refusal covering both halves of R27's rule: no explicit percentage is accepted in this version at all, and
      * a value above the ceiling would never be reached even when they are.
      */
-    private IllegalArgumentException refusedPercentage(String setting, int percentage, String topic) {
+    private IllegalArgumentException refusedPercentage(int percentage, String topic) {
+        // Named once rather than passed in: both call sites are this one setting, and the message has to keep
+        // matching the method a user actually wrote.
+        String setting = "dlqWhenOffsetPayloadReaches";
         String where = topic == null ? "the definition" : "topic " + topic;
         String ceiling = percentage > AfterRetries.MAX_PAYLOAD_PERCENTAGE
                 ? msg(" It is also above the ceiling of {}: the engine stops a partition taking work at {}% of the "
@@ -688,10 +790,11 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         // The gauges read the same parked set the parked view answers from, through the same wrapper - the engine's
         // retry queue, once the handle has wired the dispatcher to it below (KTD8, KTD14).
         FluentMeters meters = FluentMeters.registerFor(module.pcMetrics(), topics(),
-                dispatcher::parkedAcrossAllRoutes);
+                dispatcher::parkedContainersNow);
         dispatcher.meters(meters);
         ConsumerHandle handle = new ConsumerHandle(processor, dispatcher, routeTopicsByTopic(), closePath, meters);
-        dispatcher.instanceControl(handle);
+        // The wrapper's two callbacks into this handle are wired by startObserving() below, with the parked view
+        // and the loop-end hook - before anything polls, and so the handle need not publish them itself.
         this.startedHandle = handle;
 
         // The user's own rebalance listener, if the definition declared one (KTD2). The facade keeps no
@@ -841,6 +944,11 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         return dispatcher;
     }
 
+    /**
+     * What the instance subscribes to: exactly the union of the routes' topics, never more. That equality is what
+     * makes a record arriving with no route an invariant break in the dispatch wrapper rather than a user error,
+     * and it is why a pattern subscription is refused (R2, KTD2). A list, because that is what the engine takes.
+     */
     private List<String> subscriptionTopics() {
         return new ArrayList<>(topics());
     }
@@ -858,37 +966,67 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         return config;
     }
 
+    /**
+     * The routed topics as one string for a refusal message. Naming them is the part that makes a refusal
+     * actionable: it is what shows the reader which routes are superseding the setting they typed.
+     */
     private String routedTopics() {
         return routesByTopic.keySet().toString();
     }
 
     // ---------------------------------------------------------------- DefinitionView
 
+    /**
+     * The union of the routes' topics, in declaration order and read-only: a reader of a definition may see what
+     * is subscribed to and may not add to it, because a topic here with no route behind it is the one thing the
+     * dispatch wrapper treats as impossible.
+     */
     @Override
     public Set<String> topics() {
         return Collections.unmodifiableSet(routesByTopic.keySet());
     }
 
+    /**
+     * Every route once each, however many topics it was declared over. A copy rather than a wrapper, so a route
+     * declared after this call does not appear in a collection a reader is still holding.
+     */
     @Override
     public Collection<RouteView> routes() {
         return Collections.<RouteView>unmodifiableList(new ArrayList<RouteView>(routes));
     }
 
+    /**
+     * Null for an unrouted topic, as the view's contract says: a reader asks this to find out <em>whether</em> a
+     * topic is routed, so a refusal would make the ordinary answer an exception. The handle and the dispatch
+     * wrapper are the ones that refuse, because there the question is about a topic the caller believes it owns.
+     */
     @Override
     public RouteView route(String topic) {
         return routesByTopic.get(topic);
     }
 
+    /**
+     * The mode as declared, before any client exists - which is what lets the runtime seam decide whether to build
+     * a transactional producer at all.
+     */
     @Override
     public CommitMode commitMode() {
         return commitMode;
     }
 
+    /**
+     * The instance default, and in this version every route's ordering, so a reader need not ask each route (R6).
+     */
     @Override
     public ProcessingOrder ordering() {
         return defaultOrdering;
     }
 
+    /**
+     * Derived from the routes each time rather than tracked as a flag, so it stays true however late a route that
+     * produces or exports is declared. It is also read at start to choose the produce-many arm over the plain poll
+     * one, so the two decisions cannot disagree (R4, KTD2).
+     */
     @Override
     public boolean requiresProducer() {
         if (commitMode == CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER) {
@@ -902,11 +1040,20 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         return false;
     }
 
+    /**
+     * The copy this definition took, read-only: a runtime seam builds its clients from these, and a seam that
+     * could edit them would be changing a definition that has already been validated.
+     */
     @Override
     public Map<String, Object> connectionProperties() {
         return Collections.unmodifiableMap(properties);
     }
 
+    /**
+     * Built fresh each call from {@link #FACADE_OWNED_PROPERTIES}, so the one list of what the facade owns decides
+     * both what a deserialiser is configured with and what it is not - a schema-registry URL reaches a route's
+     * deserialisers, the bootstrap servers and the client serialisers do not (KTD7).
+     */
     @Override
     public Map<String, Object> passThroughProperties() {
         Map<String, Object> passThrough = new LinkedHashMap<>(properties);
@@ -914,6 +1061,10 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         return Collections.unmodifiableMap(passThrough);
     }
 
+    /**
+     * Null when the definition builds its own consumer, which is more than an absent string: it is what tells a
+     * reader that a raw-bytes fault is unreachable on this instance at all (KTD3).
+     */
     @Override
     public String preBuiltConsumerDescription() {
         return preBuiltConsumerDescription;
@@ -921,30 +1072,58 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
 
     // ---------------------------------------------------------------- defaults, read by a route resolving its own
 
+    /**
+     * Empty means retry forever, which is a declared setting rather than a missing one - so a route copying this
+     * inherits "no limit" as deliberately as it inherits a number (R10).
+     */
     OptionalInt defaultRetryLimitValue() {
         return defaultRetryLimit;
     }
 
+    /**
+     * Never null: a route resolving against this always ends up with a delay, so no route has to answer what to
+     * wait when nothing declared one.
+     */
     Duration defaultRetryDelayValue() {
         return defaultRetryDelay;
     }
 
+    /**
+     * Each route's own target, not a budget shared between them - the engine's limit is the sum (R23).
+     */
     int defaultConcurrencyValue() {
         return defaultConcurrency;
     }
 
+    /**
+     * Read by a route resolving its own, even though per-route ordering cannot yet differ from it: the route asks
+     * the same question as every other setting, so the seam is already where a later milestone needs it (R6).
+     */
     ProcessingOrder defaultOrderingValue() {
         return defaultOrdering;
     }
 
+    /**
+     * Null when the definition declared none, which a route resolves to parking in place rather than to nothing -
+     * the default that holds a record and commits nothing past it (R27).
+     */
     AfterRetries defaultAfterRetriesValue() {
         return defaultAfterRetries;
     }
 
+    /**
+     * Null when nothing declared one, in which case a route with no observer of its own tells nobody it parked -
+     * the parked view is still the record of it (R16, R28).
+     */
     ParkObserver<?, ?> defaultParkObserverValue() {
         return defaultParkObserver;
     }
 
+    /**
+     * What this definition looks like in a log line: the topics it claims and the two instance-wide settings that
+     * decide which clients it opens. Deliberately not the policy - that is per route, and a definition's own
+     * rendering should not read as though it were instance-wide.
+     */
     @Override
     public String toString() {
         return "ParallelConsumerDefinition(topics=" + topics() + ", commitMode=" + commitMode + ", ordering="

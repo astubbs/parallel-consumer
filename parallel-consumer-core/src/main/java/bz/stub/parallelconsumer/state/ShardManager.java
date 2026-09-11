@@ -26,6 +26,7 @@ import org.apache.kafka.common.TopicPartition;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 
@@ -488,17 +489,6 @@ public class ShardManager<K, V> {
      *
      * @see ProcessingShard#isResident(WorkContainer)
      */
-    /**
-     * A delivery that never started, handed back to its shard so the record can be selected again (KTD14).
-     * <p>
-     * The shard-side half of {@link WorkManager#onAbandonedBeforeStarting}: re-include it in selection, and
-     * <b>nothing else</b>. It is deliberately not {@link #onFailure}: that also puts the container in the retry
-     * queue, which is where a record waits out a backoff it earned by failing. This one never ran.
-     */
-    public void onAbandonedBeforeStarting(WorkContainer<?, ?> wc) {
-        getShard(computeShardKey(wc)).ifPresent(shard -> shard.onAbandonedBeforeStarting(wc));
-    }
-
     public void onFailure(WorkContainer<?, ?> wc) {
         log.debug("Work FAILED");
 
@@ -539,6 +529,17 @@ public class ShardManager<K, V> {
     }
 
     /**
+     * A delivery that never started, handed back to its shard so the record can be selected again (KTD14).
+     * <p>
+     * The shard-side half of {@link WorkManager#onAbandonedBeforeStarting}: re-include it in selection, and
+     * <b>nothing else</b>. It is deliberately not {@link #onFailure}: that also puts the container in the retry
+     * queue, which is where a record waits out a backoff it earned by failing. This one never ran.
+     */
+    public void onAbandonedBeforeStarting(WorkContainer<?, ?> wc) {
+        getShard(computeShardKey(wc)).ifPresent(shard -> shard.onAbandonedBeforeStarting(wc));
+    }
+
+    /**
      * Every record this instance is holding <b>parked</b>: incomplete, holding no worker, and never due again on its
      * own until something acts on it (KTD14).
      * <p>
@@ -572,16 +573,40 @@ public class ShardManager<K, V> {
      * @return a snapshot list, safe to hold after the lock is released
      */
     public List<WorkContainer<?, ?>> getParkedWorkContainers(boolean excludingRevoked) {
-        List<WorkContainer<?, ?>> parked = new ArrayList<>();
+        return collectFromRetryQueue(wc -> wc.isParked() && !(excludingRevoked && wc.isStale()));
+    }
+
+    /**
+     * Every retry-queue entry matching {@code wanted}, as a snapshot taken under the queue's read lock.
+     * <p>
+     * The two collectors over this queue - {@link #getParkedWorkContainers(boolean)} and
+     * {@link #purgeDepartedRetryEntries()} - differ only in the question they ask of each entry, and the walk
+     * itself is the part with the constraints on it: the iterator holds the READ lock until it is closed, so it
+     * must be closed before a caller reaches for the write lock, and it is {@code @ThreadConfined} with a runtime
+     * assertion, which is why this is an explicit loop rather than a stream.
+     * <p>
+     * <b>The snapshot is the point, not an implementation detail.</b> Both callers act on what they collected
+     * after the lock is released - one hands the list to a user, the other removes the entries under the write
+     * lock - so neither may hold the iterator while it does so. Collecting first is what separates the two.
+     * <p>
+     * {@link #getLowestRetryTime()} deliberately does not use this: it answers from the FIRST entry that
+     * qualifies and stops, so collecting every match would be work thrown away on a path the control loop takes
+     * once per pass.
+     *
+     * @param wanted asked once per entry, on the controller thread, while the read lock is held - so it must not
+     *               take another lock
+     */
+    private List<WorkContainer<?, ?>> collectFromRetryQueue(Predicate<WorkContainer<?, ?>> wanted) {
+        List<WorkContainer<?, ?>> collected = new ArrayList<>();
         try (RetryQueue.RetryQueueIterator entries = this.retryQueue.iterator()) {
             while (entries.hasNext()) {
-                WorkContainer<?, ?> workContainer = entries.next();
-                if (workContainer.isParked() && !(excludingRevoked && workContainer.isStale())) {
-                    parked.add(workContainer);
+                WorkContainer<?, ?> entry = entries.next();
+                if (wanted.test(entry)) {
+                    collected.add(entry);
                 }
             }
         }
-        return parked;
+        return collected;
     }
 
     /**
@@ -594,9 +619,14 @@ public class ShardManager<K, V> {
                 WorkContainer<?, ?> workContainer = retryQueueIterator.next();
                 if (workContainer.isParked()) {
                     // A parked record has no retry time - it waits for somebody to act on it, not for a clock - so
-                    // it can say nothing about how long the controller may block. They sort last, so this skips
-                    // only the tail.
-                    continue;
+                    // it can say nothing about how long the controller may block.
+                    //
+                    // STOPPING here rather than skipping on: every entry behind this one is parked too, so there
+                    // is nothing further to find. That is RetryQueue's parked-entries-sort-last invariant, which
+                    // its own javadoc states and RetryQueueParkedEntriesSortLastTest pins. Skipping instead walked
+                    // the whole parked tail on every control-loop pass, under the queue's read lock, and park's
+                    // steady state is a queue holding nothing else.
+                    break;
                 }
                 // Would only be in edge case of race between picking container for work (when its marked in-flight) and
                 // updating retryQueue - so still double-checking here to only consider not inflight ones.
@@ -741,17 +771,10 @@ public class ShardManager<K, V> {
      */
     @ControllerThreadOnly
     void purgeDepartedRetryEntries() {
-        List<WorkContainer<?, ?>> departed = new ArrayList<>();
-        try (RetryQueue.RetryQueueIterator entries = this.retryQueue.iterator()) {
-            while (entries.hasNext()) {
-                WorkContainer<?, ?> entry = entries.next();
-                if (!isResidentInItsShard(entry)) {
-                    departed.add(entry);
-                }
-            }
-        }
+        List<WorkContainer<?, ?>> departed = collectFromRetryQueue(entry -> !isResidentInItsShard(entry));
 
-        // OUTSIDE the read lock: the iterator holds it until it is closed, and this needs the write lock.
+        // OUTSIDE the read lock: collectFromRetryQueue closed the iterator, which held it, and this needs the
+        // write lock.
         // removeAll's own fast path returns without acquiring anything when the list is empty, which is the
         // common case on every tick.
         boolean modified = this.retryQueue.removeAll(departed);

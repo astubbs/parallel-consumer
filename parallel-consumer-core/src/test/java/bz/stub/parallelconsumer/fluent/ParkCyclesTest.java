@@ -8,19 +8,17 @@ import bz.stub.parallelconsumer.FakeRuntimeException;
 import bz.stub.parallelconsumer.ParallelConsumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.errors.SerializationException;
-import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static bz.stub.parallelconsumer.fluent.AfterRetries.park;
 import static com.google.common.truth.Truth.assertThat;
 
@@ -99,7 +97,7 @@ class ParkCyclesTest extends AbstractFluentEngineTest {
 
         RouteDispatcher dispatcher = pc.dispatcher();
         // The first attempt has exhausted the limit and the record is waiting out its one cycle.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(attempts.get()).isEqualTo(1));
         // Not parked while a cycle is outstanding: it has an attempt coming, so it is not in the parked view and
         // nothing has observed it.
@@ -108,7 +106,7 @@ class ParkCyclesTest extends AbstractFluentEngineTest {
 
         // ...and once the cycle's delay elapses it is attempted again and then parks, reporting the one cycle it
         // spent. The count is derived from the attempts beyond the limit, so it cannot disagree with them.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
             assertThat(attempts.get()).isEqualTo(2);
             assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1);
         });
@@ -146,7 +144,7 @@ class ParkCyclesTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(attempts.get()).isEqualTo(1));
 
         // A full second with no second attempt. The route's own delay is ten milliseconds, so an attempt inside
@@ -155,7 +153,7 @@ class ParkCyclesTest extends AbstractFluentEngineTest {
                 .untilAsserted(() -> assertThat(attempts.get()).isEqualTo(1));
 
         // ...and once the policy's three seconds are up the record is attempted once more, and then parks.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
             assertThat(attempts.get()).isEqualTo(2);
             assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1);
         });
@@ -185,7 +183,7 @@ class ParkCyclesTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "an order that comes good");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.succeededCount()).isEqualTo(1));
 
         assertThat(attempts.get()).isEqualTo(3);
@@ -217,7 +215,7 @@ class ParkCyclesTest extends AbstractFluentEngineTest {
                     return Outcome.succeeded();
                 });
 
-        RouteDispatcher dispatcher = runUntilOneRecordParks(pc, TOPIC, "poison");
+        RouteDispatcher dispatcher = runUntilOneRecordParks(pc, TOPIC, POISON);
 
         ParkedRecord parked = dispatcher.parkedForRoute(TOPIC).get(0);
         assertThat(parked.attempts()).isEqualTo(0);
@@ -251,16 +249,6 @@ class ParkCyclesTest extends AbstractFluentEngineTest {
                 .untilAsserted(() -> assertThat(attempts.get()).isEqualTo(1));
     }
 
-    private static Deserializer<String> rejecting() {
-        return (topic, data) -> {
-            String value = new String(data, StandardCharsets.UTF_8);
-            if (value.equals("poison")) {
-                throw new SerializationException("this payload cannot be read");
-            }
-            return value;
-        };
-    }
-
     /**
      * Start the definition, publish the one record the scenario needs, and wait for it to reach the parked view.
      * The scenarios here differ in the policy they declare and in what they then ask the parked entry, not in these
@@ -272,7 +260,7 @@ class ParkCyclesTest extends AbstractFluentEngineTest {
         handle = runtime.startAndAssign(pc, 1);
         runtime.publish(topic, 0, 0, "key-0", value);
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.parkedForRoute(topic)).hasSize(1));
         return dispatcher;
     }

@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 
 /**
@@ -159,7 +160,7 @@ class FacadeThrowsStayOutOfTheErrorLogTest extends AbstractFluentEngineTest {
     private void runUntilOneRecordParks(ParallelConsumerDefinition pc) {
         handle = runtime.startAndAssign(pc, 1);
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(pc.dispatcher().parkedCount()).isEqualTo(1));
     }
 }

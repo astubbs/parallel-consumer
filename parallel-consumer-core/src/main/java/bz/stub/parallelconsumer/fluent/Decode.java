@@ -9,72 +9,74 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 import java.util.Objects;
 
 /**
- * The three-way result of a route's decode step (R12): a value, a permanent failure, or a transient one.
+ * A classifier's verdict on a decode failure (R12): <em>permanent</em>, or <em>transient</em>.
  * <p>
  * A permanent failure is parked at once without consuming attempts; a transient one is a failed attempt like any
  * other. A stock Kafka {@link org.apache.kafka.common.serialization.Deserializer} that throws yields a
  * <em>transient</em> failure, because it cannot tell a corrupt payload from a registry outage - a route that needs
  * the distinction says so with {@link Formats#classifyDecodeFailures}.
  * <p>
- * This type is the classifier's vocabulary. What travels to the dispatch wrapper is a throw:
- * {@link PermanentDecodeFailureException} for permanent, and the original exception for transient.
+ * <b>There is no success arm, because a classifier is only ever asked about a failure.</b> Its input is the
+ * exception the deserialiser threw, so a verdict carrying a decoded value could never be constructed from one; the
+ * decoded value travels the ordinary return path instead. This type is the classifier's whole vocabulary, and what
+ * travels on from it to the dispatch wrapper is a throw: {@link PermanentDecodeFailureException} for permanent, and
+ * the original exception, untouched, for transient.
  *
- * @param <T> the value type being decoded
+ * @param <T> the value type the wrapped format decodes. Nothing here holds a {@code T}; the parameter exists so
+ *            that {@link Formats#classifyDecodeFailures}'s {@code Function<Exception, Decode<T>>} ties the verdict
+ *            to the format being wrapped, which is what lets a lambda be written without naming the type.
  */
 @InterfaceStability.Unstable
 public final class Decode<T> {
 
-    private final T value;
-
+    /**
+     * The exception the deserialiser threw, held so {@link #toString()} can name it. It is never read back out: what
+     * travels on is a throw - {@link PermanentDecodeFailureException} wrapping this, or this one untouched.
+     */
     private final Exception failure;
 
+    /**
+     * The verdict, as a flag rather than a second type, because there are exactly two arms and no third is coming - a
+     * classifier is only ever handed a failure.
+     */
     private final boolean permanent;
 
-    private Decode(T value, Exception failure, boolean permanent) {
-        this.value = value;
+    /**
+     * Private: {@link #permanentFailure} and {@link #transientFailure} are the whole vocabulary, and naming the arm
+     * at the call site is what makes a one-line classifier readable.
+     */
+    private Decode(Exception failure, boolean permanent) {
         this.failure = failure;
         this.permanent = permanent;
-    }
-
-    public static <T> Decode<T> value(T value) {
-        return new Decode<>(value, null, false);
     }
 
     /**
      * This payload will never decode - park it now rather than spending its attempts on it (R12, R27).
      */
     public static <T> Decode<T> permanentFailure(Exception cause) {
-        return new Decode<>(null, Objects.requireNonNull(cause, "A cause must be supplied"), true);
+        return new Decode<>(Objects.requireNonNull(cause, "A cause must be supplied"), true);
     }
 
     /**
      * Decoding failed for a reason that may pass - a registry outage, say. A failed attempt under R9 and R10.
      */
     public static <T> Decode<T> transientFailure(Exception cause) {
-        return new Decode<>(null, Objects.requireNonNull(cause, "A cause must be supplied"), false);
+        return new Decode<>(Objects.requireNonNull(cause, "A cause must be supplied"), false);
     }
 
-    public boolean isFailure() {
-        return failure != null;
-    }
-
+    /**
+     * True when the payload will never decode, so the record parks now and spends no attempt (R12). False is an
+     * ordinary failed attempt, which is also what an unclassified deserialiser failure amounts to.
+     */
     public boolean isPermanent() {
         return permanent;
     }
 
-    public T value() {
-        return value;
-    }
-
-    public Exception failure() {
-        return failure;
-    }
-
+    /**
+     * Names the arm and the failure under it, so a log line about a parked record says which verdict put it there.
+     */
     @Override
     public String toString() {
-        if (!isFailure()) {
-            return "Decode(value)";
-        }
         return "Decode(" + (permanent ? "permanent" : "transient") + " failure: " + failure + ")";
     }
 }

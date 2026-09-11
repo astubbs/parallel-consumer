@@ -12,11 +12,12 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.OptionalInt;
 import java.util.Set;
-import java.util.TreeSet;
+import java.util.TreeMap;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
@@ -50,8 +51,17 @@ public final class ParkedView {
     private static final String NEEDS_ENGINE_ACCESSORS =
             "it needs an engine accessor that does not exist yet, and is part of the next milestone of this work";
 
+    /**
+     * What this view is called in a log line or a {@link #toString()}, carried rather than derived from
+     * {@link #topics} because a route declared over a topic set and the instance-wide roll-up are both several
+     * topics and an operator needs to be able to tell them apart.
+     */
     private final String name;
 
+    /**
+     * The topics this view is of, held so that a narrowed or rolled-out view keeps the scope it was taken with.
+     * Unmodifiable and copied on the way in: a view is a value, and the caller's set is the caller's.
+     */
     private final Set<String> topics;
 
     /**
@@ -59,18 +69,50 @@ public final class ParkedView {
      */
     private final Integer partition;
 
+    /**
+     * The records this view is over, already filtered to its topics and partition when it was built. Every figure
+     * this class reports is derived from this one list, which is what makes {@link #count()} and {@link #records()}
+     * answer about the same moment however long they are apart.
+     */
     private final List<ParkedRecord> records;
 
+    /**
+     * When the engine's retry queue was read. Reported rather than kept private because an operator acting on a
+     * parked set needs to know how old the figure in front of them is.
+     */
     private final Instant takenAt;
 
+    /**
+     * The filtering form, used by the handle: it is handed everything parked and works out which of it is this
+     * view's. Package-private because a view is only ever taken from a handle, never built by a user.
+     */
     ParkedView(String name, Set<String> topics, Integer partition, List<ParkedRecord> allParked, Instant takenAt) {
+        this(name, Collections.unmodifiableSet(new LinkedHashSet<>(topics)), partition, takenAt,
+                filter(allParked, topics, partition));
+    }
+
+    /**
+     * Every field as given, for a caller that has already worked out which records are this view's -
+     * {@link #byPartition()}, which groups once instead of re-filtering the whole list per partition. The two
+     * constructors differ by the order of their last two arguments, which is what lets the filtering one delegate
+     * here.
+     */
+    private ParkedView(String name, Set<String> topics, Integer partition, Instant takenAt,
+                       List<ParkedRecord> mine) {
         this.name = name;
-        this.topics = Collections.unmodifiableSet(new LinkedHashSet<>(topics));
+        this.topics = topics;
         this.partition = partition;
-        this.records = filter(allParked, topics, partition);
+        this.records = mine;
         this.takenAt = takenAt;
     }
 
+    /**
+     * Which of everything parked belongs to this view.
+     *
+     * @param partition null for the whole route, which is the default - a view spans every partition unless
+     *                  somebody narrowed it
+     * @return an unmodifiable list, so the view a caller holds cannot be changed under them by whoever built it
+     */
     private static List<ParkedRecord> filter(List<ParkedRecord> allParked, Set<String> topics, Integer partition) {
         List<ParkedRecord> matching = new ArrayList<>();
         for (ParkedRecord parked : allParked) {
@@ -89,6 +131,10 @@ public final class ParkedView {
         return name;
     }
 
+    /**
+     * @return the topics this view covers - more than one when the route was declared over a topic set, and every
+     * routed topic on the instance-wide roll-up
+     */
     public Set<String> topics() {
         return topics;
     }
@@ -155,13 +201,17 @@ public final class ParkedView {
      * parked is not listed: this rolls out what is parked, it does not enumerate the assignment.
      */
     public List<ParkedView> byPartition() {
-        Set<Integer> partitions = new TreeSet<>();
+        // Grouped in one pass. Handing each new view the whole list and letting it filter made this quadratic -
+        // one predicate evaluation per record per partition - on exactly the large parked sets an operator rolls
+        // out per partition in order to read. A TreeMap keeps the partition order the TreeSet used to give.
+        Map<Integer, List<ParkedRecord>> byPartition = new TreeMap<>();
         for (ParkedRecord parked : records) {
-            partitions.add(parked.partition());
+            byPartition.computeIfAbsent(parked.partition(), partition -> new ArrayList<>()).add(parked);
         }
-        List<ParkedView> views = new ArrayList<>(partitions.size());
-        for (Integer each : partitions) {
-            views.add(new ParkedView(name, topics, each, records, takenAt));
+        List<ParkedView> views = new ArrayList<>(byPartition.size());
+        for (Map.Entry<Integer, List<ParkedRecord>> each : byPartition.entrySet()) {
+            views.add(new ParkedView(name, topics, each.getKey(), takenAt,
+                    Collections.unmodifiableList(each.getValue())));
         }
         return Collections.unmodifiableList(views);
     }
@@ -193,6 +243,8 @@ public final class ParkedView {
      * accessor for it.
      */
     public OptionalInt heldBehind(ParkedRecord parked) {
+        // The argument is deliberately unread: there is nothing to look it up in. Kept on the signature because
+        // the figure is per-record, and a method that gained its parameter later would break every caller.
         return OptionalInt.empty();
     }
 
@@ -237,6 +289,14 @@ public final class ParkedView {
         throw notYetSupported("dlq", null);
     }
 
+    /**
+     * The one refusal both commands raise, written once so that the four entry points cannot drift into four
+     * accounts of the same absence. It says what is missing, and then says that nothing is lost while it is
+     * missing - a park holds no worker and keeps the record in the offset map - because the question an operator
+     * asks next is whether they have to act now.
+     *
+     * @param parked the record asked for, or null on the whole-view form, which names none
+     */
     private UnsupportedOperationException notYetSupported(String command, ParkedRecord parked) {
         return new UnsupportedOperationException(msg("{} is not supported in this version{}: {}. Parked records "
                         + "stay incomplete in the offset map and hold no worker, so nothing is lost while you "
@@ -244,10 +304,33 @@ public final class ParkedView {
                 command, parked == null ? "" : msg(" (asked for {})", parked), NEEDS_ENGINE_ACCESSORS));
     }
 
+    /**
+     * What {@link #toString()} prints for a figure that has no answer yet - said once, so the two cannot drift into
+     * two spellings of the same absence.
+     */
+    private static final String NOT_AVAILABLE = "not available";
+
+    /**
+     * @return the figure, or {@link #NOT_AVAILABLE} - never the bare {@code OptionalDouble.empty} rendering, which
+     * reads to an operator as a figure of zero rather than as a figure nobody has
+     */
+    private static String describe(OptionalDouble figure) {
+        return figure.isPresent() ? String.valueOf(figure.getAsDouble()) : NOT_AVAILABLE;
+    }
+
+    /**
+     * The whole view on one line, for a log statement about a parked set. It names the view, its partition when it
+     * has one, and the four figures R28 asks for - including the ones that read empty in this version, because a
+     * line that silently dropped them would look like a complete answer.
+     */
     @Override
     public String toString() {
+        // Derived rather than hardcoded: the two figures below read empty in this version, and when the engine
+        // accessors land and they start answering, this line has to start answering with them.
         return "ParkedView(" + name + (partition == null ? "" : ", partition=" + partition) + ", count=" + count()
                 + ", oldest=" + oldestAge().map(Duration::toString).orElse("none")
-                + ", payloadFraction=not available, estimatedTimeToExport=not available)";
+                + ", payloadFraction=" + describe(payloadFraction())
+                + ", estimatedTimeToExport=" + estimatedTimeToExport().map(Duration::toString)
+                .orElse(NOT_AVAILABLE) + ")";
     }
 }

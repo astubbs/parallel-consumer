@@ -34,16 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * nothing to produce is not a visible fault: it is an idle connection, a transactional id nobody uses, and a
  * dependency on broker permissions the definition did not need.
  */
-class ClientConstructionTest {
-
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "client-construction-test");
-        return properties;
-    }
+class ClientConstructionTest extends AbstractFluentEngineTest {
 
     @Test
     void aDefinitionThatIsNeverStartedConstructsNoClientAtAll() {

@@ -21,8 +21,16 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 @InterfaceStability.Unstable
 public class StopRequestedException extends PCRetriableException {
 
+    /**
+     * Fixed rather than computed, for the same reason {@link RecordParkedException} pins its own: a {@link Throwable}
+     * is serialisable whether or not anything here intends to serialise one.
+     */
     private static final long serialVersionUID = 1L;
 
+    /**
+     * Package-private: a stop is raised only by the dispatch wrapper, so the wording is always the facade's own.
+     * There is no cause-taking form on purpose - nothing failed, the route asked.
+     */
     StopRequestedException(String message) {
         super(message);
     }

@@ -23,27 +23,52 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 @InterfaceStability.Unstable
 public final class Produced<PK, PV> {
 
+    /**
+     * How a value the function returns becomes key bytes. Held as a {@link Format} rather than a bare serialiser so
+     * that a Serde, a serialiser and a {@link Formats} helper all arrive at the route in one shape.
+     */
     private final Format<PK> key;
 
+    /**
+     * The same for the value side. Both are checked writable as they are stored, so a read-only format is a
+     * definition error rather than a failure on the first record the route tries to produce.
+     */
     private final Format<PV> value;
 
+    /**
+     * Private: the {@link #with} overloads are the only way in, which is what keeps every instance a pair of formats
+     * that can write, and lets the overloads accept whichever shapes the caller already has.
+     */
     private Produced(Format<PK> key, Format<PV> value) {
         this.key = requireWritable(key, "key");
         this.value = requireWritable(value, "value");
     }
 
+    /**
+     * Both sides from Serdes - the common case, for a caller who already holds a Serde for each type.
+     */
     public static <PK, PV> Produced<PK, PV> with(Serde<PK> key, Serde<PV> value) {
         return new Produced<>(Format.of(key), Format.of(value));
     }
 
+    /**
+     * A Serde for the key and a bare serialiser for the value, for a value type this route only ever writes.
+     */
     public static <PK, PV> Produced<PK, PV> with(Serde<PK> key, Serializer<PV> value) {
         return new Produced<>(Format.of(key), Format.writing(value));
     }
 
+    /**
+     * The mirror of {@link #with(Serde, Serializer)}. Both halves exist so a caller never has to invent the reading
+     * half of a Serde that the produced side would not use.
+     */
     public static <PK, PV> Produced<PK, PV> with(Serializer<PK> key, Serde<PV> value) {
         return new Produced<>(Format.writing(key), Format.of(value));
     }
 
+    /**
+     * Bare serialisers on both sides, for produced types that are written here and read somewhere else entirely.
+     */
     public static <PK, PV> Produced<PK, PV> with(Serializer<PK> key, Serializer<PV> value) {
         return new Produced<>(Format.writing(key), Format.writing(value));
     }
@@ -61,14 +86,24 @@ public final class Produced<PK, PV> {
         return format;
     }
 
+    /**
+     * The key format, read by the route when it wires up the records the function returns.
+     */
     public Format<PK> key() {
         return key;
     }
 
+    /**
+     * The value format, the other half of what the route needs to write a returned record.
+     */
     public Format<PV> value() {
         return value;
     }
 
+    /**
+     * Names both formats, because a refusal about produced types is read beside the route it came from and the type
+     * name alone would not say which of the pair was wrong.
+     */
     @Override
     public String toString() {
         return "Produced(key=" + key + ", value=" + value + ")";

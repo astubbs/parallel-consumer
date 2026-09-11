@@ -21,10 +21,22 @@ import java.util.Set;
 @InterfaceStability.Unstable
 public final class RouteHandle {
 
+    /**
+     * The instance this route belongs to. The handle owns the parked state, so nothing is cached here and a route
+     * handle held past the instance's close answers the way the instance does rather than from a stale copy.
+     */
     private final ConsumerHandle handle;
 
+    /**
+     * Every topic the route binds, not the one that was asked for: a route declared over a set answers under any of
+     * them and its view spans all of them, because they share one function and one policy (R5).
+     */
     private final Set<String> topics;
 
+    /**
+     * Package-private: a route handle is only minted by {@link ConsumerHandle#topic(String)}, which is what refuses a
+     * topic no route claims before a handle for it can exist.
+     */
     RouteHandle(ConsumerHandle handle, Set<String> topics) {
         this.handle = handle;
         this.topics = topics;
@@ -41,13 +53,20 @@ public final class RouteHandle {
      * This route's parked records, across every partition (R28). Narrow with {@link ParkedView#partition(int)}.
      */
     public ParkedView parked() {
-        return handle.parkedView(describeTopics(), topics, null);
+        return handle.parkedView(describeTopics(), topics);
     }
 
+    /**
+     * Renders the route's name by delegating to the one owner of that spelling, {@code RouteState}, rather than
+     * formatting a set here: a refusal and a handle's {@code toString} are read side by side and must agree.
+     */
     private String describeTopics() {
-        return topics.size() == 1 ? topics.iterator().next() : topics.toString();
+        return RouteState.describeTopics(topics);
     }
 
+    /**
+     * Names the route rather than the instance - a route handle appears in a line about one route's parked set.
+     */
     @Override
     public String toString() {
         return "RouteHandle(" + describeTopics() + ")";

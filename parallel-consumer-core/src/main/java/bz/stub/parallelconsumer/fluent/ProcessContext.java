@@ -28,42 +28,83 @@ import org.apache.kafka.common.header.Headers;
 @InterfaceStability.Unstable
 public final class ProcessContext<K, V> {
 
+    /**
+     * The engine's own record, delegated to rather than copied. Every question but the decoded key and value is
+     * answered from here, so each has one answer rather than a snapshot that can drift from the engine's.
+     */
     private final RecordContext<byte[], byte[]> engineContext;
 
+    /**
+     * The key as this route's deserialiser read it. Held because the engine below consumes raw bytes and cannot
+     * produce it, and decoded once before dispatch rather than on every access (KTD2).
+     */
     private final K key;
 
+    /**
+     * The value as this route's deserialiser read it, decoded before dispatch so the function is handed a value
+     * rather than the job of decoding one.
+     */
     private final V value;
 
+    /**
+     * Package-private: a context is only ever minted by dispatch, after this route's formats have decoded the
+     * record, so a function cannot be handed types its route did not declare.
+     */
     ProcessContext(RecordContext<byte[], byte[]> engineContext, K key, V value) {
         this.engineContext = engineContext;
         this.key = key;
         this.value = value;
     }
 
+    /**
+     * The decoded key. Null only when this context is being handed to a {@link ParkObserver} for a record that never
+     * decoded (R12, R16) - a processing function is never called with one.
+     */
     public K key() {
         return key;
     }
 
+    /**
+     * The decoded value, with the same one exception as {@link #key()}: null when a permanent decode failure is
+     * being reported, in which case the bytes are on {@link #raw()}.
+     */
     public V value() {
         return value;
     }
 
+    /**
+     * The topic the record arrived on - the one that selected this route, and so the one whose formats decoded it.
+     */
     public String topic() {
         return engineContext.topic();
     }
 
+    /**
+     * The partition the record arrived on, which under partition ordering is also the unit its ordering is kept in.
+     */
     public int partition() {
         return engineContext.partition();
     }
 
+    /**
+     * The record's offset, which stays uncommitted until the function reports a terminal outcome for it.
+     */
     public long offset() {
         return engineContext.offset();
     }
 
+    /**
+     * The record's own timestamp as the broker recorded it, not the moment it was dispatched - a retried record
+     * reports the same value on every attempt.
+     */
     public long timestamp() {
         return engineContext.timestamp();
     }
 
+    /**
+     * The headers exactly as they arrived. The facade types the key and the value and stops there: a header's
+     * meaning is the function's own convention, so nothing here decodes one.
+     */
     public Headers headers() {
         return engineContext.headers();
     }
@@ -91,6 +132,10 @@ public final class ProcessContext<K, V> {
         return engineContext;
     }
 
+    /**
+     * Identifies the record and nothing else. A context reaches a log line while the function is running, and the
+     * decoded value may be large or may not render at all - printing it is the caller's decision.
+     */
     @Override
     public String toString() {
         return "ProcessContext(" + topic() + "-" + partition() + "@" + offset() + ")";

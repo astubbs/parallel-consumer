@@ -23,7 +23,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
  * A running definition: what {@link ParallelConsumerDefinition#start()} hands back.
@@ -56,7 +55,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  */
 @Slf4j
 @InterfaceStability.Unstable
-public class ConsumerHandle implements AutoCloseable, InstanceControl {
+public class ConsumerHandle implements AutoCloseable {
 
     /**
      * How often {@link #awaitShutdown()} looks up from its latch to ask whether the engine ended without telling
@@ -64,8 +63,18 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
      */
     private static final Duration FAILURE_POLL_INTERVAL = Duration.ofMillis(200);
 
+    /**
+     * The engine this handle is the face of. Every question answered here - whether it is still consuming, what is
+     * parked, what failed - is put to the engine rather than mirrored into a field of this class, because the
+     * facade deliberately owns no state the engine already owns.
+     */
     private final ParallelEoSStreamProcessor<byte[], byte[]> processor;
 
+    /**
+     * The dispatch wrapper every record passes through. This handle reaches it for two things: to hand it the
+     * parked-set supplier and the callbacks it may make back ({@link #startObserving()}), and to read what is
+     * parked on a given set of topics ({@link #parkedView}).
+     */
     private final RouteDispatcher dispatcher;
 
     /**
@@ -74,12 +83,29 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
      */
     private final Map<String, Set<String>> routeTopicsByTopic;
 
+    /**
+     * The path the instance declared for its close, honoured by {@link #close()} and by the stop a route asks for
+     * (R17). A definition fault ignores it and does not drain - see {@link #fatal}, which says why.
+     */
     private final ClosePath closePath;
 
+    /**
+     * The instance's meters, held so that this handle can take them out of the user's registry at a moment of its
+     * own choosing rather than depending on the engine's shutdown reaching its metrics step.
+     */
     private final FluentMeters meters;
 
+    /**
+     * Counted down by whichever of the three close paths ran, so a caller has something to block on. An engine that
+     * ended without passing through this handle counts it down never, which is why {@link #awaitShutdown()} polls
+     * the engine rather than only waiting here.
+     */
     private final CountDownLatch shutdown = new CountDownLatch(1);
 
+    /**
+     * Claimed by the first close to arrive - the caller's, the stop request's, or the fault's - so the other two
+     * return instead of closing an instance twice on two different paths.
+     */
     private final AtomicBoolean closing = new AtomicBoolean();
 
     /**
@@ -98,6 +124,13 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
      */
     private final AtomicBoolean assignmentGapsLogged = new AtomicBoolean();
 
+    /**
+     * Package-private: a handle is only ever built by the definition that started the engine, which is what makes
+     * "a started definition hands one back" the only way a user gets one.
+     * <p>
+     * The handle is not observing anything when it returns. {@link #startObserving()} does that, and is separate
+     * because this object has to exist before the dispatch wrapper can be told where to report.
+     */
     ConsumerHandle(ParallelEoSStreamProcessor<byte[], byte[]> processor,
                    RouteDispatcher dispatcher,
                    Map<String, Set<String>> routeTopicsByTopic,
@@ -149,8 +182,9 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
      */
     void onControlLoopEnd() {
         try {
-            Set<TopicPartition> assigned = new LinkedHashSet<>(processor.getWm().getPm()
-                    .getAssignedPartitions().keySet());
+            // Not copied: getAssignedPartitions() builds a fresh unmodifiable map on every call, so its key set is
+            // already a stable, private view - and this runs on every pass of the control loop.
+            Set<TopicPartition> assigned = processor.getWm().getPm().getAssignedPartitions().keySet();
             meters.syncPartitionGauges(assigned);
             logRoutesWithNoAssignment(assigned);
         } catch (Throwable hookFailed) { //NOSONAR - a throw from here is fatal to the control loop
@@ -165,8 +199,10 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
      * shares with another instance that took every partition (R28).
      */
     private void logRoutesWithNoAssignment(Set<TopicPartition> assigned) {
-        if (assigned.isEmpty() || assignmentGapsLogged.get()) {
-            // Nothing assigned yet is not a gap - it is an instance whose first rebalance has not landed.
+        // Nothing assigned yet is not a gap - it is an instance whose first rebalance has not landed. The claim is
+        // made BEFORE the set arithmetic below, not after it: one guard rather than two, and the work is then done
+        // only by the pass that will report it.
+        if (assigned.isEmpty() || !assignmentGapsLogged.compareAndSet(false, true)) {
             return;
         }
         Set<String> assignedTopics = new LinkedHashSet<>();
@@ -175,9 +211,6 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
         }
         Set<String> unassigned = new LinkedHashSet<>(routeTopicsByTopic.keySet());
         unassigned.removeAll(assignedTopics);
-        if (!assignmentGapsLogged.compareAndSet(false, true)) {
-            return;
-        }
         if (!unassigned.isEmpty()) {
             log.warn("These routed topics were assigned no partition by this instance's first assignment, so their "
                             + "routes will process nothing: {}. Either the topic does not exist, or another member "
@@ -296,8 +329,7 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
     public RouteHandle topic(String topic) {
         Set<String> routeTopics = routeTopicsByTopic.get(topic);
         if (routeTopics == null) {
-            throw new IllegalArgumentException(msg("No route claims topic {} - this instance routes {}", topic,
-                    routeTopicsByTopic.keySet()));
+            throw RouteDispatcher.noRouteClaims(topic, routeTopicsByTopic.keySet());
         }
         return new RouteHandle(this, routeTopics);
     }
@@ -307,24 +339,27 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
      * per-route accessor is never overloaded (R28).
      */
     public ParkedView parkedAllTopics() {
-        return parkedView("all topics", routeTopicsByTopic.keySet(), null);
+        return parkedView("all topics", routeTopicsByTopic.keySet());
     }
 
-    ParkedView parkedView(String name, Set<String> topics, Integer partition) {
+    /**
+     * A view over what is parked on these topics right now. It always spans every partition - narrowing is
+     * {@link ParkedView#partition(int)}'s job, on the view the caller already holds.
+     */
+    ParkedView parkedView(String name, Set<String> topics) {
         // Read the set first and stamp it second, so the view's age can only overstate how stale it is.
-        List<ParkedRecord> parked = dispatcher.parkedAcrossAllRoutes();
-        return new ParkedView(name, topics, partition, parked, Instant.now());
+        List<ParkedRecord> parked = dispatcher.parkedFor(topics);
+        return new ParkedView(name, topics, null, parked, Instant.now());
     }
 
-    // ---------------------------------------------------------------- InstanceControl
+    // ---------------------------------------------------------------- what the dispatch wrapper reports here
 
     /**
      * <b>Closes from a thread of its own, and that is the whole point.</b> This is called from a worker thread,
      * inside the user function's failure path, and the engine's close awaits the worker pool - so a worker that
      * closed inline would be waiting for itself until the shutdown timeout expired (KTD6).
      */
-    @Override
-    public void fatal(Throwable definitionFault) {
+    private void fatal(Throwable definitionFault) {
         if (!fault.compareAndSet(null, definitionFault)) {
             return;
         }
@@ -345,8 +380,7 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
      * close is the whole reason the pause exists. Only then is the <b>close</b> started, on a thread of its own,
      * because this one is a worker and the close awaits the worker pool.
      */
-    @Override
-    public void stopRequested(ConsumerRecord<byte[], byte[]> record, String reason) {
+    private void stopRequested(ConsumerRecord<byte[], byte[]> record, String reason) {
         if (!stopRequest.compareAndSet(null, new StopRequest(record, reason, Instant.now()))) {
             log.debug("A second stop was requested at {}-{}@{} ({}); the first one is already closing this instance",
                     record.topic(), record.partition(), record.offset(), reason);
@@ -367,12 +401,23 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
         closeFromOurOwnThread("pc-fluent-stop-closer", closePath);
     }
 
+    /**
+     * Starts the close on a daemon thread of its own, named after the path that asked for it so a thread dump says
+     * which of the two self-closing paths ran. Both callers are worker threads and the engine's close awaits the
+     * worker pool, so neither can do this inline (KTD6). A daemon thread because a close that outlives the JVM's
+     * last user thread has nothing left to close down.
+     */
     private void closeFromOurOwnThread(String threadName, ClosePath path) {
         Thread closer = new Thread(() -> closeOnPath(path), threadName);
         closer.setDaemon(true);
         closer.start();
     }
 
+    /**
+     * What the self-closing thread runs. It claims the close exactly as {@link #close()} does, so a caller who
+     * closed first wins and this one returns; the difference is the end of it, where a failure has no caller to be
+     * thrown to and the latch still has to fall so that everyone awaiting is released.
+     */
     private void closeOnPath(ClosePath path) {
         if (!closing.compareAndSet(false, true)) {
             return;
@@ -387,6 +432,12 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
         }
     }
 
+    /**
+     * Tells an awaiting caller what ended the instance, if anything did. A definition fault is rethrown <b>as it was
+     * thrown</b>, so a caller can still catch its own exception type; only a checked one has to be wrapped, because
+     * the await signature never declared it. A clean close reaches the engine's own failure check below and, when
+     * that is clean too, returns silently - which is the one case where silence is the right answer.
+     */
     private void surfaceAnyFault() {
         Throwable cause = fault.get();
         if (cause instanceof RuntimeException) {
@@ -423,15 +474,39 @@ public class ConsumerHandle implements AutoCloseable, InstanceControl {
         return processor;
     }
 
-
-
     /**
-     * Points the wrapper's parked view at the engine, and registers the control-thread hook. Called by the
-     * definition once the engine is running, not from the constructor: this handle has to exist before the wrapper
-     * can be told about it.
+     * Points the wrapper's parked view at the engine, hands it the two callbacks it may make, and registers the
+     * control-thread hook. Called by the definition once the engine is running, not from the constructor: this
+     * handle has to exist before the wrapper can be told about it.
+     * <p>
+     * <b>The callbacks go through an adapter rather than this class implementing {@link InstanceControl}.</b> The
+     * interface is package-private, but a public class implementing it must make its methods public - which put
+     * {@code fatal} and {@code stopRequested} on the fluent API's own surface, where a user could shut their
+     * instance down through a seam that exists for the dispatch wrapper alone.
      */
     void startObserving() {
         dispatcher.parkedContainers(this::parkedContainers);
+        dispatcher.instanceControl(new InstanceControl() {
+
+            /**
+             * Satisfies {@link InstanceControl#fatal} by forwarding to the enclosing handle's private method of the
+             * same name, which is the whole reason this adapter exists: the decision stays where it is written, and
+             * off this public class's surface.
+             */
+            @Override
+            public void fatal(Throwable definitionFault) {
+                ConsumerHandle.this.fatal(definitionFault);
+            }
+
+            /**
+             * Satisfies {@link InstanceControl#stopRequested} by forwarding to the enclosing handle, for the same
+             * reason as {@link #fatal(Throwable)} above.
+             */
+            @Override
+            public void stopRequested(ConsumerRecord<byte[], byte[]> record, String reason) {
+                ConsumerHandle.this.stopRequested(record, reason);
+            }
+        });
         processor.addLoopEndCallBack(this::onControlLoopEnd);
     }
 }

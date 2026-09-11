@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
 import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.RecordContext;
+import bz.stub.parallelconsumer.internal.UserFunctions;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -22,7 +23,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.Set;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Supplier;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
@@ -65,6 +67,11 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 @Slf4j
 class RouteDispatcher {
 
+    /**
+     * The route table, by the topic that selects a route (R2). It is the definition's own map rather than a copy,
+     * and is only ever read here - a definition refuses a second start, so no route can be added behind the
+     * wrapper's back once records are flowing.
+     */
     private final Map<String, RouteState> routesByTopic;
 
     /**
@@ -102,14 +109,38 @@ class RouteDispatcher {
     // counters so a test can assert the outcome of a thousand records without standing up a meter registry, and
     // they are what the wrapper's own tests read.
 
-    private final AtomicLong succeeded = new AtomicLong();
+    /**
+     * Records the engine completed because their function reported success, a produce outcome included (R7).
+     */
+    private final LongAdder succeeded = new LongAdder();
 
-    private final AtomicLong filtered = new AtomicLong();
+    /**
+     * Records completed by a filtered outcome. The engine cannot tell one from a success - both complete and
+     * commit - so counting them apart here is the only place the distinction survives (R8).
+     */
+    private final LongAdder filtered = new LongAdder();
 
-    private final AtomicLong parked = new AtomicLong();
+    /**
+     * Records that parked, counted on the one path every park goes through. A park for a partition this instance
+     * no longer owns is deliberately not counted: it belongs to whoever owns the partition now.
+     */
+    private final LongAdder parked = new LongAdder();
 
-    private final AtomicLong producedRecords = new AtomicLong();
+    /**
+     * Records handed back for the engine to send, summed over every produce outcome - records, not outcomes, since
+     * one outcome may carry several.
+     */
+    private final LongAdder producedRecords = new LongAdder();
 
+    /**
+     * Built by the definition before the engine exists, because the retry-delay provider the options carry is one
+     * of this object's own methods.
+     *
+     * @param routesByTopic               the definition's route table, read here and never written
+     * @param fallbackRetryDelay          what {@link #retryDelayFor} answers for a topic no route claims
+     * @param preBuiltConsumerDescription the deserialisers read off a supplied consumer, or null when the
+     *                                    definition built its own - in which case the raw-bytes fault cannot arise
+     */
     RouteDispatcher(Map<String, RouteState> routesByTopic, Duration fallbackRetryDelay,
                     String preBuiltConsumerDescription) {
         this.routesByTopic = routesByTopic;
@@ -117,14 +148,28 @@ class RouteDispatcher {
         this.preBuiltConsumerDescription = preBuiltConsumerDescription;
     }
 
+    /**
+     * Replace the logging-only stand-in with the instance this wrapper runs in, so a fatal fault or a stop request
+     * reaches something that can act on it. Wired by the handle before anything polls, which is what makes it true
+     * that the first record already has somewhere to report to.
+     */
     void instanceControl(InstanceControl instance) {
         this.instance = instance;
     }
 
+    /**
+     * Hand over the meters the definition registered, so per-topic outcomes are published (R19). Until this is
+     * called the wrapper still counts into its own totals, so a test needs no registry to see what happened.
+     */
     void meters(FluentMeters meters) {
         this.meters = meters;
     }
 
+    /**
+     * Point the parked view at the engine's retry queue. A supplier rather than the queue, because all this class
+     * needs to know is that something can list what the engine is holding parked - which is what keeps the parked
+     * set out of this class entirely (KTD14).
+     */
     void parkedContainers(Supplier<List<WorkContainer<?, ?>>> parkedContainers) {
         this.parkedContainers = parkedContainers;
     }
@@ -138,18 +183,7 @@ class RouteDispatcher {
      * @param topic any topic of the route
      */
     List<ParkedRecord> parkedForRoute(String topic) {
-        RouteState route = routesByTopic.get(topic);
-        if (route == null) {
-            throw new IllegalArgumentException(msg("No route claims topic {} - this instance routes {}", topic,
-                    routesByTopic.keySet()));
-        }
-        List<ParkedRecord> found = new ArrayList<>();
-        for (ParkedRecord record : parkedAcrossAllRoutes()) {
-            if (route.topics().contains(record.topic())) {
-                found.add(record);
-            }
-        }
-        return Collections.unmodifiableList(found);
+        return parkedFor(routeFor(topic).topics());
     }
 
     /**
@@ -157,7 +191,52 @@ class RouteDispatcher {
      * per-route accessor is never overloaded (R28).
      */
     List<ParkedRecord> parkedAcrossAllRoutes() {
-        return parkedRecordsFrom(parkedContainers.get());
+        return parkedRecordsFrom(parkedContainers.get(), null);
+    }
+
+    /**
+     * The engine's parked containers, straight through: what {@link FluentMeters}' gauges read, and the only
+     * caller that wants containers rather than the {@link ParkedRecord} view over them - it needs a topic, a
+     * partition and a park time, none of which costs a key deserialisation.
+     */
+    List<WorkContainer<?, ?>> parkedContainersNow() {
+        return parkedContainers.get();
+    }
+
+    /**
+     * The parked records of a named set of topics, filtered <b>before</b> anything is built rather than after.
+     * <p>
+     * It matters because building one entry decodes the record's key: answering a single route's query by
+     * materialising every route's parked records and discarding the rest decoded the whole instance's parked set to
+     * report on one topic of it.
+     *
+     * @param topics the topics to report on; null for every routed topic
+     */
+    List<ParkedRecord> parkedFor(Set<String> topics) {
+        return parkedRecordsFrom(parkedContainers.get(), topics);
+    }
+
+    /**
+     * This instance's route for a topic.
+     *
+     * @throws IllegalArgumentException naming the routed topics, when nothing routes this one
+     */
+    private RouteState routeFor(String topic) {
+        RouteState route = routesByTopic.get(topic);
+        if (route == null) {
+            throw noRouteClaims(topic, routesByTopic.keySet());
+        }
+        return route;
+    }
+
+    /**
+     * The one wording of "you asked about a topic this instance does not route", so the handle and the wrapper
+     * cannot answer the same mistake in two different sentences. A misspelled topic answered with an empty parked
+     * set would read as good news, which is why it is a refusal at all.
+     */
+    static IllegalArgumentException noRouteClaims(String topic, Set<String> routedTopics) {
+        return new IllegalArgumentException(msg("No route claims topic {} - this instance routes {}", topic,
+                routedTopics));
     }
 
     /**
@@ -165,18 +244,21 @@ class RouteDispatcher {
      * <p>
      * Everything on a {@link ParkedRecord} comes from the container or from the route, and nothing from a store:
      * the raw record, the failure and the moment it parked are the container's failure history; the reason is the
-     * verdict the engine recorded when the throw said {@code park}; the key is decoded from the raw bytes on
-     * demand; and the park cycles are arithmetic over the attempt count (see {@link #cyclesUsed}).
+     * verdict the engine recorded when the throw said {@code park}; the key is decoded from the raw bytes as
+     * the view is built; and the park cycles are arithmetic over the attempt count (see {@link #cyclesUsed}).
      * <p>
      * A container for a topic this instance does not route is skipped rather than reported: the engine's queue is
      * the whole instance's, and a definition only ever answers for its own routes.
+     *
+     * @param wanted the topics to report on, or null for every routed topic. Applied here rather than by the
+     *               caller because everything below it costs a key deserialisation.
      */
-    List<ParkedRecord> parkedRecordsFrom(List<WorkContainer<?, ?>> containers) {
+    private List<ParkedRecord> parkedRecordsFrom(List<WorkContainer<?, ?>> containers, Set<String> wanted) {
         List<ParkedRecord> view = new ArrayList<>(containers.size());
         for (WorkContainer<?, ?> container : containers) {
             RecordContext<byte[], byte[]> engineContext = contextOf(container);
             RouteState route = routesByTopic.get(engineContext.topic());
-            if (route == null) {
+            if (route == null || (wanted != null && !wanted.contains(engineContext.topic()))) {
                 continue;
             }
             view.add(new ParkedRecord(engineContext, decodeKeyQuietly(route, engineContext.getConsumerRecord()),
@@ -185,6 +267,10 @@ class RouteDispatcher {
         return Collections.unmodifiableList(view);
     }
 
+    /**
+     * Every parked container reaches the view through here, so the one cast the engine's generic queue forces is
+     * spelled in a single place rather than at each reader.
+     */
     @SuppressWarnings("unchecked")
     private static RecordContext<byte[], byte[]> contextOf(WorkContainer<?, ?> container) {
         // The facade builds every instance on a byte[] consumer (KTD2), so the engine's containers carry byte[]
@@ -224,20 +310,36 @@ class RouteDispatcher {
         }
     }
 
+    /**
+     * How many records completed as successes. A sum over the adder's cells, so it is a reading taken while work
+     * is running rather than a snapshot of a moment - which is all a total of finished work can be.
+     */
     long succeededCount() {
-        return succeeded.get();
+        return succeeded.sum();
     }
 
+    /**
+     * How many records the routes filtered. Reading this beside {@link #succeededCount()} is the only way to see
+     * what a route rejected, since the engine completed both the same way (R8).
+     */
     long filteredCount() {
-        return filtered.get();
+        return filtered.sum();
     }
 
+    /**
+     * How many records parked, which is also how many are still holding their partition's committed offset where
+     * it is until somebody acts (R27).
+     */
     long parkedCount() {
-        return parked.get();
+        return parked.sum();
     }
 
+    /**
+     * How many records the routes handed back to be sent. It counts what was returned to the engine, not what the
+     * broker acknowledged - the send is the engine's, and its outcome is the engine's to report.
+     */
     long producedRecordCount() {
-        return producedRecords.get();
+        return producedRecords.sum();
     }
 
     // ---------------------------------------------------------------- the engine function
@@ -260,14 +362,29 @@ class RouteDispatcher {
      * invariant rather than a user-facing refusal.
      */
     void dispatchWithoutProducing(PollContext<byte[], byte[]> poll) {
-        List<ProducerRecord<byte[], byte[]>> produced = dispatch(poll);
-        if (!produced.isEmpty()) {
+        // Counted rather than collected: this arm runs for every record of a non-producing definition, and the
+        // list it used to build existed only to be asserted empty.
+        int produced = 0;
+        for (RecordContext<byte[], byte[]> context : poll.getContextsFlattened()) {
+            produced += dispatchOne(context).size();
+        }
+        if (produced != 0) {
             throw new IllegalStateException(msg("A route returned {} records to produce on an instance that opened "
                     + "no producer. A route that declares produced types is what makes a definition need one, so "
-                    + "this is a bug in the fluent API rather than in the definition.", produced.size()));
+                    + "this is a bug in the fluent API rather than in the definition.", produced));
         }
     }
 
+    /**
+     * One record, end to end: pick its route, decode it, run its function, and map what came back. Both arms above
+     * go through here, so the produce-many and plain-poll flows cannot come to differ about what a record's
+     * outcome means.
+     * <p>
+     * Every failure leaves by a throw, because the engine has no other way to be handed a record back - so this
+     * either returns the records to send, or does not return at all.
+     *
+     * @return the records the engine should send for this one, empty when the record completes with nothing
+     */
     private List<ProducerRecord<byte[], byte[]>> dispatchOne(RecordContext<byte[], byte[]> engineContext) {
         ConsumerRecord<byte[], byte[]> record = engineContext.getConsumerRecord();
         RouteState route = routesByTopic.get(record.topic());
@@ -321,6 +438,17 @@ class RouteDispatcher {
         return apply(outcome, context, route, attempts);
     }
 
+    /**
+     * The outcome the function reported, turned into what the engine is told - the one place the five kinds are
+     * mapped, so the counters, the meters and the engine can never be told three different stories about the same
+     * record.
+     * <p>
+     * Two of them leave by a throw rather than a return, which is what a park and a stop are (R8, R24).
+     *
+     * @param attempts the run just finished, counted from one - carried through so a park records the attempt it
+     *                 parked on
+     * @return the records for the engine to send, empty when the record completes with nothing
+     */
     private List<ProducerRecord<byte[], byte[]>> apply(Outcome<Object, Object> outcome,
                                                        ProcessContext<Object, Object> context,
                                                        RouteState route,
@@ -328,19 +456,19 @@ class RouteDispatcher {
         ConsumerRecord<byte[], byte[]> record = context.raw();
         switch (outcome.kind()) {
             case SUCCEEDED:
-                succeeded.incrementAndGet();
+                succeeded.increment();
                 meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
                 return emptyProduce();
             case FILTERED:
                 // Completes and commits exactly as a success does, and is counted apart from one (R8).
-                filtered.incrementAndGet();
+                filtered.increment();
                 meters.recordOutcome(record.topic(), FluentMeters.FILTERED);
                 return emptyProduce();
             case PRODUCE:
                 List<ProducerRecord<byte[], byte[]>> serialised = serialise(route, outcome.records());
-                succeeded.incrementAndGet();
+                succeeded.increment();
                 meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
-                producedRecords.addAndGet(serialised.size());
+                producedRecords.add(serialised.size());
                 return serialised;
             case PARK:
                 // The function already knows this record is hopeless, so its remaining attempts are skipped - and
@@ -355,6 +483,10 @@ class RouteDispatcher {
         }
     }
 
+    /**
+     * "This record is finished and there is nothing to send", named once so the succeeded and filtered arms
+     * cannot come to say it differently.
+     */
     private List<ProducerRecord<byte[], byte[]>> emptyProduce() {
         // The engine reads an empty list as "nothing to send", completes the record and commits its offset - which
         // is what makes filtered and succeeded the same thing to the engine and different things to the counters.
@@ -472,7 +604,7 @@ class RouteDispatcher {
         }
 
         notifyObserver(route, context, failure, attempts);
-        parked.incrementAndGet();
+        parked.increment();
         meters.recordOutcome(record.topic(), FluentMeters.PARKED);
         if (failure == null) {
             // Nothing failed: the function asked for this, so it is not a warning.
@@ -526,6 +658,11 @@ class RouteDispatcher {
         }
     }
 
+    /**
+     * The one raw-typed call into a park observer. An observer is declared over its route's consumed types, which
+     * are gone by the time the wrapper holds it, so the cast is isolated here rather than repeated - and the
+     * values it is handed came from that same route's deserialisers, which is what makes it sound.
+     */
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static void observe(ParkObserver<?, ?> observer, ProcessContext<Object, Object> context,
                                 Throwable failure, int attempts) {
@@ -629,16 +766,36 @@ class RouteDispatcher {
 
     // ---------------------------------------------------------------- decoding, running and serialising
 
+    /**
+     * One field through a route's deserialiser. The topic and the headers go with it because a schema-aware
+     * deserialiser needs both - the subject is derived from the topic, and the schema id may ride in a header
+     * (KTD7).
+     */
     @SuppressWarnings("unchecked")
     private static Object decode(Format<?> format, String topic, Headers headers, byte[] bytes) {
         return ((Deserializer<Object>) format.deserializer()).deserialize(topic, headers, bytes);
     }
 
+    /**
+     * Call the route's function, raw-typed in one place. A route's declared types are erased by the time the
+     * wrapper holds its function, and the context it is handed carries exactly the values that route's own
+     * deserialisers produced - which is the whole of why the cast holds.
+     * <p>
+     * The checked {@code Exception} is deliberate: a function may throw one, so the clients it calls need no
+     * wrapping of their own (R9).
+     */
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static Outcome<Object, Object> run(RouteState route, ProcessContext<?, ?> context) throws Exception {
         return ((ProcessFunction) route.function()).process(context);
     }
 
+    /**
+     * Encode a produce outcome with the <em>consuming</em> route's declared produced formats (R4), keeping the
+     * topic, partition, timestamp and headers the function set. The record's own destination is left alone
+     * because a route may produce to several topics, and none of them need be routed by this instance.
+     *
+     * @param produced the records as the function returned them, still in the route's produced types
+     */
     private List<ProducerRecord<byte[], byte[]>> serialise(RouteState route,
                                                            List<? extends ProducerRecord<?, ?>> produced) {
         List<ProducerRecord<byte[], byte[]>> serialised = new ArrayList<>(produced.size());
@@ -651,6 +808,10 @@ class RouteDispatcher {
         return serialised;
     }
 
+    /**
+     * One field through a route's serialiser, the mirror of {@link #decode}: the topic and headers travel with it
+     * for the same reason, and a schema-aware serialiser may write into those headers as it goes.
+     */
     @SuppressWarnings("unchecked")
     private static byte[] encode(Format<?> format, String topic, Headers headers, Object value) {
         return ((Serializer<Object>) format.serializer()).serialize(topic, headers, value);
@@ -668,7 +829,7 @@ class RouteDispatcher {
         if (failure instanceof Error) {
             throw (Error) failure;
         }
-        return new ExceptionInUserFunctionException("Error occurred in code supplied by user", failure);
+        return new ExceptionInUserFunctionException(UserFunctions.MSG, failure);
     }
 
     /**
@@ -677,12 +838,22 @@ class RouteDispatcher {
     @Slf4j
     private static class LoggingOnlyInstanceControl implements InstanceControl {
 
+        /**
+         * Satisfies {@link InstanceControl#fatal} with the only thing available when there is no instance: an
+         * error log. Nothing here can stop the run, so the log is at ERROR rather than debug - a fault that
+         * reached this stand-in in production is one nobody else is going to report.
+         */
         @Override
         public void fatal(Throwable definitionFault) {
             log.error("A definition fault reached the dispatch wrapper before it was wired to an instance",
                     definitionFault);
         }
 
+        /**
+         * Satisfies {@link InstanceControl#stopRequested} when there is no instance to pause or close. Warned
+         * rather than logged quietly, because a route asked for something that is not going to happen - and the
+         * record is still handed back, so nothing completes on the strength of a stop that never ran.
+         */
         @Override
         public void stopRequested(ConsumerRecord<byte[], byte[]> record, String reason) {
             log.warn("A stop was requested at {}-{}@{} ({}) before the wrapper was wired to an instance",

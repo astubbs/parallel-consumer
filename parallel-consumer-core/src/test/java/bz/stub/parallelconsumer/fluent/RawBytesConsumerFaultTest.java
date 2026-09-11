@@ -24,14 +24,7 @@ import static com.google.common.truth.Truth.assertThat;
  * wrapper is what will catch the first cast failure and stop the instance with them; what is proved here is that the
  * message it will carry is worth reading.
  */
-class RawBytesConsumerFaultTest {
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "raw-bytes-fault-test");
-        return properties;
-    }
+class RawBytesConsumerFaultTest extends AbstractFluentEngineTest {
 
     /**
      * A real consumer, built offline - {@code KafkaConsumer} connects on its first poll, not in its constructor - so

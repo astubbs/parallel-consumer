@@ -36,8 +36,16 @@ public enum ClosePath {
      */
     DONT_DRAIN_FIRST(DrainingMode.DONT_DRAIN);
 
+    /**
+     * The engine's own spelling of this choice, bound to the constant rather than switched on at the point of use, so
+     * the mapping between the two vocabularies lives in one place.
+     */
     private final DrainingMode drainingMode;
 
+    /**
+     * Binds a path to the engine's draining mode. The two constants are the whole set because the engine has exactly
+     * these two behaviours - this enum exists to name them in the facade's own words, not to add a third.
+     */
     ClosePath(DrainingMode drainingMode) {
         this.drainingMode = drainingMode;
     }

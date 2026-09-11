@@ -4,6 +4,10 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import org.apache.kafka.common.header.Header;
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.junit.jupiter.api.Test;
 
@@ -139,6 +143,44 @@ class FormatsTest {
         var retried = assertThrows(RuntimeException.class,
                 () -> stillTransient.deserializer().deserialize("orders", NOT_JSON));
         assertThat(retried).isNotInstanceOf(PermanentDecodeFailureException.class);
+    }
+
+    /**
+     * A wrapper must delegate the <b>headers-aware</b> form, which is the one the dispatch wrapper calls.
+     * <p>
+     * {@link org.apache.kafka.common.serialization.Deserializer}'s default 3-arg method discards the headers and
+     * calls the 2-arg one, so a wrapper overriding only the 2-arg form hides them from the deserialiser it wraps
+     * and nothing goes red - the payload still decodes, it just decodes without the headers. The registry
+     * deserialisers this facade is built to wrap are exactly the ones that resolve a schema from a header, so the
+     * loss would land on the formats a user cannot test here.
+     * <p>
+     * {@code ConfigMergingDeserializer} and {@code ConfigMergingSerializer} carried the same defect and were fixed
+     * with it; neither is reachable from a test, because both are built only by the Avro and Protobuf helpers and
+     * neither library is on this project's classpath.
+     */
+    @Test
+    void aWrappedDeserialiserIsGivenTheRecordsHeaders() {
+        Deserializer<String> headerDriven = new Deserializer<String>() {
+
+            @Override
+            public String deserialize(String topic, byte[] data) {
+                return "the headers-aware form was not called";
+            }
+
+            @Override
+            public String deserialize(String topic, Headers headers, byte[] data) {
+                Header schema = headers.lastHeader("schema");
+                return schema == null ? "no schema header" : new String(schema.value(), StandardCharsets.UTF_8);
+            }
+        };
+        Format<String> wrapped = Formats.classifyDecodeFailures(
+                Serdes.serdeFrom(Serdes.String().serializer(), headerDriven), Decode::permanentFailure);
+
+        Headers headers = new RecordHeaders().add("schema", "v7".getBytes(StandardCharsets.UTF_8));
+        String read = wrapped.deserializer()
+                .deserialize("orders", headers, "payload".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(read).isEqualTo("v7");
     }
 
     @Test

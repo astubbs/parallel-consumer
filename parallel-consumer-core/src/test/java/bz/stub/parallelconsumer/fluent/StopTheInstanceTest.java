@@ -24,6 +24,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 
 /**
@@ -96,7 +97,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
             runtime.publish(TOPIC, 0, offset, "key-" + offset, "later");
         }
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(handle.stopRequest().isPresent()).isTrue());
         StopRequest stop = handle.stopRequest().get();
         assertThat(stop.topic()).isEqualTo(TOPIC);
@@ -104,7 +105,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         assertThat(stop.reason()).contains("the deployment cannot handle this record");
 
         // The record that was already in flight is still in flight: the close is waiting for it, not abandoning it.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> holdEntered.getCount() == 0);
+        Awaitility.await().atMost(defaultTimeout).until(() -> holdEntered.getCount() == 0);
         release.countDown();
 
         Instant releasedAt = Instant.now();
@@ -196,8 +197,22 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         });
 
         handle = runtime.startAndAssign(pc, 1);
-        for (int offset = 0; offset < records; offset++) {
-            runtime.publish(TOPIC, 0, offset, "key-" + offset, "an order");
+        // Publish the whole backlog under the mock consumer's own monitor.
+        //
+        // The stop closes the consumer from a thread of its own (KTD6), and MockConsumer synchronizes both
+        // addRecord and close on itself - so holding that monitor for the loop makes publishing atomic against
+        // the close this test's own route is about to cause. Without it the close can land mid-loop on a loaded
+        // machine and addRecord throws "This consumer has already been closed" out of the SETUP, which is not what
+        // this test asserts; seen once on 2026-09-11 and recorded in docs/inflight/core-ux-modernisation.md.
+        //
+        // It also makes the test's claim literally true rather than merely likely: the engine's poll thread cannot
+        // hold the monitor while this loop runs (its simulated long poll waits, which releases it), so all two
+        // thousand records are buffered before the first one is dispatched. Nothing here waits on the engine, so
+        // the engine cannot be waited on by it.
+        synchronized (runtime.mockConsumer()) {
+            for (int offset = 0; offset < records; offset++) {
+                runtime.publish(TOPIC, 0, offset, "key-" + offset, "an order");
+            }
         }
 
         Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() ->
@@ -296,7 +311,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
 
         // The parking route's record parks, and the instance carries on: nothing about the other route's
         // declaration reaches it.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(pc.dispatcher().parkedForRoute(OTHER_TOPIC)).hasSize(1));
         assertThat(handle.stopRequest().isPresent()).isFalse();
         assertThat(handle.awaitShutdown(Duration.ofMillis(500))).isFalse();

@@ -31,18 +31,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  *
  * @see ParallelConsumerDefinition#validate()
  */
-class DefinitionRefusalTest {
+class DefinitionRefusalTest extends AbstractFluentEngineTest {
 
-    private final RecordingClientRuntime runtime = new RecordingClientRuntime();
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "definition-refusal-test");
-        return properties;
-    }
-
-    private static ParallelConsumerDefinition define() {
+    private ParallelConsumerDefinition define() {
         return ParallelConsumer.connect(props());
     }
 

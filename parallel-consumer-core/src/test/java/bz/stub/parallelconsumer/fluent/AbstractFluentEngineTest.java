@@ -5,8 +5,11 @@ package bz.stub.parallelconsumer.fluent;
  */
 
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.errors.SerializationException;
+import org.apache.kafka.common.serialization.Deserializer;
 import org.junit.jupiter.api.AfterEach;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Properties;
 
 /**
@@ -39,6 +42,29 @@ abstract class AbstractFluentEngineTest {
      * {@link RecordingClientRuntime#closeWithoutDraining} for why draining a parked record waits out the whole
      * drain timeout of a test that has already passed.
      */
+    /**
+     * The payload every decode-failure scenario uses to make a deserialiser throw. Shared so that the value a
+     * test publishes and the value the deserialiser refuses cannot drift apart into two spellings.
+     */
+    static final String POISON = "poison";
+
+    /**
+     * A deserialiser that reads UTF-8 and refuses exactly {@link #POISON}.
+     * <p>
+     * It is the smallest thing that fails the way a real one does - a {@link SerializationException} out of
+     * {@code deserialize} - and it was written out three times, identically, in the suites that need it; the
+     * duplicate-code check flagged two of them against each other.
+     */
+    static Deserializer<String> rejecting() {
+        return (topic, data) -> {
+            String value = new String(data, StandardCharsets.UTF_8);
+            if (value.equals(POISON)) {
+                throw new SerializationException("this payload cannot be read");
+            }
+            return value;
+        };
+    }
+
     @AfterEach
     void closeTheInstance() {
         if (handle != null) {

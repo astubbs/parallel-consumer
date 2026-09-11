@@ -24,16 +24,38 @@ import java.time.Instant;
 @InterfaceStability.Unstable
 public final class StopRequest {
 
+    /**
+     * The stopping record's topic, copied rather than kept as a reference to the record: the request outlives the
+     * dispatch, and the record itself is handed straight back to the engine as the stop is raised.
+     */
     private final String topic;
 
+    /**
+     * The stopping record's partition. Recorded alongside the topic and offset because together they are enough to
+     * find the record again after a restart re-delivers it.
+     */
     private final int partition;
 
+    /**
+     * The stopping record's offset. It was deliberately left uncommitted, so this is also where processing resumes.
+     */
     private final long offset;
 
+    /**
+     * What the route said when it asked, kept verbatim: it is the only account of the stop that reaches an operator.
+     */
     private final String reason;
 
+    /**
+     * When the request was made, not when the instance finished closing. The close that follows takes as long as the
+     * declared {@link ClosePath} needs, and the two moments are worth telling apart.
+     */
     private final Instant requestedAt;
 
+    /**
+     * Package-private: a stop request is minted only by dispatch, from the record whose route asked. The record's
+     * types are wildcards because the facade's engine-facing side sees raw bytes (KTD2), and nothing here needs them.
+     */
     StopRequest(ConsumerRecord<?, ?> record, String reason, Instant requestedAt) {
         this.topic = record.topic();
         this.partition = record.partition();
@@ -42,10 +64,16 @@ public final class StopRequest {
         this.requestedAt = requestedAt;
     }
 
+    /**
+     * The topic of the record that asked - which also names the route, since one topic has one function.
+     */
     public String topic() {
         return topic;
     }
 
+    /**
+     * The partition of the record that asked. With {@link #topic()} and {@link #offset()} it locates the record.
+     */
     public int partition() {
         return partition;
     }
@@ -66,10 +94,18 @@ public final class StopRequest {
         return reason;
     }
 
+    /**
+     * When the request was made. Read against the moment {@link ConsumerHandle#awaitShutdown()} returned, it says how
+     * long the declared {@link ClosePath} took.
+     */
     public Instant requestedAt() {
         return requestedAt;
     }
 
+    /**
+     * One line naming the record, the moment and the reason - what a shutdown log wants, without a caller having to
+     * assemble it from five accessors.
+     */
     @Override
     public String toString() {
         return "StopRequest(" + topic + "-" + partition + "@" + offset + ", at=" + requestedAt + ", " + reason + ")";

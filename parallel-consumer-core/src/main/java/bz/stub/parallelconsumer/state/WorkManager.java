@@ -419,6 +419,24 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return pm.getNumberOfIncompleteOffsets();
     }
 
+    /**
+     * Every record this instance is holding <b>parked</b> - see
+     * {@link ShardManager#getParkedWorkContainers(boolean)}, which owns the contract and the reasoning, including
+     * why the revoked filter is the caller's to ask for.
+     * <p>
+     * Here so that a caller outside {@code state} asks the work manager, the way it already asks for
+     * {@link #getNumberOfIncompleteOffsets()}, rather than reaching through {@code getSm()} into a collaborator
+     * that is public only because nothing has finished making it private (the {@code TODO(refactor)} beside the
+     * field says so). A reach-through reads as though the shard manager were part of this class's surface, and
+     * every one written makes narrowing it later more expensive.
+     *
+     * @param excludingRevoked as {@link ShardManager#getParkedWorkContainers(boolean)}: true while the instance is
+     *                         still consuming, false once it has stopped and the set is a report of the run
+     */
+    public List<WorkContainer<?, ?>> getParkedWorkContainers(boolean excludingRevoked) {
+        return sm.getParkedWorkContainers(excludingRevoked);
+    }
+
     public Map<TopicPartition, OffsetAndMetadata> collectCommitDataForDirtyPartitions() {
         return pm.collectDirtyCommitData();
     }

@@ -35,28 +35,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * it.
  */
 @Timeout(60)
-class RawBytesConsumerFaultDispatchTest {
-
-    private static final String TOPIC = "orders";
+class RawBytesConsumerFaultDispatchTest extends AbstractFluentEngineTest {
 
     private final LongPollingMockConsumer<String, String> stringConsumer =
             new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST);
-
-    private ConsumerHandle handle;
-
-    @AfterEach
-    void closeTheInstance() {
-        if (handle != null) {
-            RecordingClientRuntime.closeWithoutDraining(handle);
-        }
-    }
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "raw-bytes-fault-dispatch-test");
-        return properties;
-    }
 
     /**
      * The erasure that makes this undetectable is the same erasure that lets a test express it: a
