@@ -378,7 +378,24 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * The instance default for the export percentage a route's park policy may override (R6, R27).
+     * How full the offset payload may get before the oldest parked records are exported to the dead-letter topic to
+     * make room. This is the instance default a route's own park policy may override (R6, R27).
+     *
+     * <h2>What the offset payload is</h2>
+     * Committing progress as a single number - "everything up to offset N is done" - cannot describe a partition
+     * where record 100 is parked while records 101 to 400 have all succeeded. So this library commits two things:
+     * the ordinary committed offset, held back at the oldest record still incomplete, and beside it, in the small
+     * metadata field every Kafka commit carries, a compact encoded map marking which records past that offset are
+     * still incomplete. That map is the <em>offset payload</em>. It is what lets processing run on ahead of a record
+     * that is stuck, without either losing the work done past it or re-delivering all of it after a restart.
+     * <p>
+     * Kafka caps how large that metadata field may be, and every parked record is one more thing the map must
+     * carry - a parked record is precisely a record the committed offset cannot move past. So the more records park
+     * on a partition, the closer its map comes to the cap, and a partition that reaches the cap can take on no new
+     * work at all. This setting is the release valve: at the given percentage of the cap, the partition's
+     * oldest-parked records are copied to the declared dead-letter topic and completed, which shortens the map
+     * again. A higher percentage leaves records parked for longer and leaves less headroom; a lower one exports
+     * sooner and keeps more.
      * <p>
      * <b>Refused in this version</b>, at validation, along with a percentage on any route: the accessor it reads -
      * a partition's encoded payload length - does not exist in the engine yet, so an explicit percentage would be a

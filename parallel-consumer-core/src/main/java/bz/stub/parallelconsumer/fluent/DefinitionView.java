@@ -14,11 +14,21 @@ import java.util.Set;
 
 /**
  * A validated definition as a reader sees it - the argument the runtime seam is handed (KTD9).
- * <p>
- * It is enough for an implementation of {@link ClientRuntime} to build or fake the clients the definition needs:
- * which topics to subscribe to, what each route consumes and produces, the ordering and the commit mode, and whether
- * a producer is needed at all. It carries no way to change the definition, and it is only ever handed out after
- * validation has passed, so a reader never sees a definition that was going to be refused.
+ *
+ * <h2>What a definition is</h2>
+ * A <em>definition</em> is the complete description of one consumer, assembled by the fluent calls and then fixed:
+ * the connection properties it will use, every route declared on it - each with its topics, its consumed and
+ * produced formats and its processing function - the policy each of those routes carries, and the instance-wide
+ * defaults a route falls back to when it declares none of its own. It describes; it does not run. Starting a
+ * definition is what produces a running instance, and the same definition can start more than one.
+ *
+ * <h2>What the view is</h2>
+ * This interface is what a <em>runtime</em> - the real Kafka clients, a broker-free sandbox, a test - may read of a
+ * definition. It is enough for an implementation of {@link ClientRuntime} to build or fake the clients that
+ * definition needs: which topics to subscribe to, what each route consumes and produces, the ordering and the
+ * commit mode, and whether a producer is needed at all. It carries no way to change the definition, and it is
+ * only ever handed out after validation has passed, so a reader never sees a definition that was going to be
+ * refused.
  */
 @InterfaceStability.Unstable
 public interface DefinitionView {
