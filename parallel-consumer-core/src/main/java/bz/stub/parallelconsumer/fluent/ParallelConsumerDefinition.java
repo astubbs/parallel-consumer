@@ -124,8 +124,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
 
     private AfterRetries defaultAfterRetries;
 
-    private CircuitBreakerPolicy defaultCircuitBreaker;
-
     private ParkObserver<?, ?> defaultParkObserver;
 
     private Integer instancePayloadPercentage;
@@ -297,14 +295,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      */
     public ParallelConsumerDefinition defaultAfterRetries(AfterRetries policy) {
         this.defaultAfterRetries = Objects.requireNonNull(policy, "An after-retries policy must be supplied");
-        return this;
-    }
-
-    /**
-     * The breaker every route copies. No breaker state is shared between routes (R29).
-     */
-    public ParallelConsumerDefinition defaultCircuitBreaker(CircuitBreakerPolicy policy) {
-        this.defaultCircuitBreaker = Objects.requireNonNull(policy, "A circuit breaker policy must be supplied");
         return this;
     }
 
@@ -949,10 +939,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
 
     AfterRetries defaultAfterRetriesValue() {
         return defaultAfterRetries;
-    }
-
-    CircuitBreakerPolicy defaultCircuitBreakerValue() {
-        return defaultCircuitBreaker;
     }
 
     ParkObserver<?, ?> defaultParkObserverValue() {

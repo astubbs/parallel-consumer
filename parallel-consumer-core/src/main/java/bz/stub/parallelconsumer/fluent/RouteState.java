@@ -53,8 +53,6 @@ class RouteState implements RouteView {
 
     private AfterRetries ownAfterRetries;
 
-    private CircuitBreakerPolicy ownCircuitBreaker;
-
     private ParkObserver<?, ?> ownParkObserver;
 
     private boolean resolved;
@@ -66,8 +64,6 @@ class RouteState implements RouteView {
     private int resolvedConcurrency;
 
     private AfterRetries resolvedAfterRetries;
-
-    private CircuitBreakerPolicy resolvedCircuitBreaker;
 
     private ParkObserver<?, ?> resolvedParkObserver;
 
@@ -93,9 +89,6 @@ class RouteState implements RouteView {
         resolvedConcurrency = ownConcurrency != null ? ownConcurrency : owner.defaultConcurrencyValue();
         AfterRetries afterRetries = ownAfterRetries != null ? ownAfterRetries : owner.defaultAfterRetriesValue();
         resolvedAfterRetries = afterRetries == null ? AfterRetries.park() : afterRetries.copy();
-        CircuitBreakerPolicy breaker =
-                ownCircuitBreaker != null ? ownCircuitBreaker : owner.defaultCircuitBreakerValue();
-        resolvedCircuitBreaker = breaker == null ? null : breaker.copy();
         // Not copied: an observer is the user's own object, and there is nothing about it a route could override
         // part of. It is wired like every other setting - the route's own, or the instance default (R6, R16).
         resolvedParkObserver = ownParkObserver != null ? ownParkObserver : owner.defaultParkObserverValue();
@@ -165,12 +158,6 @@ class RouteState implements RouteView {
         return resolvedAfterRetries;
     }
 
-    @Override
-    public CircuitBreakerPolicy circuitBreaker() {
-        resolveDefaults();
-        return resolvedCircuitBreaker;
-    }
-
     ProcessFunction<?, ?, ?, ?> function() {
         return function;
     }
@@ -236,11 +223,6 @@ class RouteState implements RouteView {
 
     void ownAfterRetries(AfterRetries policy) {
         this.ownAfterRetries = policy;
-        invalidateResolution();
-    }
-
-    void ownCircuitBreaker(CircuitBreakerPolicy policy) {
-        this.ownCircuitBreaker = policy;
         invalidateResolution();
     }
 

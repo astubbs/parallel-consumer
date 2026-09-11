@@ -118,14 +118,12 @@ class RouteTypingAndDefaultsTest {
 
     @Test
     void everyPerRouteSettingIsACopyOfTheInstanceDefault() {
-        var breaker = CircuitBreakerPolicy.failureRate(0.5).over(100).openFor(Duration.ofSeconds(30));
         var afterRetries = AfterRetries.park();
         var pc = define()
                 .defaultRetryLimit(7)
                 .defaultRetryDelay(Duration.ofSeconds(3))
                 .defaultConcurrency(9)
-                .defaultAfterRetries(afterRetries)
-                .defaultCircuitBreaker(breaker);
+                .defaultAfterRetries(afterRetries);
         pc.string("orders").process(context -> Outcome.succeeded());
         pc.string("audit").process(context -> Outcome.succeeded());
 
@@ -135,12 +133,10 @@ class RouteTypingAndDefaultsTest {
             assertThat(route.retryDelay()).isEqualTo(Duration.ofSeconds(3));
             assertThat(route.concurrency()).isEqualTo(9);
             assertThat(route.afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.PARK);
-            assertThat(route.circuitBreaker().failureRate()).isEqualTo(0.5);
         }
         // A copy, not the instance's own object: a route editing part of a policy must not edit every other route's.
         assertThat(pc.route("orders").afterRetries()).isNotSameInstanceAs(afterRetries);
         assertThat(pc.route("orders").afterRetries()).isNotSameInstanceAs(pc.route("audit").afterRetries());
-        assertThat(pc.route("orders").circuitBreaker()).isNotSameInstanceAs(breaker);
     }
 
     /**

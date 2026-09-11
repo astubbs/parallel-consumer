@@ -65,8 +65,4 @@ public interface RouteView {
      */
     AfterRetries afterRetries();
 
-    /**
-     * @return null when no breaker was declared on the route or as the instance default
-     */
-    CircuitBreakerPolicy circuitBreaker();
 }

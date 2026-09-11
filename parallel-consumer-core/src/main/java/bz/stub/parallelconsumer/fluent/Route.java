@@ -144,14 +144,6 @@ public final class Route<K, V, PK, PV> {
     }
 
     /**
-     * A breaker for this route alone: no breaker state is shared between routes (R29).
-     */
-    public Route<K, V, PK, PV> circuitBreaker(CircuitBreakerPolicy policy) {
-        state.ownCircuitBreaker(Objects.requireNonNull(policy, "A circuit breaker policy must be supplied"));
-        return this;
-    }
-
-    /**
      * Refused: ordering is the instance default in this version.
      * <p>
      * Per-route ordering needs a change at the engine's shard-key seam - the shard key and the shard's head check -
