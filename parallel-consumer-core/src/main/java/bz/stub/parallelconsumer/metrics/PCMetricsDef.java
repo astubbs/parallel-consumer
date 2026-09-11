@@ -56,6 +56,8 @@ public enum PCMetricsDef {
     PARTITION_HIGHEST_SEEN_OFFSET("partition.highest.seen.offset", "Highest seen / consumed offset in the partition", PCMetricsSubsystem.PARTITION_MANAGER, GAUGE, topicPartitionTags()),
     PARTITION_LAST_COMMITTED_OFFSET("partition.latest.committed.offset", "Latest committed offset in the partition", PCMetricsSubsystem.PARTITION_MANAGER, GAUGE, topicPartitionTags()),
     PARTITION_ASSIGNMENT_EPOCH("partition.assignment.epoch", "Epoch of partition assignment", PCMetricsSubsystem.PARTITION_MANAGER, GAUGE, topicPartitionTags()),
+    PARTITION_PARKED_RECORDS("partition.parked.records", "Number of records parked in place right now on this partition - the live size of the set an operator can act on, which is not a count of park events", PCMetricsSubsystem.PARTITION_MANAGER, GAUGE, topicPartitionTags()),
+    PARTITION_PARKED_OLDEST_AGE("partition.parked.oldest.age", "Age in seconds of the oldest record parked on this partition, or zero when none is parked", PCMetricsSubsystem.PARTITION_MANAGER, GAUGE, topicPartitionTags()),
 
 
     OFFSETS_ENCODING_TIME("offsets.encoding.time", "Time spend encoding offsets", PCMetricsSubsystem.OFFSET_ENCODER, TIMER),

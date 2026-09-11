@@ -132,6 +132,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
 
+    /**
+     * Completes when the control thread has ended, and is the thing to WAIT on for that - see
+     * {@link #controlThreadCompletion()}, which hands it out and owns the contract.
+     * <p>
+     * A second view of the same event as {@link #controlThreadFuture}, not a second event: both are written by the
+     * one control task, on its way out, and this one exists because the submitted {@link Future} cannot be
+     * composed. A caller that wants "whichever of these two happens first" - a close through some other handle, or
+     * the control thread dying on its own - otherwise has no option but to poll, which is exactly what the fluent
+     * API's {@code ConsumerHandle.awaitShutdown} was doing at 200ms.
+     * <p>
+     * {@code final}, and {@link CompletableFuture} is itself thread-safe, so there is no lock to name and no
+     * {@code @GuardedBy} to write: completion is a single atomic transition, whichever thread reaches it, and
+     * every later attempt is a no-op by construction.
+     */
+    private final CompletableFuture<Void> controlThreadCompletion = new CompletableFuture<>();
+
     // todo make package level
     @Getter(AccessLevel.PUBLIC)
     protected WorkManager<K, V> wm;
@@ -330,6 +346,42 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     public Exception getFailureCause() {
         return this.failureReason;
+    }
+
+    /**
+     * The instance's completion, to wait on instead of polling {@link #isClosedOrFailed()}.
+     * <p>
+     * <b>What completes it: the control thread ending, however it ended.</b> That covers a close the caller asked
+     * for, a close performed from anywhere else, and a control thread that died on its own. A control thread that
+     * threw completes it <em>exceptionally</em>, with the same throwable the submitted control-task
+     * {@link Future} carries - which for a control-loop failure is the {@code failureReason} this class wraps
+     * around the cause, so a caller reading {@link Throwable#getCause()} reaches what actually killed the
+     * consumer.
+     * <p>
+     * <b>What does NOT complete it, and these are the confusions worth stating.</b> A throw from a user's function
+     * does not: that is one record failing, the instance goes on, and the outcome is the record's. Pausing does
+     * not - a paused instance's control thread is still running and is expected to resume. Neither does the
+     * instance merely reaching {@code CLOSED} state ahead of the thread's own exit, which is the gap
+     * {@link #isClosedOrFailed()} deliberately covers from the other side by asking the state as well.
+     * <p>
+     * <b>It never completes for an instance that was never started</b>, because there is no control thread to end.
+     * Wait on it only for an instance a {@code poll*} call has returned from; a submission the executor refused
+     * completes it exceptionally rather than leaving a waiter hanging, which is the one case a caller could not
+     * otherwise distinguish.
+     * <p>
+     * <b>This is the instance's own future, not a copy, and a caller must not complete or cancel it.</b> The two
+     * Java APIs for handing out a detached view - {@code copy()} and {@code minimalCompletionStage()} - are both
+     * Java 9, and this module compiles against {@code --release 8}; building one by hand costs an allocation and a
+     * retained dependent per call for a hazard nobody in this repository has. Completing it would not corrupt any
+     * engine state - nothing here reads it back, and {@link #isClosedOrFailed()} answers from the state and the
+     * control task's own {@link Future} - it would only tell every other waiter the instance ended when it had
+     * not. So the rule is a contract rather than a guard, and it is stated here rather than assumed.
+     *
+     * @return a future completing when the control thread ends, exceptionally if it ended by throwing
+     * @see #isClosedOrFailed() for the same question asked without waiting
+     */
+    public CompletableFuture<Void> controlThreadCompletion() {
+        return controlThreadCompletion;
     }
 
     /**
@@ -1595,22 +1647,43 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         // run main pool loop in thread
         Callable<Boolean> controlTask = () -> {
-            mdcPropagation.adopt(callersDiagnosticContext);
-            addInstanceMDC();
-            log.info("Control loop starting up...");
-            Thread controlThread = Thread.currentThread();
-            controlThread.setName(CONTROL_THREAD);
-            this.getMyId().ifPresent(id -> controlThread.setName(CONTROL_THREAD + "-" + id));
-            this.blockableControlThread = controlThread;
+            // The WHOLE body is inside this try, not just the loop: everything above the loop is setup that can
+            // throw (the MDC adoption runs the caller's logging binding), and a control thread that died during
+            // setup ended just as finally as one that died in the loop. A waiter told nothing about it would hang.
             try {
-                runControlLoopUntilClosed(userFunctionWrapped, callback);
-            } finally {
-                failPendingRevokeCommitOnControlThreadExit();
+                mdcPropagation.adopt(callersDiagnosticContext);
+                addInstanceMDC();
+                log.info("Control loop starting up...");
+                Thread controlThread = Thread.currentThread();
+                controlThread.setName(CONTROL_THREAD);
+                this.getMyId().ifPresent(id -> controlThread.setName(CONTROL_THREAD + "-" + id));
+                this.blockableControlThread = controlThread;
+                try {
+                    runControlLoopUntilClosed(userFunctionWrapped, callback);
+                } finally {
+                    failPendingRevokeCommitOnControlThreadExit();
+                }
+            } catch (Throwable controlThreadFailure) {
+                // Armed BEFORE the rethrow, so a waiter released by this completion already has the cause; the
+                // submitted future carries the same throwable, and the two must not disagree about why it ended.
+                // false would mean something completed it first, which nothing does - the only writers are here.
+                boolean ignoredWasFirstToComplete = controlThreadCompletion.completeExceptionally(controlThreadFailure);
+                throw controlThreadFailure;
             }
             log.info("Control loop ending clean (state:{})...", state);
+            boolean ignoredWasFirstToComplete = controlThreadCompletion.complete(null);
             return true;
         };
-        Future<Boolean> controlTaskFutureResult = executorService.submit(controlTask);
+        Future<Boolean> controlTaskFutureResult;
+        try {
+            controlTaskFutureResult = executorService.submit(controlTask);
+        } catch (RuntimeException submissionRefused) {
+            // A refused submission means the control thread will never run, so it will never end and nothing else
+            // would ever complete the future. The caller of poll* sees the throw either way; a waiter that got hold
+            // of the completion first would otherwise wait for a thread that does not exist.
+            boolean ignoredWasFirstToComplete = controlThreadCompletion.completeExceptionally(submissionRefused);
+            throw submissionRefused;
+        }
         this.controlThreadFuture = Optional.of(controlTaskFutureResult);
     }
 
