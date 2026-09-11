@@ -50,16 +50,6 @@ public final class Format<T> implements Serde<T> {
     }
 
     /**
-     * A format that can only read, naming the Java type it reads into.
-     *
-     * @see #type()
-     */
-    public static <T> Format<T> reading(Deserializer<T> deserializer, Class<T> type) {
-        Objects.requireNonNull(deserializer, "A deserializer must be supplied");
-        return new Format<>(deserializer, null, deserializer.getClass().getSimpleName(), type);
-    }
-
-    /**
      * A format that can only write - the produced side of a route whose values nothing here needs to read back.
      */
     public static <T> Format<T> writing(Serializer<T> serializer) {
@@ -98,10 +88,6 @@ public final class Format<T> implements Serde<T> {
         }
         Objects.requireNonNull(serde, "A serde must be supplied");
         return new Format<>(serde.deserializer(), serde.serializer(), serde.getClass().getSimpleName(), null);
-    }
-
-    static <T> Format<T> named(Deserializer<T> deserializer, Serializer<T> serializer, String description) {
-        return new Format<>(deserializer, serializer, description, null);
     }
 
     static <T> Format<T> named(Deserializer<T> deserializer,

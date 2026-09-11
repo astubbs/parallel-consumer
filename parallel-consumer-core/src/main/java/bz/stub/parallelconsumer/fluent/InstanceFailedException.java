@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ParallelConsumerException;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 /**
@@ -15,7 +16,7 @@ import org.apache.kafka.common.annotation.InterfaceStability;
  * definition fault, which is the facade's own and is rethrown as it was thrown (KTD3).
  */
 @InterfaceStability.Unstable
-public class InstanceFailedException extends RuntimeException {
+public class InstanceFailedException extends ParallelConsumerException {
 
     private static final long serialVersionUID = 1L;
 

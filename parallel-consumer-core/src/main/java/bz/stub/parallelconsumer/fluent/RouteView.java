@@ -4,7 +4,6 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Duration;
@@ -54,11 +53,6 @@ public interface RouteView {
      * This route's admission target: routes do not compete for one shared limit (R23, KD6).
      */
     int concurrency();
-
-    /**
-     * Instance-wide in this tier - per-route ordering is an engine change on the shard-key seam (R6).
-     */
-    ProcessingOrder ordering();
 
     /**
      * What happens once a record on this route runs out of attempts (R27).

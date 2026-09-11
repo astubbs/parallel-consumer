@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ParallelConsumerException;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 /**
@@ -14,7 +15,7 @@ import org.apache.kafka.common.annotation.InterfaceStability;
  * transient by default, because a stock deserialiser cannot tell a corrupt payload from a registry outage.
  */
 @InterfaceStability.Unstable
-public class PermanentDecodeFailureException extends RuntimeException {
+public class PermanentDecodeFailureException extends ParallelConsumerException {
 
     private static final long serialVersionUID = 1L;
 

@@ -4,8 +4,6 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-
 import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -41,11 +39,12 @@ class RouteState implements RouteView {
     private ProcessFunction<?, ?, ?, ?> function;
 
     /**
-     * Null means "not declared on this route": take the definition's default.
+     * This route's own retry limit, as a tri-state that cannot be set inconsistently: <b>null</b> means the route
+     * declared none and takes the definition's default, <b>empty</b> means it declared retries unbounded, and a
+     * present value is the limit it declared. It was two fields - an {@code Integer} limit and an
+     * {@code ownUnboundedRetries} flag - whose agreement was maintained by hand in the two setters below.
      */
-    private Integer ownRetryLimit;
-
-    private boolean ownUnboundedRetries;
+    private OptionalInt ownRetryLimit;
 
     private Duration ownRetryDelay;
 
@@ -55,7 +54,15 @@ class RouteState implements RouteView {
 
     private ParkObserver<?, ?> ownParkObserver;
 
-    private boolean resolved;
+    /**
+     * Whether {@link #resolveDefaults()} has run. <b>Volatile, and it is the publication edge for every
+     * {@code resolved*} field below</b>: resolveDefaults writes them all and then writes this flag last, and every
+     * reader tests this flag before reading them, so the volatile write/read pair is what makes those plain fields
+     * visible to the worker threads that read a route's policy once per failed record. Without it the only edge
+     * was the engine's thread-start, inherited from the definition being validated on the thread that then starts
+     * the engine - true today, stated nowhere, and lost the moment anything resolves later than that.
+     */
+    private volatile boolean resolved;
 
     private OptionalInt resolvedRetryLimit;
 
@@ -82,9 +89,7 @@ class RouteState implements RouteView {
         if (resolved) {
             return;
         }
-        resolvedRetryLimit = ownUnboundedRetries
-                ? OptionalInt.empty()
-                : ownRetryLimit != null ? OptionalInt.of(ownRetryLimit) : owner.defaultRetryLimitValue();
+        resolvedRetryLimit = ownRetryLimit != null ? ownRetryLimit : owner.defaultRetryLimitValue();
         resolvedRetryDelay = ownRetryDelay != null ? ownRetryDelay : owner.defaultRetryDelayValue();
         resolvedConcurrency = ownConcurrency != null ? ownConcurrency : owner.defaultConcurrencyValue();
         AfterRetries afterRetries = ownAfterRetries != null ? ownAfterRetries : owner.defaultAfterRetriesValue();
@@ -92,6 +97,7 @@ class RouteState implements RouteView {
         // Not copied: an observer is the user's own object, and there is nothing about it a route could override
         // part of. It is wired like every other setting - the route's own, or the instance default (R6, R16).
         resolvedParkObserver = ownParkObserver != null ? ownParkObserver : owner.defaultParkObserverValue();
+        // Last, and volatile: everything above is published by this write. See the field.
         resolved = true;
     }
 
@@ -148,11 +154,6 @@ class RouteState implements RouteView {
     }
 
     @Override
-    public ProcessingOrder ordering() {
-        return owner.defaultOrderingValue();
-    }
-
-    @Override
     public AfterRetries afterRetries() {
         resolveDefaults();
         return resolvedAfterRetries;
@@ -182,6 +183,15 @@ class RouteState implements RouteView {
      * The topics, rendered for a validation message that must name the offending route.
      */
     String describeTopics() {
+        return describeTopics(topics);
+    }
+
+    /**
+     * The same rendering for a caller that holds a route's topics without holding the route - {@link RouteHandle},
+     * which is handed only the set. One owner, because the two spellings of it must name a route identically:
+     * a refusal and a handle's {@code toString} are read side by side.
+     */
+    static String describeTopics(Set<String> topics) {
         return topics.size() == 1 ? topics.iterator().next() : topics.toString();
     }
 
@@ -200,14 +210,12 @@ class RouteState implements RouteView {
     }
 
     void ownRetryLimit(int limit) {
-        this.ownRetryLimit = limit;
-        this.ownUnboundedRetries = false;
+        this.ownRetryLimit = OptionalInt.of(limit);
         invalidateResolution();
     }
 
     void ownUnboundedRetries() {
-        this.ownRetryLimit = null;
-        this.ownUnboundedRetries = true;
+        this.ownRetryLimit = OptionalInt.empty();
         invalidateResolution();
     }
 

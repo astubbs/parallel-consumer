@@ -20,6 +20,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.annotation.InterfaceStability;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -36,6 +37,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.isBlank;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
@@ -76,24 +78,22 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * Connection properties the facade owns, so they are not passed on to a route's deserialisers: the two that
      * address the cluster, and the client serialisers, which the facade sets to raw bytes itself (KTD7).
      */
-    private static final Set<String> FACADE_OWNED_PROPERTIES = Collections.unmodifiableSet(new LinkedHashSet<>(
-            java.util.Arrays.asList(
-                    ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
-                    ConsumerConfig.GROUP_ID_CONFIG,
-                    ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
-                    ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG)));
+    private static final Set<String> FACADE_OWNED_PROPERTIES = UniSets.of(
+            ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
+            ConsumerConfig.GROUP_ID_CONFIG,
+            ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+            ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG);
 
     /**
      * Producer-side keys that mean nothing to a producer and would only log an unknown-configuration warning.
      */
-    private static final Set<String> CONSUMER_ONLY_PROPERTIES = Collections.unmodifiableSet(new LinkedHashSet<>(
-            java.util.Arrays.asList(
-                    ConsumerConfig.GROUP_ID_CONFIG,
-                    ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,
-                    ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
-                    ConsumerConfig.ISOLATION_LEVEL_CONFIG,
-                    ConsumerConfig.MAX_POLL_RECORDS_CONFIG,
-                    ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG)));
+    private static final Set<String> CONSUMER_ONLY_PROPERTIES = UniSets.of(
+            ConsumerConfig.GROUP_ID_CONFIG,
+            ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,
+            ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
+            ConsumerConfig.ISOLATION_LEVEL_CONFIG,
+            ConsumerConfig.MAX_POLL_RECORDS_CONFIG,
+            ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG);
 
     private final Map<String, Object> properties;
 
@@ -454,7 +454,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             throw new IllegalArgumentException("A route must name at least one topic");
         }
         for (String topic : topics) {
-            if (topic == null || topic.trim().isEmpty()) {
+            if (isBlank(topic)) {
                 throw new IllegalArgumentException("A topic name must not be blank");
             }
             RouteState existing = routesByTopic.get(topic);
@@ -578,14 +578,14 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
 
     private void validatePolicy() {
         if (instancePayloadPercentage != null) {
-            throw refusedPercentage("dlqWhenOffsetPayloadReaches", instancePayloadPercentage, null);
+            throw refusedPercentage(instancePayloadPercentage, null);
         }
         for (RouteState route : routes) {
             AfterRetries policy = route.afterRetries();
             String topic = route.describeTopics();
             refuseHalfAParkCycle(policy, topic);
             if (policy.payloadPercentage().isPresent()) {
-                throw refusedPercentage("dlqWhenOffsetPayloadReaches", policy.payloadPercentage().getAsInt(), topic);
+                throw refusedPercentage(policy.payloadPercentage().getAsInt(), topic);
             }
             if (policy.destination() == null) {
                 if (policy.isDlqImmediately()) {
@@ -652,7 +652,10 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * One refusal covering both halves of R27's rule: no explicit percentage is accepted in this version at all, and
      * a value above the ceiling would never be reached even when they are.
      */
-    private IllegalArgumentException refusedPercentage(String setting, int percentage, String topic) {
+    private IllegalArgumentException refusedPercentage(int percentage, String topic) {
+        // Named once rather than passed in: both call sites are this one setting, and the message has to keep
+        // matching the method a user actually wrote.
+        String setting = "dlqWhenOffsetPayloadReaches";
         String where = topic == null ? "the definition" : "topic " + topic;
         String ceiling = percentage > AfterRetries.MAX_PAYLOAD_PERCENTAGE
                 ? msg(" It is also above the ceiling of {}: the engine stops a partition taking work at {}% of the "

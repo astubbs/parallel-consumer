@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ParallelConsumerException;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.common.annotation.InterfaceStability;
 import org.apache.kafka.common.serialization.Deserializer;
@@ -38,7 +39,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * calls when a cast fails.
  */
 @InterfaceStability.Unstable
-public class RawBytesConsumerFaultException extends RuntimeException {
+public class RawBytesConsumerFaultException extends ParallelConsumerException {
 
     private static final long serialVersionUID = 1L;
 

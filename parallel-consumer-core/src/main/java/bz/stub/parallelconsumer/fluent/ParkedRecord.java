@@ -7,7 +7,6 @@ package bz.stub.parallelconsumer.fluent;
 import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.RecordContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Instant;
@@ -57,10 +56,6 @@ public final class ParkedRecord {
 
     public long offset() {
         return engineContext.offset();
-    }
-
-    TopicPartition topicPartition() {
-        return new TopicPartition(topic(), partition());
     }
 
     /**

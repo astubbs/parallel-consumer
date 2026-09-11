@@ -41,11 +41,11 @@ public final class RouteHandle {
      * This route's parked records, across every partition (R28). Narrow with {@link ParkedView#partition(int)}.
      */
     public ParkedView parked() {
-        return handle.parkedView(describeTopics(), topics, null);
+        return handle.parkedView(describeTopics(), topics);
     }
 
     private String describeTopics() {
-        return topics.size() == 1 ? topics.iterator().next() : topics.toString();
+        return RouteState.describeTopics(topics);
     }
 
     @Override
