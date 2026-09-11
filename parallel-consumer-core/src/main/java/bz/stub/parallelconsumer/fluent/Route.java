@@ -197,23 +197,6 @@ public final class Route<K, V, PK, PV> {
     }
 
     /**
-     * Refused: the commit-failure policy is instance-wide, by the same line as the commit mode.
-     * <p>
-     * Not marked {@code @DoNotCall}, which Error Prone suggests for a method that always throws: the same
-     * setting must be refused on the wire form too, which has no compiler, and one message in one place is
-     * what keeps the two bindings saying the same thing (AE7).
-     *
-     * @throws IllegalArgumentException always
-     * @see #commitMode(CommitMode)
-     */
-    @SuppressWarnings("DoNotCallSuggester")
-    public Route<K, V, PK, PV> commitFailure(CommitFailurePolicy policy) {
-        throw new IllegalArgumentException(msg("commitFailure ({}) cannot be declared on topic {} - it is a property "
-                        + "of the one commit, so it is instance-wide like commitMode (KD11, R6)",
-                policy, state.describeTopics()));
-    }
-
-    /**
      * A consumed format must be able to read: a write-only {@link Format} on the consumed side is a route whose
      * records nothing could decode, and it is refused here - at the call that declared it, naming the side and the
      * topic - rather than surviving to the first record (R4).

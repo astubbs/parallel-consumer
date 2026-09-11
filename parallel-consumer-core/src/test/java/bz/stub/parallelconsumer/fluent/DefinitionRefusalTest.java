@@ -86,31 +86,6 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
     }
 
     @Test
-    void aCommitFailurePolicyOnARouteNamesTheSettingAndTheTopic() {
-        var pc = define();
-        var route = pc.string("orders");
-
-        var thrown = assertThrows(IllegalArgumentException.class,
-                () -> route.commitFailure(CommitFailurePolicy.SHUT_DOWN));
-
-        assertThat(thrown).hasMessageThat().contains("commitFailure");
-        assertThat(thrown).hasMessageThat().contains("orders");
-    }
-
-    /**
-     * The seam it needs (astubbs#352) has not landed, so the instance-wide form refuses too rather than storing a
-     * value that would silently do nothing.
-     */
-    @Test
-    void theInstanceWideCommitFailurePolicyNamesTheSeamItWaitsFor() {
-        var thrown = assertThrows(IllegalArgumentException.class,
-                () -> define().commitFailure(CommitFailurePolicy.SHUT_DOWN));
-
-        assertThat(thrown).hasMessageThat().contains("commitFailure");
-        assertThat(thrown).hasMessageThat().contains("astubbs#352");
-    }
-
-    @Test
     void perRouteOrderingNamesTheSettingTheTopicAndWhereOrderingIsDeclared() {
         var pc = define();
         var route = pc.string("orders");

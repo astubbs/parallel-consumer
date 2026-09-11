@@ -259,23 +259,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * Refused: the seam this needs has not landed.
-     * <p>
-     * Shutting down or carrying on when a commit exhausts its budget is the one other instance-wide setting, by the
-     * same line as {@link #commitMode} - it is a property of the one commit. It sits here once the commit-failure
-     * seam (astubbs#352) lands. Until then this refuses rather than storing a value that would do nothing: an
-     * accepted setting that is silently inert is worse than one that says so.
-     *
-     * @throws IllegalArgumentException always, until astubbs#352 lands
-     */
-    public ParallelConsumerDefinition commitFailure(CommitFailurePolicy policy) {
-        throw new IllegalArgumentException(msg("commitFailure ({}) cannot be declared yet - the commit-failure seam "
-                + "it needs (astubbs#352) has not landed, and a setting that is accepted and then does nothing is "
-                + "worse than one that says so. Today a commit that exhausts its budget shuts the instance down.",
-                policy));
-    }
-
-    /**
      * How this instance shuts down: whether the records already fetched are processed first (R17, R24).
      * <p>
      * Instance-wide because the stop outcome closes the instance from a thread of its own, with nobody there to
