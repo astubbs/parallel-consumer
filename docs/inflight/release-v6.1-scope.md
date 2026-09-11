@@ -22,7 +22,7 @@ Anything else that claims 6.1 gets a row here in the PR that claims it, with the
 ## Open decisions
 
 - **The bar for 6.1.** What has to be in it for it to be worth cutting, and what is allowed to slip to 6.2. Owner's call; nothing below can be sequenced until it is stated.
-- **Whether the MCP server ships inside the dashboard module or in its own module with a Java 17 floor.** The plan defers it to planning; it decides whether 6.1 carries a new module.
+- **Whether the dashboard module's bytecode floor rises to Java 17 to host an MCP SDK, or the MCP transport is implemented without one.** The MCP server and the web GUI share that module by the owner's decision; the plan defers the floor question to planning, and it decides whether 6.1 raises a shipped module's runtime floor.
 
 ## Tag-day checks
 
