@@ -732,7 +732,7 @@ For anything the helpers do not cover -- a key that is not a string, a deseriali
                         new ProducerRecord<>("dispatches", context.value().getOrderId(),
                                 Dispatch.of(context.value()))));                // <3>
 
-        pc.topics(java.util.Arrays.asList("audit", "audit-replay"))             // <4>
+        pc.topics(Arrays.asList("audit", "audit-replay"))                       // <4>
                 .process(context -> Outcome.succeeded());
 ----
 <1> Consumed types, in the shape a Kafka Streams developer already reads.
@@ -748,15 +748,14 @@ For anything the helpers do not cover -- a key that is not a string, a deseriali
 [source,java,indent=0]
 ----
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties())
-                .commitMode(bz.stub.parallelconsumer.ParallelConsumerOptions
-                        .CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)  // <1>
-                .defaultOrdering(KEY)                                // <2>
+                .commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)  // <1>
+                .defaultOrdering(KEY)                                   // <2>
                 .defaultConcurrency(100)
                 .defaultRetryLimit(10)
                 .defaultRetryDelay(Duration.ofSeconds(1));
 
         pc.json("payments", Order.class)
-                .retryLimit(3)                                       // <3>
+                .retryLimit(3)                                          // <3>
                 .concurrency(8)
                 .process(context -> Outcome.succeeded());
 ----

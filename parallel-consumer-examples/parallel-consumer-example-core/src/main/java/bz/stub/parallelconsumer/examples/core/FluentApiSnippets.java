@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.examples.core;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.fluent.Consumed;
 import bz.stub.parallelconsumer.fluent.ConsumerHandle;
 import bz.stub.parallelconsumer.fluent.Outcome;
@@ -17,6 +18,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.Serdes;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Properties;
 
@@ -35,8 +37,10 @@ import static bz.stub.parallelconsumer.fluent.Formats.json;
  * examples silently going stale. If a name on the fluent API changes, this fails to compile instead of the README
  * quietly starting to lie. It is the same arrangement {@link CoreApp} has for the classic API's examples.
  * <p>
- * What actually <em>runs</em> is {@link FluentQuickstartApp}, against a broker in core's integration suite.
- * Anything here that has to be proved rather than merely shown belongs there instead.
+ * These regions are <em>shown</em>, not run - and neither is {@link FluentQuickstartApp}, whose own note says why.
+ * What runs against a broker is core's {@code FluentQuickstartIT}, which re-states the quickstart's shape in the
+ * types core can read without depending on this module. Anything here that has to be proved rather than merely
+ * shown belongs there instead.
  */
 @Slf4j
 @SuppressWarnings({"unused", "MagicNumber"})
@@ -68,7 +72,7 @@ public class FluentApiSnippets {
                         new ProducerRecord<>("dispatches", context.value().getOrderId(),
                                 Dispatch.of(context.value()))));                // <3>
 
-        pc.topics(java.util.Arrays.asList("audit", "audit-replay"))             // <4>
+        pc.topics(Arrays.asList("audit", "audit-replay"))                       // <4>
                 .process(context -> Outcome.succeeded());
         // end::fluentRouteForm[]
     }
@@ -79,15 +83,14 @@ public class FluentApiSnippets {
     void instanceAndRouteSettings() {
         // tag::fluentSettings[]
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties())
-                .commitMode(bz.stub.parallelconsumer.ParallelConsumerOptions
-                        .CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)  // <1>
-                .defaultOrdering(KEY)                                // <2>
+                .commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)  // <1>
+                .defaultOrdering(KEY)                                   // <2>
                 .defaultConcurrency(100)
                 .defaultRetryLimit(10)
                 .defaultRetryDelay(Duration.ofSeconds(1));
 
         pc.json("payments", Order.class)
-                .retryLimit(3)                                       // <3>
+                .retryLimit(3)                                          // <3>
                 .concurrency(8)
                 .process(context -> Outcome.succeeded());
         // end::fluentSettings[]
