@@ -399,6 +399,24 @@ class RouteState implements RouteView {
     }
 
     /**
+     * Whether this route declared an after-retries policy of its own, as against inheriting the instance default.
+     * Validation needs the distinction that {@link #afterRetries()} deliberately erases: a policy that can never
+     * fire is a mistake when this route wrote it, and merely an unused default when it did not (R6, R27).
+     */
+    boolean declaresOwnAfterRetries() {
+        return ownAfterRetries != null;
+    }
+
+    /**
+     * Whether this route declared a retry limit of its own, in either form - a bound or unbounded. Validation
+     * reads it only to say <em>where</em> a route's unbounded retries were declared, so that a refusal points at
+     * the call the author actually wrote rather than at the one they inherited.
+     */
+    boolean declaresOwnRetryLimit() {
+        return ownRetryLimit != null;
+    }
+
+    /**
      * Declares this route's own park observer (R16). Never copied - it is the user's object, and there is no part
      * of it a route could override.
      */

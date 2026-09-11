@@ -396,4 +396,125 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
         assertThat(thrown).hasMessageThat().contains("forCycles");
         assertThat(thrown).hasMessageThat().contains("at least one");
     }
+
+    // ---------------------------------------------------------------- retry-forever leaves nothing to react to
+
+    /**
+     * The owner's question on astubbs/parallel-consumer#502: what happens when retry-forever meets an
+     * after-retries policy? Nothing did - exhaustion is the only thing that consults a policy, and a record that
+     * retries forever never exhausts, so the reaction, the park cycles and the export triggers were all inert and
+     * the definition said nothing. Either half may be declared at either scope, so all four pairings are covered
+     * here, in both reactions.
+     */
+    @Test
+    void theInstanceDefaultPolicyIsRefusedBesideTheInstanceDefaultRetryForever() {
+        var definition = define().defaultRetryForever().defaultAfterRetries(park());
+        definition.string("orders").process(context -> Outcome.succeeded());
+
+        var thrown = refusal(definition);
+
+        assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("defaultRetryForever()");
+        assertThat(thrown).hasMessageThat().contains("defaultAfterRetries(...)");
+        assertThat(thrown).hasMessageThat().contains("nothing to react to");
+    }
+
+    /**
+     * The stopping reaction is inert on exactly the same terms, which is why the refusal never mentions which
+     * reaction was declared: it is the consulting that never happens, not the reacting.
+     */
+    @Test
+    void theStoppingReactionIsRefusedBesideRetryForeverJustAsParkingIs() {
+        var definition = define().defaultRetryForever().defaultAfterRetries(AfterRetries.stop());
+        definition.string("orders").process(context -> Outcome.succeeded());
+
+        var thrown = refusal(definition);
+
+        assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("nothing to react to");
+    }
+
+    @Test
+    void aRoutesOwnPolicyIsRefusedBesideItsOwnRetryForever() {
+        var definition = define();
+        definition.string("orders")
+                .retryForever()
+                .afterRetries(park())
+                .process(context -> Outcome.succeeded());
+
+        var thrown = refusal(definition);
+
+        assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("retryForever()");
+        assertThat(thrown).hasMessageThat().contains("after-retries policy of its own");
+        assertThat(thrown).hasMessageThat().contains("retryLimit(...) on this route instead");
+    }
+
+    @Test
+    void aRoutesOwnStoppingPolicyIsRefusedBesideItsOwnRetryForever() {
+        var definition = define();
+        definition.string("orders")
+                .retryForever()
+                .afterRetries(AfterRetries.stop())
+                .process(context -> Outcome.succeeded());
+
+        var thrown = refusal(definition);
+
+        assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("retryForever()");
+    }
+
+    /**
+     * The two halves declared at different scopes are the same mistake, so the refusal names the scope each half
+     * came from rather than the route where they met.
+     */
+    @Test
+    void aRoutesRetryForeverIsRefusedBesideTheInstanceDefaultPolicy() {
+        var definition = define().defaultAfterRetries(park());
+        definition.string("orders").retryForever().process(context -> Outcome.succeeded());
+
+        var thrown = refusal(definition);
+
+        assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("retryForever()");
+        assertThat(thrown).hasMessageThat().contains("defaultAfterRetries(...)");
+    }
+
+    @Test
+    void aRoutesOwnPolicyIsRefusedBesideTheInstanceDefaultRetryForever() {
+        var definition = define().defaultRetryForever();
+        definition.string("orders").afterRetries(park()).process(context -> Outcome.succeeded());
+
+        var thrown = refusal(definition);
+
+        assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("defaultRetryForever()");
+        assertThat(thrown).hasMessageThat().contains("after-retries policy of its own");
+        assertThat(thrown).hasMessageThat().contains("defaultRetryLimit(...)");
+    }
+
+    /**
+     * The control arm that keeps the refusal from being over-broad. Retrying forever with no policy declared
+     * anywhere is the classic API's behaviour and stays legal: every route resolves to a parking policy, but a
+     * resolved default is not a setting anybody wrote, and refusing it would make retryForever() unusable.
+     */
+    @Test
+    void retryForeverWithNoPolicyDeclaredAnywhereIsAccepted() {
+        var definition = define().defaultRetryForever();
+        definition.string("orders").process(context -> Outcome.succeeded());
+
+        definition.buildOptions(runtime);
+    }
+
+    /**
+     * The other control arm: a definition where one route bounds its retries is a perfectly good use of a default
+     * policy, and the route that can react is the one that keeps it legal.
+     */
+    @Test
+    void aBoundedRouteKeepsTheInstanceDefaultPolicyLegalBesideDefaultRetryForever() {
+        var definition = define().defaultRetryForever().defaultAfterRetries(park());
+        definition.string("orders").retryLimit(3).process(context -> Outcome.succeeded());
+
+        definition.buildOptions(runtime);
+    }
 }

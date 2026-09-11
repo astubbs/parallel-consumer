@@ -684,6 +684,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         if (instancePayloadPercentage != null) {
             throw refusedPercentage(instancePayloadPercentage, null);
         }
+        refuseAPolicyNothingCanTrigger();
         for (RouteState route : routes) {
             AfterRetries policy = route.afterRetries();
             String topic = route.describeTopics();
@@ -721,6 +722,53 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
                         + "loop. Park in place under this commit mode, or use a consumer commit mode (R14).",
                         topic, policy.destination(), commitMode));
             }
+        }
+    }
+
+    /**
+     * An after-retries policy is the answer to "what happens when a record runs out of attempts", so retrying
+     * forever leaves it nothing to react to. Exhaustion is the only thing that consults a policy, and under
+     * unbounded retries no record ever reaches it: the reaction - park <em>and</em> stop alike - the park cycles
+     * and the export triggers all go inert together. This is not a reaction that merely never fires in practice;
+     * it is a setting the code can never read, which is the one thing this definition refuses to produce
+     * (R10, R27, AE7).
+     * <p>
+     * Checked per route and against what was actually <em>declared</em>, because either half may be declared at
+     * either scope and all four pairings are the same mistake: retryForever() on the route or
+     * defaultRetryForever() on the instance, beside an afterRetries(...) on the route or a defaultAfterRetries(...)
+     * on the instance. The refusal names the scope each half came from, so the author is pointed at the two calls
+     * they wrote rather than at the route where the two happened to meet.
+     * <p>
+     * What is not refused is retrying forever with no policy declared anywhere. Every route resolves to
+     * {@link AfterRetries#park()} when nothing is declared, and that resolved default is not a setting anybody
+     * wrote - refusing it would make retryForever() unusable, which is the opposite of the point.
+     */
+    private void refuseAPolicyNothingCanTrigger() {
+        for (RouteState route : routes) {
+            if (route.retryLimit().isPresent()) {
+                continue;
+            }
+            boolean ownPolicy = route.declaresOwnAfterRetries();
+            if (!ownPolicy && defaultAfterRetries == null) {
+                // Retrying forever with nothing declared to react: the resolved park default is not a setting.
+                continue;
+            }
+            throw new IllegalArgumentException(msg("Topic {} {}, and {} - so the policy can never fire. Running out "
+                            + "of attempts is the only thing that consults an after-retries policy, and a record "
+                            + "that retries forever never runs out, so retrying forever leaves the policy nothing "
+                            + "to react to: the reaction, the park cycles and the export triggers are all inert. "
+                            + "Declare {}, or drop the policy (R10, R27).",
+                    route.describeTopics(),
+                    route.declaresOwnRetryLimit()
+                            ? "declares retryForever()"
+                            : "retries forever, from the instance's defaultRetryForever()",
+                    ownPolicy
+                            ? "declares an after-retries policy of its own"
+                            : "takes the instance's defaultAfterRetries(...)",
+                    route.declaresOwnRetryLimit()
+                            ? "retryLimit(...) on this route instead"
+                            : "a retryLimit(...) on this route, or replace defaultRetryForever() with "
+                                    + "defaultRetryLimit(...)"));
         }
     }
 
