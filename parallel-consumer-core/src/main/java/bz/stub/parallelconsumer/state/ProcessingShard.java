@@ -257,6 +257,14 @@ public class ProcessingShard<K, V> {
         includeInSelection(failedWork);
     }
 
+    /**
+     * A delivery that never started - see {@link ShardManager#onAbandonedBeforeStarting}. The same re-inclusion a
+     * failure gets, without the retry queue, because nothing failed.
+     */
+    public void onAbandonedBeforeStarting(WorkContainer<?, ?> abandonedWork) {
+        includeInSelection(abandonedWork);
+    }
+
 
     public boolean isEmpty() {
         return workMap.isEmpty();

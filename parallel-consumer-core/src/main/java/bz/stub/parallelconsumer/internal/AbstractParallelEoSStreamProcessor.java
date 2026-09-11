@@ -35,7 +35,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Callable;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -347,6 +351,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Setter(AccessLevel.PACKAGE)
     @Getter(PROTECTED)
     private volatile State state = State.UNUSED;
+
+    /**
+     * Records the controller took back out of the worker pool's queue un-run - see
+     * {@link #purgeQueuedWorkNotAllowedToStart()}.
+     */
+    private final AtomicLong recordsPurgedWhilePaused = new AtomicLong();
 
     /**
      * Wrapped {@link ConsumerRebalanceListener} passed in by a user that we can also call on events
@@ -1350,7 +1360,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         brokerPollSubsystem.drain();
 
         log.debug("Shutting down execution pool...");
-        //Clear scheduled but not started work in execution pool
+        // Clear scheduled but not started work in execution pool.
+        //
+        // This DROPS those records - no onAbandonedBeforeStarting, so no claim released and
+        // numberRecordsOutForProcessing not decremented - and they are redelivered after a rebalance.
+        // purgeQueuedWorkNotAllowedToStart() is the path that takes them back properly instead, and on the
+        // DONT_DRAIN close it normally runs first, earlier in the same control-loop pass. It can be beaten to
+        // the queue: the state is read twice, once by the purge and once by the switch that reaches this close,
+        // and a close(DONT_DRAIN) landing BETWEEN them means the purge saw RUNNING and did nothing. One statement
+        // wide, and the outcome is the pre-existing behaviour rather than a new fault - noted here so the two
+        // sites read as a pair. See purgeQueuedWorkNotAllowedToStart(), which carries the same note from its end.
         workerThreadPool.get().getQueue().clear();
         //request graceful shutdown
         workerThreadPool.get().shutdown();
@@ -1744,6 +1763,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
         }
 
+        // Take back what may not start, before handing out more: a paused or dont-draining instance distributes
+        // nothing, so this is the only thing that moves those records, and it must happen while the loop still runs.
+        purgeQueuedWorkNotAllowedToStart();
+
         // distribute more work
         retrieveAndDistributeNewWork(userFunction, callback);
 
@@ -2044,16 +2067,19 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.trace("Sending work ({}) to pool", batch);
         // snapshot at submit time, on the controller thread - which is already running under the caller's context
         final Map<String, String> submittersDiagnosticContext = mdcPropagation.capture();
-        Future outputRecordFuture;
+        QueuedBatch<K, V> outputRecordFuture = new QueuedBatch<>(() -> {
+            // scoped, so the context is torn off the pooled thread when the batch finishes - both what we put on it
+            // and anything the user function added - rather than being inherited by the next, unrelated, batch
+            try (var mdcScope = mdcPropagation.enter(submittersDiagnosticContext)) {
+                addInstanceMDC();
+                return runUserFunction(usersFunction, callback, batch);
+            }
+        }, batch);
         try {
-            outputRecordFuture = workerThreadPool.get().submit(() -> {
-                // scoped, so the context is torn off the pooled thread when the batch finishes - both what we put on it
-                // and anything the user function added - rather than being inherited by the next, unrelated, batch
-                try (var mdcScope = mdcPropagation.enter(submittersDiagnosticContext)) {
-                    addInstanceMDC();
-                    return runUserFunction(usersFunction, callback, batch);
-                }
-            });
+            // execute rather than submit: submit wraps the task in its own FutureTask, and that wrapper is what the
+            // pool queues - so the queue would hold something that says nothing about the work inside it, and
+            // purgeQueuedWorkNotAllowedToStart could not take a batch back.
+            workerThreadPool.get().execute(outputRecordFuture);
         } catch (RejectedExecutionException e) {
             // Narrow on purpose, and safe to be: #requireRejectionIsVisible refuses any pool whose handler is not an
             // AbortPolicy, so RejectedExecutionException is the only thing a rejection here can throw.
@@ -2438,6 +2464,103 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private void updateLastCommitCheckTime() {
         lastCommitCheckTime = Instant.now();
+    }
+
+    /**
+     * <b>The pause reaches the worker pool here</b> (KTD14): the controller pulls back the batches it has handed
+     * over but which no worker has started, and abandons their claims.
+     * <p>
+     * {@link #pauseIfRunning()} stops the controller handing out <em>new</em> work. It cannot, on its own, do
+     * anything about the batches already sitting in the pool's queue - those start whenever a worker frees up and
+     * run the user's function for an instance that has been told to stop processing. This is where they come back:
+     * a queued batch is removed from the pool's queue and each of its records returns to awaiting selection with
+     * <b>nothing having happened to it</b> - no attempt counted, no failure recorded, no retry delay - and is
+     * handed out again when the instance resumes.
+     * <p>
+     * <b>Taking it back is the whole mechanism, and the queue's own removal is what makes it safe.</b> A batch is
+     * abandoned only if {@code queue.remove} says this thread took it out; a worker that got there first has
+     * started the batch, which makes it in-flight work rather than queued work, and in-flight work is finished.
+     * There is deliberately no check inside the pool task: work that may not start is not started, rather than
+     * started and handed back through the failure path.
+     * <p>
+     * <b>The window, which is accepted rather than closed.</b> The pause is set by whoever called it - often a
+     * worker thread - and this runs on the controller's next pass. A batch that starts in between runs the user's
+     * function to completion. So the guarantee is <em>no new work after the controller acts</em>, not "after the
+     * request"; {@link #pauseIfRunning()} wakes the controller so that gap is a control-loop pass rather than a
+     * commit interval.
+     * <p>
+     * <b>The second arm is the {@link DrainingMode#DONT_DRAIN} close, whose contract this is.</b> That close says
+     * "will finish in flight, then close" - a batch still queued in the pool is not in flight, so starting it is
+     * starting new work during a close that promised not to. {@link State#DRAINING} is deliberately absent: a
+     * drain-first close exists to dispatch the records already buffered, so its queued batches must run.
+     * <p>
+     * <b>On that close path this has a twin, and it can get to the queue first.</b> {@code innerDoClose} clears
+     * the pool's queue outright, which DROPS the records rather than abandoning them. Within one control-loop pass
+     * the order is right - this runs, then the trailing {@code switch (state)} reaches the close - but the state is
+     * read twice, once here and once by that switch, and a {@code close(DONT_DRAIN)} landing between the two reads
+     * means this saw {@link State#RUNNING} and did nothing while the clear then ran. One statement wide, and the
+     * outcome is the behaviour that predates this method rather than a new fault, so it is recorded rather than
+     * closed; the same note sits on the clear itself.
+     *
+     * @return how many records were taken back on this pass
+     */
+    protected int purgeQueuedWorkNotAllowedToStart() {
+        State observed = state;
+        boolean closingWithoutDraining = (observed == CLOSING || observed == CLOSED)
+                && requestedDrainMode == DrainingMode.DONT_DRAIN;
+        if (observed != State.PAUSED && !closingWithoutDraining) {
+            return 0;
+        }
+        BlockingQueue<Runnable> queue = workerThreadPool.get().getQueue();
+        int purged = 0;
+        // A copy, because removing from the live queue while iterating it is not something BlockingQueue promises.
+        for (Runnable queued : new ArrayList<>(queue)) {
+            if (!(queued instanceof QueuedBatch) || !queue.remove(queued)) {
+                // Not ours, or a worker took it between the copy and now - either way it is not this thread's to
+                // abandon.
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            QueuedBatch<K, V> batch = (QueuedBatch<K, V>) queued;
+            for (WorkContainer<K, V> workContainer : batch.getBatch()) {
+                wm.onAbandonedBeforeStarting(workContainer);
+                purged++;
+            }
+        }
+        if (purged > 0) {
+            log.debug("Took {} record(s) back out of the worker pool's queue: the instance is {}, so they are "
+                    + "returned to awaiting selection un-run", purged, observed);
+            recordsPurgedWhilePaused.addAndGet(purged);
+        }
+        return purged;
+    }
+
+    /**
+     * How many records the controller has taken back out of the worker pool's queue because they were not allowed
+     * to start - see {@link #purgeQueuedWorkNotAllowedToStart()}. The figure that makes "nothing new started after
+     * the pause" an assertion rather than a claim.
+     */
+    public long getRecordsPurgedWhilePaused() {
+        return recordsPurgedWhilePaused.get();
+    }
+
+    /**
+     * A batch on its way to a worker, holding the containers it carries so the controller can take it back out of
+     * the pool's queue if the instance is paused before a worker starts it.
+     * <p>
+     * A {@link FutureTask} rather than the {@link java.util.concurrent.ExecutorService#submit} wrapper, because
+     * submit's own wrapper is what the pool queues and it says nothing about the work inside it. This one is queued
+     * as itself, so {@code getQueue()} hands back something a caller can read.
+     */
+    private static final class QueuedBatch<K, V> extends FutureTask<List<?>> {
+
+        @Getter
+        private final List<WorkContainer<K, V>> batch;
+
+        private QueuedBatch(Callable<List<?>> work, List<WorkContainer<K, V>> batch) {
+            super(work);
+            this.batch = batch;
+        }
     }
 
     /**
@@ -2892,6 +3015,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         if (this.state == State.RUNNING) {
             log.info("Transitioning parallel consumer to state paused.");
             this.state = State.PAUSED;
+            // So the controller acts on the pause within a loop pass rather than within a commit interval: taking
+            // the queued batches back out of the pool is its job, and until it runs they can still start.
+            notifySomethingToDo();
         } else {
             log.debug("Skipping transition of parallel consumer to state paused. Current state is {}.", this.state);
         }

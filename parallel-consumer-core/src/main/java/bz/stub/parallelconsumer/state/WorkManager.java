@@ -390,6 +390,31 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         numberRecordsOutForProcessing--;
     }
 
+    /**
+     * This delivery never started: the controller took the batch back out of the worker pool's queue before any
+     * worker began it, because the instance is paused or closing without draining (KTD14).
+     * <p>
+     * <b>Nothing happened to the record</b>, and that is the whole point of the transition: the claim ends with no
+     * verdict, which is the {@code AVAILABLE (abandoned)} arm of {@link WorkContainer}'s own state diagram, so no
+     * attempt is counted, no failure is recorded, no retry delay is set, and the record goes straight back to
+     * awaiting selection. It is not a failure and it does not enter the retry queue - a record that was never run
+     * has nothing to retry.
+     * <p>
+     * A record whose partition was revoked meanwhile is left alone for the same reason a failed one is: the retry,
+     * and the record, belong to the partition's next owner.
+     */
+    public void onAbandonedBeforeStarting(WorkContainer<K, V> wc) {
+        log.debug("Work abandoned before it started, returning it to selection: {}", wc);
+        wc.endFlight();
+        if (checkIfWorkIsStale(wc)) {
+            log.debug("Not returning abandoned work to selection - its partition was revoked, so it belongs to the "
+                    + "partition's next owner. {}", wc);
+        } else {
+            sm.onAbandonedBeforeStarting(wc);
+        }
+        numberRecordsOutForProcessing--;
+    }
+
     public long getNumberOfIncompleteOffsets() {
         return pm.getNumberOfIncompleteOffsets();
     }
