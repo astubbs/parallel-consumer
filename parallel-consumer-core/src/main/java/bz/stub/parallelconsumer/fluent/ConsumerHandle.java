@@ -20,8 +20,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -60,12 +62,6 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ConsumerHandle implements AutoCloseable {
 
     /**
-     * How often {@link #awaitShutdown()} looks up from its latch to ask whether the engine ended without telling
-     * it. Short enough not to be noticed by a caller, long enough to be free.
-     */
-    private static final Duration FAILURE_POLL_INTERVAL = Duration.ofMillis(200);
-
-    /**
      * The engine this handle is the face of. Every question answered here - whether it is still consuming, what is
      * parked, what failed - is put to the engine rather than mirrored into a field of this class, because the
      * facade deliberately owns no state the engine already owns.
@@ -98,11 +94,28 @@ public class ConsumerHandle implements AutoCloseable {
     private final FluentMeters meters;
 
     /**
-     * Counted down by whichever of the three close paths ran, so a caller has something to block on. An engine that
-     * ended without passing through this handle counts it down never, which is why {@link #awaitShutdown()} polls
-     * the engine rather than only waiting here.
+     * Completed by whichever of the three close paths ran, so a caller has something to block on.
+     * <p>
+     * A {@link CompletableFuture} rather than the latch it was, because a latch cannot be composed and this is only
+     * half the answer: an engine that ended without passing through this handle completes nothing here, so the wait
+     * has to be for <em>either</em> this or the engine's own ending - see {@link #ended}.
      */
-    private final CountDownLatch shutdown = new CountDownLatch(1);
+    private final CompletableFuture<Void> shutdown = new CompletableFuture<>();
+
+    /**
+     * Whichever ends this instance first: the shutdown this handle ran, or the engine's control thread ending on
+     * its own - a close that went round this handle, or a control-thread failure (KTD6).
+     * <p>
+     * Composed once, in the constructor, rather than per wait: each composition registers a dependent on the
+     * engine's completion that is only discharged when that completes, so a caller polling
+     * {@link #awaitShutdown(Duration)} in a loop would pile them up on a future that has not ended yet.
+     * <p>
+     * <b>Its exceptional completion is never rethrown to the caller as it arrives.</b> It carries the
+     * control-thread failure raw, and a caller is owed {@link #surfaceAnyFault()}'s answer instead: a definition
+     * fault takes precedence over the engine's, and a control-thread failure is owed an
+     * {@link InstanceFailedException} wrapper rather than the throwable itself.
+     */
+    private final CompletableFuture<Object> ended;
 
     /**
      * Claimed by the first close to arrive - the caller's, the stop request's, or the fault's - so the other two
@@ -154,6 +167,7 @@ public class ConsumerHandle implements AutoCloseable {
         this.routeTopicsByTopic = routeTopicsByTopic;
         this.closePath = closePath;
         this.meters = meters;
+        this.ended = CompletableFuture.anyOf(shutdown, processor.controlThreadCompletion());
     }
 
     /**
@@ -296,7 +310,7 @@ public class ConsumerHandle implements AutoCloseable {
         try {
             shutTheEngineDown(closePath);
         } finally {
-            shutdown.countDown();
+            boolean ignoredWasFirstToFinish = shutdown.complete(null);
         }
     }
 
@@ -322,17 +336,16 @@ public class ConsumerHandle implements AutoCloseable {
      */
     public void awaitShutdown() {
         try {
-            // The latch is counted down by whoever closes through this handle. An engine that ended on its own -
-            // a control-thread failure, or a close that went round this handle - counts nothing down, so the wait
-            // asks the engine as well rather than blocking for ever on a latch nobody will touch.
-            while (!shutdown.await(FAILURE_POLL_INTERVAL.toMillis(), TimeUnit.MILLISECONDS)) {
-                if (processor.isClosedOrFailed()) {
-                    break;
-                }
-            }
+            Object ignoredWhicheverEndedIt = ended.get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.debug("Interrupted while awaiting shutdown", e);
+        } catch (ExecutionException engineEndedByThrowing) {
+            // Deliberately not rethrown from here: the engine's completion carries the control-thread failure raw,
+            // and surfaceAnyFault below is what decides what a caller is told - a definition fault first, and the
+            // engine's own wrapped in an InstanceFailedException.
+            log.debug("The engine's control thread ended by throwing; the fault is surfaced below",
+                    engineEndedByThrowing);
         }
         surfaceAnyFault();
     }
@@ -348,20 +361,19 @@ public class ConsumerHandle implements AutoCloseable {
      * @see #awaitShutdown()
      */
     public boolean awaitShutdown(Duration timeout) {
-        boolean shutDown = false;
-        Instant deadline = Instant.now().plus(timeout);
+        boolean shutDown = true;
         try {
-            while (Instant.now().isBefore(deadline)) {
-                long remaining = Math.min(FAILURE_POLL_INTERVAL.toMillis(),
-                        Math.max(1, Duration.between(Instant.now(), deadline).toMillis()));
-                if (shutdown.await(remaining, TimeUnit.MILLISECONDS) || processor.isClosedOrFailed()) {
-                    shutDown = true;
-                    break;
-                }
-            }
+            Object ignoredWhicheverEndedIt = ended.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
+        } catch (TimeoutException theBoundExpiredFirst) {
+            shutDown = false;
+        } catch (ExecutionException engineEndedByThrowing) {
+            // It ended - by throwing - so this is a shutdown that happened inside the bound, and the fault below is
+            // owed to the caller. See awaitShutdown() for why it is not rethrown from here.
+            log.debug("The engine's control thread ended by throwing; the fault is surfaced below",
+                    engineEndedByThrowing);
         }
         if (shutDown) {
             surfaceAnyFault();
@@ -500,7 +512,7 @@ public class ConsumerHandle implements AutoCloseable {
             // Nobody asked for this close, so there is nobody to throw to.
             log.error("Closing this instance on the {} path failed", path, closeFailed);
         } finally {
-            shutdown.countDown();
+            boolean ignoredWasFirstToFinish = shutdown.complete(null);
         }
     }
 

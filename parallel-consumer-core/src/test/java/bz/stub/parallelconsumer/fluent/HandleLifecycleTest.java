@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Timeout;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Properties;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -23,6 +24,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -164,6 +166,121 @@ class HandleLifecycleTest extends AbstractFluentEngineTest {
         // The cause is the engine's own record of what killed it, reachable without waiting too.
         assertThat(started.failureCause().isPresent()).isTrue();
         assertThat(started.failureCause().get()).isSameInstanceAs(failed.getCause());
+    }
+
+    /**
+     * The same third exit, told from the waiter's side: it is released <b>at the moment the control thread ends</b>,
+     * rather than on the next tick of a poll.
+     * <p>
+     * <b>Two assertions, and the first one is the deterministic half.</b> The wait is now composed on the engine's
+     * own completion, so a handle that is waiting the right way shows up as a <em>dependent</em> of that future -
+     * which is true whether or not anything has ended yet, and cannot be passed by an implementation that polls
+     * beside it. The second measures the consequence: the gap between the engine completing and the waiter being
+     * told, which the implementation this replaces could not make smaller than its two-hundred-millisecond poll
+     * interval and averaged half of it. Everything else about the close is excluded from that measurement on
+     * purpose - it is stamped from the engine's completion, not from the throw that caused it, so engine shutdown
+     * latency cannot enter the figure.
+     *
+     * @see #awaitRethrowsAControlThreadFailureWrapped()
+     */
+    @Test
+    void aControlThreadFailureReachesTheWaiterWithoutAPollInterval() throws Exception {
+        var pc = ParallelConsumer.connect(props());
+        pc.string(TOPIC).process(context -> Outcome.succeeded());
+        ConsumerHandle started = runtime.startAndAssign(pc, 1);
+        handle = started;
+
+        assertWithMessage("the handle waits ON the engine's completion, so it is registered as a dependent of it - "
+                + "a handle that polled beside it would register none")
+                .that(started.processor().controlThreadCompletion().getNumberOfDependents())
+                .isGreaterThan(0);
+
+        // Stamped on the engine's completing thread, so it records when the control thread ENDED rather than when
+        // this test noticed. The future is discarded deliberately: the stamp is the whole point of the callback,
+        // and nothing waits on it - the waiter below is what this test synchronises with.
+        var engineEndedAt = new AtomicReference<Instant>();
+        CompletableFuture<Void> ignoredStamp = started.processor().controlThreadCompletion()
+                .whenComplete((ignoredResult, ignoredFailure) -> engineEndedAt.set(Instant.now()));
+
+        var releasedAt = new AtomicReference<Instant>();
+        var thrown = new AtomicReference<Throwable>();
+        var returned = new CountDownLatch(1);
+        Thread waiter = new Thread(() -> {
+            try {
+                started.awaitShutdown();
+            } catch (Throwable failed) {
+                thrown.set(failed);
+            } finally {
+                releasedAt.set(Instant.now());
+                returned.countDown();
+            }
+        }, "await-shutdown-waiter");
+        waiter.setDaemon(true);
+        waiter.start();
+
+        // Still waiting: nothing has ended the instance, and nothing will until the callback below is registered.
+        assertThat(returned.await(500, TimeUnit.MILLISECONDS)).isFalse();
+
+        // Killed from the inside, as ControlThreadCompletionTest does it: nobody calls close, so the only thing
+        // that can release the waiter is the control thread reporting its own death.
+        started.processor().addLoopEndCallBack(() -> {
+            throw new FakeRuntimeException("a loop-end callback that throws stops the consumer");
+        });
+
+        assertThat(returned.await(30, TimeUnit.SECONDS)).isTrue();
+        handle = null;
+
+        assertThat(thrown.get()).isInstanceOf(InstanceFailedException.class);
+        assertThat(engineEndedAt.get()).isNotNull();
+        Duration betweenEndingAndBeingTold = Duration.between(engineEndedAt.get(), releasedAt.get());
+        assertWithMessage("the waiter is released by the engine's completion, not by the next tick of a poll")
+                .that(betweenEndingAndBeingTold)
+                .isLessThan(Duration.ofMillis(200));
+    }
+
+    /**
+     * The second exit, from the waiter's side - and the thing the composed wait must not break. A stop request
+     * closes through this handle, so the handle's own shutdown is what completes first; the engine's completion
+     * follows, cleanly, and must not turn a stop into a failure.
+     * <p>
+     * It lives here rather than in {@link StopTheInstanceTest}, which owns everything stopping does to the records
+     * and the offsets: what is asserted below is only the way {@code awaitShutdown} returns for one.
+     */
+    @Test
+    void aStopRequestThatEndsItFirstReleasesTheWaiterCleanly() throws Exception {
+        var pc = ParallelConsumer.connect(props()).whenClosing(ClosePath.DONT_DRAIN_FIRST);
+        pc.string(TOPIC).process(context -> Outcome.stop("the deployment cannot handle this record"));
+        ConsumerHandle started = runtime.startAndAssign(pc, 1);
+        handle = started;
+
+        var thrown = new AtomicReference<Throwable>();
+        var returned = new CountDownLatch(1);
+        Thread waiter = new Thread(() -> {
+            try {
+                started.awaitShutdown();
+            } catch (Throwable failed) {
+                thrown.set(failed);
+            } finally {
+                returned.countDown();
+            }
+        }, "await-shutdown-waiter");
+        waiter.setDaemon(true);
+        waiter.start();
+
+        // Nothing has been published, so nothing has asked to stop yet.
+        assertThat(returned.await(500, TimeUnit.MILLISECONDS)).isFalse();
+
+        runtime.publish(TOPIC, 0, 0, "key-0", "an order");
+
+        assertThat(returned.await(30, TimeUnit.SECONDS)).isTrue();
+        handle = null;
+
+        assertWithMessage("a stop is the definition's author asking for this, so there is nothing to rethrow")
+                .that(thrown.get())
+                .isNull();
+        assertThat(started.stopRequest().isPresent()).isTrue();
+        assertThat(started.stopRequest().get().reason()).contains("the deployment cannot handle this record");
+        assertThat(started.failureCause().isPresent()).isFalse();
     }
 
     /**
