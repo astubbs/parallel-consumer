@@ -488,17 +488,6 @@ public class ShardManager<K, V> {
      *
      * @see ProcessingShard#isResident(WorkContainer)
      */
-    /**
-     * A delivery that never started, handed back to its shard so the record can be selected again (KTD14).
-     * <p>
-     * The shard-side half of {@link WorkManager#onAbandonedBeforeStarting}: re-include it in selection, and
-     * <b>nothing else</b>. It is deliberately not {@link #onFailure}: that also puts the container in the retry
-     * queue, which is where a record waits out a backoff it earned by failing. This one never ran.
-     */
-    public void onAbandonedBeforeStarting(WorkContainer<?, ?> wc) {
-        getShard(computeShardKey(wc)).ifPresent(shard -> shard.onAbandonedBeforeStarting(wc));
-    }
-
     public void onFailure(WorkContainer<?, ?> wc) {
         log.debug("Work FAILED");
 
@@ -536,6 +525,17 @@ public class ShardManager<K, V> {
             }
         }
 
+    }
+
+    /**
+     * A delivery that never started, handed back to its shard so the record can be selected again (KTD14).
+     * <p>
+     * The shard-side half of {@link WorkManager#onAbandonedBeforeStarting}: re-include it in selection, and
+     * <b>nothing else</b>. It is deliberately not {@link #onFailure}: that also puts the container in the retry
+     * queue, which is where a record waits out a backoff it earned by failing. This one never ran.
+     */
+    public void onAbandonedBeforeStarting(WorkContainer<?, ?> wc) {
+        getShard(computeShardKey(wc)).ifPresent(shard -> shard.onAbandonedBeforeStarting(wc));
     }
 
     /**
