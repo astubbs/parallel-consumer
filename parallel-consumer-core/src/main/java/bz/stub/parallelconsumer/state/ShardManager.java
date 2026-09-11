@@ -26,6 +26,7 @@ import org.apache.kafka.common.TopicPartition;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 
@@ -572,16 +573,40 @@ public class ShardManager<K, V> {
      * @return a snapshot list, safe to hold after the lock is released
      */
     public List<WorkContainer<?, ?>> getParkedWorkContainers(boolean excludingRevoked) {
-        List<WorkContainer<?, ?>> parked = new ArrayList<>();
+        return collectFromRetryQueue(wc -> wc.isParked() && !(excludingRevoked && wc.isStale()));
+    }
+
+    /**
+     * Every retry-queue entry matching {@code wanted}, as a snapshot taken under the queue's read lock.
+     * <p>
+     * The two collectors over this queue - {@link #getParkedWorkContainers(boolean)} and
+     * {@link #purgeDepartedRetryEntries()} - differ only in the question they ask of each entry, and the walk
+     * itself is the part with the constraints on it: the iterator holds the READ lock until it is closed, so it
+     * must be closed before a caller reaches for the write lock, and it is {@code @ThreadConfined} with a runtime
+     * assertion, which is why this is an explicit loop rather than a stream.
+     * <p>
+     * <b>The snapshot is the point, not an implementation detail.</b> Both callers act on what they collected
+     * after the lock is released - one hands the list to a user, the other removes the entries under the write
+     * lock - so neither may hold the iterator while it does so. Collecting first is what separates the two.
+     * <p>
+     * {@link #getLowestRetryTime()} deliberately does not use this: it answers from the FIRST entry that
+     * qualifies and stops, so collecting every match would be work thrown away on a path the control loop takes
+     * once per pass.
+     *
+     * @param wanted asked once per entry, on the controller thread, while the read lock is held - so it must not
+     *               take another lock
+     */
+    private List<WorkContainer<?, ?>> collectFromRetryQueue(Predicate<WorkContainer<?, ?>> wanted) {
+        List<WorkContainer<?, ?>> collected = new ArrayList<>();
         try (RetryQueue.RetryQueueIterator entries = this.retryQueue.iterator()) {
             while (entries.hasNext()) {
-                WorkContainer<?, ?> workContainer = entries.next();
-                if (workContainer.isParked() && !(excludingRevoked && workContainer.isStale())) {
-                    parked.add(workContainer);
+                WorkContainer<?, ?> entry = entries.next();
+                if (wanted.test(entry)) {
+                    collected.add(entry);
                 }
             }
         }
-        return parked;
+        return collected;
     }
 
     /**
@@ -741,17 +766,10 @@ public class ShardManager<K, V> {
      */
     @ControllerThreadOnly
     void purgeDepartedRetryEntries() {
-        List<WorkContainer<?, ?>> departed = new ArrayList<>();
-        try (RetryQueue.RetryQueueIterator entries = this.retryQueue.iterator()) {
-            while (entries.hasNext()) {
-                WorkContainer<?, ?> entry = entries.next();
-                if (!isResidentInItsShard(entry)) {
-                    departed.add(entry);
-                }
-            }
-        }
+        List<WorkContainer<?, ?>> departed = collectFromRetryQueue(entry -> !isResidentInItsShard(entry));
 
-        // OUTSIDE the read lock: the iterator holds it until it is closed, and this needs the write lock.
+        // OUTSIDE the read lock: collectFromRetryQueue closed the iterator, which held it, and this needs the
+        // write lock.
         // removeAll's own fast path returns without acquiring anything when the list is empty, which is the
         // common case on every tick.
         boolean modified = this.retryQueue.removeAll(departed);
