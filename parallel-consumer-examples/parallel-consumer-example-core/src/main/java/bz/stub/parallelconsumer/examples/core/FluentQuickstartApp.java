@@ -50,64 +50,69 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
  *       without processing it; a throw is a retry.</li>
  * </ul>
  *
- * <h2>The definition is separate from how it is started</h2>
- * {@link #defineConsumer} builds the definition and returns it, unstarted; {@link #run} starts it against Kafka.
- * Keeping the two apart is what lets the same definition be started against something other than a broker without
- * one word of the definition changing.
+ * <h2>It is straight-line code, deliberately</h2>
+ * The quickstart used to be wrapped in a {@code defineConsumer(Properties)} method that built the definition and
+ * handed it back. The wrapper was there to show that a definition is separate from how it is started - which is
+ * true and matters, but not on the first screen: it put a method signature between the reader and the first line
+ * of the API, and a reader who wanted to try this had to unpick it first. The separation is shown where it is
+ * actually needed, and here the properties, the routes and the start read top to bottom as a program.
  */
 @Slf4j
 public class FluentQuickstartApp {
-
-    public static final String ORDERS_TOPIC = "orders";
-
-    public static final String SCANS_TOPIC = "parcel-scans";
 
     /**
      * The value the scans route's function refuses to accept, so that the quickstart always has something to park.
      */
     private static final String TRACKING_IS_DOWN = "the parcel-tracking service is not reachable";
 
-    // tag::quickstart[]
-    ParallelConsumerDefinition defineConsumer(Properties kafkaProperties) {
-        ParallelConsumerDefinition pc = ParallelConsumer.connect(kafkaProperties) // <1>
+    /**
+     * The quickstart itself, top to bottom - the properties, the two routes and the start, in the order the README
+     * shows them. Nothing in the build calls this; point it at your own broker by changing the bootstrap servers on
+     * the first line.
+     */
+    public static void main(String[] args) {
+        // tag::quickstart[]
+        Properties kafkaProperties = new Properties();
+        kafkaProperties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092"); // <1>
+        kafkaProperties.put(ConsumerConfig.GROUP_ID_CONFIG, "parallel-consumer-quickstart");
+        kafkaProperties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+
+        ParallelConsumerDefinition pc = ParallelConsumer.connect(kafkaProperties) // <2>
                 .defaultOrdering(KEY);
 
-        pc.json(ORDERS_TOPIC, Order.class) // <2>
+        pc.json("orders", Order.class) // <3>
                 .process(context -> {
                     Order order = context.value();
                     if ("RETURNED".equals(order.getStatus())) {
-                        return Outcome.filtered(); // <3>
+                        return Outcome.filtered(); // <4>
                     }
                     reserveStock(order);
-                    return Outcome.succeeded(); // <4>
+                    System.out.println("Processed order " + order.getOrderId()); // <5>
+                    return Outcome.succeeded(); // <6>
                 });
 
-        pc.string(SCANS_TOPIC) // <5>
-                .retryLimit(2) // <6>
+        pc.string("parcel-scans") // <7>
+                .retryLimit(2) // <8>
                 .retryDelay(Duration.ofMillis(200))
-                .onParked((record, failure, attempts) -> // <7>
-                        log.warn("Parked scan at offset {} after {} attempts",
-                                record.offset(), attempts, failure))
+                .onParked((record, failure, attempts) -> // <9>
+                        System.out.println("Parked scan at offset " + record.offset()
+                                + " after " + attempts + " attempts"))
                 .process(context -> {
-                    recordScan(context.value()); // <8>
+                    recordScan(context.value()); // <10>
                     return Outcome.succeeded();
                 });
+        // end::quickstart[]
 
-        return pc;
-    }
-    // end::quickstart[]
-
-    // tag::quickstartRun[]
-    void run(Properties kafkaProperties) {
-        try (ConsumerHandle handle = defineConsumer(kafkaProperties).start()) { // <1>
+        // tag::quickstartRun[]
+        try (ConsumerHandle handle = pc.start()) { // <1>
             handle.awaitShutdown(); // <2>
         }
+        // end::quickstartRun[]
     }
-    // end::quickstartRun[]
 
     // tag::quickstartParked[]
     void reportParked(ConsumerHandle handle) {
-        ParkedView parked = handle.topic(SCANS_TOPIC).parked(); // <1>
+        ParkedView parked = handle.topic("parcel-scans").parked(); // <1>
         log.info("{} scans parked, oldest {}", parked.count(), parked.oldestAge().orElse(Duration.ZERO));
         for (ParkedRecord record : parked.records()) { // <2>
             log.info("  partition {} offset {} key {} after {} attempts: {}",
@@ -137,16 +142,4 @@ public class FluentQuickstartApp {
         throw new IllegalStateException(TRACKING_IS_DOWN + " (scan: " + scan + ")");
     }
 
-    /**
-     * Run the quickstart against a broker. Point it at one with {@code --bootstrap-servers}, or leave it to the
-     * local default. Nothing in the build calls this - see the note on this class.
-     */
-    public static void main(String[] args) {
-        String bootstrapServers = args.length > 0 ? args[0] : "localhost:9092";
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "parallel-consumer-quickstart");
-        properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        new FluentQuickstartApp().run(properties);
-    }
 }

@@ -150,14 +150,16 @@ What 1.0 is waiting on is a settled API surface, the functionality still intende
 ----
 include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentQuickstartApp.java[tag=quickstart]
 ----
-<1> Connection properties in. You construct no Kafka clients; the library builds them, and sets the serialisers itself because each route declares its own.
-<2> One topic bound to one function, with its own types -- `json(Order.class)` resolves to the JSON deserialiser already on your classpath, and `context.value()` is an `Order`.
-<3> A *filtered* outcome: the record is finished with, commits like a success, and is counted separately. No exception, no sentinel return.
-<4> A normal return is success.
-<5> A second topic with a different value type. Two routes, two functions -- not one handler switching on `record.topic()`.
-<6> After two further attempts, two hundred milliseconds apart, this record *parks in place*: it stays incomplete in the offset map, holds no worker, and the partition commits past it. Nothing was configured to make that possible and no dead-letter topic exists.
-<7> Told once, when a record gives up.
-<8> Your own client. An exception here is a retry.
+<1> Ordinary Kafka consumer properties: your broker, your group. No serialiser settings -- the library sets those itself, because each route declares its own.
+<2> Connection properties in, a definition out. You construct no Kafka clients; the library builds them when you start it.
+<3> One topic bound to one function, with its own types -- `json(Order.class)` resolves to the JSON deserialiser already on your classpath, and `context.value()` is an `Order`.
+<4> A *filtered* outcome: the record is finished with, commits like a success, and is counted separately. No exception, no sentinel return.
+<5> Whatever you want done with a record, you do here -- printing it is the smallest version of it.
+<6> A normal return is success.
+<7> A second topic with a different value type. Two routes, two functions -- not one handler switching on `record.topic()`.
+<8> After two further attempts, two hundred milliseconds apart, this record *parks in place*: it stays incomplete in the offset map, holds no worker, and the partition commits past it. Nothing was configured to make that possible and no dead-letter topic exists.
+<9> Told once, when a record gives up.
+<10> Your own client. An exception here is a retry.
 
 .Starting it, against a broker:
 [source,java,indent=0]
