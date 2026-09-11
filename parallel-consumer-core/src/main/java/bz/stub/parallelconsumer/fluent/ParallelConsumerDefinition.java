@@ -168,8 +168,12 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     public ParallelConsumerDefinition(Properties connectionProperties) {
         Objects.requireNonNull(connectionProperties, "Connection properties must be supplied");
         Map<String, Object> copy = new LinkedHashMap<>();
+        // getProperty, not get: stringPropertyNames() includes keys inherited from a parent Properties' defaults,
+        // and Properties.get is Hashtable.get, which does not consult them - so a defaulted key was copied in
+        // with a NULL value, and the entrySet pass below cannot repair it because entrySet does not see defaults
+        // either. Those nulls reached the deserialisers' configure() and the producer's properties.
         for (String name : connectionProperties.stringPropertyNames()) {
-            copy.put(name, connectionProperties.get(name));
+            copy.put(name, connectionProperties.getProperty(name));
         }
         // Properties may carry non-String values when built programmatically; stringPropertyNames misses those.
         for (Map.Entry<Object, Object> entry : connectionProperties.entrySet()) {
