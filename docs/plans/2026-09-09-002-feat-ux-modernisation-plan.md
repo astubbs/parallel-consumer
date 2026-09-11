@@ -691,6 +691,72 @@ flowchart LR
 - **Milestone C, small:** U10, then U11 after astubbs#295 merges.
 - **Milestone D, medium:** U12 to U15 in any order; U16 only after the producer-recovery stack has merged in its own order.
 - **Milestone E, large:** after the decomposition (astubbs#479); U17 to U20 are sketched here so the earlier tiers leave the seams they need, and are re-planned against the decomposed engine.
+- **The sandbox's next milestone:** a capturing sink and a crash-and-restart harness, recorded 2026-09-11, owner-directed - see the subsection below. Named as next; deliberately not sized or scheduled beyond that.
+
+#### The sandbox's next milestone: a capturing sink and a crash-and-restart harness
+
+**Recorded on 2026-09-11, owner-directed, after comparing this sandbox against a broker-free test kit another
+library publishes: "crash-restart harness and capturing sink: yes, but not in the pr. record and plan as next
+milestone."** Both are sandbox-module work and both are tiny tier under KD13 - no engine change, composed from what
+U5 already ships. Neither is in Milestone A because U5's goal is the **runner**: a definition, a mock consumer, a
+mock producer and a generator, so that a definition runs at all with no broker. These two are the **assertion kit**
+built on that runner, and nothing in Milestone A's requirement set (R33, R36) asks for one. They are named as the
+next milestone and nothing more; the tier they land in is decided when they are costed, as R30 requires.
+
+**A capturing sink.** A published class a user wires as a route's terminal behaviour, which collects every value
+it receives and hands back an immutable snapshot to assert on.
+
+- **What it is for, from the user's side.** Today a user who wants to assert what their processing function
+  actually received has to hand-roll the collector inside the function: a concurrent queue closed over by the
+  lambda, written to from however many worker threads the engine ran, and then read from the test thread once the
+  run has ended. Every user writes the same class, and each one has to re-derive that the write side is concurrent
+  and that reading it mid-run is meaningless. A published sink is that class, written once: thread-safe on the way
+  in, immutable on the way out.
+- **The restraint worth copying.** The comparable kit's version carries no assertion vocabulary of its own - the
+  user asserts on the returned list with whatever assertion library their project already uses. Ours should do the
+  same. A sink that shipped its own matchers would be a second vocabulary for a user to learn and for this project
+  to keep working, and it would push this repo's own choice of assertion library onto users who did not pick it.
+- **Depends on** the fluent route surface and its outcome vocabulary (U2, U3) and the sandbox module (U5). Nothing
+  in the engine.
+
+**A crash-and-restart harness.** A deterministic, broker-free driver for the shape a real deployment fears: a
+consumer dies holding work it had processed but not committed, and whatever replaces it is handed that work again.
+
+- **What it is for, from the user's side.** Redelivery after an uncommitted death is where a user's own
+  idempotency is either real or imagined, and today the only way to find out is a broker, a container and a kill -
+  which is slow, needs Docker, and is exactly the test a user skips. The harness makes it an ordinary unit test.
+- **The crash is a seeded range, not a moment.** That is what makes the comparable kit's version non-flaky, and it
+  is the part to copy exactly: nothing waits on a clock, so nothing can be timing-dependent. A first consumer is
+  seeded with a prefix of the log and processes it, commits only part of what it processed, and closes without
+  committing the rest; a second consumer is then seeded with the resume window a broker would replay from the
+  committed offset, and runs the full poll-dispatch-process path over it. The crash is expressed as which offsets
+  each consumer was given, not as when either of them was stopped.
+- **The assertion, and the half we should add.** The comparable kit asserts that the uncommitted tail reappears,
+  and explicitly does **not** assert the commit-frontier arithmetic, leaving that to broker tests. Ours should
+  assert the other half too: that nothing **below** the committed frontier is redelivered. That half is what
+  catches an off-by-one in an offset map, and this library encodes its in-flight offsets itself (run-length and
+  bitset in the commit metadata), so it is the half with the most to go wrong and the least to be inherited from
+  the broker.
+- **The second run's assertion must be unsatisfiable by the first run's output - a requirement of the harness, not
+  an aside.** This project has already been burned by exactly the trap this shape invites: two crash-restart
+  integration tests drained the output topic after the restart with a fresh consumer group defaulting to the
+  earliest offset, so the first phase's own durable output satisfied the second phase's assertion. Both were green
+  whether or not the mechanism existed, and deleting the second phase entirely would have left them passing. The
+  same trap is waiting here in a different costume: the sandbox's mock producer keeps one history across both runs,
+  so a harness that asserted over that whole history would be vacuous in precisely the same way. So the harness has
+  to make the wrong answer structurally unreachable rather than assert harder - read from a captured position, tag
+  each record with the run that produced it, or assert on something only the second run could have produced - and
+  it should hand the user that scoped reader rather than leaving them to build one. The write-up owns the class and
+  the repair: `docs/solutions/test-issues/a-restart-assertion-satisfiable-by-pre-crash-data-proves-nothing.md`,
+  whose `applies_when` list names this exact shape. **It is branch-only and not on `origin/master`**, so a
+  working-tree grep will not find it - read it with `node bin/inflight.mjs docs show <path>`.
+<!-- file-refs: N/A - the cited write-up is branch-only and not on origin/master, which is what the bullet above says; it resolves through `bin/inflight.mjs docs show`, not through the working tree -->
+- **Note on coverage.** Whether this repo already proves the no-redelivery-below-the-frontier half somewhere in
+  its own suite is being checked separately (2026-09-11); this entry records a capability the sandbox should hand
+  to a **user**, and says nothing either way about a gap in this project's own tests.
+- **Depends on** the sandbox consumer's seeded beginning offsets and its reading of committed offsets, both
+  shipped by U5, and on the offset-map decode the sandbox already does to tell a complete offset from an
+  incomplete one. Nothing in the engine.
 
 ### System-Wide Impact
 
