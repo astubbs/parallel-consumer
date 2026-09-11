@@ -199,6 +199,24 @@ What 1.0 is waiting on is a settled API surface, the functionality still intende
 
 This is the <<fluent-api,fluent API>>, which is *incubating* -- see that section for what that means, for what park in place costs and does not cost, and for the classic API this library shipped first, which is unchanged and not deprecated.
 
+.The same definition, no broker, no Docker, no test environment -- this is how it is run on every build of this repository:
+[source,java,indent=0]
+----
+            sandbox = Sandbox.builder()
+                    .perSecond(50)                                   // <1>
+                    .bound(Bound.after(Duration.ofSeconds(10)))      // <2>
+                    .keyCardinality(5_000)                           // <3>
+                    .build();
+
+            handle = pc.start(sandbox);                              // <4>
+            handle.awaitShutdown();                                  // <5>
+----
+<1> Generated records per second, per source topic, with each route's declared type filled with realistic random data.
+<2> Stop generating after ten seconds and close, draining first. Without a bound the run ends when you close the handle.
+<3> How many distinct keys the generator draws from. Keys have to repeat for key ordering to have anything to order, and they have to repeat rarely for a topic to look like a real one.
+<4> The one line that differs from a run against a broker.
+<5> The bound closes the instance, so this returns when the run ends.
+
 An overview article to the library can also be found on Confluent's https://www.confluent.io/blog/[blog]: https://www.confluent.io/blog/introducing-confluent-parallel-message-processing-client/[Introducing the Confluent Parallel Consumer].
 
 [#demo]
@@ -370,6 +388,7 @@ without operational burden or harming the cluster's performance
 ** <<park-in-place,Park in place>> - a record that runs out of attempts stays where it is, holding no worker, while the partition commits past it, so a dead-letter topic is a relief valve rather than a requirement
 ** Terminal outcomes counted apart: succeeded, filtered, parked, stopped
 ** A queryable parked set per route, with metrics beside it
+* A <<sandbox,sandbox>> that runs any definition - fluent or classic - with no broker, no Docker and no test environment, against generated records of the definition's own types
 * Per `key` concurrent processing, per partition and unordered message processing
 * Offsets committed correctly, in order, of only processed messages, regardless of concurrency level or retries
 * Batch support in all versions of the API to process batches of messages in parallel instead of single messages.
@@ -797,6 +816,15 @@ An existing user with hand-built clients reaches the fluent API without changing
 <2> Blocks until the instance has shut down, however it ended.
 <3> An instance can end in three ways, and the handle says which: closed by you, stopped by a route, or failed. This is the second.
 <4> And this is the third.
+
+[[sandbox]]
+=== Running with no broker: the sandbox
+
+`parallel-consumer-sandbox` runs *any* definition with no broker, no Docker and no test environment, against records it generates itself: each route's declared value type filled with realistic random data, encoded with that route's own serialiser, paced at a rate you declare, with an optional bound after which the run closes itself.
+
+The definition does not change. The `start` call does -- which is the whole claim, and the second example at the top of this page is it.
+
+Two things follow from that. It is the *demo*: a new reader can run a real definition against real records without provisioning anything. And it is the *broker-free test kit*: a test drives the same sandbox with its own records and asserts on outcomes and the parked set, which is how this project's own primary build signal works. It serves the classic API too, so an existing options-builder application runs broker-free with its start call changed and nothing else.
 
 [[fluent-migration]]
 === Replacing the three workarounds

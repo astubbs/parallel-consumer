@@ -20,7 +20,8 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
 
 /**
  * The README quickstart, and the build signal behind it: the fluent API's whole first screen, compiled on every
- * build and run against a real broker in core's {@code FluentQuickstartIT}.
+ * build and run on every build - broker-free in {@code FluentQuickstartAppTest}, and once against a real broker in
+ * core's {@code FluentQuickstartIT}.
  *
  * <h2>Why this class exists rather than a snippet in the README</h2>
  * The README's first example is the surface's primary success signal (KD7): if the fluent API drifts, this file
@@ -35,7 +36,8 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
  *       processed and recorded as complete in the commit metadata. The COMMITTED OFFSET itself does not move past
  *       a parked record - it is the highest sequential succeeded offset plus one, and a parked record is never
  *       sequentially succeeded - so consumer-group lag reads as stuck at the oldest parked record for the life of
- *       the assignment. The README's park section owns that consequence. No dead-letter topic is
+ *       the assignment. The README's park section owns that consequence, and
+ *       {@code SandboxConsumer#awaitEveryPublishedRecordCommitted} depends on it. No dead-letter topic is
  *       involved, and none is declared - export at capacity is a later milestone.</li>
  *   <li><b>The parked set.</b> {@link #reportParked} asks the handle what is parked and why.</li>
  *   <li><b>Typed routes.</b> Two topics, two value types, one function each - no casts, no {@code instanceof} on a
@@ -44,10 +46,10 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
  *       without processing it; a throw is a retry.</li>
  * </ul>
  *
- * <h2>The definition is separate from how it is started</h2>
- * {@link #defineConsumer} builds the definition and returns it, unstarted; {@link #run} starts it against Kafka.
- * Keeping the two apart is what lets the same definition be started against something other than a broker without
- * one word of the definition changing.
+ * <h2>The definition does not change between a broker and the sandbox</h2>
+ * {@link #defineConsumer} builds the definition and returns it, unstarted. {@link #run} starts it against Kafka;
+ * the test starts the same method's result in the sandbox with no broker anywhere. That the two share this method
+ * rather than resembling each other is the whole claim being tested.
  */
 @Slf4j
 public class FluentQuickstartApp {
