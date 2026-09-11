@@ -6,10 +6,9 @@ package bz.stub.parallelconsumer.internal;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.state.ModelUtils;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import bz.stub.parallelconsumer.state.WorkManager;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
@@ -19,7 +18,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import pl.tlinkowski.unij.api.UniLists;
-import pl.tlinkowski.unij.api.UniMaps;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -129,7 +127,9 @@ class PausedWorkIsTakenBackOutOfThePoolTest {
      */
     @Test
     void aRunningInstanceLeavesItsQueuedWorkAlone() throws InterruptedException {
-        var work = submitOneBlockingBatchAndQueueAnother();
+        // The containers are not needed here - this arm asserts about the QUEUE, not about either record - so the
+        // fixture's return is dropped, as the other queue-shaped arms below do.
+        submitOneBlockingBatchAndQueueAnother();
         pc.setState(State.RUNNING);
 
         assertThat(pc.purgeQueuedWork()).isEqualTo(0);
@@ -260,12 +260,10 @@ class PausedWorkIsTakenBackOutOfThePoolTest {
      * flight and really is counted, which a hand-built one would not be.
      */
     private WorkContainer<String, String> takeWork() {
-        // A key per record: the default ordering is KEY, so one key would put them in one shard and the shard would
-        // hand out only its head.
+        // ModelUtils.pollOf keys each record by its offset, which is what this needs: the default ordering is KEY,
+        // so one shared key would put every record in one shard and the shard would hand out only its head.
         long offset = nextOffset++;
-        var record = new ConsumerRecord<>(TOPIC, PARTITION, offset, "key-" + offset, "value");
-        wm.registerWork(new EpochAndRecordsMap<>(new ConsumerRecords<>(UniMaps.of(tp, UniLists.of(record))),
-                wm.getPm()));
+        wm.registerWork(new EpochAndRecordsMap<>(ModelUtils.pollOf(tp, offset), wm.getPm()));
         var work = wm.getWorkIfAvailable(1);
         assertWithMessage("the fixture must hand the test the work it asked for").that(work).hasSize(1);
         return work.get(0);

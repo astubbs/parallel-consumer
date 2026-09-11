@@ -29,6 +29,30 @@ import java.util.stream.Collectors;
  * <p>
  * Only a subset of Set methods are implemented - add, remove, clear and iterator - as those are only methods used by
  * the Parallel Consumer code.
+ *
+ * <h2>INVARIANT: parked entries sort last, contiguously, and nothing before one is parked</h2>
+ * An ascending walk that reaches a {@link WorkContainer#isParked()} entry can <b>stop</b>: every entry behind it is
+ * parked too. {@code ShardManager.getLowestRetryTime()} is the caller that depends on this - it breaks out on the
+ * first parked entry rather than walking a tail that, in park's steady state, is the whole queue.
+ * <p>
+ * It holds on three facts, all of which have to stay true:
+ * <ul>
+ *     <li><b>The comparator orders on {@code retryDueAt} first</b>, before topic, partition and offset.</li>
+ *     <li><b>Parked implies {@code retryDueAt == }{@link java.time.Instant#MAX}</b>, the largest value the
+ *     comparator can see. {@code WorkContainer.updateFailureHistory} writes {@code parkedReason} and
+ *     {@code retryDueAt} as an adjacent pair off the same carried exception, and {@code computeRetryDueAt} returns
+ *     {@code Instant.MAX} on exactly the branch that sets a park reason - one write site each, so the two cannot
+ *     disagree.</li>
+ *     <li><b>The sort key is snapshotted at insertion</b> - {@code WorkContainerSortKey.of} copies
+ *     {@code getRetryDueAt()} into an immutable key - so an entry's position cannot drift from the container's
+ *     live state. A container's park state changes only inside the failure path, which is reachable only while it
+ *     is claimed, and claiming removes it from this queue first; it returns through {@code add} with a fresh key.
+ *     <b>There is no mutate-in-place path.</b></li>
+ * </ul>
+ * <b>What would reopen it</b>: a comparator that leads with anything but {@code retryDueAt}; a second writer of
+ * {@code WorkContainer.parkedReason} or {@code retryDueAt}; or any route that parks a container while it is
+ * resident here. {@code RetryQueueParkedEntriesSortLastTest} pins the ordering itself; nothing can pin the absence
+ * of a future mutator, so that one is on the next person to add one.
  */
 public class RetryQueue {
 

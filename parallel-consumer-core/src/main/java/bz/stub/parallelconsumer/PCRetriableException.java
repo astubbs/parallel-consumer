@@ -132,9 +132,12 @@ public class PCRetriableException extends RuntimeException {
     }
 
     /**
-     * The instance carrying the facts above, found the same way {@link #isPresentIn(Throwable)} classifies a failure -
-     * PC's own pass-through wrappers are peeled and the failure underneath is tested, so a genuinely different
-     * exception that merely has one further down its chain carries nothing.
+     * The instance carrying the facts above: PC's own pass-through wrappers are peeled and the failure underneath is
+     * tested, so a genuinely different exception that merely has one further down its chain carries nothing.
+     * <p>
+     * <b>The one place that peel-and-test lives.</b> {@link #isPresentIn(Throwable)} is the same question asked as a
+     * boolean and defers to this, so the two can never come to disagree about what counts - which is the failure
+     * that put the policy on this class in the first place, one engine at a time.
      *
      * @return the carrying exception, or null when this failure says nothing beyond "it failed"
      */
@@ -163,7 +166,9 @@ public class PCRetriableException extends RuntimeException {
      * @param t the failure to classify; null is not expected
      */
     public static boolean isPresentIn(Throwable t) {
-        return ThrowableUtils.unwrapTransparentWrappers(t) instanceof PCRetriableException;
+        // Asked of handbackIn rather than re-derived: the peel-and-test is one behaviour, and the whole reason this
+        // policy sits on this class is that re-deriving it per site is how the sites came to disagree.
+        return handbackIn(t) != null;
     }
 
 }
