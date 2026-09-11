@@ -249,4 +249,41 @@ class RouteMetersTest extends AbstractFluentEngineTest {
 
         assertThat(warnings).hasSize(1);
     }
+
+    /**
+     * The case the guard used to swallow whole: one route, its only topic assigned nothing, so the whole instance
+     * holds no partitions - and the silence that must precede it.
+     * <p>
+     * This is the commonest instance of the very problem the warning exists for - a misspelled topic name in a
+     * single-route definition - and until the assignment-landed flag replaced the {@code assigned.isEmpty()} early
+     * return it produced total silence, because the warning only ever fired when some OTHER route had been given
+     * something. Kafka hands a member that was assigned nothing an empty assignment, which is not the same thing
+     * as a member whose first rebalance has not happened.
+     * <p>
+     * <b>Both halves are asserted here on purpose.</b> "Warn whenever the assignment is empty" would pass the
+     * second half of this test and fire on every healthy start, so the first half - a real window of control-loop
+     * passes before any rebalance, with nothing said - is what pins the fix to the right discriminator.
+     */
+    @Test
+    void theOnlyRouteIsReportedWhenTheInstanceIsAssignedNothingAtAll() {
+        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        pc.string(UNASSIGNED_TOPIC).process(context -> Outcome.succeeded());
+
+        try (LogCapture logs = LogCapture.of(ConsumerHandle.class, Level.WARN)) {
+            handle = pc.start(runtime);
+
+            // Before any rebalance: an empty assignment is an instance that has not joined yet, and saying
+            // anything here would fire on every healthy start. Half a second is many control-loop passes.
+            Awaitility.await().pollDelay(Duration.ofMillis(500)).atMost(defaultTimeout).until(() ->
+                    logs.messagesAt(Level.WARN, "assigned no partition", UNASSIGNED_TOPIC).isEmpty());
+
+            // The rebalance that gives this member nothing at all - no partition of the one routed topic, and so
+            // an empty assignment for the whole instance. Kafka delivers it; the facade's listener records it.
+            runtime.mockConsumer().rebalance(Collections.emptyList());
+
+            Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
+                    assertThat(logs.messagesAt(Level.WARN, "assigned no partition", UNASSIGNED_TOPIC))
+                            .isNotEmpty());
+        }
+    }
 }

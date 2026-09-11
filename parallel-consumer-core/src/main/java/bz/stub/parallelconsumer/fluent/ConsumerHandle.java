@@ -7,12 +7,14 @@ package bz.stub.parallelconsumer.fluent;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -125,6 +127,17 @@ public class ConsumerHandle implements AutoCloseable {
     private final AtomicBoolean assignmentGapsLogged = new AtomicBoolean();
 
     /**
+     * Whether a rebalance has landed at all, which is the only thing that separates <em>nothing assigned yet</em>
+     * from <em>assigned nothing</em> - two states that look identical from the control loop, because both are an
+     * empty set, and only the second of which is a gap worth reporting.
+     * <p>
+     * Written on the poll thread by {@link #rebalanceListener}, read on the control thread by
+     * {@link #logRoutesWithNoAssignment}. Monotone - it is never unset by a revocation, because a member that held
+     * partitions and then lost them all has still had its assignment answered.
+     */
+    private final AtomicBoolean anAssignmentHasLanded = new AtomicBoolean();
+
+    /**
      * Package-private: a handle is only ever built by the definition that started the engine, which is what makes
      * "a started definition hands one back" the only way a user gets one.
      * <p>
@@ -174,6 +187,50 @@ public class ConsumerHandle implements AutoCloseable {
     }
 
     /**
+     * The listener the definition subscribes with, so that the facade sees every rebalance and the user's own
+     * listener still sees them too, chained behind it (KTD2).
+     * <p>
+     * <b>Why the facade needs one at all.</b> It records that an assignment has landed, which is what lets
+     * {@link #logRoutesWithNoAssignment} tell a member that has not rebalanced yet from one that rebalanced and
+     * was given nothing. Kafka delivers an empty assignment to the second, and that is the case the warning most
+     * needs to fire for.
+     * <p>
+     * <b>It does nothing but set a flag.</b> A rebalance callback runs on the poll thread, where anything that
+     * waits stalls the whole group - the line {@code ArchitectureTest.rebalanceCallbacksMustNotBlock} holds the
+     * engine to, and this is on the same thread.
+     *
+     * @param usersListener the definition's own listener, or null when it declared none
+     */
+    ConsumerRebalanceListener rebalanceListener(ConsumerRebalanceListener usersListener) {
+        return new ConsumerRebalanceListener() {
+
+            @Override
+            public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+                // set, not compareAndSet: the flag is monotone and nothing here needs to know whether this was the
+                // first one. The report downstream has its own one-shot latch.
+                anAssignmentHasLanded.set(true);
+                if (usersListener != null) {
+                    usersListener.onPartitionsAssigned(partitions);
+                }
+            }
+
+            @Override
+            public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+                if (usersListener != null) {
+                    usersListener.onPartitionsRevoked(partitions);
+                }
+            }
+
+            @Override
+            public void onPartitionsLost(Collection<TopicPartition> partitions) {
+                if (usersListener != null) {
+                    usersListener.onPartitionsLost(partitions);
+                }
+            }
+        };
+    }
+
+    /**
      * The hook the control loop runs at the end of every pass: bring the parked gauges into line with the
      * assignment, and say once which routes were assigned nothing.
      * <p>
@@ -199,10 +256,13 @@ public class ConsumerHandle implements AutoCloseable {
      * shares with another instance that took every partition (R28).
      */
     private void logRoutesWithNoAssignment(Set<TopicPartition> assigned) {
-        // Nothing assigned yet is not a gap - it is an instance whose first rebalance has not landed. The claim is
-        // made BEFORE the set arithmetic below, not after it: one guard rather than two, and the work is then done
-        // only by the pass that will report it.
-        if (assigned.isEmpty() || !assignmentGapsLogged.compareAndSet(false, true)) {
+        // Nothing assigned yet is not a gap; assigned nothing is. Both are an empty set here, so the wait is for a
+        // rebalance to LAND rather than for the set to be non-empty - which is what this guard used to test, and
+        // what made the commonest instance of the problem silent: a definition whose only route names a topic that
+        // does not exist gets an empty assignment for ever, so the warning never fired for the one case it exists
+        // for. The claim is made BEFORE the set arithmetic below, not after it: one guard rather than two, and the
+        // work is then done only by the pass that will report it.
+        if (!anAssignmentHasLanded.get() || !assignmentGapsLogged.compareAndSet(false, true)) {
             return;
         }
         Set<String> assignedTopics = new LinkedHashSet<>();
@@ -216,6 +276,9 @@ public class ConsumerHandle implements AutoCloseable {
                             + "routes will process nothing: {}. Either the topic does not exist, or another member "
                             + "of the group holds every partition of it. Assigned: {}",
                     unassigned, assigned);
+            // TODO(refactor): a topic-existence policy at start - fail, create, or ignore - would say WHICH of the
+            // two causes this is instead of naming both; its default is an owner decision and it needs an
+            // AdminClient call this library does not make today.
         }
     }
 

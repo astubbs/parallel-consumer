@@ -845,14 +845,13 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         // and the loop-end hook - before anything polls, and so the handle need not publish them itself.
         this.startedHandle = handle;
 
-        // The user's own rebalance listener, if the definition declared one (KTD2). The facade keeps no
-        // per-assignment state of its own to clear here any more: the attempt count and the parked set are both the
-        // engine's, and the engine already drops a revoked partition's records from both (KTD14).
-        if (usersRebalanceListener == null) {
-            processor.subscribe(subscriptionTopics());
-        } else {
-            processor.subscribe(subscriptionTopics(), usersRebalanceListener);
-        }
+        // The facade's own listener, with the user's chained behind it when the definition declared one (KTD2).
+        // The facade still keeps no per-assignment state to clear on a revocation - the attempt count and the
+        // parked set are both the engine's, and the engine already drops a revoked partition's records from both
+        // (KTD14). What it does need is to know that a rebalance has LANDED, because an assignment that is empty
+        // because nothing was given to this member and one that is empty because nothing has happened yet are the
+        // same set, and only the first is worth warning about.
+        processor.subscribe(subscriptionTopics(), handle.rebalanceListener(usersRebalanceListener));
         // Before the poll, so the first control loop already carries the hook rather than the second.
         handle.startObserving();
         if (requiresProducer()) {

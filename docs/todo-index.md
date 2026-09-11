@@ -61,6 +61,10 @@ that line, leave it in the code - it will show up here.
 
 - todo why isn't this in ParallelConsumer ?
 
+**`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/fluent/ConsumerHandle.java`**
+
+- TODO(refactor): a topic-existence policy at start - fail, create, or ignore - would say WHICH of the
+
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java`**
 
 - todo delete in next major version
