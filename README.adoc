@@ -532,6 +532,9 @@ Where `${project.version}` is the version to be used:
 ----
 
 <1> Setup your clients as per normal.
+A Consumer is required: hand PC either a finished `Consumer` instance, or the configuration to build one from as `consumerConfig` - any `ConsumerConfig` key, and PC builds it with `new KafkaConsumer<>(config)`.
+That configuration must carry `key.deserializer` and `value.deserializer`, because PC is generic over its key and value types and has no basis for choosing them for you.
+`enable.auto.commit` is set to false on a consumer PC builds, and setting it to true is refused rather than silently overridden.
 A Producer is only required if using the `produce` flows: hand PC either a finished `Producer` instance, or the configuration to build one from as `producerConfig` - any `ProducerConfig` key, serializers included, and PC builds it with `new KafkaProducer<>(config)`.
 In the transactional commit mode, set `transactional.id` in that configuration as you would when building the producer yourself.
 <2> Choose your ordering type, `KEY` in this case.
