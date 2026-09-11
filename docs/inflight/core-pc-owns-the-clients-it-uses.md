@@ -2,13 +2,16 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: reliability -->
-<!-- inflight-vetted: 2026-09-11 - rewritten against `feat/504-engine-park-and-handback`: `ParallelConsumerOptions` now carries `consumerConfig` beside `producerConfig` and `PCModule.buildConsumer` beside `buildProducer`, so the consumer half this note asked for exists - additively. Both instance fields, `consumer` and `producer`, are still there and still take the path they always took, so the structural-ownership argument below is untouched and is what remains open -->
+<!-- post-merge: checked - the vet is attributed to astubbs#506, not to the branch that carried it -->
+<!-- inflight-vetted: 2026-09-11 - rewritten against astubbs#506: `ParallelConsumerOptions` now carries `consumerConfig` beside `producerConfig` and `PCModule.buildConsumer` beside `buildProducer`, so the consumer half this note asked for exists - additively. Both instance fields, `consumer` and `producer`, are still there and still take the path they always took, so the structural-ownership argument below is untouched and is what remains open -->
 
+<!-- post-merge: checked-begin - written in the past tense about a PR, which stays correct once it lands -->
 **The consumer half of this note has landed, and the argument it was making has not.**
 astubbs#506 (for astubbs#504) gave `ParallelConsumerOptions` a `consumerConfig` mirroring
 `producerConfig`, with `PCModule.buildConsumer(Map)` as the protected substitution seam beside
 `buildProducer(Map)`. A caller holding nothing but connection properties no longer has to construct a
 client purely to hand it straight back.
+<!-- post-merge: checked-end -->
 
 That change is **additive**, deliberately: a supplied `consumer` takes exactly the path it took
 before. So PC can still be handed a client that somebody else built, holds, and may close - which is
@@ -50,12 +53,14 @@ predates the ownership lifecycle it would now be built on.
 
 ## What the configuration path settled, and does not need re-litigating
 
+<!-- post-merge: checked-begin - cites a merged PR's commit and its landed contract, both permanent -->
 Recorded here because it is the kind of decision a later reader re-opens from first principles. On
 the configuration path only - a supplied instance is untouched by all of it - PC refuses an explicit
 `enable.auto.commit=true` rather than quietly inverting it, forces an absent one to false, and
 requires `key.deserializer` and `value.deserializer` because the engine is generic over `<K, V>` and
 has no pair it could default to that would not be silently wrong. The reasoning is in astubbs#506's
 commit for the feature; the contract is in `ParallelConsumerOptions.validate()`.
+<!-- post-merge: checked-end -->
 
 ## Not owned
 

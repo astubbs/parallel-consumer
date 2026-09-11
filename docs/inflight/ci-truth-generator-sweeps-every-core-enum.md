@@ -44,8 +44,10 @@ cheaper to re-derive than to argue about.
 
 ## The error text is the reason this keeps being mis-stated
 
-**No shape reports an access error.** Measured on `feat/504-engine-park-and-handback`, by adding one
+<!-- post-merge: checked-begin - names the measurement by its PR, which is permanent, rather than by the branch that carried it -->
+**No shape reports an access error.** Measured on astubbs#506, by adding one
 throwaway enum to `bz.stub.parallelconsumer.internal`, building, and reverting:
+<!-- post-merge: checked-end -->
 
 | Enum shape | What the build says |
 |---|---|
@@ -124,10 +126,12 @@ one constraint for another; option 4 concedes the public surface permanently.
 
 ## What is verified here, and what is taken on report
 
-**Verified on this branch, by building:** that the sweep is not reachability-based; that the
+<!-- post-merge: checked-begin - the verification is attributed to astubbs#506, which outlives the branch it was done on -->
+**Verified on astubbs#506, by building:** that the sweep is not reachability-based; that the
 entry-point classes carry one overload per enum and live in `bz.stub.parallelconsumer`; the four-row
 error table above, each row from its own build; that a public top-level enum builds clean; and that
 the plugin descriptor has no exclusion parameter.
+<!-- post-merge: checked-end -->
 
 **Taken on report** from `ed68074d6`'s commit body, not re-measured here: that the
 `fluent` package's own attempt failed the same way, that `OutcomeTag`'s public form was adopted for
