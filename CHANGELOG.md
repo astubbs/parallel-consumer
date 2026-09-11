@@ -23,7 +23,7 @@ First release of the community fork of [confluentinc/parallel-consumer](https://
 **This is a stability release, and that is the point.** The change set is the largest this codebase has shipped in one version, and almost all of it is fixes:
 
 - the commit-path deadlock behind the long-standing "consumption stops after a rebalance" reports
-- a family of torn reads that silently lost records in every 0.5.x line
+- a family of torn reads
 - the metrics leak, offset accuracy on assignment, and an asynchronous commit recorded before the broker answered
 - the test lanes that now guard each of them
 
