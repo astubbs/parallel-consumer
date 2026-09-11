@@ -34,26 +34,55 @@ import java.time.Instant;
 @InterfaceStability.Unstable
 public final class ParkedRecord {
 
+    /**
+     * The engine's own record, held rather than copied. Every question but the decoded key and the cycle count is
+     * answered from here, which is what stops the list an operator reads drifting from the record the engine holds -
+     * and what lets a parked record be resumed or exported after the broker's retention has dropped it.
+     */
     private final RecordContext<byte[], byte[]> engineContext;
 
+    /**
+     * The key as this route's deserialiser read it, or null when it never decoded. Untyped on purpose: the parked
+     * view spans routes whose key types differ, and an operator listing what is stuck is not working in one route's
+     * types.
+     */
     private final Object key;
 
+    /**
+     * How many park cycles this record spent before parking for good. Counted by the facade because park cycles are
+     * its own construct - the engine below sees only that the record failed again.
+     */
     private final int cycles;
 
+    /**
+     * Package-private: an entry is only ever minted from a record the engine has already parked, so there is no way
+     * to describe a park that did not happen.
+     */
     ParkedRecord(RecordContext<byte[], byte[]> engineContext, Object key, int cycles) {
         this.engineContext = engineContext;
         this.key = key;
         this.cycles = cycles;
     }
 
+    /**
+     * The topic the record arrived on, which also names the route that parked it - one topic has one function.
+     */
     public String topic() {
         return engineContext.topic();
     }
 
+    /**
+     * The partition the park is holding up: its committed offset stays at this record while later records on the
+     * same partition complete, so a partition with a park in it is the unit an operator watches.
+     */
     public int partition() {
         return engineContext.partition();
     }
 
+    /**
+     * Where the partition's committed offset is held for as long as this record stays parked, and the identity an
+     * operator resumes or exports by.
+     */
     public long offset() {
         return engineContext.offset();
     }
@@ -117,6 +146,10 @@ public final class ParkedRecord {
         return engineContext.getConsumerRecord();
     }
 
+    /**
+     * One line for a log or a diagnostic dump: where the record is, what it cost, and why it stopped. The cycle
+     * count is left out when the route declared no cycles, so the common case reads without a zero in it.
+     */
     @Override
     public String toString() {
         return "ParkedRecord(" + topic() + "-" + partition() + "@" + offset() + ", attempts=" + attempts()

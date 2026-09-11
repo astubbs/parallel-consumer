@@ -17,8 +17,18 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 @InterfaceStability.Unstable
 public class PermanentDecodeFailureException extends ParallelConsumerException {
 
+    /**
+     * Fixed rather than computed: a {@link Throwable} is serialisable whether or not anything here intends to
+     * serialise one, so the identity is pinned rather than left to the compiler.
+     */
     private static final long serialVersionUID = 1L;
 
+    /**
+     * The cause is the exception the deserialiser threw, kept because it is the only account of what was wrong with
+     * the payload - this class adds the verdict, not the diagnosis. Public because the type is part of what a
+     * classifier's caller may catch and assert on, though in the library only the wrapper built by
+     * {@link Formats#classifyDecodeFailures} throws it.
+     */
     public PermanentDecodeFailureException(String message, Throwable cause) {
         super(message, cause);
     }

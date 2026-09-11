@@ -71,18 +71,47 @@ class FluentMeters {
      */
     static final String SUCCEEDED = "succeeded";
 
+    /**
+     * Records the route deliberately skipped ({@link Outcome#filtered()}). Counted apart from
+     * {@link #SUCCEEDED} although both complete and commit, because "nothing happened to it" and "it was processed"
+     * are different answers to the only question an operator is asking (R8).
+     */
     static final String FILTERED = "filtered";
 
+    /**
+     * Records that ran out of attempts and park cycles, or that a function parked outright. This is the count of
+     * park <em>events</em> and it never goes down; the size of the set an operator can act on is the gauge below.
+     */
     static final String PARKED = "parked";
 
+    /**
+     * Counted against the record whose route asked the instance to stop (R24). Not a terminal outcome of that
+     * record - it is left incomplete - but it is counted here because the tag answers "what became of a record on
+     * this topic", and an instance that stopped has exactly one of these.
+     */
     static final String STOPPED = "stopped";
 
+    /**
+     * The outcomes to pre-register a counter for, in the order a dashboard reads best. Iterated at start rather
+     * than consulted per record, so the order costs nothing on the hot path.
+     */
     private static final String[] OUTCOMES = {SUCCEEDED, FILTERED, PARKED, STOPPED};
 
+    /**
+     * The tag every meter here carries, because a route is named by its topic and that is how a user asks about it.
+     */
     private static final String TOPIC_TAG = "topic";
 
+    /**
+     * Carried by the gauges only. A parked record is acted on per partition - its partition's committed offset is
+     * the thing being held - so the live figures are cut that way and the outcome counts are not.
+     */
     private static final String PARTITION_TAG = "partition";
 
+    /**
+     * Distinguishes the four counters that share one meter name, so a dashboard can sum them or split them without
+     * knowing four names.
+     */
     private static final String OUTCOME_TAG = "outcome";
 
     /**
@@ -94,6 +123,13 @@ class FluentMeters {
      */
     private final Supplier<List<WorkContainer<?, ?>>> parkedContainers;
 
+    /**
+     * The engine's own metrics facade, which is what puts these meters in the user's registry with the instance's
+     * common tags rather than in a second registry this class would have to own.
+     * <p>
+     * <b>Null is the whole of what {@link #none()} means.</b> Every method here returns early on it, so the
+     * no-op form needs no subclass and no call site needs a null check of its own.
+     */
     private final PCMetrics metrics;
 
     /**
@@ -110,10 +146,25 @@ class FluentMeters {
      */
     private final Map<String, Map<String, Counter>> countersByTopic = new LinkedHashMap<>();
 
+    /**
+     * The gauge pair registered for each assigned partition, kept so that a partition this instance loses can have
+     * its gauges taken back out - a gauge left behind reports zero for a partition somebody else now owns.
+     * <p>
+     * Concurrent because it is written by the control thread, from the loop-end pass, and swept by whichever thread
+     * closes the instance.
+     */
     private final ConcurrentMap<TopicPartition, List<Meter>> gaugesByPartition = new ConcurrentHashMap<>();
 
+    /**
+     * Latched by {@link #deregister()} so that nothing registers a meter after the sweep has walked the maps.
+     * Volatile because the sweep runs on the closing thread and the registrations on the control thread.
+     */
     private volatile boolean deregistered;
 
+    /**
+     * Private: an instance arrives either through {@link #registerFor}, with its counters already in place, or
+     * through {@link #none()}, with nothing at all.
+     */
     private FluentMeters(PCMetrics metrics, Supplier<List<WorkContainer<?, ?>>> parkedContainers) {
         this.metrics = metrics;
         this.parkedContainers = parkedContainers;
@@ -193,6 +244,14 @@ class FluentMeters {
         }
     }
 
+    /**
+     * The pair of gauges one partition gets: how many records are parked on it, and how long its oldest parked
+     * record has been parked. Both read the live set through {@link #parkedContainers} rather than a value cached
+     * here, so a scrape sees the set as it is at the moment of the scrape.
+     *
+     * @return the meters to remember for removal, or an empty list when this instance has already been swept - in
+     * which case nothing was registered either
+     */
     private List<Meter> registerGaugesFor(TopicPartition partition) {
         if (deregistered) {
             // Re-checked inside the mapping function, not only at the top of syncPartitionGauges: deregister()
@@ -209,6 +268,10 @@ class FluentMeters {
         return Arrays.<Meter>asList(parkedNow, oldest);
     }
 
+    /**
+     * @return how many of the instance's parked records are on this partition - the live size of the set an
+     * operator can act on, which is the figure the parked counter deliberately is not
+     */
     private static double countParked(Supplier<List<WorkContainer<?, ?>>> parkedContainers,
                                       TopicPartition partition) {
         int count = 0;
@@ -254,6 +317,11 @@ class FluentMeters {
         return record.partition() == partition.partition() && record.topic().equals(partition.topic());
     }
 
+    /**
+     * Takes one partition's gauges out of the user's registry. The map entry is claimed first, so two threads
+     * arriving together - a rebalance pass and the close - cannot both deregister the same meters; whichever loses
+     * finds nothing and returns, which is why an absent entry is not an error.
+     */
     private void removeGaugesFor(TopicPartition partition) {
         List<Meter> meters = gaugesByPartition.remove(partition);
         if (meters == null) {

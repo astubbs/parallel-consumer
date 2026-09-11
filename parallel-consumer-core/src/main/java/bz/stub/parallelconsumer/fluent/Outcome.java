@@ -76,15 +76,37 @@ public final class Outcome<PK, PV> {
     private static final Outcome<?, ?> SUCCEEDED_INSTANCE =
             new Outcome<>(Kind.SUCCEEDED, Collections.emptyList(), null);
 
+    /**
+     * The filtered counterpart, a singleton on the same grounds.
+     *
+     * @see #SUCCEEDED_INSTANCE
+     */
     private static final Outcome<?, ?> FILTERED_INSTANCE =
             new Outcome<>(Kind.FILTERED, Collections.emptyList(), null);
 
+    /**
+     * The outcome reported, and the only field the dispatch wrapper always reads - the other two are meaningful for
+     * some kinds and not others, which is why they are read through {@link #kind()} rather than tested for null.
+     */
     private final Kind kind;
 
+    /**
+     * The records to produce, empty for every kind but {@link Kind#PRODUCE} rather than null, so that the produce
+     * path never has to distinguish "produced nothing" from "was not a produce".
+     */
     private final List<ProducerRecord<PK, PV>> records;
 
+    /**
+     * Why the record parked or the instance was asked to stop, and null for the kinds that need no reason. It is
+     * required of the two kinds that carry it because it is the whole of what the parked view, or the caller
+     * awaiting shutdown, has to report (R24, R28).
+     */
     private final String reason;
 
+    /**
+     * Private: every outcome comes from one of the factories below, so no caller can build a combination the kinds
+     * do not allow - a park with produced records, or a produce with no list at all.
+     */
     private Outcome(Kind kind, List<ProducerRecord<PK, PV>> records, String reason) {
         this.kind = kind;
         this.records = records;
@@ -152,6 +174,10 @@ public final class Outcome<PK, PV> {
         return new Outcome<>(Kind.PRODUCE, Collections.unmodifiableList(new ArrayList<>(produced)), null);
     }
 
+    /**
+     * Which of the terminal outcomes this is - the one branch the dispatch wrapper makes before reading anything
+     * else off this object.
+     */
     public Kind kind() {
         return kind;
     }
@@ -170,6 +196,10 @@ public final class Outcome<PK, PV> {
         return reason;
     }
 
+    /**
+     * The kind, plus only the parts that apply to it, and the records as a count rather than as themselves - an
+     * outcome is logged on a record's own path, so rendering the payloads there would put user data in the log.
+     */
     @Override
     public String toString() {
         return "Outcome(" + kind + (reason == null ? "" : ", reason=" + reason)

@@ -34,17 +34,40 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 @InterfaceStability.Unstable
 public final class Formats {
 
+    /**
+     * Named rather than imported, and that is the point of this whole class: the registry deserialisers are not on
+     * Maven Central, so core cannot depend on them and {@link #avro} resolves this by name at definition time
+     * instead (KTD7). A string here costs a user who wants none of it nothing at all.
+     */
     private static final String AVRO_DESERIALIZER = "io.confluent.kafka.serializers.KafkaAvroDeserializer";
 
+    /**
+     * The write half of {@link #AVRO_DESERIALIZER}, resolved the same way and treated as optional: a route that
+     * only consumes never needs it.
+     */
     private static final String AVRO_SERIALIZER = "io.confluent.kafka.serializers.KafkaAvroSerializer";
 
+    /**
+     * As {@link #AVRO_DESERIALIZER}, for {@link #protobuf}.
+     */
     private static final String PROTOBUF_DESERIALIZER =
             "io.confluent.kafka.serializers.protobuf.KafkaProtobufDeserializer";
 
+    /**
+     * As {@link #AVRO_SERIALIZER}, for {@link #protobuf}, and optional for the same reason.
+     */
     private static final String PROTOBUF_SERIALIZER = "io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializer";
 
+    /**
+     * The one class whose presence proves Jackson is on the classpath. Jackson is a declared but <em>optional</em>
+     * dependency of core, so this is a presence check rather than a resolution: the JSON helpers use the real types
+     * through {@link JacksonFormats}, which is only loaded once this check has passed.
+     */
     private static final String JACKSON_OBJECT_MAPPER = "com.fasterxml.jackson.databind.ObjectMapper";
 
+    /**
+     * No instances: this is a set of static helpers a route names, not something a user holds.
+     */
     private Formats() {
     }
 
@@ -156,6 +179,15 @@ public final class Formats {
         return Format.named(new ConfigMergingDeserializer<>(deserializer, extraConfig), serializer, label, type);
     }
 
+    /**
+     * Builds one of the resolved classes through its no-argument constructor, and checks it really is what the
+     * helper expected before handing it out. The type check matters because the class was named as a string: a
+     * classpath holding something else under that name would otherwise fail as a cast at the first record, a long
+     * way from the definition that asked for it.
+     *
+     * @param label the helper's own spelling, such as {@code avro(Order)}, so a refusal names what the user wrote
+     *              rather than the class it went looking for
+     */
     private static Object instantiate(String className, Class<?> expected, String label) {
         try {
             Object instance = Class.forName(className).getDeclaredConstructor().newInstance();
@@ -171,6 +203,14 @@ public final class Formats {
         }
     }
 
+    /**
+     * Whether a class is there, without initialising it - the {@code false} argument to {@code Class.forName}, so
+     * a probe never runs a static initialiser for a library the user may end up not using at all.
+     * <p>
+     * {@link LinkageError} is caught beside {@link ClassNotFoundException} because a half-present library - the
+     * class there, something it extends missing - is as unusable as an absent one and should be reported the same
+     * way, at definition time, rather than thrown out of a probe.
+     */
     private static boolean isOnClasspath(String className) {
         try {
             Class.forName(className, false, Formats.class.getClassLoader());
@@ -180,6 +220,15 @@ public final class Formats {
         }
     }
 
+    /**
+     * Refuses <b>here</b>, while the definition is being written, when the library a helper needs is absent - the
+     * alternative being a first record that fails at a client that has already been built and has already joined a
+     * group (KTD7).
+     *
+     * @param library     the human name of what is missing, and {@code coordinates} where to get it: a message that
+     *                    names only a class leaves the reader to work out which artifact carries it
+     * @param coordinates the dependency to add, including the repository when it is not Maven Central
+     */
     private static void requireOnClasspath(String className, String label, String library, String coordinates) {
         if (!isOnClasspath(className)) {
             throw new IllegalStateException(msg("The {} format helper needs {} on the classpath and {} is not there "
@@ -198,22 +247,45 @@ public final class Formats {
         return Collections.unmodifiableMap(merged);
     }
 
+    /**
+     * Carries a helper's own fixed settings into whatever the definition configures the route with - see
+     * {@link #merge}. Everything else is straight delegation.
+     */
     private static final class ConfigMergingDeserializer<T> implements Deserializer<T> {
 
+        /**
+         * The resolved deserialiser this exists to configure. Held rather than extended because it was built by
+         * name and its type is not known here.
+         */
         private final Deserializer<T> inner;
 
+        /**
+         * The helper's fixed settings, which win over the user's on the way through - they are what makes the
+         * helper the format it claims to be, such as the specific-reader flag that decides what Avro hands back.
+         */
         private final Map<String, Object> extra;
 
+        /**
+         * Built only by {@link #reflective}, which is the one place that knows a resolved deserialiser needs
+         * settings the user was not asked for.
+         */
         private ConfigMergingDeserializer(Deserializer<T> inner, Map<String, Object> extra) {
             this.inner = inner;
             this.extra = extra;
         }
 
+        /**
+         * The one method this wrapper exists for: the inner deserialiser is configured with the definition's
+         * pass-through properties plus the helper's own, rather than with either alone.
+         */
         @Override
         public void configure(Map<String, ?> configs, boolean isKey) {
             inner.configure(merge(configs, extra), isKey);
         }
 
+        /**
+         * Plain delegation - the settings were merged at configure time, so there is nothing left to do per record.
+         */
         @Override
         public T deserialize(String topic, byte[] data) {
             return inner.deserialize(topic, data);
@@ -232,28 +304,50 @@ public final class Formats {
             return inner.deserialize(topic, headers, data);
         }
 
+        /**
+         * Closes the wrapped deserialiser: this wrapper holds nothing of its own, but a registry deserialiser holds
+         * an HTTP client and a cache, and dropping the call would leak them for the life of the process.
+         */
         @Override
         public void close() {
             inner.close();
         }
     }
 
+    /**
+     * The write-side twin of {@link ConfigMergingDeserializer}, for the routes that also produce.
+     */
     private static final class ConfigMergingSerializer<T> implements Serializer<T> {
 
+        /**
+         * The resolved serialiser this exists to configure, held for the same reason its read-side twin holds one.
+         */
         private final Serializer<T> inner;
 
+        /**
+         * The helper's fixed settings, which win over the user's on the way through.
+         */
         private final Map<String, Object> extra;
 
+        /**
+         * Built only by {@link #reflective}, and only when the library turned out to ship a serialiser at all.
+         */
         private ConfigMergingSerializer(Serializer<T> inner, Map<String, Object> extra) {
             this.inner = inner;
             this.extra = extra;
         }
 
+        /**
+         * The one method this wrapper exists for - the definition's pass-through properties plus the helper's own.
+         */
         @Override
         public void configure(Map<String, ?> configs, boolean isKey) {
             inner.configure(merge(configs, extra), isKey);
         }
 
+        /**
+         * Plain delegation - the settings were merged at configure time.
+         */
         @Override
         public byte[] serialize(String topic, T data) {
             return inner.serialize(topic, data);
@@ -268,6 +362,9 @@ public final class Formats {
             return inner.serialize(topic, headers, data);
         }
 
+        /**
+         * Closes the wrapped serialiser, for the reason its read-side twin's close gives.
+         */
         @Override
         public void close() {
             inner.close();
@@ -279,20 +376,41 @@ public final class Formats {
      */
     private static final class ClassifyingDeserializer<T> implements Deserializer<T> {
 
+        /**
+         * The deserialiser whose failures are being classified. It is unchanged by this wrapper: what it throws, it
+         * throws, and the only thing decided here is whether that throw is worth retrying.
+         */
         private final Deserializer<T> inner;
 
+        /**
+         * The user's verdict function. It is the only thing in the library that can tell a corrupt payload from a
+         * registry outage, because only the route's author knows what the wrapped deserialiser throws for each
+         * (R12).
+         */
         private final Function<Exception, Decode<T>> classifier;
 
+        /**
+         * Built only by {@link #classifyDecodeFailures}, which has already null-checked both arguments.
+         */
         private ClassifyingDeserializer(Deserializer<T> inner, Function<Exception, Decode<T>> classifier) {
             this.inner = inner;
             this.classifier = classifier;
         }
 
+        /**
+         * Passes the configuration straight through - unlike the config-merging wrappers above, this one adds no
+         * settings of its own, because a classifier changes what a failure means rather than how decoding works.
+         */
         @Override
         public void configure(Map<String, ?> configs, boolean isKey) {
             inner.configure(configs, isKey);
         }
 
+        /**
+         * Classifies what the wrapped deserialiser throws, and rethrows the original untouched when the classifier
+         * does not call the payload permanently undecodable - so an unclassified failure behaves exactly as it did
+         * before this wrapper was put round it.
+         */
         @Override
         public T deserialize(String topic, byte[] data) {
             try {
@@ -340,6 +458,9 @@ public final class Formats {
                     decodeFailure);
         }
 
+        /**
+         * Closes the wrapped deserialiser. The classifier is the user's function and is not this wrapper's to close.
+         */
         @Override
         public void close() {
             inner.close();

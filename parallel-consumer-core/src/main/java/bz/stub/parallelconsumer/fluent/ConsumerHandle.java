@@ -63,8 +63,18 @@ public class ConsumerHandle implements AutoCloseable {
      */
     private static final Duration FAILURE_POLL_INTERVAL = Duration.ofMillis(200);
 
+    /**
+     * The engine this handle is the face of. Every question answered here - whether it is still consuming, what is
+     * parked, what failed - is put to the engine rather than mirrored into a field of this class, because the
+     * facade deliberately owns no state the engine already owns.
+     */
     private final ParallelEoSStreamProcessor<byte[], byte[]> processor;
 
+    /**
+     * The dispatch wrapper every record passes through. This handle reaches it for two things: to hand it the
+     * parked-set supplier and the callbacks it may make back ({@link #startObserving()}), and to read what is
+     * parked on a given set of topics ({@link #parkedView}).
+     */
     private final RouteDispatcher dispatcher;
 
     /**
@@ -73,12 +83,29 @@ public class ConsumerHandle implements AutoCloseable {
      */
     private final Map<String, Set<String>> routeTopicsByTopic;
 
+    /**
+     * The path the instance declared for its close, honoured by {@link #close()} and by the stop a route asks for
+     * (R17). A definition fault ignores it and does not drain - see {@link #fatal}, which says why.
+     */
     private final ClosePath closePath;
 
+    /**
+     * The instance's meters, held so that this handle can take them out of the user's registry at a moment of its
+     * own choosing rather than depending on the engine's shutdown reaching its metrics step.
+     */
     private final FluentMeters meters;
 
+    /**
+     * Counted down by whichever of the three close paths ran, so a caller has something to block on. An engine that
+     * ended without passing through this handle counts it down never, which is why {@link #awaitShutdown()} polls
+     * the engine rather than only waiting here.
+     */
     private final CountDownLatch shutdown = new CountDownLatch(1);
 
+    /**
+     * Claimed by the first close to arrive - the caller's, the stop request's, or the fault's - so the other two
+     * return instead of closing an instance twice on two different paths.
+     */
     private final AtomicBoolean closing = new AtomicBoolean();
 
     /**
@@ -97,6 +124,13 @@ public class ConsumerHandle implements AutoCloseable {
      */
     private final AtomicBoolean assignmentGapsLogged = new AtomicBoolean();
 
+    /**
+     * Package-private: a handle is only ever built by the definition that started the engine, which is what makes
+     * "a started definition hands one back" the only way a user gets one.
+     * <p>
+     * The handle is not observing anything when it returns. {@link #startObserving()} does that, and is separate
+     * because this object has to exist before the dispatch wrapper can be told where to report.
+     */
     ConsumerHandle(ParallelEoSStreamProcessor<byte[], byte[]> processor,
                    RouteDispatcher dispatcher,
                    Map<String, Set<String>> routeTopicsByTopic,
@@ -367,12 +401,23 @@ public class ConsumerHandle implements AutoCloseable {
         closeFromOurOwnThread("pc-fluent-stop-closer", closePath);
     }
 
+    /**
+     * Starts the close on a daemon thread of its own, named after the path that asked for it so a thread dump says
+     * which of the two self-closing paths ran. Both callers are worker threads and the engine's close awaits the
+     * worker pool, so neither can do this inline (KTD6). A daemon thread because a close that outlives the JVM's
+     * last user thread has nothing left to close down.
+     */
     private void closeFromOurOwnThread(String threadName, ClosePath path) {
         Thread closer = new Thread(() -> closeOnPath(path), threadName);
         closer.setDaemon(true);
         closer.start();
     }
 
+    /**
+     * What the self-closing thread runs. It claims the close exactly as {@link #close()} does, so a caller who
+     * closed first wins and this one returns; the difference is the end of it, where a failure has no caller to be
+     * thrown to and the latch still has to fall so that everyone awaiting is released.
+     */
     private void closeOnPath(ClosePath path) {
         if (!closing.compareAndSet(false, true)) {
             return;
@@ -387,6 +432,12 @@ public class ConsumerHandle implements AutoCloseable {
         }
     }
 
+    /**
+     * Tells an awaiting caller what ended the instance, if anything did. A definition fault is rethrown <b>as it was
+     * thrown</b>, so a caller can still catch its own exception type; only a checked one has to be wrapped, because
+     * the await signature never declared it. A clean close reaches the engine's own failure check below and, when
+     * that is clean too, returns silently - which is the one case where silence is the right answer.
+     */
     private void surfaceAnyFault() {
         Throwable cause = fault.get();
         if (cause instanceof RuntimeException) {
@@ -437,11 +488,20 @@ public class ConsumerHandle implements AutoCloseable {
         dispatcher.parkedContainers(this::parkedContainers);
         dispatcher.instanceControl(new InstanceControl() {
 
+            /**
+             * Satisfies {@link InstanceControl#fatal} by forwarding to the enclosing handle's private method of the
+             * same name, which is the whole reason this adapter exists: the decision stays where it is written, and
+             * off this public class's surface.
+             */
             @Override
             public void fatal(Throwable definitionFault) {
                 ConsumerHandle.this.fatal(definitionFault);
             }
 
+            /**
+             * Satisfies {@link InstanceControl#stopRequested} by forwarding to the enclosing handle, for the same
+             * reason as {@link #fatal(Throwable)} above.
+             */
             @Override
             public void stopRequested(ConsumerRecord<byte[], byte[]> record, String reason) {
                 ConsumerHandle.this.stopRequested(record, reason);

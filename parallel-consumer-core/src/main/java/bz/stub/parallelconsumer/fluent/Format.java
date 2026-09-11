@@ -26,14 +26,38 @@ import java.util.Objects;
 @InterfaceStability.Unstable
 public final class Format<T> implements Serde<T> {
 
+    /**
+     * How bytes become a value, or null on a write-only format. Null is a legitimate half of this type, which is
+     * the one way it differs from a plain {@link Serde} - hence {@link #hasDeserializer()} rather than a cast.
+     */
     private final Deserializer<T> deserializer;
 
+    /**
+     * How a value becomes bytes, or null on a read-only format - a route may be declared with a hand-written
+     * {@link Deserializer} for a topic that nothing here can write (KTD9).
+     */
     private final Serializer<T> serializer;
 
+    /**
+     * What this format calls itself in a message. Held rather than derived on demand because a format is named in
+     * refusals about the route that declared it, and a deserialiser's class name is all there is to go on once a
+     * lambda or an anonymous class has been handed in.
+     */
     private final String description;
 
+    /**
+     * The Java type this format reads into, or null when nothing told it. Nothing in the facade reads this; it is
+     * carried for the sandbox, which cannot generate a record for a class it cannot name.
+     *
+     * @see #type()
+     */
     private final Class<T> type;
 
+    /**
+     * Private, so that every format arrives through a factory which has already decided which halves it has. The
+     * four arguments are not independent: at least one of the two serialisers must be present, and the factories
+     * are where that is enforced.
+     */
     private Format(Deserializer<T> deserializer, Serializer<T> serializer, String description, Class<T> type) {
         this.deserializer = deserializer;
         this.serializer = serializer;
@@ -90,6 +114,11 @@ public final class Format<T> implements Serde<T> {
         return new Format<>(serde.deserializer(), serde.serializer(), serde.getClass().getSimpleName(), null);
     }
 
+    /**
+     * The factory for this package's own format helpers, which are the only callers that can name a format better
+     * than its deserialiser's class does - {@code json(Order.class)} reads as itself in a refusal, where the public
+     * factories can only report whatever class the user handed in. Package-private for that reason.
+     */
     static <T> Format<T> named(Deserializer<T> deserializer,
                                Serializer<T> serializer,
                                String description,
@@ -156,6 +185,10 @@ public final class Format<T> implements Serde<T> {
         }
     }
 
+    /**
+     * Closes whichever halves this format has, satisfying {@link Serde#close()} for a type where either half may be
+     * absent - the null tests are the difference from a plain serde, not defensiveness.
+     */
     @Override
     public void close() {
         if (deserializer != null) {
@@ -166,6 +199,10 @@ public final class Format<T> implements Serde<T> {
         }
     }
 
+    /**
+     * The description, alone: a format is printed inside refusals that already name the topic and the side, so
+     * anything more here would repeat what surrounds it.
+     */
     @Override
     public String toString() {
         return description;

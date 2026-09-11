@@ -25,8 +25,15 @@ public interface RouteView {
      */
     Set<String> topics();
 
+    /**
+     * How this route reads key bytes. A fake reads it to encode a generated key the way the route expects to decode
+     * it, which is what lets one definition run against either world (KTD9).
+     */
     Format<?> consumedKey();
 
+    /**
+     * How this route reads value bytes - the other half of what a fake needs to generate records this route accepts.
+     */
     Format<?> consumedValue();
 
     /**
@@ -40,6 +47,10 @@ public interface RouteView {
      */
     Format<?> producedValue();
 
+    /**
+     * Whether this route is one of the reasons the instance needs a producer. False when it declared no produced
+     * types, in which case its function can only report terminal outcomes (R4).
+     */
     boolean producesRecords();
 
     /**
@@ -47,6 +58,10 @@ public interface RouteView {
      */
     OptionalInt retryLimit();
 
+    /**
+     * How long a failed record waits before its next attempt on this route - the route's own delay, or the instance
+     * default it inherited (R6, R10).
+     */
     Duration retryDelay();
 
     /**

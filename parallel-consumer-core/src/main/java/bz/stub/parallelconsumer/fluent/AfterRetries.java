@@ -65,20 +65,57 @@ public final class AfterRetries {
         STOP
     }
 
+    /**
+     * Which of the two reactions this policy asks for, fixed by the factory that made it and never changed after.
+     * That it cannot change is what lets {@link #requireParking(String)} refuse an export setting outright, rather
+     * than storing one that could never fire.
+     */
     private final Reaction reaction;
 
+    /**
+     * The topic exported records are copied to, or null for the complete default: park in place, with the source
+     * topic as the store and the offset map as the index, and nothing copied anywhere.
+     */
     private String destination;
 
+    /**
+     * The first of the three export triggers: export on the dispatch after exhaustion, which is the classic
+     * dead-letter queue. A destination declared with no trigger at all would export nothing, which is why the
+     * definition refuses that pairing rather than accepting it (KTD5).
+     */
     private boolean immediately;
 
+    /**
+     * The second export trigger: the age a parked record may reach before it is copied out, ahead of the source
+     * topic's retention deleting it. Null when no age bound was declared.
+     */
     private Duration olderThan;
 
+    /**
+     * The third export trigger, boxed so that "not declared" stays distinguishable from a declared value - a
+     * distinction {@link #payloadPercentage()} hands on as an {@link OptionalInt} rather than as a sentinel.
+     */
     private Integer payloadPercentage;
 
+    /**
+     * How long each park cycle waits before the next attempt. Null when none was declared. It is declared together
+     * with {@link #parkCycles}, and {@link #declaresAnyParkCycle()} is what lets the definition refuse half of that
+     * pair rather than silently ignoring the half that arrived (R27).
+     */
     private Duration parkDelay;
 
+    /**
+     * How many attempts {@link #parkDelay} grants before the record parks for good. Boxed for the same reason as
+     * {@link #payloadPercentage}: undeclared and declared are different answers here, and {@link #parkCycles()} may
+     * only collapse them to zero once the pair has been validated.
+     */
     private Integer parkCycles;
 
+    /**
+     * Private, so a policy can only be born through {@link #park()} or {@link #stop()} and therefore always names
+     * its reaction. {@link #copy()} is the only other caller, and it carries the remaining fields across by hand
+     * for the same reason: there is no constructor that takes them.
+     */
     private AfterRetries(Reaction reaction) {
         this.reaction = reaction;
     }
@@ -180,6 +217,10 @@ public final class AfterRetries {
     /**
      * Export the oldest parked records on a partition once its offset-map payload reaches this whole percentage of
      * Kafka's commit-metadata cap, until the payload is back below it (R27).
+     * <p>
+     * Declaring one is refused in this version: the engine has no accessor for a partition's encoded payload length,
+     * so the trigger would never fire (KTD5). The value is still recorded here rather than rejected on the spot, so
+     * that the definition's refusal can quote the number that was asked for.
      *
      * @param percentage a whole percentage, at most {@link #MAX_PAYLOAD_PERCENTAGE}
      */
@@ -200,18 +241,34 @@ public final class AfterRetries {
         }
     }
 
+    /**
+     * The one thing a reader of this policy must branch on: park the record, or stop the instance. Everything else
+     * here only qualifies the parking case (R27).
+     */
     public Reaction reaction() {
         return reaction;
     }
 
+    /**
+     * @return the topic exported records are copied to, or null when this policy parks in place and copies nothing -
+     * which is a complete policy, not an unfinished one
+     */
     public String destination() {
         return destination;
     }
 
+    /**
+     * Whether exhaustion itself is the export trigger, rather than an age or a payload bound. Named
+     * {@code isDlqImmediately} to match the {@code dlqImmediately} a definition's author actually wrote, so a
+     * refusal quoting one reads the same as the code quoting the other.
+     */
     public boolean isDlqImmediately() {
         return immediately;
     }
 
+    /**
+     * @return how old a parked record may get before it is exported, or null when no age bound was declared
+     */
     public Duration ageBound() {
         return olderThan;
     }
@@ -268,6 +325,10 @@ public final class AfterRetries {
         return copy;
     }
 
+    /**
+     * Every setting, nulls included, because this is read inside a validation refusal that must show what the
+     * policy actually carries - an omitted null would make an undeclared setting look like a declared one.
+     */
     @Override
     public String toString() {
         return "AfterRetries(" + reaction + ", destination=" + destination + ", immediately=" + immediately

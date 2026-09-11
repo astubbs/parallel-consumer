@@ -29,10 +29,22 @@ import java.util.Objects;
 @InterfaceStability.Unstable
 public final class Decode<T> {
 
+    /**
+     * The exception the deserialiser threw, held so {@link #toString()} can name it. It is never read back out: what
+     * travels on is a throw - {@link PermanentDecodeFailureException} wrapping this, or this one untouched.
+     */
     private final Exception failure;
 
+    /**
+     * The verdict, as a flag rather than a second type, because there are exactly two arms and no third is coming - a
+     * classifier is only ever handed a failure.
+     */
     private final boolean permanent;
 
+    /**
+     * Private: {@link #permanentFailure} and {@link #transientFailure} are the whole vocabulary, and naming the arm
+     * at the call site is what makes a one-line classifier readable.
+     */
     private Decode(Exception failure, boolean permanent) {
         this.failure = failure;
         this.permanent = permanent;
@@ -52,10 +64,17 @@ public final class Decode<T> {
         return new Decode<>(Objects.requireNonNull(cause, "A cause must be supplied"), false);
     }
 
+    /**
+     * True when the payload will never decode, so the record parks now and spends no attempt (R12). False is an
+     * ordinary failed attempt, which is also what an unclassified deserialiser failure amounts to.
+     */
     public boolean isPermanent() {
         return permanent;
     }
 
+    /**
+     * Names the arm and the failure under it, so a log line about a parked record says which verdict put it there.
+     */
     @Override
     public String toString() {
         return "Decode(" + (permanent ? "permanent" : "transient") + " failure: " + failure + ")";

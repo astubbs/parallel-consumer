@@ -26,6 +26,11 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  */
 class KafkaClientRuntime implements ClientRuntime {
 
+    /**
+     * Builds the real consumer, on raw bytes because each route deserialises its own (KTD2). It refuses a definition
+     * that names neither a broker nor a group before constructing anything, so the complaint is about the definition
+     * rather than about a client that failed to connect.
+     */
     @Override
     public Consumer<byte[], byte[]> consumer(DefinitionView definition) {
         Map<String, Object> config = definition.connectionProperties();

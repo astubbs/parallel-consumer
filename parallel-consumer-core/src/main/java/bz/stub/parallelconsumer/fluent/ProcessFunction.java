@@ -23,5 +23,9 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 @InterfaceStability.Unstable
 public interface ProcessFunction<K, V, PK, PV> {
 
+    /**
+     * Called once per attempt, on a worker thread, with the record already decoded by this route's formats. Return an
+     * {@link Outcome} to end the record; throw anything at all to ask for another attempt (R9).
+     */
     Outcome<PK, PV> process(ProcessContext<K, V> context) throws Exception;
 }
