@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.fluent;
  */
 
 import org.apache.kafka.common.annotation.InterfaceStability;
+import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
@@ -218,6 +219,19 @@ public final class Formats {
             return inner.deserialize(topic, data);
         }
 
+        /**
+         * Delegates <b>with the headers</b>, which the interface's default form would drop.
+         * <p>
+         * {@link Deserializer}'s default 3-arg method discards the headers and calls the 2-arg one, so a wrapper
+         * that overrides only the 2-arg form silently hides them from the deserialiser it wraps - and the dispatch
+         * wrapper calls the 3-arg form for every record. A registry deserialiser that resolves its schema from a
+         * header would have seen none.
+         */
+        @Override
+        public T deserialize(String topic, Headers headers, byte[] data) {
+            return inner.deserialize(topic, headers, data);
+        }
+
         @Override
         public void close() {
             inner.close();
@@ -243,6 +257,15 @@ public final class Formats {
         @Override
         public byte[] serialize(String topic, T data) {
             return inner.serialize(topic, data);
+        }
+
+        /**
+         * Delegates <b>with the headers</b>, for the same reason the deserialiser above does: the interface's
+         * default 3-arg form drops them, and the dispatch wrapper serialises every produced record through it.
+         */
+        @Override
+        public byte[] serialize(String topic, Headers headers, T data) {
+            return inner.serialize(topic, headers, data);
         }
 
         @Override
@@ -275,13 +298,46 @@ public final class Formats {
             try {
                 return inner.deserialize(topic, data);
             } catch (Exception decodeFailure) {
-                Decode<T> verdict = classifier.apply(decodeFailure);
-                if (verdict != null && verdict.isPermanent()) {
-                    throw new PermanentDecodeFailureException(msg("Permanently undecodable payload on topic {}",
-                            topic), decodeFailure);
+                PermanentDecodeFailureException permanent = permanentIfClassifierSaysSo(topic, decodeFailure);
+                if (permanent != null) {
+                    throw permanent;
                 }
                 throw decodeFailure;
             }
+        }
+
+        /**
+         * Classifies exactly as the 2-arg form does, and delegates <b>with the headers</b>.
+         * <p>
+         * This is the form the dispatch wrapper actually calls. Left to the interface's default it would drop the
+         * headers on the way in, so a classifier wrapping a header-driven deserialiser would have been classifying
+         * a failure the headers themselves caused.
+         */
+        @Override
+        public T deserialize(String topic, Headers headers, byte[] data) {
+            try {
+                return inner.deserialize(topic, headers, data);
+            } catch (Exception decodeFailure) {
+                PermanentDecodeFailureException permanent = permanentIfClassifierSaysSo(topic, decodeFailure);
+                if (permanent != null) {
+                    throw permanent;
+                }
+                throw decodeFailure;
+            }
+        }
+
+        /**
+         * @return the exception to throw when the classifier called this payload permanently undecodable, or null
+         * when it did not - in which case the caller rethrows the original, which is an ordinary failed attempt
+         * (R12)
+         */
+        private PermanentDecodeFailureException permanentIfClassifierSaysSo(String topic, Exception decodeFailure) {
+            Decode<T> verdict = classifier.apply(decodeFailure);
+            if (verdict == null || !verdict.isPermanent()) {
+                return null;
+            }
+            return new PermanentDecodeFailureException(msg("Permanently undecodable payload on topic {}", topic),
+                    decodeFailure);
         }
 
         @Override
