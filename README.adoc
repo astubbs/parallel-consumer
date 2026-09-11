@@ -1295,6 +1295,18 @@ Gauge `pc.partition.assignment.epoch{subsystem=partitions, topic="topicName", pa
 
 Epoch of partition assignment
 
+**Partition Parked Records**
+
+Gauge `pc.partition.parked.records{subsystem=partitions, topic="topicName", partition="partitionNumber"}`
+
+Number of records parked in place right now on this partition - the live size of the set an operator can act on, which is not a count of park events
+
+**Partition Parked Oldest Age**
+
+Gauge `pc.partition.parked.oldest.age{subsystem=partitions, topic="topicName", partition="partitionNumber"}`
+
+Age in seconds of the oldest record parked on this partition, or zero when none is parked
+
 ==== Processor
 
 **User Function Processing Time**
