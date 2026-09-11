@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
+import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.RecordContext;
 import bz.stub.parallelconsumer.internal.PCModule;
 import lombok.AccessLevel;
@@ -378,6 +379,40 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
 
     private Optional<Instant> retryDueAt = Optional.empty();
 
+    /**
+     * Why this record parked, or null when it is not parked - the state a {@link PCRetriableException#park} sets
+     * (KTD14). A parked record is never due again on its own: it stays incomplete, holds no worker, and waits for
+     * somebody to act on it.
+     * <p>
+     * <b>A state rather than an enormous retry delay</b>, because a delay is arithmetic and arithmetic degrades: a
+     * duration large enough that {@code failedAt + it} leaves {@link Instant}'s range is caught in
+     * {@link #computeRetryDueAt} and replaced with the default, so "never" silently becomes a one-second hot retry
+     * against whatever was already failing. Nothing can do that to a field that is either set or not.
+     * <p>
+     * Written by the holder of the claim inside {@link #updateFailureHistory}, beside the failure history.
+     * <p>
+     * <b>CLEARED SUSPICION, 2026-09-10: a plain field read from three threads.</b> The suspicion is the obvious
+     * one - a worker writes this and the controller and a user's own thread read it, with no {@code volatile} and
+     * no lock. It is sound on all three paths, and the argument is a <em>different</em> one on each, which is why
+     * naming only the first was not enough:
+     * <ul>
+     *   <li><b>worker to controller</b> goes through the work mailbox, a {@link java.util.concurrent.BlockingQueue},
+     *       which carries the happens-before;</li>
+     *   <li><b>worker to the selection path</b> goes through {@code state}'s volatile write in
+     *       {@link #recordVerdict}, and {@code isClaimableFrom} reads the state first;</li>
+     *   <li><b>controller to whoever reads the parked VIEW</b> - the widest reader, and the one the previous
+     *       version of this javadoc did not cover - goes through the retry queue's write lock: the controller adds
+     *       the container under it in {@code ShardManager.onFailure}, and
+     *       {@link ShardManager#getParkedWorkContainers()} walks the queue holding the matching read lock.</li>
+     * </ul>
+     * <b>What would reopen it:</b> a reader of this field that reaches a container by some route other than those
+     * three - a second parked store, a direct handle from the facade to a container, a scan of the shard maps -
+     * and nothing would go red if one appeared, because no gate can see which edge a read arrived by. Per this
+     * package's {@code AGENTS.md} no {@code @GuardedBy} is owed or even writable here: the queue's guard is a
+     * {@link java.util.concurrent.locks.ReadWriteLock}, on which the check is silently inert.
+     */
+    private String parkedReason;
+
     private Comparator<WorkContainer<?, ?>> comparator = Comparator
             .comparing((WorkContainer<?, ?> workContainer) -> {
                 // TopicPartition does not implement comparable
@@ -438,8 +473,13 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     public boolean isDelayPassed() {
-        if (!hasPreviouslyFailed()) {
-            // if never failed, there is no artificial delay, so "delay" has always passed
+        if (isParked()) {
+            // Read FIRST, and it is not an optimisation: a parked record has no deadline, and no arithmetic over
+            // the sentinel that stands in for one may be allowed to decide whether the record is due.
+            return false;
+        }
+        if (!hasRetryDeadline()) {
+            // no hand-back has ever written this record a deadline, so there is no artificial delay to wait out
             return true;
         }
         Duration delay = getDelayUntilRetryDue();
@@ -448,6 +488,15 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     /**
+     * How far away this record's deadline is - a <b>reporting</b> figure, used to decide how long the controller may
+     * block ({@code getTimeToBlockFor}) and nothing else.
+     * <p>
+     * <b>Ask {@link #isParked()} first.</b> A parked record has no due time at all, so there is no honest duration
+     * to answer with: what comes back is the distance to {@link Instant#MAX}, which is a valid {@link Duration} and
+     * far too large for {@link Duration#toMillis()}. Callers that were reaching for a "very far away" number are
+     * asking the wrong question - {@code ShardManager.getLowestRetryTime()} skips parked records for exactly that
+     * reason, and so does the slow-work scan.
+     *
      * @return time until it should be retried
      */
     public Duration getDelayUntilRetryDue() {
@@ -457,10 +506,58 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     /**
+     * Whether this record's partition has been revoked since it was handed out - so a worker still holding it is
+     * working on a record that now belongs to somebody else, and anything it reports about the record is a report
+     * about a record this instance no longer owns.
+     * <p>
+     * The engine already asks this when the record comes back ({@code WorkManager.handleFutureResult}); this is the
+     * same question, asked from the worker before it reports.
+     */
+    public boolean isStale() {
+        return module.workManager().checkIfWorkIsStale(this);
+    }
+
+    /**
+     * @return whether this record is <em>parked</em>: never due again on its own, holding no worker, still
+     * incomplete in the offset map, and carrying a reason an operator can act on
+     */
+    public boolean isParked() {
+        return parkedReason != null;
+    }
+
+    /**
+     * @return why this record parked, or null when it is not parked
+     */
+    public String getParkedReason() {
+        return parkedReason;
+    }
+
+    /**
      * @return The point in time at which the record should ideally be retried.
      */
     public Instant getRetryDueAt() {
         return retryDueAt.orElse(Instant.MIN); // use a constant for stable comparison
+    }
+
+    /**
+     * Whether a hand-back has ever written this record a retry deadline - which is the honest form of "does this
+     * record have an artificial delay at all", and the question {@link #isDelayPassed()} asks before doing any
+     * arithmetic.
+     * <p>
+     * <b>Not the attempt count.</b> Those two used to be the same question and are not: a
+     * {@link PCRetriableException#notAnAttempt()} hand-back suppresses the counter and still writes a deadline, so
+     * a record whose FIRST delivery was withheld with {@code retryAfter(30s).notAnAttempt()} has a deadline while
+     * {@code hasPreviouslyFailed()} is still false - and reading the count made the 30 seconds vanish, retrying at
+     * control-loop frequency against whatever the function was backing off from.
+     * <p>
+     * It is also the honest answer to "could this container be in the retry queue", because
+     * {@code ShardManager.onFailure} adds every hand-back to it regardless of whether the hand-back counted -
+     * see {@link ProcessingShard#getWorkIfAvailable}.
+     *
+     * @return true once any hand-back has set a deadline; it is never unset again
+     */
+    public boolean hasRetryDeadline() {
+        return retryDueAt.isPresent();
     }
 
     /**
@@ -476,14 +573,28 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * {@link Instant#MIN}, which means "due now". The record is retried immediately, forever, with no backoff and
      * no warning: a hot loop against whatever the user was trying to back off from.
      */
-    private Instant computeRetryDueAt(Instant failedAt) {
-        Duration delay = getRetryDelayConfig(); // never throws
+    private Instant computeRetryDueAt(Instant failedAt, PCRetriableException handback) {
+        if (handback != null && handback.isParked()) {
+            // Parked. The deadline is only what orders the retry queue; isParked() is what decides due-ness.
+            return Instant.MAX;
+        }
+        Duration carried = handback == null ? null : handback.getRetryAfter();
+        // The carried delay is read BEFORE the provider, and only a throw that carried nothing consults it - so a
+        // classic user's retryDelayProvider still decides every failure that says nothing (KTD14).
+        Duration delay = carried != null ? carried : getRetryDelayConfig(); // never throws
         try {
             return failedAt.plus(delay);
         } catch (RuntimeException notRepresentable) {
             // a Duration large enough that failedAt + it falls outside Instant's range
-            warnBrokenRetryDelayProvider("returned a delay that cannot be applied (" + delay + ")",
-                    notRepresentable);
+            if (carried != null) {
+                log.warn("A thrown {} asked to retry after {}, which cannot be applied to the time of the failure - "
+                                + "falling back to defaultMessageRetryDelay ({}). Park a record instead of asking "
+                                + "for a delay this large. Record: {}", handback.getClass().getSimpleName(), carried,
+                        module.options().getDefaultMessageRetryDelay(), this, notRepresentable);
+            } else {
+                warnBrokenRetryDelayProvider("returned a delay that cannot be applied (" + delay + ")",
+                        notRepresentable);
+            }
             return failedAt.plus(module.options().getDefaultMessageRetryDelay());
         }
     }
@@ -747,11 +858,24 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         state.updateAndGet(observed -> observed.transitionTo(observed.state().withVerdict(succeeded)));
     }
 
+    /**
+     * The failure history, plus whatever the throw itself said about the hand-back (KTD14).
+     * <p>
+     * The three facts a {@link PCRetriableException} can carry are read here, on the failure path and <b>before</b>
+     * the configured {@code retryDelayProvider} is consulted, so a throw that carries none of them behaves exactly
+     * as it always has: one more failed attempt, due after the configured delay, not parked.
+     */
     private void updateFailureHistory(Throwable cause) {
-        numberOfFailedAttempts.incrementAndGet();
+        PCRetriableException handback = PCRetriableException.handbackIn(cause);
+        if (handback == null || handback.countsAsAttempt()) {
+            numberOfFailedAttempts.incrementAndGet();
+        }
         lastFailedAt = of(Instant.now(module.clock()));
         lastFailureReason = Optional.ofNullable(cause);
-        retryDueAt = of(computeRetryDueAt(lastFailedAt.get()));
+        // Assigned rather than only set, so a resumed record that fails again for an ordinary reason stops being
+        // parked instead of keeping a stale reason nobody wrote.
+        parkedReason = handback == null ? null : handback.getParkReason();
+        retryDueAt = of(computeRetryDueAt(lastFailedAt.get(), handback));
     }
 
     /**
