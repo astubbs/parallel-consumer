@@ -445,6 +445,10 @@ public final class Formats {
         }
 
         /**
+         * Asks the user's classifier whether this decode failure is one no retry could fix, and turns a yes into
+         * the exception the dispatch path reads as a permanent park. The verdict is read in this one place so the
+         * wrapping cannot drift between the key side and the value side (R12).
+         *
          * @return the exception to throw when the classifier called this payload permanently undecodable, or null
          * when it did not - in which case the caller rethrows the original, which is an ordinary failed attempt
          * (R12)

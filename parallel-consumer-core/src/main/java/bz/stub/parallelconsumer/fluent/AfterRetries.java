@@ -190,6 +190,11 @@ public final class AfterRetries {
     }
 
     /**
+     * Makes exhaustion itself the export trigger, for a destination named separately by {@link #dlqTo(String)}.
+     * It is the trigger half of {@link #dlqImmediately(String)} on its own, so a policy assembled setting by
+     * setting can say what the one-call factory says; on its own it is refused, because a trigger with nowhere to
+     * send to would export nothing (R27, AE7).
+     *
      * @see #dlqImmediately(String)
      */
     public AfterRetries dlqImmediately() {
@@ -250,6 +255,11 @@ public final class AfterRetries {
     }
 
     /**
+     * Where this policy's exported records are copied. Validation reads it together with
+     * {@link #hasExportTrigger()}, which is what lets it refuse a destination with no trigger and a trigger with no
+     * destination in the same pass; it also refuses a destination this same definition routes, because an instance
+     * that consumed its own exports would loop them (R13).
+     *
      * @return the topic exported records are copied to, or null when this policy parks in place and copies nothing -
      * which is a complete policy, not an unfinished one
      */
@@ -267,6 +277,10 @@ public final class AfterRetries {
     }
 
     /**
+     * The age export trigger as it was declared. Null is the only way this policy can say the trigger is absent -
+     * there is no duration that means "never" - which is why validation tests it against null rather than against a
+     * sentinel, and why it is one of the three triggers {@link #hasExportTrigger()} counts.
+     *
      * @return how old a parked record may get before it is exported, or null when no age bound was declared
      */
     public Duration ageBound() {
@@ -274,6 +288,10 @@ public final class AfterRetries {
     }
 
     /**
+     * How long a cycling record waits before its next attempt. The dispatch wrapper turns it into the delay a
+     * retriable failure carries, so it is the only place the schedule in "scheduled retry" comes from; validation
+     * reads the same null to refuse a cycle count declared without one (R27, astubbs#234).
+     *
      * @return how long each park cycle waits, or null when no cycles were declared
      */
     public Duration parkDelay() {
@@ -281,6 +299,11 @@ public final class AfterRetries {
     }
 
     /**
+     * How many extra attempts the park delay grants, collapsed to zero when none were declared. Zero is the answer
+     * that makes the dispatch wrapper's comparison against the cycles already spent park a record on the first
+     * look, so the undeclared case needs no branch of its own. It cannot tell undeclared from declared - that is
+     * {@link #declaresAnyParkCycle()}'s job, and it exists because validation must.
+     *
      * @return how many park cycles this policy grants, zero when none were declared
      */
     public int parkCycles() {
@@ -296,6 +319,11 @@ public final class AfterRetries {
     }
 
     /**
+     * The offset-payload export trigger as it was declared. Empty rather than a number because an undeclared
+     * percentage would resolve to the instance-wide default, and only the definition holds that; in this release
+     * validation refuses a present value outright, since the trigger needs an engine accessor that arrives with
+     * Milestone C (KTD5).
+     *
      * @return the declared percentage, or empty when none was declared and the instance default applies
      */
     public OptionalInt payloadPercentage() {

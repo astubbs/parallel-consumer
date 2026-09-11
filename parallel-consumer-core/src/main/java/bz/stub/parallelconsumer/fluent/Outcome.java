@@ -166,6 +166,9 @@ public final class Outcome<PK, PV> {
     }
 
     /**
+     * The list form, and the one the varargs form delegates to - so the null check and the defensive copy that make
+     * an outcome immutable exist once rather than twice. A caller that already holds a collection uses it directly.
+     *
      * @see #produce(ProducerRecord[])
      */
     public static <PK, PV> Outcome<PK, PV> produce(List<ProducerRecord<PK, PV>> produced) {

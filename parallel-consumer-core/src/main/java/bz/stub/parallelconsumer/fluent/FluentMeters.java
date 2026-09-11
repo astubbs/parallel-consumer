@@ -269,6 +269,10 @@ class FluentMeters {
     }
 
     /**
+     * Counts this partition's parked records by walking the engine's containers, because the engine owns the parked
+     * set and keeps no per-partition tally beside it. Walking on every scrape is what keeps the gauge live: a
+     * cached number would go stale the moment a record resumed, was exported, or the partition was revoked.
+     *
      * @return how many of the instance's parked records are on this partition - the live size of the set an
      * operator can act on, which is the figure the parked counter deliberately is not
      */
@@ -284,6 +288,9 @@ class FluentMeters {
     }
 
     /**
+     * The head-of-line age an operator alerts on: how long this partition's longest-parked record has been parked,
+     * which is also how far back its committed offset is being held while later records complete.
+     *
      * @return the age in seconds of the oldest parked record on this partition, or zero when nothing is parked -
      * zero rather than NaN, because a gauge that disappears from a dashboard when the good news arrives reads as a
      * broken exporter

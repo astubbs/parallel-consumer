@@ -36,6 +36,10 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 public interface ParkObserver<K, V> {
 
     /**
+     * Told that this record has parked: its last attempt has run, and its offset will not commit past it until it
+     * is resumed or exported. It returns nothing because it is a report and not a decision - the record parks
+     * whatever this method does - and the type-level contract above is the whole of what it may assume.
+     *
      * @param record   the parked record, decoded when it could be decoded and raw when it could not
      * @param failure  the last failure, or null when the function asked for the park itself with
      *                 {@link Outcome#park(String)} - nothing failed in that case

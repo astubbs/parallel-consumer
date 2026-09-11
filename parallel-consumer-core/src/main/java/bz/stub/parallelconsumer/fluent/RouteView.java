@@ -37,12 +37,18 @@ public interface RouteView {
     Format<?> consumedValue();
 
     /**
+     * How this route writes produced key bytes, and - by being null or not - the declaration of whether it produces
+     * at all. A runtime asks it to build the serialisers the produce path needs before any record arrives.
+     *
      * @return null when the route declares no produced types, which is also what makes producing from it a compile
      * error (R3)
      */
     Format<?> producedKey();
 
     /**
+     * How this route writes produced value bytes, null on the same terms as {@link #producedKey()} - the two are
+     * declared together, so neither can be present without the other.
+     *
      * @see #producedKey()
      */
     Format<?> producedValue();
@@ -54,6 +60,10 @@ public interface RouteView {
     boolean producesRecords();
 
     /**
+     * How many attempts a failed record gets on this route before its after-retries reaction fires. Already
+     * resolved against the instance default, so a reader never sees an "undeclared" third state - the route's own
+     * limit and the default it inherited are indistinguishable here, deliberately.
+     *
      * @return the attempt limit after the first, or empty when the route asked for unbounded retries (R10)
      */
     OptionalInt retryLimit();

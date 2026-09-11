@@ -275,6 +275,11 @@ public class ConsumerHandle implements AutoCloseable {
     }
 
     /**
+     * Waits a bounded time for this instance to finish shutting down - the bounded twin of
+     * {@link #awaitShutdown()}, for a caller that must not block for ever. False is not a failure report: it says
+     * only that the bound expired first and the instance may still be draining, which is why a fault is surfaced
+     * only when the shutdown actually completed inside the bound.
+     *
      * @return true when the instance shut down within the bound
      * @throws RuntimeException the fault that stopped the instance, if one did and it shut down within the bound
      * @see #awaitShutdown()
@@ -310,6 +315,10 @@ public class ConsumerHandle implements AutoCloseable {
     }
 
     /**
+     * The fault behind a stopped instance, for a caller that polls rather than awaits. Two faults can end an
+     * instance and only one of them is the engine's - a definition fault raised when a record met it never reaches
+     * the control thread - so the facade's own is preferred, being the earlier and the more specific of the two.
+     *
      * @return the fault that stopped this instance, if one did - the facade's own definition fault, or the engine's
      * recorded control-thread failure
      */

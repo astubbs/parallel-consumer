@@ -132,6 +132,9 @@ public final class ParkedView {
     }
 
     /**
+     * Which topics' parked records this view's figures count, so a figure read from it can be attributed. A route
+     * declared over a topic set yields one view covering all of them, not one view each.
+     *
      * @return the topics this view covers - more than one when the route was declared over a topic set, and every
      * routed topic on the instance-wide roll-up
      */
@@ -140,6 +143,9 @@ public final class ParkedView {
     }
 
     /**
+     * Whether this view was narrowed to one partition, which is what tells a reader whether its figures describe a
+     * partition or the whole route. Empty is a real answer - the unnarrowed view - not a missing one.
+     *
      * @return the partition this view was narrowed to, or empty when it spans every partition - which is the
      * default
      */
@@ -311,6 +317,10 @@ public final class ParkedView {
     private static final String NOT_AVAILABLE = "not available";
 
     /**
+     * Renders one figure for {@link #toString()}, routing every absent figure through the single
+     * {@link #NOT_AVAILABLE} wording. It exists so the four figures on that line cannot come to spell the same
+     * absence in different ways.
+     *
      * @return the figure, or {@link #NOT_AVAILABLE} - never the bare {@code OptionalDouble.empty} rendering, which
      * reads to an operator as a figure of zero rather than as a figure nobody has
      */

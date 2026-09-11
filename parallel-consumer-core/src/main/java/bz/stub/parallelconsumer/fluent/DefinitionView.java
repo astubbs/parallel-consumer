@@ -35,6 +35,9 @@ public interface DefinitionView {
     Collection<RouteView> routes();
 
     /**
+     * The route bound to one topic, which is the lookup a runtime actually performs. It can answer with a single
+     * route rather than a collection because a definition refuses a second route for a topic it already routes.
+     *
      * @return the route bound to that topic, or null when nothing routes it
      */
     RouteView route(String topic);
