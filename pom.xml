@@ -11,7 +11,7 @@
     <groupId>bz.stub.parallelconsumer</groupId>
     <artifactId>parallel-consumer-parent</artifactId>
     <name>Parallel Consumer for Apache Kafka</name>
-    <version>0.6.0.0</version>
+    <version>0.6.0.1-SNAPSHOT</version>
     <description>Parallel Apache Kafka client wrapper with client side queueing, a simpler consumer/producer API with key concurrency and extendable non-blocking IO processing.
     </description>
     <url>https://github.com/astubbs/parallel-consumer</url>
@@ -57,7 +57,7 @@
         <connection>scm:git:https://github.com/astubbs/parallel-consumer.git</connection>
         <developerConnection>scm:git:https://github.com/astubbs/parallel-consumer.git</developerConnection>
         <url>https://github.com/astubbs/parallel-consumer.git</url>
-        <tag>v0.6.0.0</tag>
+        <tag>HEAD</tag>
     </scm>
 
     <properties>
