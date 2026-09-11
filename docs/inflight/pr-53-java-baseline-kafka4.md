@@ -24,5 +24,3 @@ bump `kafka.version` 3.9.1 → 4.2.x plus the TestContainers CP image; migrate r
 `new ConsumerGroupMetadata(String)`); downstream module audit; flip `test-kafka-compat` to a blocking
 3.9.1 regression check; docs. Deferred further: `parallel-consumer-share` (KIP-932).
 <!-- file-refs: N/A - the sentence says the plan is on the branch, not on master -->
-
-**Waits on this to move:** `parallel-consumer-sandbox` (the UX modernisation plan, `docs/plans/2026-09-09-002-feat-ux-modernisation-plan.md`, KTD1) is pinned to the last Java 8 lines of Instancio and Datafaker so it can share core's release target; when the baseline moves, move that module to their maintained lines in the same change.

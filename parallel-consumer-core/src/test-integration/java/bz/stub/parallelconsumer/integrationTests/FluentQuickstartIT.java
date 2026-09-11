@@ -34,8 +34,8 @@ import static org.awaitility.Awaitility.await;
  * (R36, Success Criteria).
  *
  * <h2>What only a broker can prove</h2>
- * The sandbox run in the example module proves the definition's behaviour: routes, types, outcomes, the parked set.
- * It cannot prove the two things that are the broker's own. <b>Properties to clients</b>: a definition is given
+ * Core's own fluent suite proves the definition's behaviour without a broker: routes, types, outcomes, the parked
+ * set. It cannot prove the two things that are the broker's own. <b>Properties to clients</b>: a definition is given
  * connection properties and nothing else, so whether it can actually build a consumer, join a group and be assigned
  * partitions is only answered here. <b>The commit metadata</b>: park in place is only as good as the offset map
  * that carries it, and the claim that offsets past a parked record commit is a claim about what a <em>second</em>

@@ -45,6 +45,41 @@ The rungs, in the order they must merge, and what each one unlocks here:
 Re-read this section whenever one of those merges: `gh pr view <n> -R astubbs/parallel-consumer`
 is the status, this note is the consequence.
 
+## The sandbox module ships in its own pull request, stacked above the fluent API's
+
+<!-- post-merge: checked-begin - written for the state after astubbs/parallel-consumer#502 lands: it
+     is the sandbox's pull request that is still open then, and every sentence below is about that
+     one. The pull request numbers are permanent; no sentence here depends on a branch existing. -->
+Owner direction, 2026-09-11. `parallel-consumer-sandbox` was built inside
+astubbs/parallel-consumer#502 and lifted back out of it before that pull request went up for review.
+It is a whole module with its own dependency set and its own suite, and nothing in the fluent package
+reads it: the dependency runs the other way, the sandbox onto core through the runtime seam (plan
+KTD9), and that seam stayed behind with the rest of the fluent API. So it is reviewable entirely on
+its own, and reviewing it inside the fluent API's pull request would have bought nothing.
+
+**Merge order: astubbs/parallel-consumer#502, then the sandbox.** The sandbox branch is
+`feat/504-sandbox`, cut from that pull request's tip, and its own pull request carries
+`depends on astubbs/parallel-consumer#502` so the dependency gate holds it until the parent lands.
+Its content is exactly what the parent removed, restored unchanged: the module, its reactor entry,
+the two test-log-config fixture lists, the example module's test-scope dependency on it,
+`FluentQuickstartAppTest`, the README's sandbox section and its features-list entry, and the
+sandbox's own `docs/features/` record.
+<!-- file-refs: N/A - the list above names what astubbs/parallel-consumer#502 removed; each of those
+     paths exists on the sandbox branch and deliberately not here -->
+
+**What the split costs until the sandbox lands.** The quickstart's only proof in the tree is the
+broker-backed `FluentQuickstartIT` in core. The definition's behaviour is still proved with no broker
+anywhere, but by core's own fluent suite rather than by a run of the quickstart itself, so KD7's
+"compiled in CI and run in the sandbox" is satisfied by two pull requests rather than one. The README
+claims only the broker run until then. The plan's U5 and U6 carry the same split, dated beside their
+original text.
+
+**One inherited note travels with the module.** `docs/inflight/pr-53-java-baseline-kafka4.md` gained a
+paragraph saying the sandbox's Instancio and Datafaker pins move when the Java baseline moves. That
+paragraph is on the sandbox branch rather than in astubbs/parallel-consumer#502, because it describes
+a module that pull request does not ship.
+<!-- post-merge: checked-end -->
+
 ## The compatibility gate's exclusion
 
 The fluent package `bz.stub.parallelconsumer.fluent` is incubating and its shape will churn before it settles, so it is excluded from the API-compatibility gate until then (plan KTD1). The gate is astubbs#315, not yet merged; when it lands, or when that branch is next touched, add the package exclusion to its japicmp configuration and name this note in the commit. Until the gate exists on master, nothing enforces the exclusion and nothing needs it.

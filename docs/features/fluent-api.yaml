@@ -54,7 +54,7 @@ boundaries:
     checked before the first record, so it stops the instance rather than retrying.
   - Every definition-time refusal happens before a connection is opened and names the offending topic or setting.
 validation:
-  - Run the quickstart in the sandbox and confirm both routes reached their own topic's records decoded into their own type.
+  - Run the quickstart against a broker and confirm both routes reached their own topic's records decoded into their own type.
   - Confirm the outcome counters distinguish succeeded from filtered from parked for your own routes.
 references:
   - label: README section

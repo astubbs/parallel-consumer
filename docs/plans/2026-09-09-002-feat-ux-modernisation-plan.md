@@ -686,7 +686,7 @@ flowchart LR
 
 ### Sequencing
 
-- **Milestone A, the next-release candidate:** U1, U2, U3, U21, U4, U5, U6 in dependency order, with U5 parallel to U3 onward once U2 has landed. Everything a returning developer needs to see park in place from the README, and nothing in the engine.
+- **Milestone A, the next-release candidate:** U1, U2, U3, U21, U4, U5, U6 in dependency order, with U5 parallel to U3 onward once U2 has landed. (2026-09-11: U5 and U6's sandbox half ship as a stacked pull request above astubbs/parallel-consumer#502 rather than inside it; the milestone's content is unchanged.) Everything a returning developer needs to see park in place from the README, and nothing in the engine.
 - **Milestone B, the rest of tiny:** U22, U7, U23 and U8, plus U9 on the classic API.
 - **Milestone C, small:** U10, then U11 after astubbs#295 merges.
 - **Milestone D, medium:** U12 to U15 in any order; U16 only after the producer-recovery stack has merged in its own order.
@@ -729,7 +729,7 @@ flowchart LR
 | U21 | Park and the observer | `fluent/…Park` | U3 |
 | U22 | Export: immediately, the age bound, provenance and send failure | `fluent/…Export` | U21 |
 | U4 | Handle, stop, parked view and metrics | `fluent/…Handle`, `fluent/…ParkedView`, `metrics/PCMetricsDef.java` | U21 |
-| U5 | Sandbox module | `parallel-consumer-sandbox/` | U2 |
+| U5 | Sandbox module (2026-09-11: moved to the stacked `feat/504-sandbox`) | `parallel-consumer-sandbox/` | U2 |
 | U6 | README rewrite and the quickstart build signal | `src/docs/README_TEMPLATE.adoc`, `parallel-consumer-examples/parallel-consumer-example-core/` | U21, U4, U5 |
 | U7 | Per-route policy: breaker, admission, batch size, sinks, prelude | `fluent/…Policy`, `fluent/…Breaker`, `fluent/…Admission` | U21 |
 | U8 | Example set, existing examples in the sandbox, Spring example | `parallel-consumer-examples/*` | U5, U6, astubbs#266 |
@@ -899,6 +899,15 @@ flowchart LR
 
 ### U5. Sandbox module
 
+**Moved out of astubbs/parallel-consumer#502 on 2026-09-11, owner-directed - the unit is unchanged, its pull request is not.**
+U5 ships a whole module with its own dependency set (Instancio, Datafaker and Avro on their last Java 8 lines), its own
+reactor entry, its own logging fixture and its own suite, and none of it is read by the fluent package: core cannot depend
+on the sandbox, the dependency runs the other way through the runtime seam (KTD9), which stays in astubbs/parallel-consumer#502.
+That makes it reviewable on its own, and reviewing it inside the fluent API's own pull request buys nothing while making
+both harder to read. It moves to a stacked branch, `feat/504-sandbox`, whose pull request depends on
+astubbs/parallel-consumer#502.
+
+
 - **Goal:** Any definition, fluent or classic, runs with no broker against generated records at a declared rate, bounded or until closed, and the same module is the broker-free test kit.
 - **Requirements:** R33, R36 (test kit); AE24 (sandbox half), AE26; KD7; KTD1, KTD9.
 - **Dependencies:** U2 (the runtime seam and the serde-shaped type holders it needs).
@@ -925,6 +934,15 @@ flowchart LR
 - **Verification:** The sandbox module builds at the reactor's release target, its tests pass, and the quickstart runs through it with no Docker.
 
 ### U6. README rewrite and the quickstart build signal
+
+**Split on 2026-09-11, owner-directed, along the same line as U5.** The README rewrite and the quickstart itself stay in
+astubbs/parallel-consumer#502; what moves to `feat/504-sandbox` with U5 is the half of this unit that needs the module -
+the broker-free run of the quickstart (`FluentQuickstartAppTest` and the `quickstartSandbox` tagged region), the README's
+sandbox section and its entry in the features list. Until that branch merges, the quickstart's proof is the broker-backed
+`FluentQuickstartIT` in core, which is where the Success Criteria's one broker run already lives, plus core's own fluent
+suite for the definition's behaviour. KD7's "compiled in CI and run in the sandbox" therefore reads as two pull requests
+rather than one, and the README on astubbs/parallel-consumer#502 claims only the broker run.
+
 
 - **Goal:** The README leads with the fluent API in KD14's order, and the quickstart compiles and runs in the sandbox on every build, once against a broker.
 - **Requirements:** R21, R26, R36 (quickstart); AE13, AE24; Success Criteria (primary signal, broker run); KD7, KD14.

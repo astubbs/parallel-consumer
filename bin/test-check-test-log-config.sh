@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 GATE="$PWD/bin/check-test-log-config.sh"
 
-MODULES=(parallel-consumer-core parallel-consumer-vertx parallel-consumer-reactor parallel-consumer-mutiny parallel-consumer-sandbox)
+MODULES=(parallel-consumer-core parallel-consumer-vertx parallel-consumer-reactor parallel-consumer-mutiny)
 
 pass=0
 fail=0

@@ -35,8 +35,8 @@ import static bz.stub.parallelconsumer.fluent.Formats.json;
  * examples silently going stale. If a name on the fluent API changes, this fails to compile instead of the README
  * quietly starting to lie. It is the same arrangement {@link CoreApp} has for the classic API's examples.
  * <p>
- * What actually <em>runs</em> is {@link FluentQuickstartApp}, in the sandbox on every build and once against a
- * broker. Anything here that has to be proved rather than merely shown belongs there instead.
+ * What actually <em>runs</em> is {@link FluentQuickstartApp}, against a broker in core's integration suite.
+ * Anything here that has to be proved rather than merely shown belongs there instead.
  */
 @Slf4j
 @SuppressWarnings({"unused", "MagicNumber"})
