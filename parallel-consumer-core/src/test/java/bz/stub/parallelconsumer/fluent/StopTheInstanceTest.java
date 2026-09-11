@@ -24,6 +24,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 
 /**
@@ -96,7 +97,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
             runtime.publish(TOPIC, 0, offset, "key-" + offset, "later");
         }
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(handle.stopRequest().isPresent()).isTrue());
         StopRequest stop = handle.stopRequest().get();
         assertThat(stop.topic()).isEqualTo(TOPIC);
@@ -104,7 +105,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         assertThat(stop.reason()).contains("the deployment cannot handle this record");
 
         // The record that was already in flight is still in flight: the close is waiting for it, not abandoning it.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> holdEntered.getCount() == 0);
+        Awaitility.await().atMost(defaultTimeout).until(() -> holdEntered.getCount() == 0);
         release.countDown();
 
         Instant releasedAt = Instant.now();
@@ -310,7 +311,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
 
         // The parking route's record parks, and the instance carries on: nothing about the other route's
         // declaration reaches it.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(pc.dispatcher().parkedForRoute(OTHER_TOPIC)).hasSize(1));
         assertThat(handle.stopRequest().isPresent()).isFalse();
         assertThat(handle.awaitShutdown(Duration.ofMillis(500))).isFalse();

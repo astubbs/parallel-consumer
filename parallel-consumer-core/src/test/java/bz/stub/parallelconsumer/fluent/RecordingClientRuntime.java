@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * A {@link ClientRuntime} that records whether it was asked for anything.
@@ -35,7 +36,7 @@ class RecordingClientRuntime implements ClientRuntime {
 
     int producerCalls;
 
-    final java.util.List<DefinitionView> definitionsSeen = new java.util.ArrayList<>();
+    final List<DefinitionView> definitionsSeen = new ArrayList<>();
 
     private final LongPollingMockConsumer<byte[], byte[]> consumer;
 
@@ -73,11 +74,11 @@ class RecordingClientRuntime implements ClientRuntime {
     }
 
     @Override
-    public java.util.Optional<Producer<byte[], byte[]>> producer(DefinitionView definition) {
+    public Optional<Producer<byte[], byte[]>> producer(DefinitionView definition) {
         producerCalls++;
         definitionsSeen.add(definition);
         // Empty is the seam's way of saying "build your own, and keep producer recovery" (R1, astubbs#410).
-        return suppliesAProducer ? java.util.Optional.of(producer) : java.util.Optional.empty();
+        return suppliesAProducer ? Optional.of(producer) : Optional.empty();
     }
 
     boolean builtNothing() {

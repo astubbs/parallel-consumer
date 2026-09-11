@@ -21,6 +21,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -52,7 +53,7 @@ class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
         var pc = definitionThatParksEverything(topic);
         handle = runtime.startAndAssign(pc, 1);
         runtime.publish(topic, 0, 0, "key-0", "a hopeless order");
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(handle.topic(topic).parked().count()).isEqualTo(1));
         return handle.topic(topic).parked();
     }
@@ -83,7 +84,7 @@ class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 1, "key-1", "the second hopeless order");
         runtime.publish(TOPIC, 0, 2, "key-2", "the third hopeless order");
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(handle.topic(TOPIC).parked().count()).isEqualTo(3));
 
         ParkedView parked = handle.topic(TOPIC).parked();
@@ -157,7 +158,7 @@ class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 1, 0, "key-1", "another hopeless order");
         runtime.publish(OTHER_TOPIC, 0, 0, "key-2", "a hopeless audit record");
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(handle.parkedAllTopics().count()).isEqualTo(3));
 
         assertThat(handle.parkedAllTopics().topics()).containsExactly(TOPIC, OTHER_TOPIC);
@@ -212,12 +213,12 @@ class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
 
         handle = runtime.startAndAssign(pc, 1);
         runtime.publish(TOPIC, 0, 0, "key-0", "an order that parks");
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(handle.topic(TOPIC).parked().count()).isEqualTo(1));
 
         runtime.mockConsumer().revoke(Collections.singletonList(new TopicPartition(TOPIC, 0)));
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
             assertThat(handle.topic(TOPIC).parked().count()).isEqualTo(0);
             assertThat(handle.parkedAllTopics().count()).isEqualTo(0);
         });
@@ -245,11 +246,11 @@ class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
         });
         handle = runtime.startAndAssign(pc, 1);
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> processed.get() == 1);
+        Awaitility.await().atMost(defaultTimeout).until(() -> processed.get() == 1);
 
         // The instance is still consuming, and nobody awaiting it is told anything went wrong.
         runtime.publish(TOPIC, 0, 1, "key-1", "another order");
-        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> processed.get() == 2);
+        Awaitility.await().atMost(defaultTimeout).until(() -> processed.get() == 2);
         assertThat(handle.awaitShutdown(Duration.ofMillis(500))).isFalse();
         assertThat(handle.failureCause().isPresent()).isFalse();
         assertThat(handle.processor().isClosedOrFailed()).isFalse();

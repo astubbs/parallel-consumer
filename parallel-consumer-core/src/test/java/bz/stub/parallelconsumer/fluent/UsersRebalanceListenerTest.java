@@ -11,12 +11,12 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 
 /**
@@ -64,7 +64,7 @@ class UsersRebalanceListenerTest extends AbstractFluentEngineTest {
 
         handle = runtime.startAndAssign(pc, 2);
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(listener.calls).isNotEmpty());
         assertThat(listener.calls.get(0)).startsWith("assigned ");
         assertThat(listener.calls.get(0)).contains(TOPIC + "-0");
@@ -84,7 +84,7 @@ class UsersRebalanceListenerTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.succeededCount()).isEqualTo(1));
     }
 }

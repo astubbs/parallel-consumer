@@ -44,18 +44,9 @@ import static com.google.common.truth.Truth.assertThat;
  */
 @Slf4j
 @Timeout(300)
-class RawBytesDispatchCostTest {
-
-    private static final String TOPIC = "orders";
+class RawBytesDispatchCostTest extends AbstractFluentEngineTest {
 
     private static final int RECORDS = 5_000;
-
-    private static Properties props() {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "raw-bytes-dispatch-cost-test");
-        return properties;
-    }
 
     @Test
     void printThePerRecordCostOfTheRawBytesDoorAgainstATypedClassicConsumer() {

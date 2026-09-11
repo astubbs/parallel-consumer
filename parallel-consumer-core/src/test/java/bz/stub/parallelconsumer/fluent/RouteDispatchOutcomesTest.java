@@ -14,10 +14,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 
 /**
@@ -52,7 +52,7 @@ class RouteDispatchOutcomesTest extends AbstractFluentEngineTest {
         }
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.succeededCount() + dispatcher.filteredCount()).isEqualTo(records));
 
         assertThat(dispatcher.filteredCount()).isEqualTo(100);
@@ -60,7 +60,7 @@ class RouteDispatchOutcomesTest extends AbstractFluentEngineTest {
         assertThat(dispatcher.parkedCount()).isEqualTo(0);
 
         // All offsets commit: the highest committed offset is one past the last record.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(runtime.committedOffset(TOPIC, 0)).isEqualTo(records));
 
         // Nothing produced, and nothing was even asked to produce it: this definition opens no producer at all.
@@ -83,7 +83,7 @@ class RouteDispatchOutcomesTest extends AbstractFluentEngineTest {
         handle = runtime.startAndAssign(pc, 1);
         runtime.publish(TOPIC, 0, 0, "key-0", "twelve chars");
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(runtime.mockProducer().history()).hasSize(1));
 
         var sent = runtime.mockProducer().history().get(0);
@@ -112,7 +112,7 @@ class RouteDispatchOutcomesTest extends AbstractFluentEngineTest {
         handle = runtime.startAndAssign(pc, 1);
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
             assertThat(seen.get()).isEqualTo(1);
             assertThat(pc.dispatcher().succeededCount()).isEqualTo(1);
         });
@@ -145,7 +145,7 @@ class RouteDispatchOutcomesTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
         runtime.publish("audit", 0, 0, "key-0", "audited");
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
             assertThat(ordersSeen.get()).isEqualTo(1);
             assertThat(auditSeen.get()).isEqualTo(1);
         });

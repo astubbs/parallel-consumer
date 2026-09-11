@@ -21,6 +21,7 @@ import java.util.Collections;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 
 /**
@@ -69,7 +70,7 @@ class ParkedRecordsHoldTheKeyNotThePartitionTest extends AbstractFluentEngineTes
         runtime.publish(TOPIC, 0, 3, "moving-too", "another different key");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
             assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1);
             assertThat(otherKeys.get()).isEqualTo(2);
         });
@@ -109,7 +110,7 @@ class ParkedRecordsHoldTheKeyNotThePartitionTest extends AbstractFluentEngineTes
         runtime.publish(TOPIC, 0, 1, "key-1", "another order that parks");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(2));
 
         Instant before = Instant.now();
@@ -144,7 +145,7 @@ class ParkedRecordsHoldTheKeyNotThePartitionTest extends AbstractFluentEngineTes
         runtime.publish(TOPIC, 0, 0, "customer-3", "an order worth keeping");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
 
         // Retention removes everything up to offset 5 on the broker: the parked record is no longer fetchable.

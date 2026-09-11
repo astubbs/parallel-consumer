@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -79,7 +80,7 @@ class HandleLifecycleTest extends AbstractFluentEngineTest {
             // Work in flight, everything fetched, and nothing finished yet - which is what pins the exit to the
             // FIRST wave of records. Waiting on a looser condition let the block exit two waves in, with almost
             // nothing left to drain, and the drain assertion below then failed on load rather than on behaviour.
-            Awaitility.await().atMost(Duration.ofSeconds(30)).until(() ->
+            Awaitility.await().atMost(defaultTimeout).until(() ->
                     entered.get() >= 1 && inBlock.processor().workRemaining() == records);
             enteredAtExit = entered.get();
             backlogAtExit = inBlock.processor().workRemaining();
@@ -235,7 +236,7 @@ class HandleLifecycleTest extends AbstractFluentEngineTest {
         ConsumerHandle started = runtime.startAndAssign(pc, 1);
         handle = started;
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> processed.get() == 1);
+        Awaitility.await().atMost(defaultTimeout).until(() -> processed.get() == 1);
 
         pc.close();
         handle = null;

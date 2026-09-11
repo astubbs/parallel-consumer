@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 
 /**
@@ -63,7 +64,7 @@ class RetryAndParkTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 2, "key-2", "behind it too");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(attempts.get()).isAtLeast(5));
 
         assertThat(dispatcher.parkedCount()).isEqualTo(0);
@@ -95,7 +96,7 @@ class RetryAndParkTest extends AbstractFluentEngineTest {
         // On the parked VIEW rather than the park counter: the counter moves on the worker thread at the moment of
         // the hand-back, and the record reaches the engine's retry queue - which is the view - a moment later on the
         // control thread. Waiting on one and reading the other is a race that only shows up under load.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1));
 
         assertThat(attempts.get()).isEqualTo(11);
@@ -128,7 +129,7 @@ class RetryAndParkTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 2, "fine-2", "another order");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
             assertThat(dispatcher.parkedForRoute(TOPIC)).hasSize(1);
             assertThat(dispatcher.succeededCount()).isEqualTo(2);
         });
@@ -144,7 +145,7 @@ class RetryAndParkTest extends AbstractFluentEngineTest {
         assertThat(parked.failure()).isInstanceOf(FakeRuntimeException.class);
 
         // The parked record stays incomplete, so the committed base offset cannot move past it...
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(runtime.committedMetadata(TOPIC, 0)).isNotEmpty());
         assertThat(runtime.committedOffset(TOPIC, 0)).isEqualTo(0L);
         // ...and the records past it committed anyway, encoded in the commit's offset map. That payload is the
@@ -174,7 +175,7 @@ class RetryAndParkTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.parkedCount()).isEqualTo(1));
 
         assertThat(attempts.get()).isEqualTo(1);
@@ -210,7 +211,7 @@ class RetryAndParkTest extends AbstractFluentEngineTest {
 
         // Three runs before the rebalance, so the count is unambiguously above zero when it happens: the third run
         // sees two prior failures.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(attemptsSeen).contains(2));
 
         var partition = new TopicPartition(TOPIC, 0);
@@ -222,7 +223,7 @@ class RetryAndParkTest extends AbstractFluentEngineTest {
         runtime.mockConsumer().seek(partition, 0);
         runtime.publish(TOPIC, 0, 0, "key-0", "the record that never succeeds");
 
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(attemptsSeen).isNotEmpty());
         assertThat(attemptsSeen.get(0)).isEqualTo(0);
     }

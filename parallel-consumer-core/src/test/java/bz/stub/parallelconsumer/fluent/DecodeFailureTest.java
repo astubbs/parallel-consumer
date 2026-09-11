@@ -6,20 +6,18 @@ package bz.stub.parallelconsumer.fluent;
 
 import bz.stub.parallelconsumer.ParallelConsumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.common.errors.SerializationException;
-import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
 
 /**
@@ -34,23 +32,7 @@ import static com.google.common.truth.Truth.assertThat;
 @Timeout(60)
 class DecodeFailureTest extends AbstractFluentEngineTest {
 
-    private static final String POISON = "poison";
 
-
-
-    /**
-     * A deserialiser that rejects one payload and reads every other one, so a test can put a poison record beside
-     * good ones rather than in a topic of its own.
-     */
-    private static Deserializer<String> rejecting() {
-        return (topic, data) -> {
-            String value = new String(data, StandardCharsets.UTF_8);
-            if (value.equals(POISON)) {
-                throw new SerializationException("this payload cannot be read");
-            }
-            return value;
-        };
-    }
 
     /**
      * AE6's transient half: the record follows the ordinary retry path and parks once its attempts run out, while
@@ -76,7 +58,7 @@ class DecodeFailureTest extends AbstractFluentEngineTest {
         runtime.publish("orders", 0, 1, "key-1", "a readable order");
 
         RouteDispatcher dispatcher = pc.dispatcher();
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.parkedCount()).isEqualTo(1));
 
         // A limit of two counts the attempts after the first, so three decode attempts happened and no fourth.
@@ -86,7 +68,7 @@ class DecodeFailureTest extends AbstractFluentEngineTest {
 
         // The poll thread is alive: records published after the poison one still arrive, on the other route.
         runtime.publish("audit", 0, 0, "key-0", "audited");
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(auditSeen.get()).isEqualTo(1));
         assertThat(handle.failureCause().isPresent()).isFalse();
     }
@@ -155,7 +137,7 @@ class DecodeFailureTest extends AbstractFluentEngineTest {
         // it hands the record back; the record reaches the engine's retry queue - which is the view - a moment
         // later, on the control thread. Waiting on the counter and then reading the view is a race, and it goes red
         // under a loaded box rather than on a keystroke.
-        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
                 assertThat(dispatcher.parkedForRoute("orders")).hasSize(1));
         return dispatcher;
     }
