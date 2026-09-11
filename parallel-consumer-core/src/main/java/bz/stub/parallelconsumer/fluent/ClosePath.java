@@ -15,6 +15,21 @@ import org.apache.kafka.common.annotation.InterfaceStability;
  * (KTD6). The same choice governs {@link ConsumerHandle#close()}, so an instance has one answer to "what happens to
  * the backlog", whoever asked it to stop.
  *
+ * <h2>It maps one-to-one onto the engine's {@link DrainingMode}, and adds nothing</h2>
+ * Two constants, two engine behaviours, and the mapping is data on the constant rather than a {@code switch} at the
+ * point of use. So the honest question is why a facade type exists at all rather than the setter simply taking
+ * {@code DrainingMode}, and the answer is a <b>package boundary, not a name</b>: {@code DrainingMode} is nested in
+ * {@code bz.stub.parallelconsumer.internal.DrainingCloseable}, and the premise of this package
+ * ({@code package-info}) is that a user of the facade never has to name an {@code internal} type. The two packages
+ * also carry different stability promises - the fluent package is excluded from the API-compatibility gate and
+ * {@code internal} is not - so taking the engine's enum on a public setter would publish a signature this package
+ * cannot hold still. Nothing stops a user naming {@code DrainingMode}; this is about what the facade's own surface
+ * obliges them to name.
+ * <p>
+ * The names are the second, smaller reason: {@code DRAIN_FIRST} and {@code DONT_DRAIN_FIRST} match the classic
+ * API's own method names, {@code closeDrainFirst()} and {@code closeDontDrainFirst()}, which is what a reader
+ * arriving from that API already has in their hands.
+ *
  * @see ParallelConsumerDefinition#whenClosing(ClosePath)
  */
 @InterfaceStability.Unstable
@@ -43,8 +58,9 @@ public enum ClosePath {
     private final DrainingMode drainingMode;
 
     /**
-     * Binds a path to the engine's draining mode. The two constants are the whole set because the engine has exactly
-     * these two behaviours - this enum exists to name them in the facade's own words, not to add a third.
+     * Binds a path to the engine's draining mode. The two constants are the whole set, and a third is not what this
+     * enum is for - it exists to keep an {@code internal} type off the facade's published surface, which the class
+     * javadoc above states in full. Room for a third value is a latent benefit this deliberately does not claim.
      */
     ClosePath(DrainingMode drainingMode) {
         this.drainingMode = drainingMode;
