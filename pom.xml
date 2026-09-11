@@ -54,8 +54,8 @@
     </developers>
 
     <scm>
-        <connection>scm:git:git://github.com:astubbs/parallel-consumer.git</connection>
-        <developerConnection>scm:git:git@github.com:astubbs/parallel-consumer.git</developerConnection>
+        <connection>scm:git:https://github.com/astubbs/parallel-consumer.git</connection>
+        <developerConnection>scm:git:https://github.com/astubbs/parallel-consumer.git</developerConnection>
         <url>https://github.com/astubbs/parallel-consumer.git</url>
         <tag>HEAD</tag>
     </scm>
@@ -952,6 +952,13 @@
                          bypasses the master ruleset's pull_request requirement. release.yml then checks
                          out the exact tag vX and deploys it. The tag is the single source of truth -
                          nothing scans history.
+
+                         The push goes to <scm><developerConnection>, so that URL must be HTTPS: the
+                         runner authenticates with the PAT actions/checkout stored as an http
+                         extraheader for github.com, and it holds no SSH key. The first real 0.6.0.0
+                         dispatch failed at exactly this point with "git@github.com: Permission denied
+                         (publickey)", after every guard and the whole build had passed - a dry run
+                         never pushes, so it cannot catch this.
 
                          preparationGoals=clean install (not the "poms only" validate we first tried):
                          the modules cross-depend on parallel-consumer-core's test-jar
