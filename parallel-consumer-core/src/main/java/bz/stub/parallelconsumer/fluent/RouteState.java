@@ -162,14 +162,15 @@ class RouteState implements RouteView {
         if (resolved) {
             return;
         }
-        resolvedRetryLimit = ownRetryLimit != null ? ownRetryLimit : owner.defaultRetryLimitValue();
-        resolvedRetryDelay = ownRetryDelay != null ? ownRetryDelay : owner.defaultRetryDelayValue();
-        resolvedConcurrency = ownConcurrency != null ? ownConcurrency : owner.defaultConcurrencyValue();
-        AfterRetries afterRetries = ownAfterRetries != null ? ownAfterRetries : owner.defaultAfterRetriesValue();
+        InstanceDefaults defaults = owner.defaults();
+        resolvedRetryLimit = ownRetryLimit != null ? ownRetryLimit : defaults.retryLimit();
+        resolvedRetryDelay = ownRetryDelay != null ? ownRetryDelay : defaults.retryDelay();
+        resolvedConcurrency = ownConcurrency != null ? ownConcurrency : defaults.concurrency();
+        AfterRetries afterRetries = ownAfterRetries != null ? ownAfterRetries : defaults.afterRetries();
         resolvedAfterRetries = afterRetries == null ? AfterRetries.park() : afterRetries.copy();
         // Not copied: an observer is the user's own object, and there is nothing about it a route could override
         // part of. It is wired like every other setting - the route's own, or the instance default (R6, R16).
-        resolvedParkObserver = ownParkObserver != null ? ownParkObserver : owner.defaultParkObserverValue();
+        resolvedParkObserver = ownParkObserver != null ? ownParkObserver : defaults.parkObserver();
         // Last, and volatile: everything above is published by this write. See the field.
         resolved = true;
     }
