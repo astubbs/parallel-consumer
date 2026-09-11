@@ -29,11 +29,14 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * run, and refused after twenty seconds - which the README's own quickstart hit on every build, taking about
  * thirty-six seconds for a ten-second run and logging an error while it did.
  * <p>
- * Two assertions, and they fail in different worlds. The <b>log</b> one is the behavioural half: a wait that runs
- * out refuses, the generator records that refusal and logs it at error, so a run with no error from the generator
- * is a run whose wait was satisfied rather than one that gave up. The <b>deadline</b> is the timing half:
+ * <b>One assertion carries this, and the other is a backstop - they are not independent, whatever the earlier
+ * version of this paragraph said.</b> The wait that runs out refuses, the generator records that refusal
+ * <em>and</em> logs it at error, and {@code awaitBound} rethrows a recorded failure - so the {@code awaitBound}
+ * line below throws before the log assertion is ever reached. What that line pins is the timing:
  * {@link #WELL_INSIDE_THE_BUDGET} is comfortably under the budget-plus-close a run that ignored parked records
- * would need, and comfortably over what this one takes.
+ * would need, and comfortably over what this one takes. The log assertion cannot fail while the rethrow stands;
+ * it is kept because it is the half that would still have teeth if the rethrow were ever loosened, and because a
+ * generator that logged an error without recording it is a shape nothing else here would catch.
  * <p>
  * <b>What this run still spends, and what it is not.</b> Most of the wall clock here is the drain-first close
  * afterwards, which sits out its drain timeout on parked work it can never take - the engine's behaviour, not the

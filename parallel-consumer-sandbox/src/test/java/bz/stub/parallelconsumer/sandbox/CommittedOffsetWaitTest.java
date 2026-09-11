@@ -20,6 +20,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -56,13 +61,20 @@ class CommittedOffsetWaitTest {
      */
     private static final Duration IMPATIENT = Duration.ofMillis(250);
 
+    /**
+     * For the one test here whose wait is meant to be ended by something else rather than to run out: long enough
+     * that a wait nothing ended refuses instead of passing for the wrong reason, and never actually spent, because
+     * what ends it lands within a poll interval.
+     */
+    private static final Duration PATIENT = Duration.ofSeconds(10);
+
     @Test
     void aSandboxThatPublishedNothingHasNothingToWaitFor() {
         SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 1);
 
+        // No assertion needed beyond returning: a wait with something outstanding would refuse. Asserting
+        // publishedRecords() here would only restate what this test itself established by publishing nothing.
         consumer.awaitEveryPublishedRecordCommitted(IMPATIENT);
-
-        assertThat(consumer.publishedRecords()).isEqualTo(0);
     }
 
     @Test
@@ -250,18 +262,69 @@ class CommittedOffsetWaitTest {
     }
 
     /**
-     * A consumer closed under the wait ends it quietly: that is how an unbounded run stops, and it is not a
-     * shortfall anybody can act on.
+     * A consumer closed <b>while the wait is running</b> ends it quietly: that is how an unbounded run stops, and
+     * it is not a shortfall anybody can act on.
+     * <p>
+     * <b>The concurrency is the test, so it is arranged rather than hoped for.</b> This used to close before
+     * calling the wait at all, which exercises the same early return on its first pass but never the case its own
+     * name describes - a close arriving from another thread with the wait already in flight. The seam is the
+     * parked-count supplier: the wait asks it on the waiting thread every pass, so counting a latch down inside it
+     * is proof the wait is running, not a sleep hoping it got there. The close is on another thread, which is the
+     * shape being pinned.
+     * <p>
+     * This is also the only test of that early return, which
+     * {@link SandboxConsumer#awaitEveryPublishedRecordCommitted(Duration)} documents as deliberate - a closed
+     * consumer will never commit anything again, so there is nothing left to wait for and nothing to report.
      */
     @Test
-    void aConsumerClosedUnderTheWaitEndsItRatherThanFailingIt() {
+    void aConsumerClosedUnderTheWaitEndsItRatherThanFailingIt() throws Exception {
+        SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 1);
+        consumer.publish("orders", 0, "a", "1");
+        CountDownLatch theWaitIsRunning = new CountDownLatch(1);
+        consumer.countingParkedRecordsWith(() -> {
+            theWaitIsRunning.countDown();
+            return Collections.emptyMap();
+        });
+
+        ExecutorService closer = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> closing = closer.submit(() -> {
+                if (!theWaitIsRunning.await(30, TimeUnit.SECONDS)) {
+                    throw new AssertionError("the wait never asked for the parked counts, so it never ran");
+                }
+                consumer.close();
+                return null;
+            });
+
+            // Ends when the close lands, a poll interval after the latch. Only a wait that nothing ended spends
+            // this budget, and that one refuses - so a regression here fails loudly rather than passing slowly.
+            consumer.awaitEveryPublishedRecordCommitted(PATIENT);
+
+            // Surfaces an assertion failure from the closing thread, which would otherwise die unseen.
+            var ignoredCloseResult = closing.get(30, TimeUnit.SECONDS);
+        } finally {
+            closer.shutdownNow();
+        }
+
+        assertWithMessage("the published record was never accounted for: the close is what ended the wait, which "
+                + "is the whole point - a wait that had been satisfied would prove nothing here")
+                .that(consumer.highestCommittedOffsets()).doesNotContainKey(ORDERS_0);
+        assertThat(consumer.closed()).isTrue();
+    }
+
+    /**
+     * The same early return reached on the wait's first pass, which is what an unbounded run that has already shut
+     * down looks like when something asks it to wait afterwards.
+     */
+    @Test
+    void aConsumerAlreadyClosedBeforeTheWaitEndsItImmediately() {
         SandboxConsumer<String, String> consumer = SandboxFixtures.assignedConsumer("orders", 1);
         consumer.publish("orders", 0, "a", "1");
         consumer.close();
 
+        // No assertion needed beyond returning: a wait that did not notice the close would refuse, because the
+        // record it published was never committed and never parked.
         consumer.awaitEveryPublishedRecordCommitted(IMPATIENT);
-
-        assertThat(consumer.highestCommittedOffsets()).doesNotContainKey(ORDERS_0);
     }
 
     private static Map<TopicPartition, OffsetAndMetadata> offsets(TopicPartition first, long firstOffset,

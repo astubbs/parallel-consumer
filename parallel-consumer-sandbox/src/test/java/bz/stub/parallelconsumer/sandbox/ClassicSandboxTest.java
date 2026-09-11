@@ -111,18 +111,23 @@ class ClassicSandboxTest {
     }
 
     /**
-     * The other half of the transactional claim: the sandbox does not <em>soften</em> a refusal a broker would
-     * make. An external engine - Vert.x, Reactor, Mutiny - refuses the transactional commit mode at construction,
-     * and it refuses it in the sandbox for the same reason and with the same message.
+     * The other half of the transactional claim: an external engine - Vert.x, Reactor, Mutiny - refuses the
+     * transactional commit mode at construction, so the sandbox cannot be used to run a combination a broker
+     * would reject.
+     *
+     * <h2>What this covers, and what it does not</h2>
+     * <b>It gives the sandbox no coverage, and the name no longer pretends otherwise.</b> The refusal lives in
+     * core's {@code ExternalEngine} constructor and fires on the commit mode alone, before any client is read -
+     * so {@code classic.consumer()} and {@code classic.producer(...)} below are inert, and this test would pass
+     * with any clients at all. What it does cover is that refusal itself, which <b>nothing else in the tree
+     * tests</b>; it is kept here for that reason rather than deleted, and the gap is core's to own properly.
      * <p>
-     * <b>Tested through a minimal subclass rather than through the Vert.x module</b>, deliberately. The refusal
-     * lives in core's {@code ExternalEngine} constructor, not in any of the three engines, and it fires on the
-     * commit mode alone before a client is touched - so pulling Vert.x and Netty onto this module's test
-     * classpath would test core's code through the heaviest possible route. Note that nothing else in the tree
-     * covers this refusal at all; the sandbox is not the right owner for that gap, and the report says so.
+     * <b>Through a minimal subclass rather than through the Vert.x module</b>, deliberately: the refusal is not in
+     * any of the three engines, so pulling Vert.x and Netty onto this module's test classpath would reach core's
+     * code by the heaviest possible route.
      */
     @Test
-    void anExternalEngineStillRefusesTheTransactionalCommitModeInTheSandbox() {
+    void anExternalEngineRefusesTheTransactionalCommitModeBeforeItReadsAnyClient() {
         Sandbox sandbox = Sandbox.builder().build();
         try (ClassicSandbox<String, Order> classic = sandbox.classic(String.class, Order.class, "orders")) {
             ParallelConsumerOptions<String, Order> transactional = ParallelConsumerOptions

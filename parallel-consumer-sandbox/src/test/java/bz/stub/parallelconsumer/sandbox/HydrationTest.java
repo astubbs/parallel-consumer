@@ -81,14 +81,25 @@ class HydrationTest {
     void anAvroSpecificRecordIsFilledFromItsSchema() {
         AvroParcel parcel = generator.create(AvroParcel.class, 0);
 
-        assertThat(parcel).isNotNull();
-        assertWithMessage("the round trip through the schema must produce the class's own String type, not Utf8")
-                .that(parcel.getTrackingNumber()).isNotNull();
-        assertThat(parcel.getRecipientName()).isNotNull();
+        assertWithMessage("every field the schema declares comes back filled")
+                .that(parcel.getTrackingNumber()).isNotEmpty();
+        assertThat(parcel.getRecipientName()).isNotEmpty();
+        assertWithMessage("weightGrams is the only non-string field, and the only one whose put does an unchecked "
+                + "(Integer) cast - a fill that skipped it would leave the Java default and nothing else here "
+                + "would notice. The seed is fixed, so this is deterministic rather than improbable.")
+                .that(parcel.getWeightGrams()).isNotEqualTo(0);
         // Not asserted as realistic: RandomData reads the schema, which says "a string", and knows nothing about
         // field names. That is the documented trade - the schema is the more authoritative source for an Avro
         // type, and it costs the Datafaker layer.
-        assertThat(parcel.getSchema()).isEqualTo(AvroParcel.SCHEMA$);
+        //
+        // What IS asserted is the schema property, not the returned value's type. This test used to claim "the
+        // class's own String type, not Utf8" over an isNotNull(), which cannot tell String from Utf8 and never
+        // could: AvroParcel#put coerces with value.toString(), so deleting avro.java.string - the property that
+        // class's javadoc calls load-bearing - turned nothing red. The property itself is the thing that can go.
+        assertWithMessage("avro.java.string is what makes RandomData produce String rather than Utf8 for these "
+                + "fields; the coercion in AvroParcel#put hides its removal from every value-level assertion")
+                .that(AvroParcel.SCHEMA$.getField("trackingNumber").schema().getProp("avro.java.string"))
+                .isEqualTo("String");
     }
 
     @Test
