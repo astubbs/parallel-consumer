@@ -17,6 +17,7 @@ import org.apache.kafka.common.serialization.IntegerDeserializer;
 import org.apache.kafka.common.serialization.LongDeserializer;
 import org.apache.kafka.common.serialization.ShortDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.serialization.UUIDDeserializer;
 import org.apache.kafka.common.utils.Bytes;
 import org.junit.jupiter.api.Test;
@@ -43,7 +44,7 @@ class ValueTypesTest {
 
     @Test
     void aFormatThatWasToldItsTypeAnswersWithIt() {
-        assertThat(ValueTypes.of(Format.reading(new StringDeserializer(), String.class))).isEqualTo(String.class);
+        assertThat(ValueTypes.of(Format.of(new StringDeserializer(), new StringSerializer(), String.class))).isEqualTo(String.class);
     }
 
     @Test
