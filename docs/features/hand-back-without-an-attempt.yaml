@@ -16,7 +16,7 @@ summary: >-
   failed attempt against it, for a delivery where your work never actually ran - so a record
   declined by a gate does not spend the budget meant for records that were tried and failed.
 use_this_when:
-  - Something in front of your work declined the delivery: a circuit breaker that is open, a tenant or feature switched off, a dependency you chose not to call yet.
+  - "Something in front of your work declined the delivery: a circuit breaker that is open, a tenant or feature switched off, a dependency you chose not to call yet."
   - A record must be returned repeatedly while a condition clears, and you do not want every return to look like a failure of the record itself.
   - A payload can never be processed at all, where it pairs with park to stop the record for good without first recording an attempt that never happened.
 setup:

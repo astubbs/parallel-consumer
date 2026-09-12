@@ -38,7 +38,7 @@ boundaries:
   - Pause does not interrupt work already in flight. A record inside your processing function runs to completion, and a pause never cancels or interrupts it.
   - The guarantee is that no new work starts after the CONTROLLER acts, not after the call returns. Pausing wakes the controller, so that window is a control-loop pass rather than a commit interval - but a worker that picks up a queued batch inside it runs that batch. This is a stated window, not a defect.
   - A record taken back out of the pool has nothing recorded against it - no attempt spent, no failure, no retry delay - so pausing never advances any record's retry history. It is abandoned, not failed.
-  - A close that does not drain takes queued work back the same way, on the same contract: work still queued is not in flight, so starting it would be starting new work during a close that promised not to. A draining close deliberately does not, because it exists to dispatch what is already buffered.
+  - "A close that does not drain takes queued work back the same way, on the same contract: work still queued is not in flight, so starting it would be starting new work during a close that promised not to. A draining close deliberately does not, because it exists to dispatch what is already buffered."
   - Automatic per-partition throttling is separate from this application-controlled processor state.
 validation:
   - Pause while work is queued and confirm the records that ran are exactly those already inside the processing function; the processor reports how many were taken back out of the pool.

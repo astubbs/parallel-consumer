@@ -16,7 +16,7 @@ summary: >-
   PCRetriableException(message).retryAfter(duration) - instead of the engine asking a configured
   delay provider that has to work the answer out again from the record's history.
 use_this_when:
-  - The failure itself carries the wait: a Retry-After header, a rate-limit reset time, a broker or database backoff the client reported.
+  - "The failure itself carries the wait: a Retry-After header, a rate-limit reset time, a broker or database backoff the client reported."
   - You want a growing backoff per record and do not want to maintain an attempt ledger of your own to compute it.
   - Only some failures need a different delay, and setting a delay provider for the instance would change every failure to get at those.
 setup:
