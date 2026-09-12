@@ -251,6 +251,17 @@ whoever copied it. Its distinguishing property is that it decays silently: when 
 moves, the probe keeps passing, so it needs a correspondence check that fails on divergence or it is
 only as current as its last manual review.
 
+## Fleet
+
+Every application running the runtime against one Kafka cluster, taken together, regardless of
+which consumer group each instance belongs to. An instance carries its application and its group as
+attributes; neither bounds the fleet. The word is deliberately wider than a consumer group because
+the people who ask fleet questions run deployments, not groups.
+
+The word says nothing about topology. How a fleet's state is gathered, who holds it, and where a
+question about it is answered are design decisions owned by the plan that makes them, not part of
+what the term means.
+
 ## Ratchet
 
 A gate that can only turn one way: the recorded set of accepted findings may **shrink**, never
