@@ -436,6 +436,7 @@ public class ParallelConsumerInstance implements AutoCloseable {
     ParkedView parkedView(String name, Set<String> topics) {
         // Read the set first and stamp it second, so the view's age can only overstate how stale it is.
         List<ParkedRecord> parked = dispatcher.parkedFor(topics);
+        // Null partition: the view spans every partition of the topics it is of, which is the default (R28).
         return new ParkedView(name, topics, null, parked, Instant.now());
     }
 
