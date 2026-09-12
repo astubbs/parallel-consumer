@@ -4,7 +4,7 @@ package bz.stub.parallelconsumer.sandbox;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import org.apache.kafka.common.TopicPartition;
@@ -78,10 +78,10 @@ class SandboxSmokeTest {
                 .feeding(DISPATCHES_TOPIC, SandboxFixtures.countedValues(DISPATCHES_TOPIC))
                 .build();
 
-        try (ConsumerHandle handle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance instance = definition.start(sandbox)) {
             assertWithMessage("the record bound should have been reached and the instance closed")
                     .that(sandbox.awaitBound(Duration.ofSeconds(30))).isTrue();
-            handle.awaitShutdown();
+            instance.awaitShutdown();
         }
 
         assertThat(sandbox.generatedRecords()).isEqualTo(RECORD_BOUND);

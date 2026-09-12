@@ -105,9 +105,9 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
     /**
      * How many records are parked on each partition right now, or an empty map when nothing on this path can park.
      * <p>
-     * A <em>supplier of counts</em> rather than the fluent API's handle, deliberately: this class is the broker
+     * A <em>supplier of counts</em> rather than the fluent API's instance, deliberately: this class is the broker
      * under both APIs and knows nothing about either, and the classic API has no park at all. The fluent path
-     * supplies the handle's parked view; {@link ClassicSandbox} supplies nothing and gets the empty answer.
+     * supplies the instance's parked view; {@link ClassicSandbox} supplies nothing and gets the empty answer.
      */
     private volatile Supplier<Map<TopicPartition, Long>> parkedCounts = Collections::emptyMap;
 
@@ -316,7 +316,7 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
      * either. So it holds its partition's committed offset at its own offset for good.
      * <p>
      * The first version of this wait read that as a record the instance still owed, and so <b>refused a bounded run
-     * whose records park</b> - telling the caller to use {@link Bound#none()} and close the handle itself. That is
+     * whose records park</b> - telling the caller to use {@link Bound#none()} and close the instance itself. That is
      * the decision being overridden here, and it was wrong for the product rather than merely inconvenient: the
      * README's own quickstart parks by design and is bounded, so every build spent the whole twenty-second budget
      * waiting for a commit that could never come, logged the refusal at error, and then closed anyway - about

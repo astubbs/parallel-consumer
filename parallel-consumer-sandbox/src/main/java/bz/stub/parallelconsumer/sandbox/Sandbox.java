@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.sandbox;
  */
 
 import bz.stub.parallelconsumer.fluent.ClientRuntime;
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.DefinitionView;
 import bz.stub.parallelconsumer.fluent.Format;
 import bz.stub.parallelconsumer.fluent.ParkedRecord;
@@ -43,7 +43,7 @@ import java.util.function.LongFunction;
  *         .process(ctx -> { inventory.reserve(ctx.value()); return Outcome.succeeded(); });
  *
  * Sandbox sandbox = Sandbox.builder().handPublished().build();
- * try (ConsumerHandle handle = pc.start(sandbox)) {   // against a broker, this line reads pc.start()
+ * try (ParallelConsumerInstance instance = pc.start(sandbox)) {   // against a broker, this line reads pc.start()
  *     sandbox.publish("orders", "cust-1", new Order("o-1"));
  *     sandbox.publish("orders", "cust-1", new Order("o-2"));
  *     sandbox.awaitSettled();
@@ -68,7 +68,7 @@ import java.util.function.LongFunction;
  *         .perSecond(50)
  *         .bound(Bound.after(Duration.ofSeconds(10)))
  *         .build();
- * try (ConsumerHandle handle = pc.start(sandbox)) {
+ * try (ParallelConsumerInstance instance = pc.start(sandbox)) {
  *     sandbox.awaitBound(Duration.ofSeconds(30));
  * }
  * }</pre>
@@ -154,8 +154,9 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     private final Map<String, LongFunction<Object>> keys;
 
     /**
-     * Whether the caller publishes rather than the driver. True means {@link #started(ConsumerHandle)} assigns the
-     * partitions and stops there, so the only records this sandbox holds are the ones {@link #publish} was given.
+     * Whether the caller publishes rather than the driver. True means {@link #started(ParallelConsumerInstance)}
+     * assigns the partitions and stops there, so the only records this sandbox holds are the ones
+     * {@link #publish} was given.
      * <p>
      * An opt-out rather than the default, even though publishing by hand is the primary shape, because the driver
      * was here first and a demo that declared a rate and a bound must go on running: a sandbox that silently
@@ -186,8 +187,8 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     private DefinitionView definition;
 
     /**
-     * The driver, null until the instance starts with one - see {@link #started(ConsumerHandle)}. Every method
-     * that touches it
+     * The driver, null until the instance starts with one - see {@link #started(ParallelConsumerInstance)}. Every
+     * method that touches it
      * either null-checks it or refuses, because "this sandbox has not been started" is a better answer than a
      * null pointer.
      */
@@ -195,12 +196,12 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     private RecordDriver driver;
 
     /**
-     * The running instance, from {@link #started(ConsumerHandle)}. Held for two things the caller-published shape
-     * needs and the driver got for free: something for {@link #close()} to close, and somewhere for
-     * {@link #awaitSettled()} to look when the wait ends with records still outstanding.
+     * The running instance, from {@link #started(ParallelConsumerInstance)}. Held for two things the
+     * caller-published shape needs and the driver got for free: something for {@link #close()} to close, and
+     * somewhere for {@link #awaitSettled()} to look when the wait ends with records still outstanding.
      */
     @SuppressWarnings("NullAway.Init")
-    private ConsumerHandle handle;
+    private ParallelConsumerInstance instance;
 
     /**
      * One per routed topic, built at {@code start} from the route that claims it: what turns a key and a value
@@ -267,23 +268,23 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     /**
      * Assign the partitions and, unless the caller is publishing, start the driver - the moment neither client
      * factory method can give us: the engine has now subscribed, so there is a rebalance listener to assign to,
-     * and the handle exists, so the bound has something to close.
+     * and the instance exists, so the bound has something to close.
      */
     @Override
-    public void started(ConsumerHandle handle) {
-        Objects.requireNonNull(handle, "A handle must be supplied");
+    public void started(ParallelConsumerInstance instance) {
+        Objects.requireNonNull(instance, "A instance must be supplied");
         if (consumer == null) {
             throw new IllegalStateException("This sandbox was started without being asked for a consumer - a "
                     + "definition that supplies its own consumer with consumer(...) cannot also be run in the "
                     + "sandbox, because the sandbox IS the consumer");
         }
-        this.handle = handle;
+        this.instance = instance;
         consumer.assignAfterSeeding();
         // A parked record is a terminal outcome, and its partition never commits past it - so without this the
         // bound's wait would spend its whole budget on a definition that parks by design, which the README's own
-        // quickstart does (astubbs#504). The handle is the only thing that knows what is parked, and this is the
+        // quickstart does (astubbs#504). The instance is the only thing that knows what is parked, and this is the
         // first moment it exists.
-        consumer.countingParkedRecordsWith(() -> parkedCountsByPartition(handle));
+        consumer.countingParkedRecordsWith(() -> parkedCountsByPartition(instance));
         if (handPublished) {
             log.info("Sandbox ready, publishing by hand: {} - publish(topic, key, value), then awaitSettled()",
                     definition.topics());
@@ -297,9 +298,9 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
                 // offset or a park is what means a record is done with.
                 consumer.awaitEveryPublishedRecordCommitted();
             } finally {
-                // Closed either way: a handle left open outlives whatever made it, and the wait's own refusal
+                // Closed either way: a instance left open outlives whatever made it, and the wait's own refusal
                 // still reaches the caller through the driver's recorded failure.
-                handle.close();
+                instance.close();
             }
         });
         log.info("Sandbox driving: {} at {}/s per topic, {}", definition.topics(), perSecond, bound);
@@ -381,7 +382,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         if (offset < 0) {
             throw new IllegalStateException("This sandbox's consumer has closed, so " + topic + " can take no "
                     + "more records - the instance is no longer running. Publish inside the try-with-resources "
-                    + "that holds the handle, and settle before you leave it.");
+                    + "that holds the instance, and settle before you leave it.");
         }
         return offset;
     }
@@ -468,7 +469,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
             throw new IllegalStateException("Every record published reached an end, but the run did not settle: "
                     + describe(stopped.get()) + " Whatever was in flight when the stop landed was left incomplete "
                     + "by design, and nothing published after it is processed at all. Assert on the stop itself "
-                    + "through the handle rather than on the run.");
+                    + "through the instance rather than on the run.");
         }
     }
 
@@ -498,7 +499,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * refusal paths can ask without guarding first.
      */
     private Optional<StopRequest> stopRequest() {
-        return handle == null ? Optional.empty() : handle.stopRequest();
+        return instance == null ? Optional.empty() : instance.stopRequest();
     }
 
     /**
@@ -515,7 +516,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * own control-thread failure
      */
     private Throwable instanceFailure() {
-        return handle == null ? null : handle.failureCause().orElse(null);
+        return instance == null ? null : instance.failureCause().orElse(null);
     }
 
     /**
@@ -523,9 +524,9 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * "this sandbox has not been started" is a better answer than a null pointer or an empty result.
      */
     private void requireStarted() {
-        if (consumer == null || handle == null) {
+        if (consumer == null || instance == null) {
             throw new IllegalStateException("This sandbox has not been started - pass it to the definition's "
-                    + "start(...) first, and publish inside the try-with-resources that holds the handle");
+                    + "start(...) first, and publish inside the try-with-resources that holds the instance");
         }
     }
 
@@ -578,7 +579,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         }
         if (!bound.isBounded()) {
             throw new IllegalStateException("This sandbox is unbounded, so it will never reach a bound - declare "
-                    + "one with Sandbox.builder().bound(...), or close the handle to end the run");
+                    + "one with Sandbox.builder().bound(...), or close the instance to end the run");
         }
         return driver.awaitBound(timeout);
     }
@@ -589,17 +590,17 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * <b>Closing the instance is what makes the sandbox usable as the single try-with-resources resource</b>, the
      * shape the broker-free drivers of the stream-processing libraries users compare us with have. It is
      * idempotent and it is second, so it changes nothing on the driven path: the bound has already closed the
-     * handle by the time anything gets here, and {@link ConsumerHandle#close()} called twice returns once the
-     * first has finished. On the caller-published path there is no driver to stop, and without this a close would
-     * do nothing at all - which is a worse trap than the wordier javadoc.
+     * instance by the time anything gets here, and {@link ParallelConsumerInstance#close()} called twice returns
+     * once the first has finished. On the caller-published path there is no driver to stop, and without this a
+     * close would do nothing at all - which is a worse trap than the wordier javadoc.
      */
     @Override
     public void close() {
         if (driver != null) {
             driver.close();
         }
-        if (handle != null) {
-            handle.close();
+        if (instance != null) {
+            instance.close();
         }
     }
 
@@ -608,14 +609,14 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     /**
      * How many records are parked on each of the instance's partitions right now, for the bound's wait.
      * <p>
-     * Counted from {@link ConsumerHandle#parkedAllTopics()}'s own records rather than from its
+     * Counted from {@link ParallelConsumerInstance#parkedAllTopics()}'s own records rather than from its
      * {@code byPartition()} roll-out, because that groups by partition <em>number</em> across every topic - so a
      * definition with two routes would credit {@code orders-0}'s parked records to {@code parcel-scans-0} as well.
      * The record carries its topic and its partition, and a partition here is both.
      */
-    private static Map<TopicPartition, Long> parkedCountsByPartition(ConsumerHandle handle) {
+    private static Map<TopicPartition, Long> parkedCountsByPartition(ParallelConsumerInstance instance) {
         Map<TopicPartition, Long> counts = new LinkedHashMap<>();
-        for (ParkedRecord parked : handle.parkedAllTopics().records()) {
+        for (ParkedRecord parked : instance.parkedAllTopics().records()) {
             counts.merge(new TopicPartition(parked.topic(), parked.partition()), 1L, Long::sum);
         }
         return counts;
@@ -880,7 +881,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         private double perSecond = 50;
 
         /**
-         * No bound by default, because the default caller is a demo that stops when its handle is closed. A test
+         * No bound by default, because the default caller is a demo that stops when its instance is closed. A test
          * declares one.
          */
         private Bound bound = Bound.none();

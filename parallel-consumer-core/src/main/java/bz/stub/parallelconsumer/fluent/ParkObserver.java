@@ -21,9 +21,9 @@ import org.apache.kafka.common.annotation.InterfaceStability;
  * park of the same record fires nothing.
  * <p>
  * <b>Typed values only when decoding succeeded.</b> A record parked by a permanent decode failure (R12) has no
- * value to hand over, so {@link ProcessContext#key()} and {@link ProcessContext#value()} are null and
- * {@link ProcessContext#raw()} carries the original bytes and headers - which is also what an export would carry.
- * Its attempt count is zero, because a payload that can never decode spends no attempts.
+ * value to hand over, so {@link TypedRecordContext#key()} and {@link TypedRecordContext#value()} are null and
+ * {@link TypedRecordContext#raw()} carries the original bytes and headers. Its attempt count is zero, because a
+ * payload that can never decode spends no attempts.
  * <p>
  * <b>A throw from here changes nothing.</b> It is caught and logged; the record parks either way. An observer is a
  * report, and a report that could alter the outcome would make parking depend on the reporting.
@@ -36,10 +36,14 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 public interface ParkObserver<K, V> {
 
     /**
+     * Told that this record has parked: its last attempt has run, and its offset will not commit past it until it
+     * is resumed. It returns nothing because it is a report and not a decision - the record parks
+     * whatever this method does - and the type-level contract above is the whole of what it may assume.
+     *
      * @param record   the parked record, decoded when it could be decoded and raw when it could not
      * @param failure  the last failure, or null when the function asked for the park itself with
      *                 {@link Outcome#park(String)} - nothing failed in that case
      * @param attempts how many times this route's function ran for this record, zero for a permanent decode failure
      */
-    void onParked(ProcessContext<K, V> record, Throwable failure, int attempts);
+    void onParked(TypedRecordContext<K, V> record, Throwable failure, int attempts);
 }

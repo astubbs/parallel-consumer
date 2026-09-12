@@ -169,7 +169,7 @@ public final class Route<K, V, PK, PV> {
     @SuppressWarnings("DoNotCallSuggester")
     public Route<K, V, PK, PV> ordering(ProcessingOrder ordering) {
         throw new IllegalArgumentException(msg("ordering ({}) cannot be declared on topic {} in this version - "
-                        + "ordering is the instance default, declared with defaultOrdering(...) on the definition. "
+                        + "ordering is the instance default, declared as withDefaultOrdering(...) on the definition. "
                         + "Per-route ordering needs a change at the engine's shard-key seam and is a later "
                         + "milestone (R6).",
                 ordering, state.describeTopics()));
@@ -191,26 +191,9 @@ public final class Route<K, V, PK, PV> {
     @SuppressWarnings("DoNotCallSuggester")
     public Route<K, V, PK, PV> commitMode(CommitMode commitMode) {
         throw new IllegalArgumentException(msg("commitMode ({}) cannot be declared on topic {} - it is instance-wide, "
-                        + "declared with commitMode(...) on the definition: the engine has one consumer and one "
+                        + "declared as withCommitMode(...) on the definition: the engine has one consumer and one "
                         + "commit, so a per-route commit mode would be a second instance (KD11, R6)",
                 commitMode, state.describeTopics()));
-    }
-
-    /**
-     * Refused: the commit-failure policy is instance-wide, by the same line as the commit mode.
-     * <p>
-     * Not marked {@code @DoNotCall}, which Error Prone suggests for a method that always throws: the same
-     * setting must be refused on the wire form too, which has no compiler, and one message in one place is
-     * what keeps the two bindings saying the same thing (AE7).
-     *
-     * @throws IllegalArgumentException always
-     * @see #commitMode(CommitMode)
-     */
-    @SuppressWarnings("DoNotCallSuggester")
-    public Route<K, V, PK, PV> commitFailure(CommitFailurePolicy policy) {
-        throw new IllegalArgumentException(msg("commitFailure ({}) cannot be declared on topic {} - it is a property "
-                        + "of the one commit, so it is instance-wide like commitMode (KD11, R6)",
-                policy, state.describeTopics()));
     }
 
     /**

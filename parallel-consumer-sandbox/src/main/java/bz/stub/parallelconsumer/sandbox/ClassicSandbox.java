@@ -215,7 +215,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * It refuses when the budget runs out with records outstanding, and also when the instance shut down under the
      * wait leaving records outstanding - which the underlying wait returns quietly for, that being how an
      * unbounded driven run ordinarily ends. There is no instance failure to surface here: the classic API has no
-     * handle to record one on.
+     * instance to record one on.
      *
      * @throws IllegalStateException naming the partitions that never got there and what each published, completed
      *                               and parked

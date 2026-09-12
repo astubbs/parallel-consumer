@@ -87,7 +87,7 @@ class RouteDispatcher {
     private final String preBuiltConsumerDescription;
 
     /**
-     * Replaced at start with the handle. Until then, and in a test that drives the wrapper directly, a fault has
+     * Replaced at start with the instance. Until then, and in a test that drives the wrapper directly, a fault has
      * nowhere to go but the log.
      */
     private volatile InstanceControl instance = new LoggingOnlyInstanceControl();
@@ -98,7 +98,7 @@ class RouteDispatcher {
     private volatile FluentMeters meters = FluentMeters.none();
 
     /**
-     * Where the parked set is read from: the engine's retry queue, through the handle. Empty until the handle wires
+     * Where the parked set is read from: the engine's retry queue, through the instance. Empty until it wires
      * it, because a wrapper with no engine behind it has nothing parked.
      */
     private volatile Supplier<List<WorkContainer<?, ?>>> parkedContainers = Collections::emptyList;
@@ -150,7 +150,7 @@ class RouteDispatcher {
 
     /**
      * Replace the logging-only stand-in with the instance this wrapper runs in, so a fatal fault or a stop request
-     * reaches something that can act on it. Wired by the handle before anything polls, which is what makes it true
+     * reaches something that can act on it. Wired by the instance before anything polls, which is what makes it true
      * that the first record already has somewhere to report to.
      */
     void instanceControl(InstanceControl instance) {
@@ -195,15 +195,6 @@ class RouteDispatcher {
     }
 
     /**
-     * The engine's parked containers, straight through: what {@link FluentMeters}' gauges read, and the only
-     * caller that wants containers rather than the {@link ParkedRecord} view over them - it needs a topic, a
-     * partition and a park time, none of which costs a key deserialisation.
-     */
-    List<WorkContainer<?, ?>> parkedContainersNow() {
-        return parkedContainers.get();
-    }
-
-    /**
      * The parked records of a named set of topics, filtered <b>before</b> anything is built rather than after.
      * <p>
      * It matters because building one entry decodes the record's key: answering a single route's query by
@@ -230,7 +221,7 @@ class RouteDispatcher {
     }
 
     /**
-     * The one wording of "you asked about a topic this instance does not route", so the handle and the wrapper
+     * The one wording of "you asked about a topic this instance does not route", so the instance and the wrapper
      * cannot answer the same mistake in two different sentences. A misspelled topic answered with an empty parked
      * set would read as good news, which is why it is a refusal at all.
      */
@@ -256,13 +247,13 @@ class RouteDispatcher {
     private List<ParkedRecord> parkedRecordsFrom(List<WorkContainer<?, ?>> containers, Set<String> wanted) {
         List<ParkedRecord> view = new ArrayList<>(containers.size());
         for (WorkContainer<?, ?> container : containers) {
-            RecordContext<byte[], byte[]> engineContext = contextOf(container);
-            RouteState route = routesByTopic.get(engineContext.topic());
-            if (route == null || (wanted != null && !wanted.contains(engineContext.topic()))) {
+            RecordContext<byte[], byte[]> recordContext = contextOf(container);
+            RouteState route = routesByTopic.get(recordContext.topic());
+            if (route == null || (wanted != null && !wanted.contains(recordContext.topic()))) {
                 continue;
             }
-            view.add(new ParkedRecord(engineContext, decodeKeyQuietly(route, engineContext.getConsumerRecord()),
-                    cyclesUsed(route, engineContext.getNumberOfFailedAttempts())));
+            view.add(new ParkedRecord(recordContext, decodeKeyQuietly(route, recordContext.getConsumerRecord()),
+                    cyclesUsed(route, recordContext.getNumberOfFailedAttempts())));
         }
         return Collections.unmodifiableList(view);
     }
@@ -385,8 +376,8 @@ class RouteDispatcher {
      *
      * @return the records the engine should send for this one, empty when the record completes with nothing
      */
-    private List<ProducerRecord<byte[], byte[]>> dispatchOne(RecordContext<byte[], byte[]> engineContext) {
-        ConsumerRecord<byte[], byte[]> record = engineContext.getConsumerRecord();
+    private List<ProducerRecord<byte[], byte[]>> dispatchOne(RecordContext<byte[], byte[]> recordContext) {
+        ConsumerRecord<byte[], byte[]> record = recordContext.getConsumerRecord();
         RouteState route = routesByTopic.get(record.topic());
         if (route == null) {
             throw new IllegalStateException(msg("No route claims topic {}, yet a record from it was dispatched. The "
@@ -397,10 +388,10 @@ class RouteDispatcher {
 
         // The engine has failed this record `alreadyFailed` times; the run about to happen is the next attempt, and
         // that is the number the retry limit is measured against (R10, KTD14).
-        int alreadyFailed = engineContext.getNumberOfFailedAttempts();
+        int alreadyFailed = recordContext.getNumberOfFailedAttempts();
         int attempts = alreadyFailed + 1;
 
-        // Whatever decoded before the failure, which is what the park observer and an export are given: both sides
+        // Whatever decoded before the failure, which is what the park observer is given: both sides
         // when the record decoded, the key alone when only the value failed, neither when nothing did (R13, R16).
         Object key = null;
         Object value = null;
@@ -410,20 +401,20 @@ class RouteDispatcher {
         } catch (PermanentDecodeFailureException permanent) {
             // No attempt is spent: the payload will never decode, so there is nothing to try again (R12). And no
             // park cycle either - a wait cannot change a payload that can never be read (R27).
-            throw park(new ProcessContext<>(engineContext, key, value), route, permanent, alreadyFailed,
+            throw park(new TypedRecordContext<>(recordContext, key, value), route, permanent, alreadyFailed,
                     "its payload can never be decoded", false);
         } catch (ClassCastException castFailed) {
             if (RawBytesConsumerFaultException.isRawBytesCastFailure(castFailed)) {
                 throw rawBytesFault(castFailed);
             }
-            throw afterAttempt(new ProcessContext<>(engineContext, key, value), route, castFailed, attempts);
+            throw afterAttempt(new TypedRecordContext<>(recordContext, key, value), route, castFailed, attempts);
         } catch (RuntimeException decodeFailed) {
             // A stock deserialiser cannot tell a corrupt payload from a registry outage, so this is transient by
             // default and costs an attempt (R12).
-            throw afterAttempt(new ProcessContext<>(engineContext, key, value), route, decodeFailed, attempts);
+            throw afterAttempt(new TypedRecordContext<>(recordContext, key, value), route, decodeFailed, attempts);
         }
 
-        ProcessContext<Object, Object> context = new ProcessContext<>(engineContext, key, value);
+        TypedRecordContext<Object, Object> context = new TypedRecordContext<>(recordContext, key, value);
         Outcome<Object, Object> outcome;
         try {
             outcome = run(route, context);
@@ -450,24 +441,24 @@ class RouteDispatcher {
      * @return the records for the engine to send, empty when the record completes with nothing
      */
     private List<ProducerRecord<byte[], byte[]>> apply(Outcome<Object, Object> outcome,
-                                                       ProcessContext<Object, Object> context,
+                                                       TypedRecordContext<Object, Object> context,
                                                        RouteState route,
                                                        int attempts) {
         ConsumerRecord<byte[], byte[]> record = context.raw();
         switch (outcome.kind()) {
             case SUCCEEDED:
                 succeeded.increment();
-                meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
+                meters.recordOutcome(record.topic(), OutcomeTag.SUCCEEDED);
                 return emptyProduce();
             case FILTERED:
                 // Completes and commits exactly as a success does, and is counted apart from one (R8).
                 filtered.increment();
-                meters.recordOutcome(record.topic(), FluentMeters.FILTERED);
+                meters.recordOutcome(record.topic(), OutcomeTag.FILTERED);
                 return emptyProduce();
             case PRODUCE:
                 List<ProducerRecord<byte[], byte[]>> serialised = serialise(route, outcome.records());
                 succeeded.increment();
-                meters.recordOutcome(record.topic(), FluentMeters.SUCCEEDED);
+                meters.recordOutcome(record.topic(), OutcomeTag.SUCCEEDED);
                 producedRecords.add(serialised.size());
                 return serialised;
             case PARK:
@@ -502,7 +493,7 @@ class RouteDispatcher {
      * @return the exception to throw, so a caller reads as {@code throw afterAttempt(...)} and the compiler knows
      * the path ends
      */
-    private RuntimeException afterAttempt(ProcessContext<Object, Object> context, RouteState route,
+    private RuntimeException afterAttempt(TypedRecordContext<Object, Object> context, RouteState route,
                                           Throwable failure, int attempts) {
         ConsumerRecord<byte[], byte[]> record = context.raw();
         if (isExhausted(route, attempts)) {
@@ -578,23 +569,18 @@ class RouteDispatcher {
      * after its partition was revoked, and what it would report then belongs to whoever owns the partition now.
      * The engine already knows - it drops the container rather than holding it parked - so this asks it rather
      * than keeping an assignment view of its own.
-     * <p>
-     * <b>Seam for the export unit.</b> Export is a re-dispatch, not a send from this failure path (KTD5): on a
-     * later dispatch of an already-parked record the wrapper returns the export record instead of calling the
-     * function, reading the entry the engine holds for the provenance headers. The definition refuses a dead-letter
-     * destination at start until that lands, so no definition reaching here has one.
      *
      * @param countsAsAttempt false for a park that spent no attempt at the user's work - a payload that can never
      *                        be decoded (R12)
      */
-    private RuntimeException park(ProcessContext<Object, Object> context, RouteState route, Throwable failure,
+    private RuntimeException park(TypedRecordContext<Object, Object> context, RouteState route, Throwable failure,
                                   int attempts, String why, boolean countsAsAttempt) {
         ConsumerRecord<byte[], byte[]> record = context.raw();
         String message = msg("Parked {}-{}@{} after {} attempt(s): {}. It stays incomplete in the offset map and "
                         + "holds no worker; offsets past it still commit under key and unordered processing.",
                 record.topic(), record.partition(), record.offset(), attempts, why);
 
-        if (context.engineContext().isStale()) {
+        if (context.recordContext().isStale()) {
             // A worker can finish after its partition was revoked. The engine will drop this container rather than
             // hold it parked, so there is nothing to list - and reporting it would tell an observer, and an
             // operator, about a record that belongs to whoever owns the partition now. The record is still handed
@@ -605,7 +591,7 @@ class RouteDispatcher {
 
         notifyObserver(route, context, failure, attempts);
         parked.increment();
-        meters.recordOutcome(record.topic(), FluentMeters.PARKED);
+        meters.recordOutcome(record.topic(), OutcomeTag.PARKED);
         if (failure == null) {
             // Nothing failed: the function asked for this, so it is not a warning.
             log.info(message);
@@ -642,7 +628,7 @@ class RouteDispatcher {
      * back - which is what makes "after the last attempt and before the offset commits" true: the commit happens
      * later, on the control thread, once this throw has been processed.
      */
-    private void notifyObserver(RouteState route, ProcessContext<Object, Object> context, Throwable failure,
+    private void notifyObserver(RouteState route, TypedRecordContext<Object, Object> context, Throwable failure,
                                 int attempts) {
         ParkObserver<?, ?> observer = route.parkObserver();
         if (observer == null) {
@@ -664,7 +650,7 @@ class RouteDispatcher {
      * values it is handed came from that same route's deserialisers, which is what makes it sound.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static void observe(ParkObserver<?, ?> observer, ProcessContext<Object, Object> context,
+    private static void observe(ParkObserver<?, ?> observer, TypedRecordContext<Object, Object> context,
                                 Throwable failure, int attempts) {
         ((ParkObserver) observer).onParked(context, failure, attempts);
     }
@@ -681,7 +667,7 @@ class RouteDispatcher {
      *     <em>and</em> hands back the batches already queued in the worker pool, so nothing further reaches a
      *     route's function - that second half is the engine change this facade used to work around with a flag of
      *     its own (KTD14).</li>
-     *     <li><b>Close</b>, also through the handle, on a thread of its own because this one is a worker and the
+     *     <li><b>Close</b>, also through the instance, on a thread of its own because this one is a worker and the
      *     close awaits the worker pool.</li>
      *     <li><b>Throw</b>, which is the only way to hand a record back, leaving it incomplete so a restart
      *     delivers it again.</li>
@@ -702,7 +688,7 @@ class RouteDispatcher {
     /**
      * A pre-built consumer that is not configured for raw bytes: a definition fault, never a retry (KTD3, R1).
      * <p>
-     * {@link InstanceControl#fatal} is what makes it fatal; the handle closes the instance and surfaces this
+     * {@link InstanceControl#fatal} is what makes it fatal; the instance closes itself and surfaces this
      * exception to whoever is awaiting shutdown. The throw itself matters either way: the record must not complete,
      * because it was never processed.
      */
@@ -785,7 +771,7 @@ class RouteDispatcher {
      * wrapping of their own (R9).
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static Outcome<Object, Object> run(RouteState route, ProcessContext<?, ?> context) throws Exception {
+    private static Outcome<Object, Object> run(RouteState route, TypedRecordContext<?, ?> context) throws Exception {
         return ((ProcessFunction) route.function()).process(context);
     }
 
@@ -833,7 +819,7 @@ class RouteDispatcher {
     }
 
     /**
-     * Where a fault goes before the handle exists, or when the wrapper is driven directly by a test.
+     * Where a fault goes before the instance exists, or when the wrapper is driven directly by a test.
      */
     @Slf4j
     private static class LoggingOnlyInstanceControl implements InstanceControl {

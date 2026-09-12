@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.sandbox;
  */
 
 import bz.stub.parallelconsumer.fluent.Consumed;
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.Format;
 import bz.stub.parallelconsumer.fluent.Formats;
 import bz.stub.parallelconsumer.fluent.Outcome;
@@ -73,9 +73,9 @@ class RouteRefusalTest {
                 .feeding("legacy", index -> "scan-" + index)
                 .build();
 
-        try (ConsumerHandle handle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance instance = definition.start(sandbox)) {
             assertThat(sandbox.awaitBound(Duration.ofSeconds(30))).isTrue();
-            handle.awaitShutdown();
+            instance.awaitShutdown();
         }
 
         assertThat(sandbox.generatedRecords()).isEqualTo(5);
@@ -111,9 +111,9 @@ class RouteRefusalTest {
                 .bound(Bound.afterRecords(3))
                 .feeding("legacy", index -> "scan-" + index)
                 .build();
-        try (ConsumerHandle handle = untypedRoute().start(told)) {
+        try (ParallelConsumerInstance instance = untypedRoute().start(told)) {
             assertThat(told.awaitBound(Duration.ofSeconds(30))).isTrue();
-            handle.awaitShutdown();
+            instance.awaitShutdown();
         }
         assertThat(told.generatedRecords()).isEqualTo(3);
     }
@@ -126,10 +126,10 @@ class RouteRefusalTest {
     void aHandPublishedSandboxNeedsNoValueFunctionAtAll() {
         Sandbox handPublished = Sandbox.builder().handPublished().build();
 
-        try (ConsumerHandle handle = untypedRoute().start(handPublished)) {
+        try (ParallelConsumerInstance instance = untypedRoute().start(handPublished)) {
             var ignoredOffset = handPublished.publish("legacy", "cust-1", "scan-1");
             handPublished.awaitSettled();
-            assertThat(handle.parkedAllTopics().count()).isEqualTo(0);
+            assertThat(instance.parkedAllTopics().count()).isEqualTo(0);
         }
         assertWithMessage("the driver published nothing, because there is no driver")
                 .that(handPublished.generatedRecords()).isEqualTo(0);

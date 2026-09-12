@@ -82,7 +82,7 @@ class RouteTypingAndDefaultsTest {
         var record = new ConsumerRecord<>("orders", 0, 0L,
                 "k".getBytes(StandardCharsets.UTF_8), "{}".getBytes(StandardCharsets.UTF_8));
         Outcome<Long, OrderEvent> outcome = function.process(
-                new ProcessContext<>(contextFor(record), "k1", order));
+                new TypedRecordContext<>(contextFor(record), "k1", order));
 
         assertThat(outcome.kind()).isEqualTo(Outcome.Kind.PRODUCE);
         ProducerRecord<Long, OrderEvent> produced = outcome.records().get(0);
@@ -94,7 +94,7 @@ class RouteTypingAndDefaultsTest {
     }
 
     /**
-     * A {@link ProcessContext} is a view over the engine's own {@link RecordContext}, so building one by hand needs
+     * A {@link TypedRecordContext} is a view over the engine's own {@link RecordContext}, so building one by hand needs
      * one of those. This test asks it only about the record - what is under test is the compiler's view of the
      * route's types - so it is built over the record alone, with no work container behind it.
      */
@@ -120,10 +120,10 @@ class RouteTypingAndDefaultsTest {
     void everyPerRouteSettingIsACopyOfTheInstanceDefault() {
         var afterRetries = AfterRetries.park();
         var pc = define()
-                .defaultRetryLimit(7)
-                .defaultRetryDelay(Duration.ofSeconds(3))
-                .defaultConcurrency(9)
-                .defaultAfterRetries(afterRetries);
+                .withDefaultRetryLimit(7)
+                .withDefaultRetryDelay(Duration.ofSeconds(3))
+                .withDefaultConcurrency(9)
+                .withDefaultAfterRetries(afterRetries);
         pc.string("orders").process(context -> Outcome.succeeded());
         pc.string("audit").process(context -> Outcome.succeeded());
 
@@ -145,19 +145,17 @@ class RouteTypingAndDefaultsTest {
      */
     @Test
     void theStopReactionCopiesIntoEveryRouteAndARouteMayOverrideIt() {
-        var pc = define().defaultAfterRetries(AfterRetries.stop());
+        var pc = define().withDefaultAfterRetries(AfterRetries.stop());
         pc.string("orders").process(context -> Outcome.succeeded());
-        pc.string("audit").afterRetries(AfterRetries.dlqImmediately("audit.dlq"))
-                .process(context -> Outcome.succeeded());
+        pc.string("audit").afterRetries(AfterRetries.park()).process(context -> Outcome.succeeded());
 
         assertThat(pc.route("orders").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.STOP);
         assertThat(pc.route("audit").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.PARK);
-        assertThat(pc.route("audit").afterRetries().destination()).isEqualTo("audit.dlq");
     }
 
     @Test
     void aRoutesOwnSettingOverridesOnlyItsOwnCopy() {
-        var pc = define().defaultRetryLimit(7).defaultConcurrency(9);
+        var pc = define().withDefaultRetryLimit(7).withDefaultConcurrency(9);
         pc.string("orders").retryLimit(2).concurrency(4).process(context -> Outcome.succeeded());
         pc.string("audit").process(context -> Outcome.succeeded());
 
@@ -173,7 +171,7 @@ class RouteTypingAndDefaultsTest {
      */
     @Test
     void unboundedRetriesAreOptInOnTheInstanceAndOnARoute() {
-        var pc = define().defaultRetryForever();
+        var pc = define().withDefaultRetryForever();
         pc.string("orders").process(context -> Outcome.succeeded());
         pc.string("audit").retryLimit(3).process(context -> Outcome.succeeded());
 
@@ -195,7 +193,6 @@ class RouteTypingAndDefaultsTest {
 
         assertThat(pc.route("orders").retryLimit().getAsInt()).isEqualTo(10);
         assertThat(pc.route("orders").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.PARK);
-        assertThat(pc.route("orders").afterRetries().destination()).isNull();
     }
 
     /**

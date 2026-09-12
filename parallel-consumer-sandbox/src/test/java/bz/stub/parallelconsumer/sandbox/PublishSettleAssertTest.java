@@ -6,7 +6,7 @@ package bz.stub.parallelconsumer.sandbox;
 
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.fluent.AfterRetries;
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.fluent.ParkedRecord;
@@ -76,7 +76,7 @@ class PublishSettleAssertTest {
         });
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
-        try (ConsumerHandle handle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance instance = definition.start(sandbox)) {
             assertThat(sandbox.publish(ORDERS_TOPIC, "cust-1", "first")).isEqualTo(0L);
             assertThat(sandbox.publish(ORDERS_TOPIC, "cust-2", "second")).isEqualTo(1L);
             assertThat(sandbox.publish(ORDERS_TOPIC, "cust-1", "third")).isEqualTo(2L);
@@ -90,7 +90,7 @@ class PublishSettleAssertTest {
                     + "complete commits at three")
                     .that(SandboxFixtures.highestCommittedOffset(sandbox, ORDERS_0)).isEqualTo(3L);
             assertWithMessage("nothing failed, so nothing should be parked")
-                    .that(handle.parkedAllTopics().count()).isEqualTo(0);
+                    .that(instance.parkedAllTopics().count()).isEqualTo(0);
         }
     }
 
@@ -141,7 +141,7 @@ class PublishSettleAssertTest {
         definition.string(ORDERS_TOPIC).process(context -> Outcome.succeeded());
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
-        try (ConsumerHandle ignoredHandle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance ignoredInstance = definition.start(sandbox)) {
             var ignoredOffset = sandbox.publish(ORDERS_TOPIC, "cust-1", "first");
             sandbox.awaitSettled();
 
@@ -172,12 +172,12 @@ class PublishSettleAssertTest {
                 });
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
-        try (ConsumerHandle handle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance instance = definition.start(sandbox)) {
             var ignoredOffset = sandbox.publish(ORDERS_TOPIC, "cust-1", "first");
 
             sandbox.awaitSettled();
 
-            List<ParkedRecord> parked = handle.parkedAllTopics().records();
+            List<ParkedRecord> parked = instance.parkedAllTopics().records();
             assertWithMessage("the record ran out of attempts, so it parked - and a park is a settled record")
                     .that(parked).hasSize(1);
             assertThat(parked.get(0).topic()).isEqualTo(ORDERS_TOPIC);
@@ -209,7 +209,7 @@ class PublishSettleAssertTest {
                 });
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
-        try (ConsumerHandle handle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance instance = definition.start(sandbox)) {
             var ignoredOffset = sandbox.publish(ORDERS_TOPIC, "cust-1", "first");
 
             IllegalStateException refusal = assertThrows(IllegalStateException.class, sandbox::awaitSettled);
@@ -218,8 +218,8 @@ class PublishSettleAssertTest {
                     + "declared, so the refusal names the stop")
                     .that(refusal).hasMessageThat().contains("A route stopped the instance at orders-0@0");
             assertThat(refusal).hasMessageThat().contains("ran out of attempts");
-            assertWithMessage("and the handle records it too, which is what the refusal read")
-                    .that(handle.stopRequest()).isPresent();
+            assertWithMessage("and the instance records it too, which is what the refusal read")
+                    .that(instance.stopRequest()).isPresent();
         }
     }
 
@@ -238,7 +238,7 @@ class PublishSettleAssertTest {
                 });
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
-        try (ConsumerHandle ignoredHandle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance ignoredInstance = definition.start(sandbox)) {
             var ignoredOffset = sandbox.publish(ORDERS_TOPIC, "cust-1", "first");
 
             IllegalStateException refusal =
@@ -257,7 +257,7 @@ class PublishSettleAssertTest {
         definition.string(ORDERS_TOPIC).process(context -> Outcome.succeeded());
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
-        try (ConsumerHandle ignoredHandle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance ignoredInstance = definition.start(sandbox)) {
             IllegalArgumentException refusal = assertThrows(IllegalArgumentException.class,
                     () -> sandbox.publish("parcel-scans", "cust-1", "first"));
 
@@ -288,7 +288,7 @@ class PublishSettleAssertTest {
         definition.string(ORDERS_TOPIC).process(context -> Outcome.succeeded());
 
         Sandbox sandbox = Sandbox.builder().handPublished().bound(Bound.afterRecords(1)).build();
-        try (ConsumerHandle ignoredHandle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance ignoredInstance = definition.start(sandbox)) {
             IllegalStateException refusal = assertThrows(IllegalStateException.class,
                     () -> sandbox.awaitBound(Duration.ofSeconds(1)));
 

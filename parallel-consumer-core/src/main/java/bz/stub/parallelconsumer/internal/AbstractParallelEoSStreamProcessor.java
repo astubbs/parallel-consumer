@@ -132,6 +132,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
 
+    /**
+     * Completes when the control thread has ended, and is the thing to WAIT on for that - see
+     * {@link #controlThreadCompletion()}, which hands it out and owns the contract.
+     * <p>
+     * A second view of the same event as {@link #controlThreadFuture}, not a second event: both are written by the
+     * one control task, on its way out, and this one exists because the submitted {@link Future} cannot be
+     * composed. A caller that wants "whichever of these two happens first" - a close through some other handle, or
+     * the control thread dying on its own - otherwise has no option but to poll, which is exactly what the fluent
+     * API's {@code ParallelConsumerInstance.awaitShutdown} was doing at 200ms.
+     * <p>
+     * {@code final}, and {@link CompletableFuture} is itself thread-safe, so there is no lock to name and no
+     * {@code @GuardedBy} to write: completion is a single atomic transition, whichever thread reaches it, and
+     * every later attempt is a no-op by construction.
+     */
+    private final CompletableFuture<Void> controlThreadCompletion = new CompletableFuture<>();
+
     // todo make package level
     @Getter(AccessLevel.PUBLIC)
     protected WorkManager<K, V> wm;
@@ -333,6 +349,42 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
+     * The instance's completion, to wait on instead of polling {@link #isClosedOrFailed()}.
+     * <p>
+     * <b>What completes it: the control thread ending, however it ended.</b> That covers a close the caller asked
+     * for, a close performed from anywhere else, and a control thread that died on its own. A control thread that
+     * threw completes it <em>exceptionally</em>, with the same throwable the submitted control-task
+     * {@link Future} carries - which for a control-loop failure is the {@code failureReason} this class wraps
+     * around the cause, so a caller reading {@link Throwable#getCause()} reaches what actually killed the
+     * consumer.
+     * <p>
+     * <b>What does NOT complete it, and these are the confusions worth stating.</b> A throw from a user's function
+     * does not: that is one record failing, the instance goes on, and the outcome is the record's. Pausing does
+     * not - a paused instance's control thread is still running and is expected to resume. Neither does the
+     * instance merely reaching {@code CLOSED} state ahead of the thread's own exit, which is the gap
+     * {@link #isClosedOrFailed()} deliberately covers from the other side by asking the state as well.
+     * <p>
+     * <b>It never completes for an instance that was never started</b>, because there is no control thread to end.
+     * Wait on it only for an instance a {@code poll*} call has returned from; a submission the executor refused
+     * completes it exceptionally rather than leaving a waiter hanging, which is the one case a caller could not
+     * otherwise distinguish.
+     * <p>
+     * <b>This is the instance's own future, not a copy, and a caller must not complete or cancel it.</b> The two
+     * Java APIs for handing out a detached view - {@code copy()} and {@code minimalCompletionStage()} - are both
+     * Java 9, and this module compiles against {@code --release 8}; building one by hand costs an allocation and a
+     * retained dependent per call for a hazard nobody in this repository has. Completing it would not corrupt any
+     * engine state - nothing here reads it back, and {@link #isClosedOrFailed()} answers from the state and the
+     * control task's own {@link Future} - it would only tell every other waiter the instance ended when it had
+     * not. So the rule is a contract rather than a guard, and it is stated here rather than assumed.
+     *
+     * @return a future completing when the control thread ends, exceptionally if it ended by throwing
+     * @see #isClosedOrFailed() for the same question asked without waiting
+     */
+    public CompletableFuture<Void> controlThreadCompletion() {
+        return controlThreadCompletion;
+    }
+
+    /**
      * The run state of the controller.
      *
      * @see State
@@ -453,44 +505,62 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     protected AbstractParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> newOptions, PCModule<K, V> module) {
         requireNonNull(newOptions, "Options must be supplied");
+        // Before anything is built from them: on the configuration path the module constructs the consumer, and a
+        // refusal that names the option the caller set is worth more than the client constructor's own complaint
+        // about a key they never typed. Pure checks, so running them here rather than inside
+        // validateConfiguration() changes nothing for a valid configuration.
+        newOptions.validate();
         this.module = module;
         this.mdcPropagation = module.mdcPropagation();
         options = newOptions;
         this.shutdownTimeout = options.getShutdownTimeout();
         this.drainTimeout = options.getDrainTimeout();
-        this.consumerManager = module.consumerManager();
+        // Everything from here on is inside the guard: past this line a client may EXIST that nobody but this
+        // half-built processor can close. Ownership of a PC-built client passes to this instance's close(), and a
+        // constructor that throws never returns an instance to call it on - so the clients built for the attempt
+        // are closed here instead. See PCModule.closeClientsBuiltByPc.
+        try {
+            this.consumerManager = module.consumerManager();
 
-        validateConfiguration();
+            validateConfiguration();
 
-        module.setParallelEoSStreamProcessor(this);
+            module.setParallelEoSStreamProcessor(this);
 
-        log.info("Confluent Parallel Consumer initialise... groupId: {}, Options: {}",
-                consumerManager.groupMetadata().groupId(),
-                newOptions);
-        //Initialize global metrics - should be initialized before any of the module objects are created so that meters can be bound in them.
-        pcMetrics = module.pcMetrics();
+            log.info("Confluent Parallel Consumer initialise... groupId: {}, Options: {}",
+                    consumerManager.groupMetadata().groupId(),
+                    newOptions);
+            //Initialize global metrics - should be initialized before any of the module objects are created so that meters can be bound in them.
+            pcMetrics = module.pcMetrics();
 
-        this.dynamicExtraLoadFactor = module.dynamicExtraLoadFactor();
+            this.dynamicExtraLoadFactor = module.dynamicExtraLoadFactor();
 
-        workerThreadPool = SupplierUtils.memoize(() -> requireRejectionIsVisible(setupWorkerPool(newOptions.getMaxConcurrency())));
-        forceWorkerPoolConstruction();
+            workerThreadPool = SupplierUtils.memoize(() -> requireRejectionIsVisible(setupWorkerPool(newOptions.getMaxConcurrency())));
+            forceWorkerPoolConstruction();
 
-        this.wm = module.workManager();
+            this.wm = module.workManager();
 
-        this.brokerPollSubsystem = module.brokerPoller(this);
+            this.brokerPollSubsystem = module.brokerPoller(this);
 
-        if (options.isProducerSupplied()) {
-            this.producerManager = Optional.of(module.producerManager());
-            if (options.isUsingTransactionalProducer())
-                this.committer = this.producerManager.get();
-            else
+            if (options.isProducerSupplied()) {
+                this.producerManager = Optional.of(module.producerManager());
+                if (options.isUsingTransactionalProducer())
+                    this.committer = this.producerManager.get();
+                else
+                    this.committer = this.brokerPollSubsystem;
+            } else {
+                this.producerManager = Optional.empty();
                 this.committer = this.brokerPollSubsystem;
-        } else {
-            this.producerManager = Optional.empty();
-            this.committer = this.brokerPollSubsystem;
+            }
+            //Initialize metrics for this class once all the objects are created
+            initMetrics();
+        } catch (Throwable constructionFailed) {
+            // Not only validateConfiguration(): every line above can throw, and the window is the same for all of
+            // them. Narrowing the guard to the checks that are known to throw today would mean being right about
+            // every line added above it later - the same argument onUserFunctionFailure's finally makes.
+            // Best effort, so a client that fails to close as well cannot hide the failure the caller has to act on.
+            module.closeClientsBuiltByPc("a client built for a processor that failed to construct");
+            throw constructionFailed;
         }
-        //Initialize metrics for this class once all the objects are created
-        initMetrics();
     }
 
     private void initMetrics() {
@@ -504,11 +574,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     private void validateConfiguration() {
-        options.validate();
-
+        // options.validate() has already run, at the top of the constructor - these three need the consumer, which
+        // on the configuration path does not exist until the module builds it.
         checkGroupIdConfigured();
-        checkNotSubscribed(options.getConsumer());
-        checkAutoCommitIsDisabled(options.getConsumer());
+        checkNotSubscribed(module.consumer());
+        checkAutoCommitIsDisabled(module.consumer());
     }
 
     private void checkGroupIdConfigured() {
@@ -1595,22 +1665,51 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         // run main pool loop in thread
         Callable<Boolean> controlTask = () -> {
-            mdcPropagation.adopt(callersDiagnosticContext);
-            addInstanceMDC();
-            log.info("Control loop starting up...");
-            Thread controlThread = Thread.currentThread();
-            controlThread.setName(CONTROL_THREAD);
-            this.getMyId().ifPresent(id -> controlThread.setName(CONTROL_THREAD + "-" + id));
-            this.blockableControlThread = controlThread;
+            // The WHOLE body is inside this try, not just the loop: everything above the loop is setup that can
+            // throw (the MDC adoption runs the caller's logging binding), and a control thread that died during
+            // setup ended just as finally as one that died in the loop. A waiter told nothing about it would hang.
             try {
-                runControlLoopUntilClosed(userFunctionWrapped, callback);
-            } finally {
-                failPendingRevokeCommitOnControlThreadExit();
+                mdcPropagation.adopt(callersDiagnosticContext);
+                addInstanceMDC();
+                log.info("Control loop starting up...");
+                Thread controlThread = Thread.currentThread();
+                controlThread.setName(CONTROL_THREAD);
+                this.getMyId().ifPresent(id -> controlThread.setName(CONTROL_THREAD + "-" + id));
+                this.blockableControlThread = controlThread;
+                try {
+                    runControlLoopUntilClosed(userFunctionWrapped, callback);
+                } finally {
+                    failPendingRevokeCommitOnControlThreadExit();
+                }
+                // Inside the try, not after it, because the comment above is the contract and these two lines are
+                // part of the body: the clean-exit log runs the caller's logging binding over a state binding, so
+                // it can throw - and that is the exact hazard the try was written for. Outside, a throw from here
+                // left the completion never completed while the submitted Future still failed, so a waiter hung:
+                // the one case controlThreadCompletion()'s javadoc promises cannot happen. Raised by the review of
+                // astubbs/parallel-consumer#506, which found the code and its own comment disagreeing.
+                log.info("Control loop ending clean (state:{})...", state);
+                // false would mean something completed it first, which nothing does - the only writers are here.
+                boolean ignoredWasFirstToComplete = controlThreadCompletion.complete(null);
+            } catch (Throwable controlThreadFailure) {
+                // Armed BEFORE the rethrow, so a waiter released by this completion already has the cause; the
+                // submitted future carries the same throwable, and the two must not disagree about why it ended.
+                // A clean completion arriving first makes this a no-op, which is the right outcome: only the clean
+                // log line can throw after it, and a consumer that finished its loop did finish it.
+                boolean ignoredWasFirstToComplete = controlThreadCompletion.completeExceptionally(controlThreadFailure);
+                throw controlThreadFailure;
             }
-            log.info("Control loop ending clean (state:{})...", state);
             return true;
         };
-        Future<Boolean> controlTaskFutureResult = executorService.submit(controlTask);
+        Future<Boolean> controlTaskFutureResult;
+        try {
+            controlTaskFutureResult = executorService.submit(controlTask);
+        } catch (RuntimeException submissionRefused) {
+            // A refused submission means the control thread will never run, so it will never end and nothing else
+            // would ever complete the future. The caller of poll* sees the throw either way; a waiter that got hold
+            // of the completion first would otherwise wait for a thread that does not exist.
+            boolean ignoredWasFirstToComplete = controlThreadCompletion.completeExceptionally(submissionRefused);
+            throw submissionRefused;
+        }
         this.controlThreadFuture = Optional.of(controlTaskFutureResult);
     }
 
@@ -2381,8 +2480,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 // at min block for the retry time - retry time is not exact
                 Duration lowestScheduled = lowestScheduledOpt.get();
                 Duration timeBetweenCommits = getTimeBetweenCommits();
-                Duration effectiveRetryDelay = lowestScheduled.toMillis() < retryDelay.toMillis() ? retryDelay : lowestScheduled;
-                Duration result = timeBetweenCommits.toMillis() < effectiveRetryDelay.toMillis() ? timeBetweenCommits : effectiveRetryDelay;
+                Duration effectiveRetryDelay = longerOf(lowestScheduled, retryDelay);
+                Duration result = shorterOf(timeBetweenCommits, effectiveRetryDelay);
                 log.debug("Not enough work in flight, while work is waiting to be retried - so will only sleep until next retry time of {} (lowestScheduled = {})", result, lowestScheduled);
                 return result;
             }
@@ -2499,8 +2598,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * outcome is the behaviour that predates this method rather than a new fault, so it is recorded rather than
      * closed; the same note sits on the clear itself.
      *
+     * <b>Per container, because the batch is already gone from the queue.</b> {@code queue.remove} has run by the
+     * time the hand-backs do, irreversibly, so one hand-back throwing must not take the containers behind it with
+     * it - they would stay in flight forever, which is the stall this method exists to prevent. The failure is
+     * collected and surfaced after the loop instead: it is PC's own bookkeeping, so it leaves that record
+     * unaccounted for, and the control loop's guard then shuts the instance down deliberately rather than
+     * continuing. Raised by the review of astubbs/parallel-consumer#506.
+     *
      * @return how many records were taken back on this pass
      */
+    @SneakyThrows
     protected int purgeQueuedWorkNotAllowedToStart() {
         State observed = state;
         boolean closingWithoutDraining = (observed == CLOSING || observed == CLOSED)
@@ -2510,6 +2617,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
         BlockingQueue<Runnable> queue = workerThreadPool.get().getQueue();
         int purged = 0;
+        Throwable bookkeepingFailed = null;
         // A copy, because removing from the live queue while iterating it is not something BlockingQueue promises.
         for (Runnable queued : new ArrayList<>(queue)) {
             if (!(queued instanceof QueuedBatch) || !queue.remove(queued)) {
@@ -2520,14 +2628,37 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             @SuppressWarnings("unchecked")
             QueuedBatch<K, V> batch = (QueuedBatch<K, V>) queued;
             for (WorkContainer<K, V> workContainer : batch.getBatch()) {
-                wm.onAbandonedBeforeStarting(workContainer);
-                purged++;
+                try {
+                    wm.onAbandonedBeforeStarting(workContainer);
+                    // Counted only on the path that finished, so the figure means what its name says - taken back
+                    // AND returned to selection. A container whose hand-back threw is neither.
+                    purged++;
+                } catch (Throwable handbackThrew) {
+                    // Per container, and each independent of the others - the same shape the two user-function
+                    // loops use, and for a sharper reason: by the time this runs, queue.remove() has ALREADY taken
+                    // the batch out of the pool irreversibly. So a throw escaping this loop strands every container
+                    // behind it in flight forever - never returned to selection, never run, one stalling its shard
+                    // under KEY ordering - and that is the stall the purge exists to avoid, reached by a different
+                    // door. Throwable rather than Exception, because an Error would otherwise pass straight through
+                    // the guard written to contain it.
+                    bookkeepingFailed = firstOrSuppress(bookkeepingFailed, handbackThrew);
+                }
             }
         }
         if (purged > 0) {
             log.debug("Took {} record(s) back out of the worker pool's queue: the instance is {}, so they are "
                     + "returned to awaiting selection un-run", purged, observed);
             recordsPurgedWhilePaused.addAndGet(purged);
+        }
+        if (bookkeepingFailed != null) {
+            // Surfaced AFTER the loop, not swallowed. This is PC's own bookkeeping, so a throw here is a bug in PC
+            // and it leaves that one record unaccounted for: out of the pool's queue, still marked in flight,
+            // nothing retrying it. Continuing past an unaccounted record is not permitted - the same operator
+            // ruling failFatallyOnUnmailboxableRecord records - and the control loop's own guard is what acts on
+            // it, arming failureReason and performing a controlled shutdown. Letting it escape mid-loop got that
+            // shutdown as well, and took the rest of the batch with it; this gets the shutdown without the
+            // stranding. Rethrown as itself rather than wrapped, so the cause the operator reads is unchanged.
+            throw bookkeepingFailed;
         }
         return purged;
     }
@@ -2676,6 +2807,33 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } finally {
             cleanUpContext(context);
         }
+    }
+
+    /**
+     * Compared with {@link Duration#compareTo}, not by converting both to milliseconds, because the delay being
+     * compared can be one PC did not choose.
+     * <p>
+     * <b>{@code toMillis()} overflows, and this is the call site where that mattered.</b> A retry deadline roughly
+     * 292 million years out is representable as an {@link Instant} - well inside its billion-year range - so nothing
+     * on the way here refuses it, and {@code getLowestRetryTime()} hands it over as an ordinary answer. Multiplying
+     * its seconds by a thousand then throws {@link ArithmeticException} on the CONTROL thread, where the failure has
+     * nothing to say about the record that caused it. {@code compareTo} cannot overflow, and the result these two
+     * return is bounded by the commit interval anyway. Raised by the review of
+     * astubbs/parallel-consumer#506; {@code PCRetriableException.retryAfter} refuses such a delay at the throw site,
+     * and these close the routes a throw site is not on - a {@code retryDelayProvider} above all.
+     * <p>
+     * Package-private statics rather than inline ternaries so the overflow has something to be tested against;
+     * {@code TimeToBlockForDoesNotOverflowTest} is that test.
+     */
+    static Duration longerOf(Duration a, Duration b) {
+        return a.compareTo(b) < 0 ? b : a;
+    }
+
+    /**
+     * @see #longerOf(Duration, Duration)
+     */
+    static Duration shorterOf(Duration a, Duration b) {
+        return a.compareTo(b) < 0 ? a : b;
     }
 
     /**

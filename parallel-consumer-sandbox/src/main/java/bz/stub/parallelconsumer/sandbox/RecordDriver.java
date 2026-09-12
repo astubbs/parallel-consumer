@@ -103,7 +103,7 @@ final class RecordDriver implements AutoCloseable {
      * The driver's own thread, or null before {@link #start()}.
      * <p>
      * Volatile because {@link #close()} reads it from whatever thread closes the sandbox, and that is not always
-     * the thread that started it: a demo closes from a shutdown hook, and a handle can be closed by any caller
+     * the thread that started it: a demo closes from a shutdown hook, and an instance can be closed by any caller
      * holding it. A close that read a stale null would return having neither interrupted nor joined a driver
      * that is still running - and a driver outliving its sandbox goes on publishing into a closed consumer.
      * The tests do not reach the race, because a closer thread they start themselves inherits the write through
@@ -141,7 +141,7 @@ final class RecordDriver implements AutoCloseable {
             throw new IllegalStateException("This driver is already running");
         }
         thread = new Thread(this::generate, "pc-sandbox-driver");
-        // A daemon so that a demo whose main method returns without closing its handle does not hang the JVM. The
+        // A daemon so that a demo whose main method returns without closing its instance does not hang the JVM. The
         // bound and close() are the real stops; this is only the backstop.
         thread.setDaemon(true);
         thread.start();
@@ -309,7 +309,7 @@ final class RecordDriver implements AutoCloseable {
      * the thread is somewhere else entirely: inside {@link #onBoundReached}, which waits for the instance to
      * account for what was published and then closes it. Interrupting it there turns an orderly end into a
      * possibly-uncommitted one - {@link SandboxConsumer#awaitEveryPublishedRecordCommitted(Duration)} catches the
-     * interrupt, re-arms the flag and returns as though it had succeeded, and {@code handle.close()} then runs on
+     * interrupt, re-arms the flag and returns as though it had succeeded, and {@code instance.close()} then runs on
      * a thread carrying an interrupt. Parallel Consumer's close path is interrupt-sensitive by design, and says
      * so: "Control thread carries an interrupt into the close sequence ... If the transactional commit lock
      * cannot be acquired below, this is the likely reason". The final commit can be skipped, and the offsets the

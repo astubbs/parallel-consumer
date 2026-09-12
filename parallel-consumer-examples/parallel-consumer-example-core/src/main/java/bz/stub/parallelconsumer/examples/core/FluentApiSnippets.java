@@ -7,7 +7,7 @@ package bz.stub.parallelconsumer.examples.core;
 import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.fluent.Consumed;
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.fluent.Produced;
@@ -23,7 +23,6 @@ import java.util.Map;
 import java.util.Properties;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
-import static bz.stub.parallelconsumer.fluent.AfterRetries.dlqImmediately;
 import static bz.stub.parallelconsumer.fluent.AfterRetries.park;
 import static bz.stub.parallelconsumer.fluent.AfterRetries.stop;
 import static bz.stub.parallelconsumer.fluent.Formats.json;
@@ -83,11 +82,11 @@ public class FluentApiSnippets {
     void instanceAndRouteSettings() {
         // tag::fluentSettings[]
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties())
-                .commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)  // <1>
-                .defaultOrdering(KEY)                                   // <2>
-                .defaultConcurrency(100)
-                .defaultRetryLimit(10)
-                .defaultRetryDelay(Duration.ofSeconds(1));
+                .withCommitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)  // <1>
+                .withDefaultOrdering(KEY)                                   // <2>
+                .withDefaultConcurrency(100)
+                .withDefaultRetryLimit(10)
+                .withDefaultRetryDelay(Duration.ofSeconds(1));
 
         pc.json("payments", Order.class)
                 .retryLimit(3)                                          // <3>
@@ -97,7 +96,7 @@ public class FluentApiSnippets {
     }
 
     /**
-     * What happens to a record that has run out of attempts: the three reactions, as data.
+     * What happens to a record that has run out of attempts: the reactions this release offers, as data.
      */
     void afterRetriesPolicy() {
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties());
@@ -112,12 +111,8 @@ public class FluentApiSnippets {
                         .forCycles(4))
                 .process(context -> Outcome.succeeded());
 
-        pc.json("payments", Order.class)
-                .afterRetries(dlqImmediately("payments.dlq"))                 // <3>
-                .process(context -> Outcome.succeeded());
-
         pc.json("schema-sensitive", Order.class)
-                .afterRetries(stop())                                         // <4>
+                .afterRetries(stop())                                         // <3>
                 .process(context -> Outcome.succeeded());
         // end::fluentAfterRetries[]
     }
@@ -152,21 +147,22 @@ public class FluentApiSnippets {
     void handBuiltClients() {
         // tag::fluentOwnClients[]
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties())
-                .consumer(myOwnConsumer())      // <1>
-                .producer(myOwnProducer());     // <2>
+                .withConsumer(myOwnConsumer())      // <1>
+                .withProducer(myOwnProducer());     // <2>
         // end::fluentOwnClients[]
     }
 
     /**
      * The first documented workaround: a dead-letter topic written by hand, with the failure swallowed so that the
-     * offset commits.
+     * offset commits. Park is what replaces it - the record stops being retried without being copied anywhere and
+     * without the offset being advanced over a record nobody looked at.
      */
     void migrationDeadLetter() {
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties());
         // tag::fluentMigrationDeadLetter[]
         pc.json("orders", Order.class)
                 .retryLimit(5)
-                .afterRetries(park())          // or dlqTo("orders.dlq") once export lands
+                .afterRetries(park())          // the record stays put; nothing is copied anywhere
                 .process(context -> {
                     warehouse(context.value());
                     return Outcome.succeeded();
@@ -214,20 +210,20 @@ public class FluentApiSnippets {
     }
 
     /**
-     * The handle: what a running instance offers, and how it ends.
+     * The running instance: what it offers, and how it ends.
      */
-    void theHandle() {
+    void theInstance() {
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties());
         pc.json("orders", Order.class).process(context -> Outcome.succeeded());
-        // tag::fluentHandle[]
-        try (ConsumerHandle handle = pc.start()) {              // <1>
-            handle.awaitShutdown();                             // <2>
-            handle.stopRequest().ifPresent(stop ->              // <3>
+        // tag::fluentInstance[]
+        try (ParallelConsumerInstance instance = pc.start()) {  // <1>
+            instance.awaitShutdown();                           // <2>
+            instance.stopRequest().ifPresent(stop ->            // <3>
                     log.warn("A route stopped the instance: {}", stop.reason()));
-            handle.failureCause().ifPresent(cause ->            // <4>
+            instance.failureCause().ifPresent(cause ->          // <4>
                     log.error("The instance failed", cause));
         }
-        // end::fluentHandle[]
+        // end::fluentInstance[]
     }
 
     private static void warehouse(Order order) {

@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.function.Function;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -238,16 +239,24 @@ class WorkContainerHandbackTest {
     }
 
     /**
-     * A delay so large that adding it to the failure time leaves {@link java.time.Instant}'s range. The container
-     * falls back to the configured default rather than leaving the deadline unset - unset reads as "due now", which
-     * would be a hot retry loop against whatever was already failing.
+     * A delay whose ADDITION to the failure time leaves {@link java.time.Instant}'s range. The container falls back
+     * to the configured default rather than leaving the deadline unset - unset reads as "due now", which would be a
+     * hot retry loop against whatever was already failing.
+     * <p>
+     * <b>Reached through the clock rather than through a geological delay</b>, since the review of
+     * astubbs/parallel-consumer#506: {@code retryAfter} now refuses anything longer than PC can schedule, so the only
+     * way left to overflow the addition is a failure that happens near the end of time. That is also the honest shape
+     * of what remains reachable - a legal delay plus a late enough {@code failedAt}.
      */
     @Test
     void aCarriedDelayThatCannotBeAppliedFallsBackToTheDefault() {
-        var container = container();
+        var module = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder().build());
+        module.getMutableClock().setInstant(java.time.Instant.MAX.minus(Duration.ofDays(1)));
+        var container = new WorkContainer<String, String>(0,
+                new ConsumerRecord<>("orders", 0, 5, "key", "value"), module);
 
         container.onUserFunctionFailure(new PCRetriableException("far future")
-                .retryAfter(Duration.ofDays(Long.MAX_VALUE / 100_000)));
+                .retryAfter(Duration.ofDays(365L * 1000L)));
 
         // The LOW side is where the named defect is, and an upper bound alone cannot see it: with the fallback
         // deleted the deadline is left unset, unset reads as Instant.MIN, and the resulting ~billion-year
@@ -270,6 +279,52 @@ class WorkContainerHandbackTest {
                 .hasMessageContaining("non-negative");
         assertThatThrownBy(() -> new PCRetriableException("x").retryAfter(null))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>A delay longer than PC can schedule is refused where it is written, and the message says what to use
+     * instead.</b> The band matters: roughly 292 million years is where {@link Duration#toMillis()} overflows, while
+     * {@link java.time.Instant} holds a deadline a billion years out - so a delay in between produced a valid
+     * {@code retryDueAt}, was handed to the control loop as an ordinary answer, and threw there. Raised by the review
+     * of astubbs/parallel-consumer#506. {@code TimeToBlockForDoesNotOverflowTest} covers the routes that have no
+     * throw site to refuse at.
+     */
+    @Test
+    void aDelayLongerThanPcCanScheduleIsRefusedAndNamesPark() {
+        Duration inTheBandThatUsedToOverflow = Duration.ofDays(365L * 500_000_000L);
+        assertThat(inTheBandThatUsedToOverflow).isGreaterThan(Duration.ofMillis(Long.MAX_VALUE));
+        assertThat(java.time.Instant.EPOCH.plus(inTheBandThatUsedToOverflow)).isLessThan(java.time.Instant.MAX);
+
+        assertThatThrownBy(() -> new PCRetriableException("never").retryAfter(inTheBandThatUsedToOverflow))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("park(reason)");
+    }
+
+    /**
+     * <b>The park wins, and the discarded delay is said out loud.</b> The fluent API invites the combination -
+     * {@code park(reason).notAnAttempt()} is advertised as composable - so a reader may reasonably expect
+     * {@code retryAfter} to compose too. It cannot: a park is never due again, which no deadline can express. Both
+     * facts were individually documented and their interaction was not, which is what the review of
+     * astubbs/parallel-consumer#506 found; the precedence is now on both methods and the engine logs the loss at
+     * DEBUG.
+     */
+    @Test
+    void aParkDiscardsACarriedDelayWhicheverOrderTheyAreChainedIn() {
+        var delayThenPark = container();
+        delayThenPark.onUserFunctionFailure(new PCRetriableException("give up")
+                .retryAfter(Duration.ofSeconds(30)).park("it ran out"));
+
+        assertThat(delayThenPark.isParked()).isTrue();
+        assertWithMessage("the sentinel, not now-plus-thirty-seconds - a park is a state, and nothing computes it")
+                .that(delayThenPark.getRetryDueAt()).isEqualTo(java.time.Instant.MAX);
+        assertThat(delayThenPark.isAvailableToTakeAsWork()).isFalse();
+
+        var parkThenDelay = containerAt(6, null);
+        parkThenDelay.onUserFunctionFailure(new PCRetriableException("give up")
+                .park("it ran out").retryAfter(Duration.ofSeconds(30)));
+
+        assertWithMessage("chaining order cannot change which fact wins")
+                .that(parkThenDelay.getRetryDueAt()).isEqualTo(java.time.Instant.MAX);
     }
 
     /**

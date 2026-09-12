@@ -10,6 +10,7 @@ import lombok.experimental.UtilityClass;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.Set;
 import java.util.function.Predicate;
 
 /**
@@ -178,12 +179,23 @@ public class ThrowableUtils {
      */
     public static Throwable unwrapTransparentWrappers(Throwable t) {
         try {
-            var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+            // Allocated on the SECOND hop, not before the first, because a revisit needs two hops to happen and
+            // essentially every chain here is one wrapper deep: ExceptionInUserFunctionException is the only
+            // transparent wrapper, and it is never nested in itself. This is called once per container in a failed
+            // batch, on a branch whose own comment notes it runs at full processing rate during an outage, so a
+            // per-container IdentityHashMap was buying a guard against a shape the ordinary case does not have.
+            // Raised by the review of astubbs/parallel-consumer#506.
+            Set<Throwable> seen = null;
             var current = t;
             // identity, not just a self-reference check - the same guard walkCauseChain uses, for the same reason:
             // two wrappers can point at each other, and the depth bound alone would spend 100 hops on a 2-cycle
-            for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH && seen.add(current)
-                    && isTransparentWrapper(current); depth++) {
+            for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH && isTransparentWrapper(current); depth++) {
+                if (depth == 1) {
+                    seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+                }
+                if (seen != null && !seen.add(current)) {
+                    break;
+                }
                 Throwable cause = current.getCause();
                 if (cause == null) {
                     break;

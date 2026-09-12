@@ -15,7 +15,7 @@ import java.util.Objects;
  * <h2>Reaching a bound waits for every record to be accounted for, then closes drain first</h2>
  * Either bound - the count or the duration - ends the same way (R33, R17): the driver stops publishing, then
  * waits until every record it published is accounted for, and only then closes the instance. So what a test reads
- * after the close is the end of the run rather than the middle of it. Without a bound the run ends when its handle
+ * after the close is the end of the run rather than the middle of it. Without a bound the run ends when its instance
  * is closed, which is what an interactive demo wants and what a test almost never does.
  * <p>
  * <b>The wait is on what the instance reports, and not on a drain</b>, because a drain-first close is not the same
@@ -62,7 +62,7 @@ public final class Bound {
     }
 
     /**
-     * Generate until the handle is closed.
+     * Generate until the instance is closed.
      */
     public static Bound none() {
         return NONE;

@@ -1,0 +1,82 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Missing-topic policy - a route naming a topic the cluster lacks fails the start
+category: operability
+module: parallel-consumer-core
+maturity: alpha
+availability:
+  status: planned
+  target_release: 0.6.0.0
+release_assumptions:
+  - Fluent API only, and incubating with the rest of that package. The classic API is unaffected and asks the
+    cluster nothing.
+  - >-
+    The check needs an AdminClient, taken from the same seam the consumer and the producer come from. A runtime
+    with no cluster behind it - the broker-free sandbox, or a definition driven over mock clients - declines to
+    supply one and the check is skipped rather than faked, so nothing here describes behaviour without a broker.
+summary: >-
+  Before the instance joins the group, the start asks the cluster once whether the topics the routes name are
+  there. By default a definition it cannot satisfy is refused, naming every missing topic; a definition may
+  instead have the start create what is missing, or name it in a warning and carry on.
+use_this_when:
+  - A misspelled topic name should stop a deployment rather than quietly produce an empty route.
+  - >-
+    Your brokers allow auto-creation. Kafka's consumer sets allow.auto.create.topics to true by default, so
+    without this a typo is created for you as an empty topic with a partition count nobody chose, and the only
+    symptom is that nothing arrives.
+  - Your brokers forbid auto-creation, where the same typo instead leaves the route assigned nothing and the
+    warning cannot say whether the topic is absent or its partitions are held by another group member.
+  - A definition owns the topics it reads - a test fixture, a single-writer pipeline, a first deployment - and
+    creating them at start is preferable to provisioning them separately.
+setup:
+  declare:
+    - Nothing. Refusing the start is the default on every fluent-API definition.
+    - withMissingTopicPolicy(MissingTopic.CREATE) to create what is missing instead, with the broker's own
+      num.partitions
+      and default.replication.factor, because a partition count is a capacity decision about a topic this
+      definition merely reads.
+    - withMissingTopicPolicy(MissingTopic.IGNORE) to start anyway with the missing topics named in a warning.
+  observe:
+    - >-
+      MissingTopicsException from start() under the default policy. It carries missingTopics() as well as the
+      message, so a caller that means to create them does not have to parse prose.
+opt_in:
+  mechanism: >-
+    Instance-wide on a fluent-API definition, not per route. One question asked once of one cluster before any
+    route is running, and two routes disagreeing about whether a missing topic is fatal would describe a
+    half-started instance, which is not a state this API has.
+  isolated_from_stable_modules: false
+boundaries:
+  - This is the one definition check that reaches the cluster. Every other refusal happens before a connection is
+    opened; this one asks the broker, once, at start.
+  - >-
+    Missing and unanswerable are different answers. A describe that comes back unknown-topic means the topic is
+    not there; a describe that fails any other way - no route to the broker, no authorisation to describe - is the
+    cluster declining to answer, and is raised as its own startup fault rather than being read as missing. Under
+    IGNORE it is swallowed, because that policy says this question may not stop a start.
+  - The refusal is a fault of the definition rather than a transient one. Retrying the start does not make a topic
+    appear, so it is not something to wrap in a retry loop.
+  - >-
+    CREATE declares no shape. The topic is created with neither a partition count nor a replication factor, so the
+    broker's defaults apply. Inventing a partition count here would reproduce the failure auto-creation already
+    has, which is a number nobody chose.
+  - The check runs once at start. A topic deleted while the instance runs is not noticed by it.
+validation:
+  - Start a definition naming a topic that does not exist and confirm the start is refused, that the message names
+    the topic, and that no consumer joined the group.
+  - Start the same definition under CREATE and confirm the topic exists afterwards with the broker's own partition
+    count.
+references:
+  - label: README section
+    path: README.adoc#fluent-entry-point
+  - label: The three policies, each with the failure it replaces
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/fluent/MissingTopic.java
+  - label: The check, and where the AdminClient comes from
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/fluent/TopicExistenceCheck.java
+  - label: What the refusal carries for a caller acting on it
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/fluent/MissingTopicsException.java
+  - label: Each policy, and the unanswerable-cluster case
+    path: parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/fluent/MissingTopicPolicyTest.java
+readme_anchor: fluent-entry-point

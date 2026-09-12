@@ -74,7 +74,7 @@ class RawBytesDispatchCostTest extends AbstractFluentEngineTest {
             return Outcome.succeeded();
         });
 
-        ConsumerHandle handle = runtime.startAndAssign(pc, 1);
+        ParallelConsumerInstance handle = runtime.startAndAssign(pc, 1);
         try {
             for (int offset = 0; offset < RECORDS; offset++) {
                 runtime.publish(TOPIC, 0, offset, "key-" + offset, "order-" + offset);

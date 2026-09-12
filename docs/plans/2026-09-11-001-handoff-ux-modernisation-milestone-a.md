@@ -86,6 +86,13 @@ per-flag reporting fault, `docs/inflight/ci-codecov-flags-not-like-for-like.md`)
   accepted and documented on the purge method.
 - **Owner:** the fluent record types are thin views over the engine's `RecordContext`, adding only
   decoding (and park cycles); `ProcessContext` and `ParkedRecord` are what survived.
+  - **`ProcessContext` is spelled `TypedRecordContext` from 2026-09-11, owner-confirmed.** The
+    decision above is unchanged - it is still a thin view adding only the decoding - and the new name
+    is what says so: what it adds over the engine's record is the decoded, typed key and value. It
+    cannot simply be `RecordContext`, which is the engine's own class and is what this delegates to;
+    under the byte-typed engine that class's `key()` returns `byte[]`, so the two collide on return
+    type and cannot share a name. `TypedRecordContext` keeps the `*Context` family. `ProcessFunction`
+    keeps its name: it is named for what it is passed to, not for what it is passed.
 - **Agent's call, recorded in R24:** the stopping record is parked with the reason that it asked the
   instance to stop, so it appears in the parked view; the stopped counter counts it and the parked
   counter does not. Revisit if the owner wants it unlisted.

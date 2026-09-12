@@ -4,7 +4,7 @@ package bz.stub.parallelconsumer.sandbox;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import ch.qos.logback.classic.Level;
@@ -69,7 +69,7 @@ class ParkedRunBoundTest {
     @Test
     void aBoundedRunWhoseRecordsParkEndsAtItsBoundRatherThanWaitingOutTheBudget() {
         ParallelConsumerDefinition definition = SandboxFixtures.succeedingStringRoute(
-                SandboxFixtures.definition().defaultOrdering(KEY), ORDERS);
+                SandboxFixtures.definition().withDefaultOrdering(KEY), ORDERS);
         definition.string(SCANS)
                 .retryLimit(1)
                 .retryDelay(Duration.ofMillis(50))
@@ -85,14 +85,14 @@ class ParkedRunBoundTest {
                 .feeding(SCANS, SandboxFixtures.countedValues(SCANS))
                 .build();
 
-        ConsumerHandle handle;
+        ParallelConsumerInstance instance;
         try (LogCapture driverLog = LogCapture.of(RecordDriver.class, Level.WARN)) {
-            handle = definition.start(sandbox);
+            instance = definition.start(sandbox);
             assertWithMessage("the bound has to finish inside %s: every scan parks, so the only thing that could "
                     + "hold the wait open is a wait that does not count a parked record as accounted for",
                     WELL_INSIDE_THE_BUDGET)
                     .that(sandbox.awaitBound(WELL_INSIDE_THE_BUDGET)).isTrue();
-            handle.awaitShutdown();
+            instance.awaitShutdown();
 
             assertWithMessage("the bound's wait refusing is logged as an error by the driver, so a run that "
                     + "ends cleanly logs none: %s", driverLog.messagesAt(Level.ERROR))
@@ -101,13 +101,13 @@ class ParkedRunBoundTest {
 
         assertWithMessage("the scans route's downstream always throws, so its records are what the run left "
                 + "parked - and they are what the wait counted")
-                .that(handle.parkedAllTopics().count()).isAtLeast(1);
+                .that(instance.parkedAllTopics().count()).isAtLeast(1);
         assertWithMessage("the succeeding route still commits, so the run is the mixed case: one partition "
                 + "accounted for by its commit, the other by its parked records")
                 .that(SandboxFixtures.highestCommittedOffset(sandbox, new TopicPartition(ORDERS, 0)))
                 .isGreaterThan(0L);
         assertThat(sandbox.generatedRecords()).isEqualTo(RECORDS);
 
-        handle.close();
+        instance.close();
     }
 }

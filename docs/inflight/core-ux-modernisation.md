@@ -24,6 +24,31 @@ The rungs, in the order they must merge, and what each one unlocks here:
   dependency, but until it lands a transactional definition must carry a `transactional.id` in its
   properties, and the README example under that mode has to show it. The natural point: merge it
   before the README rewrite (R21) so the transactional example is written once.
+- **astubbs#420 also breaks a fluent refusal, and the break is silent.** This is a code change, not
+  only the documentation one above. `ParallelConsumerDefinition`'s `validateTransactionalId` holds
+  two refusals; the second, *"The commit mode is {} but there is no {} in the connection
+  properties"*, is true only while PC needs the caller to supply that id. astubbs#420 derives it
+  (`internal/TransactionalIdDerivation`, `prefixFor`/`derive`/`resolve`) and **removes a caller-set
+  one with a WARN, in every mode** - so under that PR the fluent API would refuse to start a
+  definition unless the user sets a key PC then strips and complains about. Nothing fails until a
+  user hits it: both sides pass their own suites, and the two PRs touch different files.
+  - **Which side changes: the fluent one, and whichever of astubbs#502 / astubbs#420 merges second
+    does it.** Delete that second refusal and its test,
+    `DefinitionRefusalTest#theTransactionalCommitModeWithNoTransactionalIdNamesTheSetting`. The
+    first refusal - an id declared under a non-transactional commit mode - stays true either way and
+    keeps its test, `aTransactionalIdUnderANonTransactionalCommitModeNamesBoth`.
+  - **The two seams are not the same job and are not being unified.** `ClientRuntime` builds the
+    **consumer** and splits one property bag per client; it deliberately declines producer
+    construction - `KafkaClientRuntime.producer()` returns empty and the definition then hands the
+    producer properties to the options, so PC builds it (astubbs#426, already merged). astubbs#420's
+    `ProducerFactory` sits on the other side of `ParallelConsumerOptions`, inside `PCModule`, which
+    is why an adapter between them would violate KTD3 - the facade holds no client in a field.
+    `transactional.id` is the one key both claim, and it belongs to the derivation, not the facade.
+  - **Back-pointer worth adding from the 225 side when that stack is next touched**:
+    `docs/inflight/core-recoverable-producer-fencing.md` names no fluent dependency, and astubbs#420
+    carries a note arguing PC should build the **consumer** from configuration too - for which
+    `KafkaClientRuntime.consumer()` is already a working, unstable-annotated precedent. That is a
+    milestone of its own, not this stack's work.
 - **astubbs#472, astubbs#474, astubbs#410, astubbs#434**, in that order, are producer recovery
   itself: the plumbing, the ledger that puts an aborted transaction's work back, recovery of an
   invalidated producer, and the abort of a transaction an unsendable record poisoned. **R14's
@@ -52,7 +77,7 @@ The fluent package `bz.stub.parallelconsumer.fluent` is incubating and its shape
 ## When the direct-pull engine merges: the pause purge has nothing to purge
 
 <!-- post-merge: checked - the PR numbers below outlive the branches -->
-The pause in the shipped engine stops work in two places: the controller stops submitting, and on its next pass it pulls the batches still queued in the worker pool out of that queue and abandons their claims, so nothing queued before the pause starts after the controller acts (plan KTD14; the window between a worker requesting the pause and the controller's next pass is accepted and documented on the purge). That purge exists only because the shipped engine pre-fills the pool queue ahead of the workers. Under direct pull (astubbs#361, `perf/shard-occupancy-scan-v2`, draft) workers take their own next record from the shards and there is no queue, so a pause is simply a take that refuses, and the purge has nothing to do. When astubbs#361 merges after the UX modernisation (astubbs#502), or when astubbs#502 is rebased over it: make the purge a no-op for the direct-pull pool rather than leaving it to find an empty queue, keep the pause test's upper bound on what ran (that branch's `pausingDrainsThePreLoadedExecutorQueueAsWellAsTheInFlightRecords` skips itself for queue-less engines and the unconditional bound stays), and re-read the stop path in `ConsumerHandle`, which relies on the purge for "no new work after the controller acts". Owner direction, 2026-09-10.
+The pause in the shipped engine stops work in two places: the controller stops submitting, and on its next pass it pulls the batches still queued in the worker pool out of that queue and abandons their claims, so nothing queued before the pause starts after the controller acts (plan KTD14; the window between a worker requesting the pause and the controller's next pass is accepted and documented on the purge). That purge exists only because the shipped engine pre-fills the pool queue ahead of the workers. Under direct pull (astubbs#361, `perf/shard-occupancy-scan-v2`, draft) workers take their own next record from the shards and there is no queue, so a pause is simply a take that refuses, and the purge has nothing to do. When astubbs#361 merges after the UX modernisation (astubbs#502), or when astubbs#502 is rebased over it: make the purge a no-op for the direct-pull pool rather than leaving it to find an empty queue, keep the pause test's upper bound on what ran (that branch's `pausingDrainsThePreLoadedExecutorQueueAsWellAsTheInFlightRecords` skips itself for queue-less engines and the unconditional bound stays), and re-read the stop path in `ParallelConsumerInstance`, which relies on the purge for "no new work after the controller acts". Owner direction, 2026-09-10.
 
 **The same branch is also where the drain-first close's park defect gets cheap.** Gated on the same merge. Under
 `KEY` or `PARTITION` ordering, records

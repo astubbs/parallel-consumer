@@ -9,7 +9,20 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 import java.util.Objects;
 
 /**
- * A classifier's verdict on a decode failure (R12): <em>permanent</em>, or <em>transient</em>.
+ * A classifier's verdict on a failure to decode a record's bytes: <em>permanent</em>, or <em>transient</em> (R12).
+ *
+ * <h2>What is being decoded, and why the answer matters</h2>
+ * A record arrives from Kafka as two byte arrays - a key and a value - and nothing more. The formats a route
+ * declares are what turn those bytes into the key and value its function is handed, and that turning is decoding.
+ * This API does it <b>inside the record's own attempt</b>, not on the thread that polled the broker, and the
+ * placement is the whole point: a payload the route cannot read is then one record's problem, reported as that
+ * record's outcome, rather than an exception on the poll thread that would take the instance down and leave every
+ * other record on the partition unprocessed.
+ * <p>
+ * Which outcome it should be depends on <em>why</em> the bytes did not read, and only the user's code can tell.
+ * A corrupt or wrong-format payload will never read, however often it is tried, so the record should park now and
+ * spend none of its attempts on it. A schema registry that could not be reached will read perfectly well in a
+ * minute, so the record should simply be retried. This type is how a route says which of the two it is looking at.
  * <p>
  * A permanent failure is parked at once without consuming attempts; a transient one is a failed attempt like any
  * other. A stock Kafka {@link org.apache.kafka.common.serialization.Deserializer} that throws yields a

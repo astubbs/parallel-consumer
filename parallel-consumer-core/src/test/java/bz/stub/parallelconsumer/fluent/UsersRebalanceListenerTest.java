@@ -59,7 +59,7 @@ class UsersRebalanceListenerTest extends AbstractFluentEngineTest {
     @Test
     void aDeclaredListenerIsToldAboutTheAssignment() {
         var listener = new RecordingListener();
-        var pc = ParallelConsumer.connect(props()).rebalanceListener(listener);
+        var pc = ParallelConsumer.connect(props()).withRebalanceListener(listener);
         pc.string(TOPIC).process(context -> Outcome.succeeded());
 
         handle = runtime.startAndAssign(pc, 2);

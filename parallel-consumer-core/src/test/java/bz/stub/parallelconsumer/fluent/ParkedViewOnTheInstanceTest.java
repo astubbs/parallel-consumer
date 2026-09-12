@@ -7,8 +7,6 @@ package bz.stub.parallelconsumer.fluent;
 import bz.stub.parallelconsumer.FakeRuntimeException;
 import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.micrometer.core.instrument.Meter;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.common.TopicPartition;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
@@ -19,7 +17,6 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
@@ -34,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * reaches the queue on the control thread a moment after the worker hands it back.
  */
 @Timeout(180)
-class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
+class ParkedViewOnTheInstanceTest extends AbstractFluentEngineTest {
 
 
     private static final String OTHER_TOPIC = "audit";
@@ -59,7 +56,7 @@ class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
     }
 
     private ParallelConsumerDefinition definitionThatParksEverything(String... topics) {
-        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props()).withDefaultOrdering(ProcessingOrder.UNORDERED);
         for (String topic : topics) {
             pc.string(topic)
                     .retryLimit(0)
@@ -112,11 +109,11 @@ class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
     }
 
     /**
-     * The two commands an operator will reach for, and the answer they get today: a refusal that says which
-     * milestone brings them, rather than a silent no-op or an empty success.
+     * The command an operator will reach for, and the answer it gives today: a refusal that says which milestone
+     * brings it, rather than a silent no-op or an empty success. Both entry points refuse, and both say why.
      */
     @Test
-    void resumeAndDlqRefuseAndSayWhy() {
+    void resumeRefusesAndSaysWhy() {
         ParkedView parked = oneParkedRecordOn(TOPIC);
         ParkedRecord record = parked.records().get(0);
 
@@ -124,24 +121,19 @@ class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
                 .hasMessageThat().contains("resume is not supported in this version");
         assertThat(assertThrows(UnsupportedOperationException.class, parked::resume))
                 .hasMessageThat().contains("engine accessor");
-        assertThat(assertThrows(UnsupportedOperationException.class, () -> parked.dlq(record)))
-                .hasMessageThat().contains("dlq is not supported in this version");
-        assertThat(assertThrows(UnsupportedOperationException.class, parked::dlq))
-                .hasMessageThat().contains("engine accessor");
 
         // The record is still parked afterwards: a refused command changes nothing.
         assertThat(handle.topic(TOPIC).parked().count()).isEqualTo(1);
     }
 
     /**
-     * The three figures R28 asks for that this version cannot answer read empty rather than zero. Zero would be a
+     * The two figures R28 asks for that this version cannot answer read empty rather than zero. Zero would be a
      * number an operator could act on, and it would be wrong.
      */
     @Test
     void thePayloadFiguresReadEmptyUntilTheEngineAccessorsLand() {
         ParkedView parked = oneParkedRecordOn(TOPIC);
         assertThat(parked.payloadFraction().isPresent()).isFalse();
-        assertThat(parked.estimatedTimeToExport().isPresent()).isFalse();
         assertThat(parked.heldBehind(parked.records().get(0)).isPresent()).isFalse();
         assertThat(parked.toString()).contains("not available");
     }
@@ -205,7 +197,7 @@ class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
      */
     @Test
     void revokingAPartitionEmptiesItsParkedViewWithNothingHavingToClearIt() {
-        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props()).withDefaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))
@@ -224,52 +216,4 @@ class ParkedViewOnTheHandleTest extends AbstractFluentEngineTest {
         });
     }
 
-    /**
-     * The loop-end hook must never throw: the control loop runs its hooks as user code and a throw takes the
-     * instance down, so a reporting fault would stop consuming.
-     * <p>
-     * What the hook does now is bring the parked gauges into line with the assignment, and registering a gauge
-     * calls into the <b>user's</b> meter registry - third-party code, running inside PC's control loop, which is
-     * exactly the shape that must not be able to stop it. A registry that throws on every gauge is the honest way
-     * to exercise the containment: the parked read itself is a query on the caller's thread now, so a fault there
-     * can only fail the query.
-     */
-    @Test
-    void aMeterRegistryThatThrowsIsContainedAndTheInstanceKeepsRunning() {
-        var processed = new AtomicInteger();
-        var pc = ParallelConsumer.connect(props())
-                .defaultOrdering(ProcessingOrder.UNORDERED)
-                .meterRegistry(new ThrowingOnGaugeRegistry());
-        pc.string(TOPIC).process(context -> {
-            processed.incrementAndGet();
-            return Outcome.succeeded();
-        });
-        handle = runtime.startAndAssign(pc, 1);
-        runtime.publish(TOPIC, 0, 0, "key-0", "an order");
-        Awaitility.await().atMost(defaultTimeout).until(() -> processed.get() == 1);
-
-        // The instance is still consuming, and nobody awaiting it is told anything went wrong.
-        runtime.publish(TOPIC, 0, 1, "key-1", "another order");
-        Awaitility.await().atMost(defaultTimeout).until(() -> processed.get() == 2);
-        assertThat(handle.awaitShutdown(Duration.ofMillis(500))).isFalse();
-        assertThat(handle.failureCause().isPresent()).isFalse();
-        assertThat(handle.processor().isClosedOrFailed()).isFalse();
-    }
-
-    /**
-     * A user's registry that refuses exactly the parked gauges - the ones the loop-end hook registers, and only
-     * those, so the engine's own meters still register and the instance starts normally. Refusing every gauge would
-     * fail the engine's construction instead, which is a different test.
-     */
-    private static class ThrowingOnGaugeRegistry extends SimpleMeterRegistry {
-
-        @Override
-        protected <T> io.micrometer.core.instrument.Gauge newGauge(Meter.Id id, T obj,
-                                                                   java.util.function.ToDoubleFunction<T> f) {
-            if (id.getName().contains("route.parked")) {
-                throw new FakeRuntimeException("this registry refuses the parked gauges");
-            }
-            return super.newGauge(id, obj, f);
-        }
-    }
 }
