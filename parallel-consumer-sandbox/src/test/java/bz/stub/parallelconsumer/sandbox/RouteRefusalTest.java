@@ -27,10 +27,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * <p>
  * The sandbox has to <b>encode</b> what it publishes with the same format the route <b>decodes</b> it with,
  * because the engine under the facade reads raw bytes. That gives a route one requirement it need not otherwise
- * meet - its format has to be able to write - and a driven sandbox one more: something has to say what a record
- * of that topic contains, because this artefact's driver has no idea. Both are refused at start, naming the topic;
- * the alternative is a record the route cannot read, failing one poll later with a message about the payload
- * rather than about the definition, or a route that silently never fires.
+ * meet - its format has to be able to write - and a driven sandbox one more: something has to name the Java type
+ * the hydration is to fill, unless its caller says what a record contains instead. Both are refused at start,
+ * naming the topic; the alternative is a record the route cannot read, failing one poll later with a message
+ * about the payload rather than about the definition, or a route that silently never fires.
  */
 @Timeout(60)
 class RouteRefusalTest {
@@ -86,26 +86,51 @@ class RouteRefusalTest {
      * so the first check passes, but nothing names the type to fill. Refused with the cure in the message.
      */
     /**
-     * A driven sandbox with nothing to publish on a topic is refused at start, naming it - and the refusal says
-     * both ways out, because the two shapes of this module are the two answers.
+     * A driven route whose Java type nothing can name is refused at start, naming the topic - and the refusal
+     * lists every way out, because which one a caller wants depends on what they were trying to do.
      * <p>
-     * <b>Up front rather than at the first record.</b> A driver that skipped a topic it had no values for would
-     * present as a definition whose route never fires, which is a far harder thing to diagnose than a refusal.
+     * <b>Up front rather than at the first record.</b> A driver that skipped a topic the hydration could not fill
+     * would present as a definition whose route never fires, which is a far harder thing to diagnose.
      */
     @Test
-    void aDrivenTopicWithNoValueFunctionIsRefusedAndTheRefusalSaysBothWaysOut() {
+    void aDrivenRouteWithNoNamedTypeIsRefusedAndTheRefusalListsEveryWayOut() {
         Sandbox refusing = Sandbox.builder().build();
 
         IllegalArgumentException refusal = assertThrows(IllegalArgumentException.class,
                 () -> untypedRoute().start(refusing));
 
         assertThat(refusal).hasMessageThat().contains("legacy");
-        assertThat(refusal).hasMessageThat().contains("nothing has said what a record of it should contain");
+        assertThat(refusal).hasMessageThat().contains("does not name a Java type");
         assertWithMessage("a refusal that does not say what to do about it is only half a message")
+                .that(refusal).hasMessageThat().contains("hydrating(\"legacy\"");
+        assertWithMessage("and saying what a record contains is the other answer, for a caller who never wanted "
+                + "fake data in the first place")
                 .that(refusal).hasMessageThat().contains("feeding(\"legacy\"");
-        assertWithMessage("the other way out is to publish by hand, and a caller who wanted that reads it here")
-                .that(refusal).hasMessageThat().contains("handPublished()");
+    }
 
+    /**
+     * The type declared on the builder, which is what the refusal above points at: the hydration then fills it.
+     */
+    @Test
+    void aDeclaredTypeIsWhatTheHydrationFills() {
+        Sandbox told = Sandbox.builder()
+                .perSecond(500)
+                .bound(Bound.afterRecords(3))
+                .hydrating("legacy", String.class)
+                .build();
+        try (ParallelConsumerInstance instance = untypedRoute().start(told)) {
+            assertThat(told.awaitBound(Duration.ofSeconds(30))).isTrue();
+            instance.awaitShutdown();
+        }
+        assertThat(told.drivenRecords()).isEqualTo(3);
+    }
+
+    /**
+     * The other answer: the caller says what a record contains, and the route needs no nameable type at all
+     * because nothing is going to fill one.
+     */
+    @Test
+    void aValueFunctionMakesTheNamedTypeUnnecessary() {
         Sandbox told = Sandbox.builder()
                 .perSecond(500)
                 .bound(Bound.afterRecords(3))

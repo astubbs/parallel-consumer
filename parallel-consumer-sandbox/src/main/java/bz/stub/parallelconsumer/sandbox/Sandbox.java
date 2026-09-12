@@ -147,19 +147,32 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     private final int keyCardinality;
 
     /**
-     * What the driver publishes as the value on each topic, by topic: a function from this feed's record index to
-     * the value for that record.
+     * The run's seed. Logged when the run starts, because it is the one number a reader needs to reproduce what
+     * they just saw, and handed to the hydration, which is the only thing here with anything to be random about.
+     */
+    private final long seed;
+
+    /**
+     * Value types declared by hand for topics whose route cannot name one. The escape hatch for a route with a
+     * custom serde, so that "the hydration cannot fill a value for this topic" is a fixable state rather than a
+     * wall. It says nothing about a topic given its own value function, which needs no type at all.
+     */
+    private final Map<String, Class<?>> declaredTypes;
+
+    /**
+     * What the driver publishes as the value on each topic, for the topics whose caller said. A topic that did
+     * not gets the hydration, which fills the route's declared type with realistic random data.
      * <p>
-     * <b>The driver knows how to pace and stop; it does not know what a record contains.</b> That seam is what
-     * lets the realistic fake objects live in their own artefact - and what lets a caller who wants neither drive
-     * a definition with two lines of its own.
+     * <b>The driver knows how to pace and stop; it does not know what a record contains.</b> Keeping that a
+     * function rather than a hard-wired filler is what lets an application publish its own domain objects through
+     * the same driver - and it is why the hydration below is a default rather than the only answer.
      */
     private final Map<String, LongFunction<Object>> values;
 
     /**
-     * What the driver publishes as the key on each topic, by topic. Optional: a topic with none gets
-     * {@link #pooledKey(long, int)}, which is what makes key ordering demonstrable without anybody declaring
-     * anything.
+     * What the driver publishes as the key on each topic, for the topics whose caller said. A topic that did not
+     * gets a key of the route's own declared key type, drawn from a pool of {@link #keyCardinality} so that keys
+     * repeat and a shard has something to order.
      */
     private final Map<String, LongFunction<Object>> keys;
 
@@ -239,6 +252,8 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         this.bound = builder.bound;
         this.partitionsPerTopic = builder.partitionsPerTopic;
         this.keyCardinality = builder.keyCardinality;
+        this.seed = builder.seed;
+        this.declaredTypes = new LinkedHashMap<>(builder.declaredTypes);
         this.values = new LinkedHashMap<>(builder.values);
         this.keys = new LinkedHashMap<>(builder.keys);
         this.handPublished = builder.handPublished;
@@ -324,7 +339,8 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
                 instance.close();
             }
         });
-        log.info("Sandbox driving: {} at {}/s per topic, {}", definition.topics(), perSecond, bound);
+        log.info("Sandbox driving: {} at {}/s per topic, seed {}, {}",
+                definition.topics(), perSecond, seed, bound);
         driver.start();
     }
 
@@ -339,10 +355,11 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * {@link ClassicSandbox#pipe} or {@link ClassicSandbox#startDriving}. Note that no encoding happens on
      * this path at all: the mock consumer holds records of the user's own types, so objects go in as they are.
      *
-     * @param keyType   the classic instance's key type. <b>A type witness</b>: it is what fixes {@code K}, since a
-     *                  classic application's types live in its options builder's generics and erasure has taken
-     *                  them by the time anything here could look. Nothing reads the {@code Class} itself
-     * @param valueType the classic instance's value type, a witness for {@code V} for the same reason
+     * @param keyType   the classic instance's key type, drawn from a small pool so keys repeat - and the witness
+     *                  that fixes {@code K}, since a classic application's types live in its options builder's
+     *                  generics and erasure has taken them by the time anything here could look
+     * @param valueType the classic instance's value type, filled with realistic random data unless the caller
+     *                  supplies its own value function
      */
     public <K, V> ClassicSandbox<K, V> classic(Class<K> keyType, Class<V> valueType, String... topics) {
         return classic(keyType, valueType, Arrays.asList(topics));
@@ -357,9 +374,8 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         if (topics.isEmpty()) {
             throw new IllegalArgumentException("A classic sandbox needs at least one topic to publish into");
         }
-        // Explicit type arguments, because the two Class parameters above are witnesses that nothing reads, so
-        // there is no argument left for inference to read K and V off.
-        return new ClassicSandbox<K, V>(topics, partitionsPerTopic, perSecond, bound);
+        return new ClassicSandbox<>(keyType, valueType, topics, partitionsPerTopic, perSecond, bound, seed,
+                keyCardinality);
     }
 
     // ---------------------------------------------------------------- publish, settle, assert
@@ -734,27 +750,23 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         List<TopicFeed> feeds = new ArrayList<>();
         for (RouteView route : definition.routes()) {
             for (String topic : route.topics()) {
-                LongFunction<Object> keysHere = keys.get(topic);
+                // One filler per feed, seeded with the run's seed, so record n of this topic depends on the seed
+                // and n and not on how the topics interleaved. Built even when both functions are the caller's,
+                // because it costs nothing until it is asked for anything.
+                RandomObjects random = RandomObjects.seededWith(seed);
+                Class<?> declared = declaredTypes.get(topic);
+                Class<?> valueType = declared != null ? declared : ValueTypes.of(route.consumedValue());
+                Class<?> keyType = ValueTypes.of(route.consumedKey());
                 int pool = keyCardinality;
+
+                LongFunction<Object> declaredKeys = keys.get(topic);
+                LongFunction<Object> declaredValues = values.get(topic);
                 feeds.add(new RouteFeed(publishers.get(topic),
-                        keysHere != null ? keysHere : index -> pooledKey(index, pool),
-                        values.get(topic)));
+                        declaredKeys != null ? declaredKeys : index -> random.key(keyType, index, pool),
+                        declaredValues != null ? declaredValues : index -> random.create(valueType, index)));
             }
         }
         return feeds;
-    }
-
-    /**
-     * The key a topic gets when the caller declared no key function: one of {@link #keyCardinality} distinct
-     * strings, chosen by the record's index.
-     * <p>
-     * A <b>String</b> because every route helper the fluent API offers declares a String key, and a <b>pool</b>
-     * because keys have to repeat for key ordering to have anything to order. It is the one thing about a record
-     * this class still decides for itself, and it decides it because a caller who has not thought about keys
-     * still wants a run whose shards behave.
-     */
-    private static String pooledKey(long index, int cardinality) {
-        return "key-" + Math.floorMod(index, cardinality);
     }
 
     /**
@@ -766,23 +778,37 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * naming the topic.
      * <p>
      * Two separate refusals, and they apply to different sandboxes. <b>A format that cannot write</b> is refused
-     * whoever supplies the value, because the record has to be encoded either way. <b>A driven topic with no
-     * value function</b> is refused only when there is a driver: this artefact's driver has no idea what an
-     * {@code Order} looks like, and publishing an empty instance of one would put records on the topic that look
-     * like data and are not.
+     * whoever supplies the value, because the record has to be encoded either way. <b>A type the hydration cannot
+     * name</b> is refused only where the hydration is what would fill it: a driven topic whose caller supplied
+     * neither a value function nor a declared type. The cure is on the definition - a format helper that carries
+     * its type, a declared type on the builder, a value function of the caller's own, or a serialiser for a route
+     * that only reads.
      */
     private void refuseRoutesTheDriverCannotFeed(DefinitionView view) {
         for (RouteView route : view.routes()) {
             for (String topic : route.topics()) {
                 requireWritable(topic, route.consumedValue(), "value");
                 requireWritable(topic, route.consumedKey(), "key");
-                if (!handPublished && !values.containsKey(topic)) {
-                    throw new IllegalArgumentException("The sandbox has nothing to publish on topic " + topic
-                            + ": its route consumes " + route.consumedValue() + ", and nothing has said what a "
-                            + "record of it should contain. Either say so - "
-                            + "Sandbox.builder().feeding(\"" + topic + "\", index -> yourValue(index)) - or "
-                            + "publish the records yourself with Sandbox.builder().handPublished() and "
-                            + "sandbox.pipe(...).");
+                if (handPublished) {
+                    continue;
+                }
+                if (!values.containsKey(topic) && !declaredTypes.containsKey(topic)
+                        && ValueTypes.of(route.consumedValue()) == null) {
+                    throw new IllegalArgumentException("The sandbox cannot fill records for topic " + topic
+                            + ": its value format (" + route.consumedValue() + ") does not name a Java type, and "
+                            + "the hydration has to fill an instance of one. Declare the route with a format "
+                            + "helper (json/avro/protobuf/string/bytes), with Format.of(deserializer, "
+                            + "serializer, YourType.class), tell the sandbox with "
+                            + "Sandbox.builder().hydrating(\"" + topic + "\", YourType.class), or say what a "
+                            + "record contains yourself with Sandbox.builder().feeding(\"" + topic + "\", "
+                            + "index -> yourValue(index)).");
+                }
+                if (!keys.containsKey(topic) && ValueTypes.of(route.consumedKey()) == null) {
+                    throw new IllegalArgumentException("The sandbox cannot fill keys for topic " + topic
+                            + ": its key format (" + route.consumedKey() + ") does not name a Java type. Declare "
+                            + "the key with a format helper, with Format.of(deserializer, serializer, "
+                            + "YourType.class), or with Sandbox.builder().feedingKeys(\"" + topic + "\", "
+                            + "index -> yourKey(index)).");
                 }
             }
         }
@@ -954,7 +980,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
 
     /**
      * The knobs, all optional. The defaults are a run that reads well in a console and finishes when you close
-     * it: fifty records a second per topic, one partition, ten distinct keys in the pool, no bound.
+     * it: fifty records a second per topic, one partition, ten distinct keys, seed zero, no bound.
      */
     @InterfaceStability.Unstable
     public static final class Builder {
@@ -982,6 +1008,18 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
          * see the repetition.
          */
         private int keyCardinality = 10;
+
+        /**
+         * Zero unless asked otherwise - a fixed default rather than a random one, so that two runs of an
+         * unchanged program are the same run.
+         */
+        private long seed;
+
+        /**
+         * Value types declared by topic, for routes whose format cannot name one. Ordered, so a refusal listing
+         * what was declared lists it the way it was written.
+         */
+        private final Map<String, Class<?>> declaredTypes = new LinkedHashMap<>();
 
         /**
          * What the driver publishes as the value on each topic. Ordered, so a refusal listing what was declared
@@ -1013,10 +1051,11 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
          * wants, and what makes {@link Sandbox#awaitSettled()} a statement about that data rather than about a
          * rate.
          * <p>
-         * {@link #perSecond(double)}, {@link #bound(Bound)}, {@link #keyCardinality(int)},
-         * {@link #feeding(String, LongFunction)} and {@link #feedingKeys(String, LongFunction)} all describe the
-         * driver, so they say nothing once this is set; {@link #partitionsPerTopic(int)} still applies, because it
-         * shapes the topics rather than who publishes into them.
+         * {@link #perSecond(double)}, {@link #bound(Bound)}, {@link #keyCardinality(int)}, {@link #seed(long)},
+         * {@link #hydrating(String, Class)}, {@link #feeding(String, LongFunction)} and
+         * {@link #feedingKeys(String, LongFunction)} all describe the driver, so they say nothing once this is
+         * set; {@link #partitionsPerTopic(int)} still applies, because it shapes the topics rather than who
+         * publishes into them.
          */
         public Builder handPublished() {
             this.handPublished = true;
@@ -1064,17 +1103,40 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         }
 
         /**
-         * <b>What the driver publishes on this topic</b>: a function from the record's index within this topic to
-         * the value for that record. Every routed topic needs one before a driven sandbox will start, and the
-         * refusal names the topic that has none.
+         * Two runs with the same seed fill the same records, in the same order, with the same timestamps - so a
+         * sandbox failure is reproducible rather than merely likely to recur. It is the hydration's number: a
+         * topic given its own value function is not random and has nothing to seed.
+         */
+        public Builder seed(long seed) {
+            this.seed = seed;
+            return this;
+        }
+
+        /**
+         * Name the value type for a topic whose route cannot - a custom serde over a class the format does not
+         * carry. Without this, and without {@link #feeding(String, LongFunction)}, such a route is refused at
+         * start, naming the topic.
+         */
+        public Builder hydrating(String topic, Class<?> valueType) {
+            declaredTypes.put(Objects.requireNonNull(topic, "A topic must be supplied"),
+                    Objects.requireNonNull(valueType, "A value type must be supplied"));
+            return this;
+        }
+
+        /**
+         * <b>What the driver publishes on this topic</b>, instead of the realistic random data it would otherwise
+         * fill the route's declared type with: a function from the record's index within this topic to the value
+         * for that record.
          * <p>
-         * Addressed by <em>index</em> rather than called in sequence, deliberately: the record at a given index is
-         * then the same whatever order the topics were served in and whatever the pacing did, so "reproduce record
-         * 4173" is a thing a caller can do without replaying the four thousand before it. A function that ignores
-         * the index and returns a constant is perfectly reasonable for a run that is about throughput.
+         * Addressed by <em>index</em> rather than called in sequence, deliberately, and for the same reason
+         * {@link #seed(long)} exists: the record at a given index is then the same whatever order the topics were
+         * served in and whatever the pacing did, so "reproduce record 4173" is a thing a caller can do without
+         * replaying the four thousand before it.
          * <p>
-         * The value is encoded with the route's own serialiser, so it has to be of the type that route reads. A
-         * value of the wrong type is refused when it is published, naming the class.
+         * Reach for it when a run is about particular values rather than plausible ones - and note that a test
+         * which wants particular <em>records</em> usually wants no driver at all, which is
+         * {@link #handPublished()}. The value is encoded with the route's own serialiser, so it has to be of the
+         * type that route reads; one of the wrong type is refused when it is published, naming the class.
          */
         public Builder feeding(String topic, LongFunction<?> value) {
             Objects.requireNonNull(value, "A value function must be supplied");
@@ -1086,11 +1148,11 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
 
         /**
          * The keys to go with {@link #feeding(String, LongFunction)}, for a topic that wants its own rather than
-         * the pool of strings a topic gets by default.
+         * the pool the hydration draws from its route's declared key type.
          * <p>
-         * Worth declaring when the route's key is not a String, or when the test is <em>about</em> which records
-         * share a shard - a function returning one constant puts every record of the topic on one key, which is
-         * the quickest way to see what ordering costs.
+         * Worth declaring when the run is <em>about</em> which records share a shard - a function returning one
+         * constant puts every record of the topic on one key, which is the quickest way to see what ordering
+         * costs.
          */
         public Builder feedingKeys(String topic, LongFunction<?> key) {
             Objects.requireNonNull(key, "A key function must be supplied");

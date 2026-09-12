@@ -11,7 +11,7 @@ availability:
   target_release: 0.6.0.0
 release_assumptions:
   - The module is first published in 0.6.0.0; the record is conditional until that release is cut.
-  - It builds at the reactor's Java 8 release target with no third-party dependencies of its own; what a record contains comes from a function the caller supplies.
+  - It builds at the reactor's Java 8 release target on the last Java 8 lines of its hydration libraries; the maintained lines wait for the Java baseline change.
 summary: >-
   Run a Parallel Consumer definition - fluent or classic - against records piped in by the caller or driven by the
   module itself, with no broker, no
@@ -36,7 +36,7 @@ setup:
 opt_in:
   mechanism: Add the parallel-consumer-sandbox artifact, normally in test scope, and change the start call.
   isolated_from_stable_modules: true
-  explanation: Core never depends on it, so an application that does not use it carries neither the module nor anything it would have pulled in.
+  explanation: Core never depends on it, so an application that does not use it carries neither the module nor its hydration libraries.
 boundaries:
   - Incubating, like the fluent API it serves - every public type carries InterfaceStability.Unstable.
   - Reading an output topic consumes - the next read is the next record, and a drain leaves it empty. The cursor
@@ -50,7 +50,7 @@ boundaries:
     has any history to read, and says so rather than reading empty.
   - A route whose value format cannot write, or whose Java type nothing can name, is refused at start naming the
     topic. The sandbox has to encode what it publishes with the same format the route decodes it with.
-  - Protobuf message types are refused when their first record is generated. There is no filler for one in this
+  - Protobuf message types are refused when their first record is hydrated. There is no filler for one in this
     version; supply records by hand for such a route.
   - The hydrated data is realistic in shape, not in meaning. Field values are chosen by field name and type, so a
     definition whose behaviour depends on the relationships between fields needs records of its own.

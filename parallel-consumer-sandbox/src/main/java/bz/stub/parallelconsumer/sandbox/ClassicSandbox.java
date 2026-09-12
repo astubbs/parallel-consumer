@@ -60,6 +60,18 @@ import java.util.function.LongFunction;
 public final class ClassicSandbox<K, V> implements AutoCloseable {
 
     /**
+     * The key type to fill. Declared by the caller rather than read from a definition, because a classic
+     * application's types live in its options builder's generics and erasure has taken them by the time anything
+     * here could look.
+     */
+    private final Class<K> keyType;
+
+    /**
+     * The value type to fill, declared for the same reason as {@link #keyType}.
+     */
+    private final Class<V> valueType;
+
+    /**
      * The topics to publish into - the ones the caller will subscribe its instance to. Unmodifiable, because the
      * consumer below was built with these exact partitions and a later addition would have nowhere to go.
      */
@@ -111,14 +123,34 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * Package-private: a classic sandbox is built by {@link Sandbox#classic(Class, Class, String...)}, so that the
      * settings below come from one builder rather than from eight arguments at a call site.
      */
-    ClassicSandbox(Collection<String> topics,
+    /**
+     * The run's seed, given to each feed's own {@link RandomObjects} so that two runs of a seed fill the same
+     * records.
+     */
+    private final long seed;
+
+    /**
+     * How many distinct keys to draw from. A pool rather than a key per record, because repeating keys is what
+     * makes shard behaviour something a sandbox run can show.
+     */
+    private final int keyCardinality;
+
+    ClassicSandbox(Class<K> keyType,
+                   Class<V> valueType,
+                   Collection<String> topics,
                    int partitionsPerTopic,
                    double perSecond,
-                   Bound bound) {
+                   Bound bound,
+                   long seed,
+                   int keyCardinality) {
+        this.keyType = keyType;
+        this.valueType = valueType;
         this.topics = Collections.unmodifiableList(new ArrayList<>(topics));
         this.partitionsPerTopic = partitionsPerTopic;
         this.perSecond = perSecond;
         this.bound = bound;
+        this.seed = seed;
+        this.keyCardinality = keyCardinality;
         this.consumer = new SandboxConsumer<>(this.topics, partitionsPerTopic);
     }
 
@@ -321,15 +353,25 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * tells the consumer how to find them and it answers zero for every partition, which on this path is the
      * truth.
      *
-     * <b>Both functions are the caller's</b>, and they are addressed by the record's index within its topic rather
-     * than called in sequence, so record <em>n</em> of a topic is the same whatever order the topics were served
-     * in and whatever the pacing did. This artefact's driver has no idea what a value of {@code V} looks like;
-     * saying so is the price of it not having to.
+     * Records are filled from the key and value types this sandbox was built with, addressed by the record's
+     * index within its topic rather than by sequence, so record <em>n</em> of a topic is the same whatever order
+     * the topics were served in and whatever the pacing did.
      *
      * @param instance the Parallel Consumer instance to close at the bound; every processor type implements
      *                 {@link DrainingCloseable}
-     * @param keys     the key for a record at an index - repeat keys, or a shard has nothing to order
-     * @param values   the value for a record at an index
+     */
+    public void startDriving(DrainingCloseable instance) {
+        RandomObjects random = RandomObjects.seededWith(seed);
+        startDriving(instance,
+                index -> random.key(keyType, index, keyCardinality),
+                index -> random.create(valueType, index));
+    }
+
+    /**
+     * The same, with the records to publish said out loud rather than filled with realistic random data - for a
+     * run that is about particular values.
+     *
+     * @see #startDriving(DrainingCloseable)
      */
     public void startDriving(DrainingCloseable instance, LongFunction<K> keys, LongFunction<V> values) {
         Objects.requireNonNull(instance, "The instance to close at the bound must be supplied");
@@ -354,7 +396,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
                 instance.closeDrainFirst();
             }
         });
-        log.info("Classic sandbox driving: {} at {}/s per topic, {}", topics, perSecond, bound);
+        log.info("Classic sandbox driving: {} at {}/s per topic, seed {}, {}", topics, perSecond, seed, bound);
         driver.start();
     }
 

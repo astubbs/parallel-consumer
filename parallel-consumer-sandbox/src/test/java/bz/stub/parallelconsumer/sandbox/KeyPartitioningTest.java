@@ -25,7 +25,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
- * Where the driver puts a key, on a topic with more than one partition.
+ * Where the feed puts a key, on a topic with more than one partition.
  *
  * <h2>Two promises, and they were both broken for every key type but String</h2>
  * A key sticks to a partition - which is what makes a key-ordered run in the sandbox shard the way it would

@@ -43,11 +43,22 @@ final class SandboxFixtures {
     }
 
     /**
+     * Adds a JSON route whose function always succeeds, for a test whose subject <em>is</em> the record - the
+     * hydration filling a declared type, and that type surviving the encode and decode a route does.
+     */
+    static <V> ParallelConsumerDefinition succeedingJsonRoute(ParallelConsumerDefinition definition,
+                                                              String topic,
+                                                              Class<V> valueType) {
+        definition.json(topic, valueType).process(context -> Outcome.succeeded());
+        return definition;
+    }
+
+    /**
      * Adds a String route whose function always succeeds, which is what a test that is about the plumbing - the
      * driver, the bound, the wait - wants its records to do.
      * <p>
-     * A String route rather than a typed one because these tests are not about what is in a record: this module's
-     * driver is fed by functions the caller writes, and {@link #countedValues(String)} is the smallest honest one.
+     * A String route rather than a typed one because those tests are not about what is in a record, and pairing it
+     * with {@link #countedValues(String)} keeps the hydration out of a test that is not about it.
      */
     static ParallelConsumerDefinition succeedingStringRoute(ParallelConsumerDefinition definition, String topic) {
         definition.string(topic).process(context -> Outcome.succeeded());
@@ -83,6 +94,21 @@ final class SandboxFixtures {
      * the caller's, because this module's driver has no opinion about what a record contains; and the instance is
      * returned rather than closed here, because a bound closes it and a test that reaches its bound still calls
      * {@code closeDrainFirst()} afterwards to cover the run that did not.
+     */
+    static <K, V> ParallelEoSStreamProcessor<K, V> startClassic(ClassicSandbox<K, V> classic,
+                                                                ParallelConsumerOptions<K, V> options,
+                                                                Consumer<PollContext<K, V>> onPoll) {
+        ParallelEoSStreamProcessor<K, V> pc = new ParallelEoSStreamProcessor<>(options);
+        pc.subscribe(classic.topics());
+        pc.poll(onPoll);
+        classic.startDriving(pc);
+        return pc;
+    }
+
+    /**
+     * The same, for a test that says what its records contain rather than letting the hydration fill them.
+     *
+     * @see #startClassic(ClassicSandbox, ParallelConsumerOptions, Consumer)
      */
     static <K, V> ParallelEoSStreamProcessor<K, V> startClassic(ClassicSandbox<K, V> classic,
                                                                 ParallelConsumerOptions<K, V> options,
