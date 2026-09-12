@@ -87,6 +87,17 @@ class RouteDispatcher {
     private final String preBuiltConsumerDescription;
 
     /**
+     * Whether the definition was handed a finished consumer at all - the condition without which the raw-bytes
+     * fault is not merely unlikely but impossible, because a consumer this facade built itself is a byte-array
+     * consumer by construction.
+     * <p>
+     * Separate from {@link #preBuiltConsumerDescription}, which is null both when no consumer was supplied and when
+     * one was supplied that the probe could not read: a best-effort diagnostic cannot also be the flag that decides
+     * whether an instance is stopped.
+     */
+    private final boolean preBuiltConsumerSupplied;
+
+    /**
      * Replaced at start with the instance. Until then, and in a test that drives the wrapper directly, a fault has
      * nowhere to go but the log.
      */
@@ -139,13 +150,16 @@ class RouteDispatcher {
      * @param routesByTopic               the definition's route table, read here and never written
      * @param fallbackRetryDelay          what {@link #retryDelayFor} answers for a topic no route claims
      * @param preBuiltConsumerDescription the deserialisers read off a supplied consumer, or null when the
-     *                                    definition built its own - in which case the raw-bytes fault cannot arise
+     *                                    definition built its own or the probe could not read them
+     * @param preBuiltConsumerSupplied    whether a finished consumer was supplied - what makes the raw-bytes fault
+     *                                    possible at all
      */
     RouteDispatcher(Map<String, RouteState> routesByTopic, Duration fallbackRetryDelay,
-                    String preBuiltConsumerDescription) {
+                    String preBuiltConsumerDescription, boolean preBuiltConsumerSupplied) {
         this.routesByTopic = routesByTopic;
         this.fallbackRetryDelay = fallbackRetryDelay;
         this.preBuiltConsumerDescription = preBuiltConsumerDescription;
+        this.preBuiltConsumerSupplied = preBuiltConsumerSupplied;
     }
 
     /**
@@ -406,7 +420,7 @@ class RouteDispatcher {
             throw park(new TypedRecordContext<>(recordContext, key, value), route, permanent, alreadyFailed,
                     "its payload can never be decoded", false);
         } catch (ClassCastException castFailed) {
-            if (RawBytesConsumerFaultException.isRawBytesCastFailure(castFailed)) {
+            if (preBuiltConsumerSupplied && RawBytesConsumerFaultException.isRawBytesCastFailure(castFailed)) {
                 throw rawBytesFault(castFailed);
             }
             throw afterAttempt(new TypedRecordContext<>(recordContext, key, value), route, castFailed, attempts);
@@ -748,6 +762,12 @@ class RouteDispatcher {
 
     /**
      * A pre-built consumer that is not configured for raw bytes: a definition fault, never a retry (KTD3, R1).
+     * <p>
+     * <b>Only reachable when a consumer was actually supplied.</b> A consumer this facade built is a byte-array
+     * consumer by construction, so a cast failure on a definition that built its own is somebody else's - and
+     * classifying it here would stop the instance instead of taking R12's transient decode-failure retry path. The
+     * other half of that narrowing is {@link RawBytesConsumerFaultException#isRawBytesCastFailure}, which requires
+     * the throw to have come from this class's own cast.
      * <p>
      * {@link InstanceControl#fatal} is what makes it fatal; the instance closes itself and surfaces this
      * exception to whoever is awaiting shutdown. The throw itself matters either way: the record must not complete,

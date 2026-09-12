@@ -618,7 +618,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         // the flag stays set for it.
         started = true;
 
-        this.dispatcher = new RouteDispatcher(routesByTopic, defaults.retryDelay(), preBuiltConsumerDescription);
+        this.dispatcher = new RouteDispatcher(routesByTopic, defaults.retryDelay(), preBuiltConsumerDescription,
+                preBuiltConsumerSupplied);
 
         options.commitMode(commitMode)
                 .ordering(defaults.ordering())
