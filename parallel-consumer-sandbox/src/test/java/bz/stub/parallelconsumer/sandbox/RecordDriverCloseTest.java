@@ -35,7 +35,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
 class RecordDriverCloseTest {
 
     @Test
-    void closingAGeneratorThatHasReachedItsBoundLetsTheBoundSequenceFinish() throws Exception {
+    void closingADriverThatHasReachedItsBoundLetsTheBoundSequenceFinish() throws Exception {
         CountDownLatch insideTheBoundSequence = new CountDownLatch(1);
         CountDownLatch letTheBoundSequenceFinish = new CountDownLatch(1);
         AtomicBoolean interruptedInsideTheBoundSequence = new AtomicBoolean();
@@ -85,7 +85,7 @@ class RecordDriverCloseTest {
      * interrupt exists for - so the fix above did not simply remove it.
      */
     @Test
-    void closingAGeneratorThatIsStillGeneratingStillInterruptsItOutOfItsSleep() {
+    void closingADriverThatIsStillPublishingStillInterruptsItOutOfItsSleep() {
         CountingFeed feed = new CountingFeed();
         // One record every ten seconds: without an interrupt the close would sit out the join's full ten.
         RecordDriver driver = new RecordDriver(Collections.singletonList(feed), 0.1, Bound.none(),
