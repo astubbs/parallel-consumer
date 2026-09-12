@@ -201,6 +201,27 @@ What 1.0 is waiting on is a settled API surface, the functionality still intende
 
 This is the <<fluent-api,fluent API>>, which is *incubating* -- see that section for what that means, for what park in place costs and does not cost, and for the classic API this library shipped first, which is unchanged and not deprecated.
 
+.The same definition, no broker, no Docker, no test environment -- this is how it is run on every build of this repository:
+[source,java,indent=0]
+----
+            sandbox = Sandbox.builder()
+                    .perSecond(50)                                   // <1>
+                    .bound(Bound.after(Duration.ofSeconds(10)))      // <2>
+                    .keyCardinality(5_000)                           // <3>
+                    .feeding(ORDERS_TOPIC, FluentQuickstartApp::anOrder)   // <4>
+                    .feeding(SCANS_TOPIC, FluentQuickstartApp::aScan)
+                    .build();
+
+            instance = pc.start(sandbox);                              // <5>
+            instance.awaitShutdown();                                  // <6>
+----
+<1> Records per second, per source topic.
+<2> Stop publishing after ten seconds and close, draining first. Without a bound the run ends when you close the instance.
+<3> How many distinct keys the driver draws from. Keys have to repeat for key ordering to have anything to order, and they have to repeat rarely for a topic to look like a real one.
+<4> *What a record contains is yours*: a function from the record's index to its value. The sandbox knows how to pace and stop; only your application knows what an order looks like. A test that wants particular records skips the driver entirely and pipes them in itself -- see <<sandbox,the sandbox>>.
+<5> The one line that differs from a run against a broker.
+<6> The bound closes the instance, so this returns when the run ends.
+
 An overview article to the library can also be found on Confluent's https://www.confluent.io/blog/[blog]: https://www.confluent.io/blog/introducing-confluent-parallel-message-processing-client/[Introducing the Confluent Parallel Consumer].
 
 [#demo]
@@ -372,6 +393,7 @@ without operational burden or harming the cluster's performance
 ** <<park-in-place,Park in place>> - a record that runs out of attempts stays where it is, holding no worker, while the partition commits past it, so no dead-letter topic is required to keep the partition moving
 ** Terminal outcomes counted apart: succeeded, filtered, parked, stopped
 ** A queryable parked set per route, with metrics beside it
+* A <<sandbox,sandbox>> that runs any definition - fluent or classic - with no broker, no Docker and no test environment: pipe your own records in, settle, and assert, or let it make up records of the definition's own types
 * Per `key` concurrent processing, per partition and unordered message processing
 * Offsets committed correctly, in order, of only processed messages, regardless of concurrency level or retries
 * Batch support in all versions of the API to process batches of messages in parallel instead of single messages.
@@ -793,6 +815,59 @@ An existing user with hand-built clients reaches the fluent API without changing
 <2> Blocks until the instance has shut down, however it ended.
 <3> An instance can end in three ways, and it says which: closed by you, stopped by a route, or failed. This is the second.
 <4> And this is the third.
+
+[[sandbox]]
+=== Running with no broker: the sandbox
+
+`parallel-consumer-sandbox` runs *any* definition with no broker, no Docker and no test environment.
+
+The definition does not change. The `start` call does -- which is the whole claim, and the second example at the top of this page is it.
+
+There are two ways to get records into it, and the first is the one to reach for.
+
+*Pipe, settle, assert* -- for a test, which knows its own data:
+
+[source,java,indent=0]
+----
+Sandbox sandbox = Sandbox.builder().handPublished().build();
+
+try (ParallelConsumerInstance instance = pc.start(sandbox)) {
+    sandbox.pipe("orders", "cust-1", new Order("o-1"));        // <1>
+    sandbox.pipe("orders", "cust-1", new Order("o-2"));
+
+    sandbox.awaitSettled();                                    // <2>
+
+    assertThat(inventory.reserved()).hasSize(2);
+    assertThat(instance.parkedAllTopics().count()).isEqualTo(0);
+}
+----
+<1> Encoded with the route's own serialiser -- you do not supply one, because the route already declared both halves of its format. Piped in from your thread, and placed by the key, so key ordering means here what it means against a broker.
+<2> Blocks until every record published so far is *accounted for*: completed, or parked. It refuses rather than returning quietly if the run ended before it got there -- the budget ran out, the instance failed, or a route stopped it.
+
+*Reading what came out* -- a per-topic object, with the verbs those same drivers use:
+
+[source,java,indent=0]
+----
+SandboxOutputTopic<String, String> shipments = classic.createOutputTopic("shipments");
+
+assertThat(shipments.queueSize()).isEqualTo(3);              // <1>
+assertThat(shipments.readValue()).isEqualTo("shipped-o-1");  // <2>
+assertThat(shipments.readValuesToList()).hasSize(2);         // <3>
+assertThat(shipments.isEmpty()).isTrue();
+----
+<1> *Every read refuses until the run has settled*, `queueSize()` and `isEmpty()` included -- an early read comes back empty, and an empty read is indistinguishable from a definition that produced nothing, so that is a test which passes for the wrong reason.
+<2> *Reading consumes*, as it does in the drivers this borrows from: the next read is the next record, not the same one again.
+<3> `readRecord()` and `readRecordsToList()` keep the keys and headers; `readKeyValuesToMap()` is there when a map is what you want, and keeps a repeated key's last value. `queueSize()` is their `getQueueSize` without the prefix, which nothing else on this surface carries.
+
+There is a matching object on the way in -- `createInputTopic("orders").pipeInput(key, value)` -- for a test that pipes into one topic repeatedly; `pipe(topic, key, value)` above is the flat form of the same path. Today it is the classic API's `pollAndProduce` that fills an output topic; a fluent definition produces nothing until export lands, and its output topic is honestly empty until then.
+
+*Why there is a settle at all*, when the broker-free drivers of the stream-processing libraries you may be comparing us with need none: those engines are single-threaded, so a piped record is processed on the caller's thread and an assertion on the next line is already safe. This is the real engine -- polled on one thread, dispatched on a worker, committed on the control thread -- so a pipe call that returned would tell you nothing about whether your function had run. `awaitSettled()` is what makes the next line mean something.
+
+*A driver that publishes for you* -- for a soak or a demo, where the point is volume rather than particular records. You give it a function from a record's index to its value, per topic (`feeding("orders", index -> anOrder(index))`); it encodes with that route's own serialiser, paces at a rate you declare, and takes an optional bound after which it settles and closes the run itself. That is what a sandbox does unless `handPublished()` says otherwise.
+
+The sandbox has *no third-party dependencies*: it is the engine plus the mock clients that already ship with it. It knows how to pace and stop, and nothing about what an order looks like -- so a routed topic that nothing has said how to fill is refused when a driven sandbox starts, naming the topic.
+
+Two things follow. It is the *demo*: a new reader can run a real definition against real records without provisioning anything. And it is the *broker-free test kit*, which is how this project's own primary build signal works. It serves the classic API too, so an existing options-builder application runs broker-free with its start call changed and nothing else -- and it has both shapes as well.
 
 [[fluent-migration]]
 === Replacing the three workarounds

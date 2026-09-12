@@ -44,5 +44,14 @@
             <artifactId>jackson-databind</artifactId>
             <version>${jackson.examples.version}</version>
         </dependency>
+        <!-- Test scope only: the quickstart's MAIN starts against a broker, and only its test starts the same
+             definition in the sandbox. An example that shipped the sandbox on its compile path would be teaching
+             users to depend on it in production. -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-sandbox</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>

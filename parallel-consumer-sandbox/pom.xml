@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.1-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Sandbox</name>
+    <artifactId>parallel-consumer-sandbox</artifactId>
+    <description>Runs any Parallel Consumer definition with no broker: the mock consumer that already ships in the
+        core artefact, a producer to match, and a driver that publishes what you tell it to at a declared rate.
+        Also the broker-free test kit. It has no third-party dependencies of its own; realistic record values are
+        a separate concern with a separate artefact.
+    </description>
+
+    <properties>
+        <!-- Nothing here pins a third-party library, and that is the point: this module is core plus the mock
+             clients that already ship with it. What a record CONTAINS is the caller's - a function from a record
+             index to a value - so the libraries that make realistic fake objects, and the bytecode-level pinning
+             they needed against this reactor's Java 8 release target, belong to whatever supplies those
+             functions rather than to the driver that publishes them. -->
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

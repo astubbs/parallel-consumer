@@ -1,0 +1,32 @@
+package bz.stub.parallelconsumer.sandbox;
+
+/*-
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+/**
+ * One topic's supply of records, as {@link RecordDriver} sees it.
+ * <p>
+ * The seam between pacing and content: the driver owns the rate, the bound and the thread and knows nothing
+ * about types or encoding; a feed owns exactly one topic's records and knows nothing about when to publish them.
+ * That is what lets the fluent path (which must encode with each route's serialisers, because the engine below
+ * the facade reads raw bytes) and the classic path (which hands the mock consumer typed objects and encodes
+ * nothing) share one driver rather than two.
+ */
+interface TopicFeed {
+
+    /**
+     * The topic this feed publishes into, for the driver's logging - the driver itself never routes on it,
+     * because a feed already knows where its records go.
+     */
+    String topic();
+
+    /**
+     * Publish the record at {@code index} of this topic's sequence. The index addresses the record, so the same
+     * seed and index give the same record however the run is paced.
+     *
+     * @return false when the consumer has been closed under us and there is nothing left to publish into;
+     * anything else that goes wrong throws
+     */
+    boolean publish(long index);
+}

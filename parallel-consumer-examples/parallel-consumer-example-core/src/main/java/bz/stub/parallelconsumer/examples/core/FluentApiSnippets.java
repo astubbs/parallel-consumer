@@ -36,10 +36,10 @@ import static bz.stub.parallelconsumer.fluent.Formats.json;
  * examples silently going stale. If a name on the fluent API changes, this fails to compile instead of the README
  * quietly starting to lie. It is the same arrangement {@link CoreApp} has for the classic API's examples.
  * <p>
- * These regions are <em>shown</em>, not run - and neither is {@link FluentQuickstartApp}, whose own note says why.
- * What runs against a broker is core's {@code FluentQuickstartIT}, which re-states the quickstart's shape in the
- * types core can read without depending on this module. Anything here that has to be proved rather than merely
- * shown belongs there instead.
+ * What actually <em>runs</em> is {@link FluentQuickstartApp}, broker-free on every build in the sandbox
+ * module's {@code FluentQuickstartAppTest}. Core's {@code FluentQuickstartIT} re-states the quickstart's shape
+ * against a real broker in the types core can read without depending on this module. Anything here that has
+ * to be proved rather than merely shown belongs in one of those instead.
  */
 @Slf4j
 @SuppressWarnings({"unused", "MagicNumber"})

@@ -1,0 +1,67 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Sandbox - run any definition with no broker
+category: engineering
+module: parallel-consumer-sandbox
+maturity: alpha
+availability:
+  status: planned
+  target_release: 0.6.0.0
+release_assumptions:
+  - The module is first published in 0.6.0.0; the record is conditional until that release is cut.
+  - It builds at the reactor's Java 8 release target with no third-party dependencies of its own; what a record contains comes from a function the caller supplies.
+summary: >-
+  Run a Parallel Consumer definition - fluent or classic - against records piped in by the caller or driven by the
+  module itself, with no broker, no
+  Docker and no test environment: the same engine and the same definition, with the Kafka clients replaced.
+use_this_when:
+  - You want to see a definition process real-looking records before provisioning a cluster.
+  - You want to pipe the records a test knows about into a real definition and assert on what came out of it.
+  - You want to test processing behaviour, outcomes and the parked set without Docker in the test suite.
+  - You want an example or a demo that a reader can run immediately.
+setup:
+  maven:
+    group_id: bz.stub.parallelconsumer
+    artifact_id: parallel-consumer-sandbox
+    version: 0.6.0.0
+  api:
+    build: Sandbox.builder() with perSecond, bound, seed, partitionsPerTopic and keyCardinality.
+    fluent_entry: definition.start(sandbox) - the one line that differs from a run against a broker.
+    classic_entry: sandbox.classic(keyType, valueType, topics) hands the same clients and driver to an options builder.
+    piping_in: pipe(topic, key, value), or createInputTopic(topic).pipeInput(key, value) for a per-topic object; no serialisers either way, because the route declared its format.
+    settling: awaitSettled() on either sandbox, awaitBound(timeout) on a driven one - the call that makes an assertion afterwards mean something.
+    reading_out: createOutputTopic(topic) gives readValue, readRecord, readValuesToList, readRecordsToList, readKeyValuesToMap, queueSize and isEmpty.
+opt_in:
+  mechanism: Add the parallel-consumer-sandbox artifact, normally in test scope, and change the start call.
+  isolated_from_stable_modules: true
+  explanation: Core never depends on it, so an application that does not use it carries neither the module nor anything it would have pulled in.
+boundaries:
+  - Incubating, like the fluent API it serves - every public type carries InterfaceStability.Unstable.
+  - Reading an output topic consumes - the next read is the next record, and a drain leaves it empty. The cursor
+    belongs to the output topic object, so a second one over the same topic reads the whole of it again.
+  - Every read on an output topic refuses until the run has settled since the last record was piped in, isEmpty and
+    queueSize included, because an early read returns an empty list and that is indistinguishable from a definition
+    that produced nothing.
+  - An output topic reads what the instance produced, which today is the classic API's pollAndProduce path; a fluent
+    definition produces nothing until export lands, so a fluent output topic is empty rather than unavailable.
+  - A classic sandbox needs its producer built - producer(keySerializer, valueSerializer) - before an output topic
+    has any history to read, and says so rather than reading empty.
+  - A route whose value format cannot write, or whose Java type nothing can name, is refused at start naming the
+    topic. The sandbox has to encode what it publishes with the same format the route decodes it with.
+  - Protobuf message types are refused when their first record is generated. There is no filler for one in this
+    version; supply records by hand for such a route.
+  - The hydrated data is realistic in shape, not in meaning. Field values are chosen by field name and type, so a
+    definition whose behaviour depends on the relationships between fields needs records of its own.
+  - A seed makes a run reproducible; without one, two runs differ.
+validation:
+  - Confirm the records your routes saw were decoded into the types the routes declare.
+  - Confirm you settled before reading an output topic; a refusal there is the guard working, not a fault.
+  - Confirm the run reached its bound and closed, and read the parked set after the close.
+references:
+  - label: README section
+    path: README.adoc#sandbox
+  - label: The build signal that runs a definition through it
+    path: parallel-consumer-examples/parallel-consumer-example-core/src/test/java/bz/stub/parallelconsumer/examples/core/FluentQuickstartAppTest.java
+readme_anchor: sandbox

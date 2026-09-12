@@ -82,8 +82,9 @@ engine can later be implemented inside it without changing what the user sees.
 
 **Sandbox**
 A run of a definition with no broker: the same processing engine and the same definition, with the
-Kafka clients replaced by fakes and records generated into the definition's own topics at a declared
-rate, hydrated with realistic random data of each route's declared type. What differs between a
+Kafka clients replaced by fakes: a caller pipes in the records it knows and waits for the run to
+settle, or a driver puts records into the definition's own topics at a declared rate, hydrated with
+realistic random data of each route's declared type. What differs between a
 sandbox run and a real one is the start call and nothing else, which is what makes it both the demo
 and the broker-free test kit. A bound — a duration or a record count — ends the run by draining and
 closing, so what is readable afterwards is the end of the run rather than the middle of it.

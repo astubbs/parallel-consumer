@@ -697,11 +697,77 @@ flowchart LR
 
 ### Sequencing
 
-- **Milestone A, the next-release candidate:** U1, U2, U3, U21, U4, U5, U6 in dependency order, with U5 parallel to U3 onward once U2 has landed. (2026-09-11: U5 and U6's sandbox half ship as a stacked pull request above astubbs/parallel-consumer#502 rather than inside it; the milestone's content is unchanged.) Everything a returning developer needs to see park in place from the README, and nothing in the engine.
+- **Milestone A, the next-release candidate:** U1, U2, U3, U21, U4, U5, U6 in dependency order, with U5 parallel to U3 onward once U2 has landed. (2026-09-11: U5 and U6's sandbox half shipped as a stacked pull request above astubbs/parallel-consumer#502 rather than inside it; the milestone's content is unchanged.) Everything a returning developer needs to see park in place from the README, and nothing in the engine.
 - **Milestone B, the rest of tiny:** U22, U7, U23 and U8, plus U9 on the classic API.
 - **Milestone C, small:** U10, then U11 after astubbs#295 merges.
 - **Milestone D, medium:** U12 to U15 in any order; U16 only after the producer-recovery stack has merged in its own order.
 - **Milestone E, large:** after the decomposition (astubbs#479); U17 to U20 are sketched here so the earlier tiers leave the seams they need, and are re-planned against the decomposed engine.
+- **The sandbox's next milestone:** a capturing sink and a crash-and-restart harness, recorded 2026-09-11, owner-directed - see the subsection below. Named as next; deliberately not sized or scheduled beyond that.
+
+#### The sandbox's next milestone: a capturing sink and a crash-and-restart harness
+
+**Recorded on 2026-09-11, owner-directed, after comparing this sandbox against a broker-free test kit another
+library publishes: "crash-restart harness and capturing sink: yes, but not in the pr. record and plan as next
+milestone."** Both are sandbox-module work and both are tiny tier under KD13 - no engine change, composed from what
+U5 already ships. Neither is in Milestone A because U5's goal is the **runner**: a definition, a mock consumer, a
+mock producer and a generator, so that a definition runs at all with no broker. These two are the **assertion kit**
+built on that runner, and nothing in Milestone A's requirement set (R33, R36) asks for one. They are named as the
+next milestone and nothing more; the tier they land in is decided when they are costed, as R30 requires.
+
+**A capturing sink.** A published class a user wires as a route's terminal behaviour, which collects every value
+it receives and hands back an immutable snapshot to assert on.
+
+- **What it is for, from the user's side.** Today a user who wants to assert what their processing function
+  actually received has to hand-roll the collector inside the function: a concurrent queue closed over by the
+  lambda, written to from however many worker threads the engine ran, and then read from the test thread once the
+  run has ended. Every user writes the same class, and each one has to re-derive that the write side is concurrent
+  and that reading it mid-run is meaningless. A published sink is that class, written once: thread-safe on the way
+  in, immutable on the way out.
+- **The restraint worth copying.** The comparable kit's version carries no assertion vocabulary of its own - the
+  user asserts on the returned list with whatever assertion library their project already uses. Ours should do the
+  same. A sink that shipped its own matchers would be a second vocabulary for a user to learn and for this project
+  to keep working, and it would push this repo's own choice of assertion library onto users who did not pick it.
+- **Depends on** the fluent route surface and its outcome vocabulary (U2, U3) and the sandbox module (U5). Nothing
+  in the engine.
+
+**A crash-and-restart harness.** A deterministic, broker-free driver for the shape a real deployment fears: a
+consumer dies holding work it had processed but not committed, and whatever replaces it is handed that work again.
+
+- **What it is for, from the user's side.** Redelivery after an uncommitted death is where a user's own
+  idempotency is either real or imagined, and today the only way to find out is a broker, a container and a kill -
+  which is slow, needs Docker, and is exactly the test a user skips. The harness makes it an ordinary unit test.
+- **The crash is a seeded range, not a moment.** That is what makes the comparable kit's version non-flaky, and it
+  is the part to copy exactly: nothing waits on a clock, so nothing can be timing-dependent. A first consumer is
+  seeded with a prefix of the log and processes it, commits only part of what it processed, and closes without
+  committing the rest; a second consumer is then seeded with the resume window a broker would replay from the
+  committed offset, and runs the full poll-dispatch-process path over it. The crash is expressed as which offsets
+  each consumer was given, not as when either of them was stopped.
+- **The assertion, and the half we should add.** The comparable kit asserts that the uncommitted tail reappears,
+  and explicitly does **not** assert the commit-frontier arithmetic, leaving that to broker tests. Ours should
+  assert the other half too: that nothing **below** the committed frontier is redelivered. That half is what
+  catches an off-by-one in an offset map, and this library encodes its in-flight offsets itself (run-length and
+  bitset in the commit metadata), so it is the half with the most to go wrong and the least to be inherited from
+  the broker.
+- **The second run's assertion must be unsatisfiable by the first run's output - a requirement of the harness, not
+  an aside.** This project has already been burned by exactly the trap this shape invites: two crash-restart
+  integration tests drained the output topic after the restart with a fresh consumer group defaulting to the
+  earliest offset, so the first phase's own durable output satisfied the second phase's assertion. Both were green
+  whether or not the mechanism existed, and deleting the second phase entirely would have left them passing. The
+  same trap is waiting here in a different costume: the sandbox's mock producer keeps one history across both runs,
+  so a harness that asserted over that whole history would be vacuous in precisely the same way. So the harness has
+  to make the wrong answer structurally unreachable rather than assert harder - read from a captured position, tag
+  each record with the run that produced it, or assert on something only the second run could have produced - and
+  it should hand the user that scoped reader rather than leaving them to build one. The write-up owns the class and
+  the repair: `docs/solutions/test-issues/a-restart-assertion-satisfiable-by-pre-crash-data-proves-nothing.md`,
+  whose `applies_when` list names this exact shape. **It is branch-only and not on `origin/master`**, so a
+  working-tree grep will not find it - read it with `node bin/inflight.mjs docs show <path>`.
+<!-- file-refs: N/A - the cited write-up is branch-only and not on origin/master, which is what the bullet above says; it resolves through `bin/inflight.mjs docs show`, not through the working tree -->
+- **Note on coverage.** Whether this repo already proves the no-redelivery-below-the-frontier half somewhere in
+  its own suite is being checked separately (2026-09-11); this entry records a capability the sandbox should hand
+  to a **user**, and says nothing either way about a gap in this project's own tests.
+- **Depends on** the sandbox consumer's seeded beginning offsets and its reading of committed offsets, both
+  shipped by U5, and on the offset-map decode the sandbox already does to tell a complete offset from an
+  incomplete one. Nothing in the engine.
 
 ### System-Wide Impact
 
@@ -740,7 +806,7 @@ flowchart LR
 | U21 | Park and the observer | `fluent/…Park` | U3 |
 | U22 | Export: immediately, the age bound, provenance and send failure | `fluent/…Export` | U21 |
 | U4 | Handle, stop, parked view and metrics | `fluent/…Handle`, `fluent/…ParkedView`, `metrics/PCMetricsDef.java` | U21 |
-| U5 | Sandbox module (2026-09-11: moved to the stacked `feat/504-sandbox`) | `parallel-consumer-sandbox/` | U2 |
+| U5 | Sandbox module (2026-09-11: split onto the stacked `feat/504-sandbox`) | `parallel-consumer-sandbox/` | U2 |
 | U6 | README rewrite and the quickstart build signal | `src/docs/README_TEMPLATE.adoc`, `parallel-consumer-examples/parallel-consumer-example-core/` | U21, U4, U5 |
 | U7 | Per-route policy: breaker, admission, batch size, sinks, prelude | `fluent/…Policy`, `fluent/…Breaker`, `fluent/…Admission` | U21 |
 | U8 | Example set, existing examples in the sandbox, Spring example | `parallel-consumer-examples/*` | U5, U6, astubbs#266 |
@@ -910,13 +976,78 @@ flowchart LR
 
 ### U5. Sandbox module
 
-**Moved out of astubbs/parallel-consumer#502 on 2026-09-11, owner-directed - the unit is unchanged, its pull request is not.**
-U5 ships a whole module with its own dependency set (Instancio, Datafaker and Avro on their last Java 8 lines), its own
-reactor entry, its own logging fixture and its own suite, and none of it is read by the fluent package: core cannot depend
-on the sandbox, the dependency runs the other way through the runtime seam (KTD9), which stays in astubbs/parallel-consumer#502.
-That makes it reviewable on its own, and reviewing it inside the fluent API's own pull request buys nothing while making
-both harder to read. It moves to a stacked branch, `feat/504-sandbox`, whose pull request depends on
-astubbs/parallel-consumer#502.
+**Split out of Milestone A's pull request on 2026-09-11, owner-directed - the unit is unchanged, its pull request is
+not.** U5 ships a whole module with its own dependency set (Instancio, Datafaker and Avro on their last Java 8 lines),
+its own reactor entry, its own logging fixture and its own suite, and none of it is read by the fluent package: core
+cannot depend on the sandbox, the dependency runs the other way through the runtime seam (KTD9), which shipped with the
+rest of the fluent API in astubbs/parallel-consumer#502. That made it reviewable on its own, and reviewing it inside the
+fluent API's own pull request would have bought nothing while making both harder to read. It ships from
+`feat/504-sandbox`, stacked on astubbs/parallel-consumer#502.
+
+**Annotated 2026-09-11, owner-directed. The text above and below is left as it was written; these are the two ways
+the shipped module differs from it, and the vocabulary to read it with.**
+
+- **"The generator" in this unit names two separate things, and the word is retired.** The **driver** runs a feed on
+  its own thread until a stopping rule is met, then settles and closes the run - that is what points 2 (second half)
+  and 3 describe, and the type is `RecordDriver`. The **hydration** makes the realistic values - points 2 (first half)
+  and 5, and the `RandomObjects`/`FieldValues`/`ValueTypes`/`AvroValues` family with the `demo/` types. A **feed** is a
+  stream of records into the sandbox for one route or topic. Conflating the first two sent an analysis at the wrong
+  one, which is why the word is gone from new prose rather than merely clarified here.
+- **The driver is no longer the only way in, and is no longer the primary one.** This unit's goal says "runs with no
+  broker against generated records at a declared rate", and that is now the *convenience*: a soak, or a demo. The
+  primary shape is the caller's - publish records, block until everything published has settled, assert - which is the
+  shape of the broker-free test drivers of the stream-processing libraries users compare us with, and which R33 already
+  anticipated ("the generator can be replaced by hand-written records"). It is `Sandbox.builder().handPublished()`,
+  `Sandbox#publish` and `Sandbox#awaitSettled`, with the same pair on `ClassicSandbox`. The driver's own behaviour is
+  unchanged.
+- **Annotated 2026-09-12, owner-directed: the sandbox's verbs are now the ones users already know from the
+  broker-free test drivers of the stream-processing libraries users compare us with (KTD16).** The bullet above
+  names `Sandbox#publish`; it is `Sandbox#pipe` from here on. Four renames, and the text above is left as it was:
+  `publish` becomes **`pipe`** - flat, taking a topic, a key and a value, rather than through a per-topic handle,
+  because the route already declared both halves of its format, so a handle would carry nothing the argument list
+  does not; the no-argument `producer()` accessor becomes **`readRecords()`**, reading what came out as the
+  counterpart of piping something in; `ClassicSandbox#startGenerating` becomes **`startDriving`**, the type it
+  starts being `RecordDriver` and "generating" naming a concept the annotation above retired; and
+  `generatedRecords()` becomes **`drivenRecords()`**, because it counts what the driver put in and the old name
+  also read as the consumer's own published-record accounting. **`awaitSettled` keeps its name** - it is the one
+  divergence KTD16 licenses, our engine being concurrent where theirs is single-threaded, and that reasoning is
+  recorded above. Renamed outright with no deprecated delegates, per KD15: the module has never shipped, so
+  nothing outside this repository can be calling it.
+- **Corrected 2026-09-12, owner-directed, the same day: the second of those four renames is reversed, and the
+  no-argument accessor is `producer()` again.** Both halves are kept, as KD15 keeps its own reversal, because a
+  reader who found only the correction would re-derive the mistake. As first recorded, the rename read "reading what
+  came out becomes a read verb" and the only thing the module then exposed for inspecting results was the mock
+  producer accessor, so that is what took the name. It was the wrong thing: the accessor hands back a **client**,
+  not records, and once the real read side landed in the annotation below it sat beside `readRecordsToList()`
+  returning something that is not a list of records - worse than the name it started with. **The read verbs belong
+  to the output-topic object alone**; the accessor is the escape hatch beneath it, for what an output topic does not
+  expose (transactional state, every topic at once), and its javadoc says so and points at `createOutputTopic`.
+  (session-settled: owner-directed, 2026-09-12 - "it is an escape hatch that hands back the client".)
+- **Annotated 2026-09-12, owner-directed: the module gains their per-topic objects on both sides, and a read side
+  it did not have.** Measured from the comparable driver rather than recalled, its shape is a driver handing out
+  per-topic input and output objects, `pipeInput` on the first and a family of `read*` verbs on the second. So
+  `createInputTopic(topic)` and `createOutputTopic(topic)` are here, on both sandboxes, and the flat
+  `pipe(topic, key, value)` stays as the one-line form of the same path rather than being replaced - a test that
+  pipes into one topic repeatedly reads better with the object, a test that pipes once reads better flat, and both
+  go through one encoding and one partition choice. The output side is **new surface, not a rename**: it reads the
+  mock producer's history, per topic, through a cursor, with `readValue`, `readRecord`, `readValuesToList`,
+  `readRecordsToList`, `readKeyValuesToMap`, `queueSize` and `isEmpty`. Three decisions inside it were the owner's
+  to make and are recorded on `SandboxOutputTopic` itself: **reading consumes**, as theirs does, so a test that
+  reads twice gets two records; **the size accessor drops their `get` prefix** and keeps the word, because nothing
+  else on this surface carries one; and **every read refuses until the run has settled since the last pipe**,
+  emptiness questions included, because an early read returns an empty list and a test that believed it would pass
+  for the wrong reason for ever. Their key-and-value list has no counterpart: it pairs a key with a value in a type
+  this project does not have, and `readRecordsToList` already carries the key. **This is not the capturing sink**
+  the next-milestone subsection below names - that collects what a processing *function* received; this reads what
+  the instance *produced*.
+- **The hydration ships as its own pull request above this one, and the driver takes a function instead.** Point 2's
+  first half, point 5, and this unit's Instancio/Datafaker/Avro dependency set - with the bytecode-level pinning the
+  Java 8 release target needed, which the Files and Risks entries below describe - move to `feat/504-sandbox-hydration`.
+  What is left in the sandbox module is a function from a record's index to its value, per topic
+  (`Sandbox.Builder#feeding`), so **the module has no third-party dependencies at all**; a driven sandbox with a topic
+  nothing has said how to fill is refused at start, naming it. The hydration artefact supplies exactly such a function.
+  The README quickstart therefore names its own two value functions rather than relying on the module to invent
+  records - which also makes AE24's *filtered* outcome fire on a schedule rather than on a dice roll.
 
 
 - **Goal:** Any definition, fluent or classic, runs with no broker against generated records at a declared rate, bounded or until closed, and the same module is the broker-free test kit.
@@ -946,13 +1077,12 @@ astubbs/parallel-consumer#502.
 
 ### U6. README rewrite and the quickstart build signal
 
-**Split on 2026-09-11, owner-directed, along the same line as U5.** The README rewrite and the quickstart itself stay in
-astubbs/parallel-consumer#502; what moves to `feat/504-sandbox` with U5 is the half of this unit that needs the module -
-the broker-free run of the quickstart (`FluentQuickstartAppTest` and the `quickstartSandbox` tagged region), the README's
-sandbox section and its entry in the features list. Until that branch merges, the quickstart's proof is the broker-backed
-`FluentQuickstartIT` in core, which is where the Success Criteria's one broker run already lives, plus core's own fluent
-suite for the definition's behaviour. KD7's "compiled in CI and run in the sandbox" therefore reads as two pull requests
-rather than one, and the README on astubbs/parallel-consumer#502 claims only the broker run.
+**Split on 2026-09-11, owner-directed, along the same line as U5.** The README rewrite and the quickstart itself shipped
+with astubbs/parallel-consumer#502; the half of this unit that needs the module ships here with U5 - the broker-free run
+of the quickstart (`FluentQuickstartAppTest` and the `quickstartSandbox` tagged region), the README's sandbox section and
+its entry in the features list. Between the two merges the quickstart's only proof was the broker-backed
+`FluentQuickstartIT` in core, plus core's own fluent suite for the definition's behaviour, so KD7's "compiled in CI and
+run in the sandbox" was satisfied across two pull requests rather than one.
 
 
 - **Goal:** The README leads with the fluent API in KD14's order, and the quickstart compiles and runs in the sandbox on every build, once against a broker.

@@ -20,13 +20,12 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
 
 /**
  * The README quickstart, and the build signal behind it: the fluent API's whole first screen, compiled on every
- * build.
+ * build and run broker-free on every build by the sandbox module's {@code FluentQuickstartAppTest}.
  * <p>
- * <b>Nothing executes this class.</b> Core cannot depend on the examples module, so core's
- * {@code FluentQuickstartIT} re-states the same SHAPE against a real broker in the types core can read on its own -
- * it does not run what is here. The broker-free run of this definition lives in the sandbox module, which is
- * stacked above this work as astubbs/parallel-consumer#507. What this file is worth is the compiler: if the fluent
- * API drifts, the README's first example stops building.
+ * Core cannot depend on the examples module, so core's {@code FluentQuickstartIT} re-states the same SHAPE
+ * against a real broker in the types core can read on its own - it does not run what is here. What this file
+ * is worth beyond the sandbox run is the compiler: if the fluent API drifts, the README's first example stops
+ * building.
  *
  * <h2>Why this class exists rather than a snippet in the README</h2>
  * The README's first example is the surface's primary success signal (KD7): if the fluent API drifts, this file
@@ -41,7 +40,8 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
  *       processed and recorded as complete in the commit metadata. The COMMITTED OFFSET itself does not move past
  *       a parked record - it is the highest sequential succeeded offset plus one, and a parked record is never
  *       sequentially succeeded - so consumer-group lag reads as stuck at the oldest parked record for the life of
- *       the assignment. The README's park section owns that consequence. No dead-letter topic is
+ *       the assignment. The README's park section owns that consequence, and
+ *       {@code SandboxConsumer#awaitEveryPublishedRecordCommitted} depends on it. No dead-letter topic is
  *       involved, and none can be - copying a record out to one is a later milestone.</li>
  *   <li><b>The parked set.</b> {@link #reportParked} asks the instance what is parked and why.</li>
  *   <li><b>Typed routes.</b> Two topics, two value types, one function each - no casts, no {@code instanceof} on a
@@ -50,12 +50,22 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
  *       without processing it; a throw is a retry.</li>
  * </ul>
  *
- * <h2>It is straight-line code, deliberately</h2>
+ * <h2>It is straight-line code, deliberately - with one seam</h2>
  * The quickstart used to be wrapped in a {@code defineConsumer(Properties)} method that built the definition and
  * handed it back. The wrapper was there to show that a definition is separate from how it is started - which is
  * true and matters, but not on the first screen: it put a method signature between the reader and the first line
  * of the API, and a reader who wanted to try this had to unpick it first. The separation is shown where it is
- * actually needed, and here the properties, the routes and the start read top to bottom as a program.
+ * actually needed, and the properties, the routes and the start read top to bottom as a program.
+ * <p>
+ * <b>{@link #defineConsumer()} is what is left of that wrapper, and the README never sees it.</b> The tagged
+ * region begins below its signature and ends above its {@code return}, so the snippet a reader is given is that
+ * straight-line program byte for byte - the properties, then connect, then the two routes, with no signature in
+ * front of them and nothing to unpick. What the method buys is the one thing the broker-free run cannot do
+ * without: {@code FluentQuickstartAppTest} starts THIS definition, unstarted and unaltered, against a sandbox
+ * runtime (KD7, AE24), and a definition built inside {@code main} can be handed to nobody. It takes no arguments
+ * precisely so that the properties stay inside the region, where the README shows them. Restoring the argument,
+ * or folding the region back into {@code main}, gives up one of the two claims: either the README stops showing a
+ * program a reader can paste, or the primary success signal stops running the example it is about.
  */
 @Slf4j
 public class FluentQuickstartApp {
@@ -66,11 +76,11 @@ public class FluentQuickstartApp {
     private static final String TRACKING_IS_DOWN = "the parcel-tracking service is not reachable";
 
     /**
-     * The quickstart itself, top to bottom - the properties, the two routes and the start, in the order the README
-     * shows them. Nothing in the build calls this; point it at your own broker by changing the bootstrap servers on
-     * the first line.
+     * The quickstart itself, top to bottom - the properties, the two routes, in the order the README shows them.
+     * Only the signature and the {@code return} sit outside the region the README includes; the note on this class
+     * says why the seam exists rather than the definition being built inside {@link #main}.
      */
-    public static void main(String[] args) {
+    static ParallelConsumerDefinition defineConsumer() {
         // tag::quickstart[]
         Properties kafkaProperties = new Properties();
         kafkaProperties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092"); // <1>
@@ -103,6 +113,17 @@ public class FluentQuickstartApp {
                 });
         // end::quickstart[]
 
+        return pc;
+    }
+
+    /**
+     * Run the quickstart against your own broker by changing the bootstrap servers on the definition's first line.
+     * Nothing in the build calls this - the broker-free run starts the same definition through
+     * {@link #defineConsumer()}.
+     */
+    public static void main(String[] args) {
+        ParallelConsumerDefinition pc = defineConsumer();
+
         // tag::quickstartRun[]
         try (ParallelConsumerInstance instance = pc.start()) { // <1>
             instance.awaitShutdown(); // <2>
@@ -126,6 +147,33 @@ public class FluentQuickstartApp {
      * Stands in for your own inventory client. The quickstart never fails here, so the orders route shows the two
      * outcomes a healthy route reaches: succeeded, and filtered.
      */
+    /**
+     * One order for the sandbox to publish, addressed by the record's index.
+     * <p>
+     * <b>The sandbox knows how to pace and stop; it does not know what an order looks like.</b> That is this
+     * method - and it is the shape any application writes, because nothing but the application knows its own
+     * data. It is deliberately not random: one order in five is RETURNED, so the filtered outcome the README
+     * calls out happens on a schedule a reader can follow rather than when a dice roll says so.
+     */
+    static Order anOrder(long index) {
+        String status = index % 5 == 0 ? "RETURNED" : "IN_TRANSIT";
+        return new Order("order-" + index, "customer-" + index, CITIES[(int) (index % CITIES.length)],
+                1 + (int) (index % 3), status);
+    }
+
+    /**
+     * One parcel scan for the sandbox to publish. The scans route always fails and parks, so what a scan says
+     * matters only in the log line that reports the park.
+     */
+    static String aScan(long index) {
+        return "scan-" + index + " at " + CITIES[(int) (index % CITIES.length)];
+    }
+
+    /**
+     * A handful of destinations, so a run reads like a topic rather than like one city repeated.
+     */
+    private static final String[] CITIES = {"Leeds", "Bristol", "Glasgow", "Cardiff"};
+
     private static void reserveStock(Order order) {
         log.info("Reserving stock for order {} - {} parcel(s) to {}",
                 order.getOrderId(), order.getParcelCount(), order.getDestinationCity());
