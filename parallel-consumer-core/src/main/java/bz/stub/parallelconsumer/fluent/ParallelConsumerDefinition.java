@@ -354,7 +354,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @param percentage a percentage of the cap - {@code percentOf(70)} is seventy percent of it - at most
      *                   {@link AfterRetries#MAX_PAYLOAD_PERCENTAGE}
      */
-    public ParallelConsumerDefinition withDlqWhenOffsetPayloadReaches(Percent percentage) {
+    public ParallelConsumerDefinition withDlqAtOffsetPayload(Percent percentage) {
         this.instancePayloadPercentage = Objects.requireNonNull(percentage, "An export percentage must be supplied");
         return this;
     }
@@ -365,10 +365,10 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * here and now rather than being stored and explained later as something else.
      *
      * @param percentage a percentage of the cap out of a hundred, not a fraction of one
-     * @see #withDlqWhenOffsetPayloadReaches(Percent)
+     * @see #withDlqAtOffsetPayload(Percent)
      */
-    public ParallelConsumerDefinition withDlqWhenOffsetPayloadReaches(double percentage) {
-        return withDlqWhenOffsetPayloadReaches(Percent.percentOf(percentage));
+    public ParallelConsumerDefinition withDlqAtOffsetPayload(double percentage) {
+        return withDlqAtOffsetPayload(Percent.percentOf(percentage));
     }
 
     // ---------------------------------------------------------------- pre-built clients (Java binding only)

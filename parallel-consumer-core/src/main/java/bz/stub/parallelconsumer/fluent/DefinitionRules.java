@@ -349,10 +349,10 @@ final class DefinitionRules {
      * a value above the ceiling would never be reached even when they are.
      */
     private IllegalArgumentException refusedPercentage(Percent percentage, String topic) {
-        // Spelled per side rather than once: the same trigger is dlqWhenOffsetPayloadReaches on a route's park
-        // policy and withDlqWhenOffsetPayloadReaches on the definition, where every setting carries the prefix
-        // (KD16), and the message has to keep matching the method a user actually wrote.
-        String setting = topic == null ? "withDlqWhenOffsetPayloadReaches" : "dlqWhenOffsetPayloadReaches";
+        // Spelled per side rather than once: the same trigger is dlqAtOffsetPayload on a route's park policy and
+        // withDlqAtOffsetPayload on the definition, where every setting carries the prefix (KD16), and the message
+        // has to keep matching the method a user actually wrote.
+        String setting = topic == null ? "withDlqAtOffsetPayload" : "dlqAtOffsetPayload";
         String where = topic == null ? "the definition" : "topic " + topic;
         String ceiling = percentage.compareTo(AfterRetries.MAX_PAYLOAD_PERCENTAGE) > 0
                 ? msg(" It is also above the ceiling of {}: the engine stops a partition taking work at {} of the "

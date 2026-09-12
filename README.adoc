@@ -641,7 +641,7 @@ A store nobody can see is a leak, so the parked set is queryable per route from 
 The same figures are published through the <<metrics,metrics integration>>: outcome counts under the `routes` subsystem, tagged by topic and outcome, and the live parked count and oldest parked age under the `partitions` subsystem, tagged by topic and partition.
 
 *Copying a record to another topic is called `dlq` here, and it is a verb.*
-It is the relief valve for park rather than the first resort: `dlqTo` names the destination, `dlqWhenOffsetPayloadReaches` fires when a partition's offset-map payload reaches a percentage of Kafka's commit-metadata cap, written `percentOf(...)` so the unit is on the value rather than in the reader's head, `dlqOlderThan` fires before the topic's retention could delete a parked record, and `dlqImmediately` is the classic dead-letter queue -- export on the dispatch after exhaustion, with no park in between.
+It is the relief valve for park rather than the first resort: `dlqTo` names the destination, `dlqAtOffsetPayload` fires when a partition's offset-map payload reaches a percentage of Kafka's commit-metadata cap, written `percentOf(...)` so the unit is on the value rather than in the reader's head, `dlqOlderThan` fires before the topic's retention could delete a parked record, and `dlqImmediately` is the classic dead-letter queue -- export on the dispatch after exhaustion, with no park in between.
 
 Those four qualify a record that parks.
 `afterRetries(dlq("payments.dlq"))` is the reaction itself, beside `park()` and `stop()`: the record is copied out on the dispatch that exhausts it and never enters the parked set, so there is nothing left for a trigger to qualify and declaring one beside it is refused.

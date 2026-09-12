@@ -165,12 +165,12 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
     @Test
     void anyExplicitExportPercentageIsRefusedNamingTheSetting() {
         var pc = define();
-        pc.string("orders").afterRetries(park().dlqTo("orders.dlq").dlqWhenOffsetPayloadReaches(50))
+        pc.string("orders").afterRetries(park().dlqTo("orders.dlq").dlqAtOffsetPayload(50))
                 .process(context -> Outcome.succeeded());
 
         var thrown = refusal(pc);
 
-        assertThat(thrown).hasMessageThat().contains("dlqWhenOffsetPayloadReaches");
+        assertThat(thrown).hasMessageThat().contains("dlqAtOffsetPayload");
         assertThat(thrown).hasMessageThat().contains("orders");
         assertThat(thrown).hasMessageThat().contains("50%");
     }
@@ -182,12 +182,12 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
     @Test
     void anExportPercentageDeclaredAsATypeIsRefusedTheSameWay() {
         var pc = define();
-        pc.string("orders").afterRetries(park().dlqTo("orders.dlq").dlqWhenOffsetPayloadReaches(percentOf(50)))
+        pc.string("orders").afterRetries(park().dlqTo("orders.dlq").dlqAtOffsetPayload(percentOf(50)))
                 .process(context -> Outcome.succeeded());
 
         var thrown = refusal(pc);
 
-        assertThat(thrown).hasMessageThat().contains("dlqWhenOffsetPayloadReaches");
+        assertThat(thrown).hasMessageThat().contains("dlqAtOffsetPayload");
         assertThat(thrown).hasMessageThat().contains("50%");
     }
 
@@ -203,18 +203,18 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
         var route = pc.string("orders");
 
         assertThat(assertThrows(IllegalArgumentException.class,
-                () -> park().dlqTo("orders.dlq").dlqWhenOffsetPayloadReaches(-5)))
+                () -> park().dlqTo("orders.dlq").dlqAtOffsetPayload(-5)))
                 .hasMessageThat().contains("above zero");
         assertThat(assertThrows(IllegalArgumentException.class,
-                () -> park().dlqTo("orders.dlq").dlqWhenOffsetPayloadReaches(700)))
+                () -> park().dlqTo("orders.dlq").dlqAtOffsetPayload(700)))
                 .hasMessageThat().contains("above a hundred");
-        assertThat(assertThrows(IllegalArgumentException.class, () -> define().withDlqWhenOffsetPayloadReaches(0)))
+        assertThat(assertThrows(IllegalArgumentException.class, () -> define().withDlqAtOffsetPayload(0)))
                 .hasMessageThat().contains("above zero");
         assertThat(assertThrows(NullPointerException.class,
-                () -> define().withDlqWhenOffsetPayloadReaches((Percent) null)))
+                () -> define().withDlqAtOffsetPayload((Percent) null)))
                 .hasMessageThat().contains("percentage must be supplied");
         assertThat(assertThrows(NullPointerException.class,
-                () -> park().dlqTo("orders.dlq").dlqWhenOffsetPayloadReaches((Percent) null)))
+                () -> park().dlqTo("orders.dlq").dlqAtOffsetPayload((Percent) null)))
                 .hasMessageThat().contains("percentage must be supplied");
 
         // Completing the route proves the definition was a usable one all along: every refusal above fired at the
@@ -227,7 +227,7 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
     void anExportPercentageAboveTheCeilingAlsoNamesTheCeilingAndThePauseThreshold() {
         var pc = define();
         pc.string("orders").afterRetries(park().dlqTo("orders.dlq")
-                .dlqWhenOffsetPayloadReaches(AfterRetries.MAX_PAYLOAD_PERCENTAGE.percentage() + 1))
+                .dlqAtOffsetPayload(AfterRetries.MAX_PAYLOAD_PERCENTAGE.percentage() + 1))
                 .process(context -> Outcome.succeeded());
 
         var thrown = refusal(pc);
@@ -239,10 +239,10 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
 
     @Test
     void theInstanceWideExportPercentageIsRefusedNamingTheSetting() {
-        var pc = define().withDlqWhenOffsetPayloadReaches(60);
+        var pc = define().withDlqAtOffsetPayload(60);
         pc.string("orders").process(context -> Outcome.succeeded());
 
-        assertThat(refusal(pc)).hasMessageThat().contains("withDlqWhenOffsetPayloadReaches");
+        assertThat(refusal(pc)).hasMessageThat().contains("withDlqAtOffsetPayload");
     }
 
     /**

@@ -290,8 +290,8 @@ public final class AfterRetries {
      * @param percentage a percentage of the cap - {@code percentOf(70)} is seventy percent of it - at most
      *                   {@link #MAX_PAYLOAD_PERCENTAGE}, which is also what applies when none is declared
      */
-    public AfterRetries dlqWhenOffsetPayloadReaches(Percent percentage) {
-        requireParking("dlqWhenOffsetPayloadReaches");
+    public AfterRetries dlqAtOffsetPayload(Percent percentage) {
+        requireParking("dlqAtOffsetPayload");
         this.payloadPercentage = Objects.requireNonNull(percentage, "An export percentage must be supplied");
         return this;
     }
@@ -302,10 +302,10 @@ public final class AfterRetries {
      * here and now rather than being stored and explained later as something else.
      *
      * @param percentage a percentage of the cap out of a hundred, not a fraction of one
-     * @see #dlqWhenOffsetPayloadReaches(Percent)
+     * @see #dlqAtOffsetPayload(Percent)
      */
-    public AfterRetries dlqWhenOffsetPayloadReaches(double percentage) {
-        return dlqWhenOffsetPayloadReaches(percentOf(percentage));
+    public AfterRetries dlqAtOffsetPayload(double percentage) {
+        return dlqAtOffsetPayload(percentOf(percentage));
     }
 
     /**

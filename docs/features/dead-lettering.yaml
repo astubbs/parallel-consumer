@@ -39,7 +39,7 @@ setup:
       is the classic dead-letter queue one retry delay later; dlqImmediately(topic) is the same thing in one call.
     - dlqOlderThan(age) beside a destination to empty a parked record out before the source topic's retention could
       delete it.
-    - dlqWhenOffsetPayloadReaches(percentOf(...)) beside a destination to export the oldest parked records once a
+    - dlqAtOffsetPayload(percentOf(...)) beside a destination to export the oldest parked records once a
       partition's offset payload reaches that percentage of the commit-metadata cap - Percent carries the unit, which
       is a percentage out of a hundred and not a fraction of one, and the same setting takes a bare number for a
       caller who would rather write one.

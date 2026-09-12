@@ -39,7 +39,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * <pre>{@code
  * import static bz.stub.parallelconsumer.Percent.percentOf;
  *
- * definition.withDlqWhenOffsetPayloadReaches(percentOf(70));
+ * definition.withDlqAtOffsetPayload(percentOf(70));
  * }</pre>
  * A caller who does not want the ceremony passes the bare {@code double} that every setting taking one of these also
  * accepts, and the setting builds this on their behalf - so the refusals above hold whichever door was used.
@@ -79,7 +79,7 @@ public final class Percent implements Comparable<Percent> {
      * fraction spelling meant.
      * <p>
      * Written to read as a sentence at the call site under a static import, which is the form it is meant to be used
-     * in: {@code withDlqWhenOffsetPayloadReaches(percentOf(70))}.
+     * in: {@code withDlqAtOffsetPayload(percentOf(70))}.
      *
      * @param percentage the percentage out of a hundred - above zero, at most a hundred, and a real number
      * @throws IllegalArgumentException if that is not a percentage: not a finite number, zero or negative, or above
