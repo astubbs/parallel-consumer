@@ -3,10 +3,17 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 
-Open on the fluent API branch (PR astubbs#502, issue astubbs#504). It is a defect in a **published
-meter**, not only in a counter the tests read, which is why it is here and not only on the field: the
-increment sits beside a `meters.recordOutcome(..., OutcomeTag.SUCCEEDED)` that registers through the
-engine's `PCMetrics` into the user's own registry (R19, KTD8).
+<!-- post-merge: checked-begin -->
+Open against the fluent API's outcome counters, under issue astubbs#504; found by the independent
+cross-model review on astubbs#502, which asked for the produce path's counting to be driven from the
+engine. Both references stay resolvable once that pull request has merged, which is why they are named
+rather than described.
+<!-- post-merge: checked-end -->
+
+It is a defect in a **published meter**, not only in a counter the tests read, which is why it is here
+and not only on the field: the increment sits beside a
+`meters.recordOutcome(..., OutcomeTag.SUCCEEDED)` that registers through the engine's `PCMetrics` into
+the user's own registry (R19, KTD8).
 
 **This is a known defect class in this repository, already named**: state advanced at request time rather
 than at acknowledgement time -
