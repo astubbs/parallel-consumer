@@ -4,13 +4,15 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.Percent;
 import bz.stub.parallelconsumer.state.PartitionStateManager;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Duration;
 import java.util.Objects;
-import java.util.OptionalInt;
+import java.util.Optional;
 
+import static bz.stub.parallelconsumer.Percent.percentOf;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
@@ -36,17 +38,29 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 public final class AfterRetries {
 
     /**
+     * The engine's own pause threshold as a percentage: where a partition stops taking work, which is the quantity
+     * the ceiling below is measured down from. Read off
+     * {@link PartitionStateManager#USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT} rather than written down again, so a
+     * change to the threshold moves the ceiling with it.
+     */
+    public static final Percent PAUSE_THRESHOLD_PERCENTAGE =
+            percentOf(PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT * 100);
+
+    /**
      * The highest export percentage a definition may declare, and the default.
      * <p>
-     * The engine stops a partition taking work at
-     * {@link PartitionStateManager#USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT} of the commit-metadata cap, so a
-     * percentage at or above that is never reached and would read as a setting that silently does nothing. Five
-     * points below it is the margin the owner chose, which lands on seventy today. Both numbers are provisional on
-     * the current encoding: exact continuous offset encoding (astubbs#237,
-     * confluentinc#53) makes the payload size precise and they are revisited when it lands.
+     * The engine stops a partition taking work at {@link #PAUSE_THRESHOLD_PERCENTAGE} of the commit-metadata cap, so
+     * a percentage at or above that is never reached and would read as a setting that silently does nothing. Five
+     * points below it is the margin the owner chose. Both numbers are provisional on the current encoding: exact
+     * continuous offset encoding (astubbs#237, confluentinc#53) makes the payload size precise and they are
+     * revisited when it lands.
+     * <p>
+     * It is a {@link Percent} rather than a bare number for the same reason the setting it bounds takes one: the
+     * ceiling is the same kind of quantity as the value it is compared against, and a bare number here would put
+     * the unit back in the reader's head.
      */
-    public static final int MAX_PAYLOAD_PERCENTAGE =
-            (int) (PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT * 100) - 5;
+    public static final Percent MAX_PAYLOAD_PERCENTAGE =
+            percentOf(PAUSE_THRESHOLD_PERCENTAGE.percentage() - 5);
 
     /**
      * Which of the three reactions this policy asks for. They answer three different questions: park is about
@@ -101,10 +115,11 @@ public final class AfterRetries {
     private Duration olderThan;
 
     /**
-     * The third export trigger, boxed so that "not declared" stays distinguishable from a declared value - a
-     * distinction {@link #payloadPercentage()} hands on as an {@link OptionalInt} rather than as a sentinel.
+     * The third export trigger. Null when not declared, which stays distinguishable from a declared value - a
+     * distinction {@link #payloadPercentage()} hands on as an {@link Optional} rather than as a sentinel. Held as a
+     * {@link Percent} so the value carries its unit from the call site all the way to the refusal that quotes it.
      */
-    private Integer payloadPercentage;
+    private Percent payloadPercentage;
 
     /**
      * How long each park cycle waits before the next attempt. Null when none was declared. It is declared together
@@ -265,19 +280,32 @@ public final class AfterRetries {
     }
 
     /**
-     * Export the oldest parked records on a partition once its offset-map payload reaches this whole percentage of
-     * Kafka's commit-metadata cap, until the payload is back below it (R27).
+     * Export the oldest parked records on a partition once its offset-map payload reaches this percentage of Kafka's
+     * commit-metadata cap, until the payload is back below it (R27).
      * <p>
      * Declaring one is refused in this version: the engine has no accessor for a partition's encoded payload length,
      * so the trigger would never fire (KTD5). The value is still recorded here rather than rejected on the spot, so
-     * that the definition's refusal can quote the number that was asked for.
+     * that the definition's refusal can quote the percentage that was asked for.
      *
-     * @param percentage a whole percentage, at most {@link #MAX_PAYLOAD_PERCENTAGE}
+     * @param percentage a percentage of the cap - {@code percentOf(70)} is seventy percent of it - at most
+     *                   {@link #MAX_PAYLOAD_PERCENTAGE}, which is also what applies when none is declared
      */
-    public AfterRetries dlqWhenOffsetPayloadReaches(int percentage) {
+    public AfterRetries dlqWhenOffsetPayloadReaches(Percent percentage) {
         requireParking("dlqWhenOffsetPayloadReaches");
-        this.payloadPercentage = percentage;
+        this.payloadPercentage = Objects.requireNonNull(percentage, "An export percentage must be supplied");
         return this;
+    }
+
+    /**
+     * The same trigger for a caller who would rather write the number than the type: {@code 70} is seventy percent
+     * of the cap, the unit {@link Percent} spells out. It builds one, so a value that is not a percentage is refused
+     * here and now rather than being stored and explained later as something else.
+     *
+     * @param percentage a percentage of the cap out of a hundred, not a fraction of one
+     * @see #dlqWhenOffsetPayloadReaches(Percent)
+     */
+    public AfterRetries dlqWhenOffsetPayloadReaches(double percentage) {
+        return dlqWhenOffsetPayloadReaches(percentOf(percentage));
     }
 
     /**
@@ -379,8 +407,8 @@ public final class AfterRetries {
      *
      * @return the declared percentage, or empty when none was declared and the instance default applies
      */
-    public OptionalInt payloadPercentage() {
-        return payloadPercentage == null ? OptionalInt.empty() : OptionalInt.of(payloadPercentage);
+    public Optional<Percent> payloadPercentage() {
+        return Optional.ofNullable(payloadPercentage);
     }
 
     /**

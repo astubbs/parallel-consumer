@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.fluent;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.Percent;
 import bz.stub.parallelconsumer.state.PartitionStateManager;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -63,7 +64,7 @@ final class DefinitionRules {
      * The instance-wide export percentage as declared, or null when nothing declared one. Held only to be refused
      * by name: the trigger it would drive reads an engine accessor that does not exist yet (KTD5).
      */
-    private final Integer instancePayloadPercentage;
+    private final Percent instancePayloadPercentage;
 
     /**
      * Whether the caller supplied a finished producer, which is what excuses a transactional definition from
@@ -76,7 +77,7 @@ final class DefinitionRules {
                     ConnectionProperties connection,
                     CommitMode commitMode,
                     InstanceDefaults defaults,
-                    Integer instancePayloadPercentage,
+                    Percent instancePayloadPercentage,
                     boolean preBuiltProducerSupplied) {
         this.routes = routes;
         this.routesByTopic = routesByTopic;
@@ -224,7 +225,7 @@ final class DefinitionRules {
             String topic = route.describeTopics();
             refuseHalfAParkCycle(policy, topic);
             if (policy.payloadPercentage().isPresent()) {
-                throw refusedPercentage(policy.payloadPercentage().getAsInt(), topic);
+                throw refusedPercentage(policy.payloadPercentage().get(), topic);
             }
             if (policy.destination() == null) {
                 if (policy.isDlqImmediately()) {
@@ -347,17 +348,17 @@ final class DefinitionRules {
      * One refusal covering both halves of R27's rule: no explicit percentage is accepted in this version at all, and
      * a value above the ceiling would never be reached even when they are.
      */
-    private IllegalArgumentException refusedPercentage(int percentage, String topic) {
+    private IllegalArgumentException refusedPercentage(Percent percentage, String topic) {
         // Spelled per side rather than once: the same trigger is dlqWhenOffsetPayloadReaches on a route's park
         // policy and withDlqWhenOffsetPayloadReaches on the definition, where every setting carries the prefix
         // (KD16), and the message has to keep matching the method a user actually wrote.
         String setting = topic == null ? "withDlqWhenOffsetPayloadReaches" : "dlqWhenOffsetPayloadReaches";
         String where = topic == null ? "the definition" : "topic " + topic;
-        String ceiling = percentage > AfterRetries.MAX_PAYLOAD_PERCENTAGE
-                ? msg(" It is also above the ceiling of {}: the engine stops a partition taking work at {}% of the "
+        String ceiling = percentage.compareTo(AfterRetries.MAX_PAYLOAD_PERCENTAGE) > 0
+                ? msg(" It is also above the ceiling of {}: the engine stops a partition taking work at {} of the "
                         + "commit-metadata cap, so a percentage at or near that is never reached.",
                 AfterRetries.MAX_PAYLOAD_PERCENTAGE,
-                (int) (PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT * 100))
+                AfterRetries.PAUSE_THRESHOLD_PERCENTAGE)
                 : "";
         return new IllegalArgumentException(msg("{} ({}) on {} is not supported in this version: the trigger reads a "
                         + "partition's encoded payload length, and the engine has no accessor for it yet, so an "

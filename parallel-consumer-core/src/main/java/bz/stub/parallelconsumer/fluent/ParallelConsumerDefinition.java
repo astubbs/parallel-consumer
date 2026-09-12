@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.Percent;
 import bz.stub.parallelconsumer.internal.PCModule;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -128,7 +129,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * it would drive reads an engine accessor that does not exist yet (KTD5). Boxed so that null means nothing was
      * declared - a zero would be a value somebody typed.
      */
-    private Integer instancePayloadPercentage;
+    private Percent instancePayloadPercentage;
 
     /**
      * Whether the caller supplied a finished consumer, so that start does not ask the runtime for one. A flag
@@ -349,10 +350,25 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * a partition's encoded payload length - does not exist in the engine yet, so an explicit percentage would be a
      * setting that never fires (KTD5). The default of {@link AfterRetries#MAX_PAYLOAD_PERCENTAGE} applies once that
      * accessor lands.
+     *
+     * @param percentage a percentage of the cap - {@code percentOf(70)} is seventy percent of it - at most
+     *                   {@link AfterRetries#MAX_PAYLOAD_PERCENTAGE}
      */
-    public ParallelConsumerDefinition withDlqWhenOffsetPayloadReaches(int percentage) {
-        this.instancePayloadPercentage = percentage;
+    public ParallelConsumerDefinition withDlqWhenOffsetPayloadReaches(Percent percentage) {
+        this.instancePayloadPercentage = Objects.requireNonNull(percentage, "An export percentage must be supplied");
         return this;
+    }
+
+    /**
+     * The same setting for a caller who would rather write the number than the type: {@code 70} is seventy percent of
+     * the cap, the unit {@link Percent} spells out. It builds one, so a value that is not a percentage is refused
+     * here and now rather than being stored and explained later as something else.
+     *
+     * @param percentage a percentage of the cap out of a hundred, not a fraction of one
+     * @see #withDlqWhenOffsetPayloadReaches(Percent)
+     */
+    public ParallelConsumerDefinition withDlqWhenOffsetPayloadReaches(double percentage) {
+        return withDlqWhenOffsetPayloadReaches(Percent.percentOf(percentage));
     }
 
     // ---------------------------------------------------------------- pre-built clients (Java binding only)

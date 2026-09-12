@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.fluent;
 import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.Percent;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import java.util.Arrays;
 import java.util.Properties;
 import java.util.regex.Pattern;
 
+import static bz.stub.parallelconsumer.Percent.percentOf;
 import static bz.stub.parallelconsumer.fluent.AfterRetries.dlqImmediately;
 import static bz.stub.parallelconsumer.fluent.AfterRetries.park;
 import static com.google.common.truth.Truth.assertThat;
@@ -170,21 +172,69 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
 
         assertThat(thrown).hasMessageThat().contains("dlqWhenOffsetPayloadReaches");
         assertThat(thrown).hasMessageThat().contains("orders");
-        assertThat(thrown).hasMessageThat().contains("50");
+        assertThat(thrown).hasMessageThat().contains("50%");
+    }
+
+    /**
+     * The same refusal through the other door: a percentage declared as a {@link Percent} reaches validation the
+     * same way the bare number does, and is quoted back with its unit either way.
+     */
+    @Test
+    void anExportPercentageDeclaredAsATypeIsRefusedTheSameWay() {
+        var pc = define();
+        pc.string("orders").afterRetries(park().dlqTo("orders.dlq").dlqWhenOffsetPayloadReaches(percentOf(50)))
+                .process(context -> Outcome.succeeded());
+
+        var thrown = refusal(pc);
+
+        assertThat(thrown).hasMessageThat().contains("dlqWhenOffsetPayloadReaches");
+        assertThat(thrown).hasMessageThat().contains("50%");
+    }
+
+    /**
+     * What is not a percentage is refused where it is written, not carried as far as validation: the type is
+     * constructed on the spot by the plain-number overload, so both doors refuse at the call. The distinction
+     * matters because validation's own refusal explains a percentage as unsupported in this version, which would be
+     * the wrong sentence for a number that was never a percentage.
+     */
+    @Test
+    void whatIsNotAPercentageIsRefusedAtTheCallRatherThanAtValidation() {
+        var pc = define();
+        var route = pc.string("orders");
+
+        assertThat(assertThrows(IllegalArgumentException.class,
+                () -> park().dlqTo("orders.dlq").dlqWhenOffsetPayloadReaches(-5)))
+                .hasMessageThat().contains("above zero");
+        assertThat(assertThrows(IllegalArgumentException.class,
+                () -> park().dlqTo("orders.dlq").dlqWhenOffsetPayloadReaches(700)))
+                .hasMessageThat().contains("above a hundred");
+        assertThat(assertThrows(IllegalArgumentException.class, () -> define().withDlqWhenOffsetPayloadReaches(0)))
+                .hasMessageThat().contains("above zero");
+        assertThat(assertThrows(NullPointerException.class,
+                () -> define().withDlqWhenOffsetPayloadReaches((Percent) null)))
+                .hasMessageThat().contains("percentage must be supplied");
+        assertThat(assertThrows(NullPointerException.class,
+                () -> park().dlqTo("orders.dlq").dlqWhenOffsetPayloadReaches((Percent) null)))
+                .hasMessageThat().contains("percentage must be supplied");
+
+        // Completing the route proves the definition was a usable one all along: every refusal above fired at the
+        // call that wrote the percentage, with nothing having been built.
+        route.process(context -> Outcome.succeeded());
+        assertThat(runtime.builtNothing()).isTrue();
     }
 
     @Test
     void anExportPercentageAboveTheCeilingAlsoNamesTheCeilingAndThePauseThreshold() {
         var pc = define();
         pc.string("orders").afterRetries(park().dlqTo("orders.dlq")
-                .dlqWhenOffsetPayloadReaches(AfterRetries.MAX_PAYLOAD_PERCENTAGE + 1))
+                .dlqWhenOffsetPayloadReaches(AfterRetries.MAX_PAYLOAD_PERCENTAGE.percentage() + 1))
                 .process(context -> Outcome.succeeded());
 
         var thrown = refusal(pc);
 
         assertThat(thrown).hasMessageThat().contains("ceiling");
-        assertThat(thrown).hasMessageThat().contains(String.valueOf(AfterRetries.MAX_PAYLOAD_PERCENTAGE));
-        assertThat(thrown).hasMessageThat().contains("75");
+        assertThat(thrown).hasMessageThat().contains(AfterRetries.MAX_PAYLOAD_PERCENTAGE.toString());
+        assertThat(thrown).hasMessageThat().contains(AfterRetries.PAUSE_THRESHOLD_PERCENTAGE.toString());
     }
 
     @Test
@@ -201,7 +251,8 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
      */
     @Test
     void theCeilingIsFivePointsBelowTheEnginesPauseThreshold() {
-        assertThat(AfterRetries.MAX_PAYLOAD_PERCENTAGE).isEqualTo(70);
+        assertThat(AfterRetries.PAUSE_THRESHOLD_PERCENTAGE).isEqualTo(percentOf(75));
+        assertThat(AfterRetries.MAX_PAYLOAD_PERCENTAGE).isEqualTo(percentOf(70));
     }
 
     @Test
