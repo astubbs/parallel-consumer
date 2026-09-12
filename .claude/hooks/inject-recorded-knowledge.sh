@@ -73,7 +73,7 @@
 #
 # Never fails a session: any error prints nothing and exits 0. A broken reminder must not be a
 # broken session. When the command cannot run - no `node` on PATH, or the corpus cannot be read -
-# the framing is printed with ONE line saying the three areas are missing and how to get them, and
+# the framing is printed with ONE line saying the corpus areas are missing and how to get them, and
 # the non-corpus sections follow; the old bash scan is never fallen back to, because a partial
 # index that reads as complete is the failure this hook exists to end.
 

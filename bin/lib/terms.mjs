@@ -12,7 +12,8 @@
 // twice over.
 //
 // FIXED STRINGS, NOT AN ALTERNATION. The plan wrote `-E <a|b|c>`; measured 2026-09-03 on this
-// repository (559 live refs, three areas), `git grep -i -E 'commit_lock|inflight\.mjs'` costs
+// repository, as it stood then - 559 live refs, and three corpus areas rather than today's -
+// `git grep -i -E 'commit_lock|inflight\.mjs'` costs
 // 2.6 s and three alternated terms 3.6 s, while `-F -e commit_lock -e inflight.mjs` costs
 // 440 ms and three fixed terms 490 ms - the same 14,596 hit lines either way. An alternation
 // drops git's regex engine out of its fast path; a list of fixed strings does not, and a term

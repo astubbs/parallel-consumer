@@ -1518,7 +1518,7 @@ printf -- '---\ntitle: "s"\n---\n' > "$nc_tmp/docs/solutions/x/s.md"
 printf '# A well-tagged bug\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: misdirection -->\n' > "$nc_tmp/docs/inflight/bug-well-tagged.md"
 knowledge_commit "$nc_tmp" "fixture"
 
-# NO `node` ON PATH: the framing and the non-corpus sections, one line saying the three areas are
+# NO `node` ON PATH: the framing and the non-corpus sections, one line saying the corpus areas are
 # missing and how to get them, exit 0 - and never the old bash scan, which is what a partial index
 # that reads as complete would be. A PATH holding everything the hook uses EXCEPT node - `dirname`
 # included, which is a binary on both platforms and resolves the hook's own directory.

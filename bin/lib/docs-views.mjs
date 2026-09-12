@@ -358,7 +358,7 @@ export function formatDocsList(shape, { area = null, group = null } = {}) {
     return [...out, '', scopeLine(shape)].join('\n')
 }
 
-// --- The session index - `docs index`, what the session-start hook injects for the three areas. --
+// --- The session index - `docs index`, what the session-start hook injects for every area. ------
 //
 // THE HEADINGS ARE THE ONES THE BASH HOOK PRINTED, VERBATIM. The index moved here from
 // .claude/hooks/inject-recorded-knowledge.sh (the plan's KTD8), and an agent that learned to

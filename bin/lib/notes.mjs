@@ -59,7 +59,7 @@ import {
 export { NOTES_DIR }
 
 /**
- * The deepest directory every area lives under - `docs` for the three default areas, the area
+ * The deepest directory every area lives under - `docs` for the default areas, the area
  * itself when there is one, `''` (the root tree) when they share nothing. Segment-wise, so
  * `docs/plans` and `docs/planning` do not share a `docs/plan` that exists nowhere.
  */
@@ -129,8 +129,8 @@ export function corpusIndex({ areas = DOC_AREAS } = {}) {
     // measurement is in this function's header comment, with the command that reproduces it.
     //
     // THE TREE RESOLVED IS THE AREAS' COMMON PARENT, not each area's own tree, so the whole index
-    // stays one batch-check and one ls-tree per distinct tree whatever the width: three areas under
-    // `docs/` resolve `docs` and scope the listing to `plans solutions inflight`; the notes area
+    // stays one batch-check and one ls-tree per distinct tree whatever the width: the areas under
+    // `docs/` resolve `docs` and scope the listing to their own names; the notes area
     // alone resolves `docs/inflight` itself, which dedupes even harder because a branch editing
     // only a plan still shares the baseline's notes tree. Paths come back relative to that tree
     // and are re-prefixed, which is what keeps the rows identical to a per-ref `ls-tree`.

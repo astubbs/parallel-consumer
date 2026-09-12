@@ -197,7 +197,7 @@ const rankLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'rank.mjs')
 const vetLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'vet.mjs')).href)
 const repoLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'repo.mjs')).href)
 
-/** The notes-area corpus index, the way the `rank` row builds it - notes only, never all three areas. */
+/** The notes-area corpus index, the way the `rank` row builds it - notes only, never the whole corpus. */
 async function rankCorpus(binDir) {
     const { corpusIndex } = await notes(binDir)
     const { DOC_AREAS, NOTES_DIR } = await repoLib(binDir)
