@@ -32,12 +32,22 @@ export function windowRepo() {
 }
 
 /**
- * A CORPUS THAT SPANS THE THREE DOCS AREAS, holding every state the divergence header reports.
+ * A CORPUS THAT SPANS EVERY DOCS AREA, holding every state the divergence header reports.
  *
- *   master            docs/inflight/note.md, docs/solutions/ci/sol.md, docs/plans/2026-01-01-001-plan.md
+ *   master            docs/inflight/note.md, docs/solutions/ci/sol.md, docs/plans/2026-01-01-001-plan.md,
+ *                     and the feature records below
+ *   master            docs/features/batching.yaml and pause.yaml - published records in two
+ *                     categories; docs/features/no-title.yaml - a record whose `title:` key is
+ *                     MISSING, which the title chain must report rather than paper over with the
+ *                     filename; docs/features/staging/planned-thing.yaml - a staged record which
+ *                     DECLARES ITSELF PUBLISHED, so both readers of that fact - the group and the
+ *                     line's tail - have to agree that the directory wins
  *   adds-heading      note.md plus a new `## ...` section - a divergent version that ADDED A HEADING
  *   adds-line         note.md plus one plain line - a divergent version that added NO heading
- *   only-here         docs/inflight/branch-only.md, which master has never had
+ *   only-here         docs/inflight/branch-only.md and docs/features/branch-only-capability.yaml,
+ *                     which master has never had - THE CASE THE WORKING TREE CANNOT ANSWER: a
+ *                     session on master grepping for that capability finds nothing and concludes
+ *                     nobody has specified it
  *   tag preserved/parked
  *                     note.md with content no live ref carries - its branch was deleted after
  *                     tagging, which is how this repository parks work before a re-cut
@@ -50,6 +60,18 @@ export function windowRepo() {
  * Returns the repository with `master` checked out and the `only-here` note absent from the working
  * tree; a caller that needs that note on disk adds a worktree for its branch.
  */
+/**
+ * One feature record in the shape `docs/features/README.md` specifies - the keys the corpus reads
+ * (`title`, `category`, `availability.status`) around the copyright comment every record carries.
+ * `title` omitted writes a record that HAS none, which is a state the tool must report rather than
+ * hide, so it is spelt as an absent key here rather than an empty string.
+ */
+export function feature({ title = null, category, status }) {
+    return ['# Copyright (C) 2026 Antony Stubbs and contributors', '', 'schema_version: 1', 'kind: feature',
+        ...(title === null ? [] : [`title: ${title}`]), `category: ${category}`, 'module: parallel-consumer-core',
+        'availability:', `  status: ${status}`, 'summary: what it does, in one line.', ''].join('\n')
+}
+
 export function buildDocsFixture() {
     const { dir, git, commit } = windowRepo()
     const write = (rel, body) => {
@@ -60,6 +82,16 @@ export function buildDocsFixture() {
     write('docs/inflight/note.md', NOTE)
     write('docs/solutions/ci/sol.md', '# A solved problem\n\nfixed\n')
     write('docs/plans/2026-01-01-001-plan.md', '# A plan\n\nsteps\n')
+    // EVERY RECORD OPENS WITH THE COPYRIGHT COMMENT the real ones carry, because that line is what
+    // makes a markdown title rule answer confidently and wrongly for this whole area.
+    write('docs/features/batching.yaml', feature({ title: 'Batch processing', category: 'processing', status: 'published' }))
+    write('docs/features/pause.yaml', feature({ title: 'Pause and resume', category: 'operability', status: 'published' }))
+    write('docs/features/no-title.yaml', feature({ category: 'processing', status: 'published' }))
+    // DECLARES `published` ON PURPOSE, and that is the whole point of it: a staged record whose own
+    // status contradicts the directory it sits in is the shape the index rendered as `_published_`
+    // under a heading saying "not settled in the tree yet". A staged record that agreed with its
+    // directory could not have caught it, and the live corpus holds one that does not agree.
+    write('docs/features/staging/planned-thing.yaml', feature({ title: 'A capability not settled yet', category: 'integration', status: 'published' }))
     commit('the corpus')
 
     git('checkout', '-q', '-b', 'adds-heading')
@@ -72,7 +104,8 @@ export function buildDocsFixture() {
 
     git('checkout', '-q', '-b', 'only-here', 'master')
     write('docs/inflight/branch-only.md', '# Only here\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nz\n')
-    commit('a note master never had')
+    write('docs/features/branch-only-capability.yaml', feature({ title: 'A capability only this branch records', category: 'operability', status: 'planned' }))
+    commit('a note and a feature record master never had')
 
     git('checkout', '-q', '-b', 'to-tag', 'master')
     write('docs/inflight/note.md', `${NOTE}parked before a re-cut\n`)

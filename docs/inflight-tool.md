@@ -34,6 +34,14 @@ tool exists for, caught on its own pull request.
 **`--headings` is why this is readable.** The same term unscoped returns thousands of body-text hits;
 scoped to headings it returns what documents are *about*. Reach for it first on a broad term.
 
+**What "a heading" means is the AREA's answer, not one pattern for the whole corpus.** For a prose
+area it is the markdown headings. For `docs/features/`, whose records are data, it is every line the
+record declares - a record has no prose body for the flag to strip, and its only non-declaration is
+the copyright comment. The area table in `bin/lib/repo.mjs` carries the rule and
+`bin/lib/doc-kind.mjs` owns the patterns. **An area that declares no such distinction is named as
+NOT SEARCHED rather than reported as empty** - the two must never read alike, which is the whole
+point of the tool.
+
 ## Before editing a note several branches share
 
 ```
@@ -54,14 +62,22 @@ Reporting them would bury the two dozen that actually differ.
 node bin/inflight.mjs docs
 ```
 
-The map. Each of the three areas with how many documents it holds across every ref and how many of
+The map. Each area with how many documents it holds across every ref and how many of
 those exist *only* off the baseline; under each area its groups with the same two counts; then the
 `docs` subcommands with the sentence that says when to reach for each; then a notice for any
 delivery of the context query that has a recorded failure; then the ref set it searched. The groups
 are the ones the session-start index already uses, so nothing here needs learning twice: solutions
 by category directory, in-flight notes by the cost-of-not-knowing order (registers first, then open
 work by impact, then features with no consequence attached, then whatever no group claimed, then
-closed, then deferred last), plans by year-month, newest first.
+closed, then deferred last), plans by year-month, newest first, and capability records by the
+`category:` each one declares, with staged records last.
+
+**`docs/features/` is an area like any other, and its records are YAML rather than prose.** A
+record's title is its `title:` key - never the `# Copyright ...` comment it opens with - and a
+record carrying no `title:` is listed as saying so, because a schema that has moved on must not
+render as a tidy list of filenames. A record under `docs/features/staging/` is grouped as staged
+whatever category it declares: that directory holds records the tree contradicts, and one filed
+beside the published records is one that will be read as shipped.
 
 ```
 In-flight state  docs/inflight/  <n> documents, <n> only off the baseline    bin/inflight.mjs docs list inflight
@@ -116,8 +132,8 @@ whether that copy is the baseline's, your branch's own edit, or one of the two d
 incident the divergence header exists for - a session edited a stale copy of a note and every
 working-tree read answered for that copy without saying so.
 
-The read-time hook prints one line about this whenever a file under `docs/inflight/`,
-`docs/solutions/` or `docs/plans/` is read - and on a shallow or never-fetched clone that line
+The read-time hook prints one line about this whenever a file under any corpus area -
+`docs/inflight/`, `docs/solutions/`, `docs/plans/` or `docs/features/` - is read - and on a shallow or never-fetched clone that line
 opens with `UNRELIABLE (<id> - run: <remedy>):`, because the count is computed against a
 truncated history; the prompt hook's count line carries the same prefix, and `docs show` prints
 the same warning in full inside its header. `docs show` is the same query at full size, and the
@@ -159,7 +175,8 @@ serving it as the document would present history as the live copy. The header na
 
 **An empty answer says what it covered.** A path on no ref prints the ref set it searched - size, and
 the live-versus-archival split - because "on none of 614 refs" is a result and a blank line is not. A
-path outside the three corpus areas says so and claims nothing, since the query is not defined there.
+path outside the corpus areas says so, naming them, and claims nothing - the query is not defined
+there.
 
 ```
 node bin/inflight.mjs docs header docs/inflight/bug-857-family.md
@@ -176,12 +193,15 @@ node bin/inflight.mjs docs index
 ```
 
 What `.claude/hooks/inject-recorded-knowledge.sh` puts in front of every Claude Code session for
-`docs/solutions/`, `docs/inflight/` and `docs/plans/` - the whole title list, corpus-scoped. On a
+every corpus area - `docs/solutions/`, `docs/inflight/`, `docs/plans/` and `docs/features/` - the
+whole title list, corpus-scoped. On a
 host without hooks this is the pull form; with hooks it is the refresh. The on-baseline part keeps
 the headings the hook has always printed, so a grep an agent learned still works (`grep '^## crash'`,
 `sed -n '/^# Open work/,/^# /p'`): solutions under `## <category>`, in-flight notes under
 `# Registers`, `# Open work` by impact, `# Not shown above` and `# Deferred`, plans under
-`# Dated plans and investigations` by month. The off-baseline part is new, and it is grouped by
+`# Dated plans and investigations` by month, capability records under `# What the product does`
+by category. Each area gets an equal share of the off-baseline cap, so adding an area re-divides
+what the branch-only half may spend rather than growing the page. The off-baseline part is new, and it is grouped by
 the **branch set** carrying the documents, as `stranded` clusters them:
 
 ```

@@ -55,6 +55,17 @@ export const HEADER_TOP = 3
 const ADDS_SHOWN = 5
 
 /**
+ * How many added CONTENT lines the same line names, when there were no headings to name.
+ *
+ * Fewer than the headings, because they are not the same kind of thing. A heading is a few words by
+ * construction; a content line is prose, and in a record it is a folded-scalar line that can run the
+ * width of the file. Deliberately NOT truncated to compensate: the whole point of showing more than
+ * one is that two versions get different evidence, and clipping them to a common width is a way to
+ * hand two different versions the same string again.
+ */
+const CONTENT_SHOWN = 3
+
+/**
  * THE ONE-LINE FORM OF A WARNING THAT VOIDS THE ANSWER, for the renderers with no room for the
  * full text: the summary tier of the header and a match block's count line. A shallow or
  * never-fetched clone truncates the history the divergent set is computed against, so the count
@@ -117,11 +128,24 @@ export function formatDivergenceHeader(d, { tier = 'summary', top = HEADER_TOP, 
         out.push(`    ${sizeText.padEnd(14)} ${named.join(', ')}${more > 0 ? ` and ${plural(more, 'more ref')}` : ''}`)
         if (c.preview) {
             const headings = c.preview.headings
+            // WHAT THE EVIDENCE IS AGAINST, said out loud whenever it is not the merge-base. A
+            // version the merge-base has never held is compared with a sibling version instead,
+            // because "what the whole file contains" is the same sentence for every version of it -
+            // and a reader choosing between versions cannot act on evidence whose baseline is unstated.
+            const adds = c.preview.againstRef ? `has, and ${c.preview.againstRef} does not` : 'adds'
+            const named = (xs, cap) => `${xs.slice(0, cap).map((h) => `"${h}"`).join(', ')}`
+                + `${xs.length > cap ? ` and ${xs.length - cap} more` : ''}`
+            const content = c.preview.contentLines ?? []
             if (headings.length > 0) {
-                const named = headings.slice(0, ADDS_SHOWN).map((h) => `"${h}"`).join(', ')
-                const rest = headings.length - ADDS_SHOWN
-                out.push(`        adds: ${named}${rest > 0 ? ` and ${rest} more` : ''}`)
-            } else if (c.preview.firstLine !== null) out.push(`        adds: "${c.preview.firstLine}" (no heading added)`)
+                out.push(`        ${adds}: ${named(headings, ADDS_SHOWN)}`)
+            // The word follows the document kind: a YAML record has keys where prose has headings,
+            // and "no heading added" about a file that cannot hold one is a sentence a reader has
+            // to decode before discarding.
+            } else if (content.length > 0) {
+                out.push(`        ${adds}: ${named(content, CONTENT_SHOWN)} (no ${c.preview.kind === 'record' ? 'key' : 'heading'} added)`)
+            // A version wholly contained in the one it was compared with is a real finding, and a
+            // different one from "the diff could not be read" - which renders as no line at all.
+            } else if (c.preview.againstRef) out.push(`        nothing ${c.preview.againstRef}'s version does not already have`)
             else out.push('        adds: nothing visible in a line diff')
         }
     }
@@ -255,6 +279,42 @@ const areaBlock = (area, { allGroups = false } = {}) => {
 }
 
 /**
+ * MAX-MIN FAIR SHARES of `total` lines over areas wanting `needs[i]` each: every area that wants no
+ * more than an equal share gets all of it, and what it leaves is re-divided among the rest, until
+ * either everyone is satisfied or the remainder splits evenly between those who are not.
+ *
+ * AN EQUAL SPLIT WAS WRONG IN A WAY THAT ONLY SHOWED WHEN AN AREA WAS ADDED. Each area took
+ * `maxLines / areas.length` and rolled what it did not spend to the NEXT area, so a surplus could
+ * only ever flow forwards - and the area that reliably has one is the newest, which is appended and
+ * therefore last. Adding the capability area narrowed every share and then wasted its own on nobody,
+ * which is how a pre-existing area that had always listed every one of its branch-only documents
+ * began omitting some. Fair shares are order-independent, so no area's position decides whether its
+ * documents are printed.
+ *
+ * @param {number[]} needs lines each area would print, in order
+ * @param {number} total the cap
+ * @returns {number[]} lines allocated to each, summing to at most `total`
+ */
+export function fairShares(needs, total) {
+    const out = needs.map(() => 0)
+    let open = needs.map((_, i) => i)
+    let remaining = total
+    while (open.length > 0 && remaining > 0) {
+        const share = Math.floor(remaining / open.length)
+        if (share <= 0) break
+        const satisfiable = open.filter((i) => needs[i] <= share)
+        if (satisfiable.length === 0) {
+            // Nobody fits: the remainder splits evenly, which is where an equal split started.
+            for (const i of open) out[i] = share
+            break
+        }
+        for (const i of satisfiable) { out[i] = needs[i]; remaining -= needs[i] }
+        open = open.filter((i) => needs[i] > share)
+    }
+    return out
+}
+
+/**
  * @param {object} shape from `docsShape()`
  * @param {{warnings?: object[], failures?: Record<string, {reason: string, time: string}>,
  *          commands?: {path: string, summary: string, when: string}[]}} opts
@@ -334,7 +394,7 @@ export function formatDocsList(shape, { area = null, group = null } = {}) {
     return [...out, '', scopeLine(shape)].join('\n')
 }
 
-// --- The session index - `docs index`, what the session-start hook injects for the three areas. --
+// --- The session index - `docs index`, what the session-start hook injects for every area. ------
 //
 // THE HEADINGS ARE THE ONES THE BASH HOOK PRINTED, VERBATIM. The index moved here from
 // .claude/hooks/inject-recorded-knowledge.sh (the plan's KTD8), and an agent that learned to
@@ -358,8 +418,34 @@ export function formatDocsList(shape, { area = null, group = null } = {}) {
 
 const INDEX_TOOL_MORE = `${TOOL} docs`
 
-/** The hook's area order, which is not `DOC_AREAS`'s: solved first, then work, then the plans. */
-const INDEX_AREA_ORDER = ['solutions', 'inflight', 'plans']
+/**
+ * The hook's area order, which is not `DOC_AREAS`'s: solved first, then work, then the plans, then
+ * what the product does. Features last because it is the only area that is not a record of somebody
+ * working - a session reads it to find out whether a capability already exists, which is a question
+ * asked less often than "has this been solved" but is the one a wrong answer is most expensive on.
+ *
+ * A PREFERENCE, NOT A GATE - see `indexAreas`. This list is the second hand-kept copy of the area
+ * table, and it used to decide membership as well as order.
+ */
+const INDEX_AREA_ORDER = ['solutions', 'inflight', 'plans', 'features']
+
+/**
+ * The areas of the index, in the order above, with anything this file has not heard of APPENDED.
+ *
+ * A MISSING AREA HAS TO BE LOUD, and dropping it was silent in the worst way available: the index
+ * exited 0, counted the area's documents in its own preamble total, named the directory in the same
+ * sentence, and then listed none of it. A reader has no way to notice a section that was never
+ * printed - which is the failure the single area table exists to prevent, reintroduced by the copy
+ * of it that governs rendering rather than commands.
+ *
+ * So an unlisted area appears, at the end, rendered by the generic shapes below rather than by a
+ * hand-written one. Generic reads as unfinished, which is exactly the signal wanted: it says "this
+ * area reached the index and nobody has given it a voice yet", where `.filter(Boolean)` said nothing.
+ */
+const indexAreas = (shape) => [
+    ...INDEX_AREA_ORDER.map((k) => shape.areas.find((a) => a.key === k)).filter(Boolean),
+    ...shape.areas.filter((a) => !INDEX_AREA_ORDER.includes(a.key)),
+]
 
 /**
  * A cluster's branch names: local and remote-tracking copies of one branch are one name, and the
@@ -383,11 +469,48 @@ const noteTail = (d) => {
     return d.note.impact ? `  _${d.note.impact}_` : ''
 }
 
+/**
+ * The disposition a feature line carries: whether the capability EXISTS yet, which the title cannot
+ * say.
+ *
+ * THE DIRECTORY OUTRANKS THE DECLARATION, and this line is where the two used to disagree inside one
+ * rendered line: a record under `staging/` was grouped as staged and then tailed `_published_`,
+ * because this read `availability.status` verbatim and never learned what the grouping had already
+ * decided. An agent scanning the index for shipped capability read the tail, not the heading above
+ * it, and proposed work against a capability the tree does not have - the exact outcome
+ * docs/features/staging/README.md forbids. `staged` now travels on the record (bin/lib/docs-shape.mjs
+ * -> `isStaged`), so there is one answer for both readers rather than two derivations of one fact.
+ */
+const featureTail = (d) => {
+    if (d.feature?.staged) return '  _staged_'
+    return d.feature?.status ? `  _${d.feature.status}_` : ''
+}
+
+/**
+ * One document as a line of the index, in the shape the hook gave that area's lines - and the shape
+ * an area nobody has written a line for takes: its title and its path, which is the least a reader
+ * needs to go and open it.
+ */
+const GENERIC_LINE = (d) => `- ${d.title}  \`${d.path}\``
+
 /** One document as a line of the index, in the shape the hook gave that area's lines. */
 const INDEX_LINE = {
     solutions: (d) => `- ${d.title}  \`${d.path}\``,
     inflight: (d) => `- [${d.note?.type || 'untyped'}] ${d.title}${noteTail(d)}`,
     plans: (d) => `- ${planStem(d.path)}`,
+    features: (d) => `- ${d.title}${featureTail(d)}  \`${d.path}\``,
+}
+
+/** The on-baseline half of an area this file has no hand-written shape for: its groups, plainly. */
+const GENERIC_ON_BASELINE = (area, docs) => {
+    const out = [`# ${area.name} - \`${area.dir}/\``, '',
+        'No shape has been written for this area in bin/lib/docs-views.mjs, so it is listed generically.', '']
+    for (const g of area.groups) {
+        const mine = docs.filter((d) => g.docs.includes(d))
+        if (mine.length === 0) continue
+        out.push(`## ${g.label}`, ...mine.map(GENERIC_LINE), '')
+    }
+    return out
 }
 
 /** The on-baseline half of one area, as the hook rendered it. */
@@ -440,6 +563,18 @@ const ON_BASELINE = {
         }
         return out
     },
+    features: (area, docs) => {
+        const out = ['# What the product does - capability records', '',
+            '`docs/features/` - one YAML record per user-visible capability, grouped by its own `category`. '
+            + 'Read before proposing one: a record here means the capability is shipped or already specified.']
+        for (const g of area.groups) {
+            const mine = docs.filter((d) => g.docs.includes(d))
+            if (mine.length === 0) continue
+            out.push('', `## ${g.label}`, ...mine.map(INDEX_LINE.features))
+        }
+        out.push('')
+        return out
+    },
     plans: (area, docs) => {
         const out = ['# Dated plans and investigations', '', '`docs/plans/` - the method that settled a question of this shape before:']
         let any = false
@@ -459,6 +594,7 @@ const OFF_BASELINE_HEADING = {
     solutions: '# Solved only on branches - grouped by the branch set carrying them, largest first',
     inflight: '# In flight only on branches - grouped by the branch set carrying them, largest first',
     plans: '# Plans only on branches - grouped by the branch set carrying them, largest first',
+    features: '# Capabilities recorded only on branches - grouped by the branch set carrying them, largest first',
 }
 
 /**
@@ -511,45 +647,53 @@ export function formatDocsIndex(shape, { clusters, maxLines = 400, currentBranch
         + 'a document this checkout has edited is shown as the baseline holds it. What this cannot show is a version '
         + `preserved only in an archival ref (a tag, refs/backup) - \`${TOOL} stranded\` names those.`, '')
 
-    // EACH AREA GETS AN EQUAL SHARE OF THE CAP, and what it does not spend rolls to the next. One
-    // shared budget in area order let the in-flight area, which holds most of the off-baseline
-    // corpus, spend the whole cap and collapse every branch-only plan to one count line - the
-    // smallest area paying for the largest.
-    const areas = INDEX_AREA_ORDER.map((k) => shape.areas.find((a) => a.key === k)).filter(Boolean)
-    const share = Math.floor(maxLines / Math.max(1, areas.length))
-    let carry = maxLines - share * areas.length
-    for (const area of areas) {
+    // THE CAP IS ALLOCATED OVER REAL DEMAND, which needs both halves of every area before any of it
+    // is printed - so this renders in two passes. One shared budget walked in area order let the
+    // in-flight area, which holds most of the off-baseline corpus, spend the whole cap and collapse
+    // every branch-only plan to one count line; an equal split fixed that and left a subtler
+    // version, which `fairShares` above explains.
+    const areas = indexAreas(shape)
+    const planned = areas.map((area) => {
         const allDocs = area.groups.flatMap((g) => g.docs)
-        out.push(...ON_BASELINE[area.key](area, allDocs.filter((d) => !d.offBaseline)))
-
-        let budget = share + carry
-        carry = 0
+        const line = INDEX_LINE[area.key] ?? GENERIC_LINE
         const groups = branchSetGroups(allDocs.filter((d) => d.offBaseline), clusters, currentBranch)
-        if (groups.length === 0) { carry = budget; continue }
-        out.push(OFF_BASELINE_HEADING[area.key], '')
+            .map((g) => {
+                const heading = `## only on ${branchSetLabel(g.names)}${g.pinned ? ' - YOUR BRANCH' : ''}`
+                return { ...g, lines: area.key === 'plans' ? [heading, stemsLine(g.docs), ''] : [heading, ...g.docs.map(line), ''] }
+            })
+        return {
+            area,
+            onBaseline: (ON_BASELINE[area.key] ?? GENERIC_ON_BASELINE)(area, allDocs.filter((d) => !d.offBaseline)),
+            groups,
+            need: groups.reduce((n, g) => n + g.lines.length, 0),
+        }
+    })
+    const budgets = fairShares(planned.map((p) => p.need), maxLines)
+
+    planned.forEach((p, i) => {
+        out.push(...p.onBaseline)
+        if (p.groups.length === 0) return
+        out.push(OFF_BASELINE_HEADING[p.area.key]
+            ?? `# ${p.area.name} only on branches - grouped by the branch set carrying them, largest first`, '')
+        let budget = budgets[i]
         let omitted = 0
         let omittedDocs = 0
-        for (const g of groups) {
-            const heading = `## only on ${branchSetLabel(g.names)}${g.pinned ? ' - YOUR BRANCH' : ''}`
-            const lines = area.key === 'plans'
-                ? [heading, stemsLine(g.docs), '']
-                : [heading, ...g.docs.map(INDEX_LINE[area.key]), '']
+        for (const g of p.groups) {
             // A group that does not fit is omitted with everything after it in this area: the
             // groups are largest first, so the cap lands on the smallest and the tail stays a tail.
             // The pinned group is never the one omitted, and it spends the budget it uses.
-            if (!g.pinned && (omitted > 0 || lines.length > budget)) {
+            if (!g.pinned && (omitted > 0 || g.lines.length > budget)) {
                 omitted++
                 omittedDocs += g.docs.length
                 continue
             }
-            budget = Math.max(0, budget - lines.length)
-            out.push(...lines)
+            budget = Math.max(0, budget - g.lines.length)
+            out.push(...g.lines)
         }
         if (omitted > 0) {
             out.push(`... ${plural(omitted, 'more branch set')} holding ${plural(omittedDocs, 'document')}, past the ${maxLines}-line cap `
-                + `(\`docs index --max-lines <n>\` raises it): ${TOOL} docs list ${area.key}`, '')
+                + `(\`docs index --max-lines <n>\` raises it): ${TOOL} docs list ${p.area.key}`, '')
         }
-        carry = budget
-    }
+    })
     return sourceFrame('index', null, out.join('\n'), INDEX_TOOL_MORE)
 }

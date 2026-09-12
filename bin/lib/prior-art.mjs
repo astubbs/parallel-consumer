@@ -46,6 +46,7 @@
 
 import { baseline as baselineRef, exec, freshnessWarnings, lines, refTips } from './git.mjs'
 import { formatWarnings } from './views.mjs'
+import { PROSE_HEADING_ERE } from './doc-kind.mjs'
 import { DOC_AREAS, REPO } from './repo.mjs'
 
 
@@ -67,7 +68,53 @@ export function jqFilter(pattern, shape) {
     return `.[] | select((.title + " " + (.body // "")) | test(${JSON.stringify(pattern)}; "i")) | ${shape}`
 }
 
-export const summary = 'search plans, solutions, notes, commits and GitHub across EVERY ref'
+// NO ENUMERATION HERE. This said "plans, solutions, notes, feature records" - a hand-written copy of
+// the very table this file was changed to derive its sections from, one level down, and stale the
+// next time an area is added. `bin/inflight.mjs prior-art` prints the areas it searched, by name,
+// every run; a one-line summary does not have to.
+export const summary = 'search every docs area, commits and GitHub across EVERY ref'
+
+/**
+ * THE SECTION NUMBERS ARE COUNTED, NEVER WRITTEN DOWN. The tree sections are the corpus areas plus
+ * the everything-else sweep, and the commit and GitHub sections follow them - so a fourth area used
+ * to mean a section 4 printed twice, once for the area and once for the hard-coded tail.
+ *
+ * COUNTED OFF THE RESULT, not off `DOC_AREAS`, and that is not a refinement: `priorArt` takes an
+ * `areas` option now, so a module constant read from the default table would number the tail of a
+ * run it was not describing. The result knows how many sections it actually built; nothing else
+ * does. `GITHUB_LAST = GITHUB_FIRST + 2` was the last remnant of the same habit, hard-coding three
+ * GitHub lists beside a table of three - and the self-test pins the resulting headings.
+ */
+const commitsSectionOf = (r) => r.sections.length + 1
+const githubFirstOf = (r) => commitsSectionOf(r) + 1
+const githubLastOf = (r) => githubFirstOf(r) + GITHUB_LISTS.length - 1
+
+/**
+ * THE GITHUB LISTS, as a table for the same reason the areas are one: each `ghList` used to write
+ * its own number beside a constant that counted them, so adding a list meant editing two places and
+ * nothing went red when only one was edited. `args` takes the jq selector because the pattern is
+ * not known until the search runs.
+ */
+const GITHUB_LISTS = [
+    {
+        heading: 'Open PRs whose title or body matches (collision check)',
+        note: undefined,
+        args: (jq) => ['pr', 'list', '-R', REPO, '--state', 'open', '--limit', '200', '--json', 'number,title,body',
+            '--jq', jq('"  #\\(.number) \\(.title)"')],
+    },
+    {
+        heading: 'MERGED PRs whose title or body matches',
+        note: '(the PR that already solved something in your file is, by definition, merged)',
+        args: (jq) => ['pr', 'list', '-R', REPO, '--state', 'merged', '--limit', '200', '--json', 'number,title,body',
+            '--jq', jq('"  #\\(.number) \\(.title)"')],
+    },
+    {
+        heading: 'Issues, --state all (fork issues and upstream-mirror ones)',
+        note: "(read the upstream original, not the mirror's summary)",
+        args: (jq) => ['issue', 'list', '-R', REPO, '--state', 'all', '--limit', '400', '--json', 'number,title,body,state',
+            '--jq', jq('"  #\\(.number) [\\(.state)] \\(.title)"')],
+    },
+]
 
 export const usage = `Usage: bin/inflight.mjs prior-art [--headings] [--by-ref] <term> [<term>...]
 
@@ -78,10 +125,11 @@ search term available.
   bin/inflight.mjs prior-art isTransactionCommittingInProgress acquireCommitLock
   bin/inflight.mjs prior-art RetryQueue writeLock
 
---headings matches only markdown headings, and shows the heading TEXT rather than just the path. A
-document's headings are its own table of contents, so this answers "has anyone WRITTEN ABOUT X",
-where the default answers "does X appear anywhere". Measured: 8812 hits become 2066 headings, for
-the same cost. Reach for it first on a broad term.
+--headings matches only a document's own table of contents, and shows the matched TEXT rather than
+just the path - so this answers "has anyone WRITTEN ABOUT X", where the default answers "does X
+appear anywhere". In a prose area that means its markdown headings; in an area whose records are
+data it means their top-level keys, which is the same claim in the shape that area writes it.
+Measured: 8812 hits become 2066 headings, for the same cost. Reach for it first on a broad term.
 
 --by-ref groups the hits by the SET OF REFS carrying them instead of listing one line per path. Use
 it when a term returns dozens of paths: identical ref-sets mean one branch, and the per-path view
@@ -104,17 +152,22 @@ cannot say that. A cluster whose refs are all gone is a dead branch, not prior a
  * @property {{ran: boolean, skipped?: string, lists: {heading: string, note?: string, entries: string[], failed: boolean}[]}} github
  *
  * @param {string[]} terms case-insensitive extended regexes, OR-ed together
- * @param {{onSection?: (s: Section, r: PriorArtResult) => void, github?: boolean, headings?: boolean}} [opts]
+ * @param {{onSection?: (s: Section, r: PriorArtResult) => void, github?: boolean, headings?: boolean,
+ *           areas?: {dir: string, name: string, headings?: string|null}[]}} [opts]
  *   `headings: true` matches only markdown HEADINGS, and returns the heading TEXT rather than just
  *   the paths. A document's headings are its own table of contents - what it is *about*, as opposed
  *   to every place a word happens to appear - so this is the mode for "has anyone written about X",
  *   where the body-text mode answers "does X appear anywhere". Measured on this repo: one term went
- *   from 8812 ref:path hits to 2066 heading lines, at the same cost.
+ *   from 8812 ref:path hits to 2066 heading lines, at the same cost. Each AREA says what a heading
+ *   means for it (`headings` in DOC_AREAS): a record's top-level keys are its table of contents.
+ *   `areas` overrides the corpus area table - the self-test's way of reaching an area whose
+ *   `headings` rule is declared absent, and the one knob a caller has over which sections exist.
  *   `github: false` keeps the search entirely local - for a caller that only wants the tree, and for
  *   the self-test, which must not depend on a rate limit shared with every parallel session here.
  * @returns {PriorArtResult}
  */
 export function priorArt(terms, opts = {}) {
+    const areas = opts.areas ?? DOC_AREAS
     /** @type {PriorArtResult} */
     const result = {
         ok: false, pattern: terms.join('|'), baseline: '', refsSearched: 0,
@@ -126,9 +179,13 @@ export function priorArt(terms, opts = {}) {
 
     // Anything the caller passes is already a regex, so a term containing `|` or parens composes.
     const pattern = result.pattern
-    // A markdown heading, then the caller's pattern anywhere on that line. POSIX class rather than
-    // `\s`, because git grep -E is ERE and does not read the PCRE shorthand.
-    const grepPattern = opts.headings ? `^#{1,6}[[:space:]].*(${pattern})` : pattern
+    // THE HEADING RULE IS THE AREA'S, NOT THE CORPUS'S - the same lesson as `documents` in the area
+    // table, learnt the same way. One markdown-heading pattern for every section meant the records
+    // area could not match in this mode at all, and reported that as `nothing, across 604 refs`:
+    // the sentence AGENTS.md tells agents to read as a completed check, over a corpus never
+    // searched. An area with no table of contents at all (`headings: null`) is not searched and
+    // SAYS SO below, because an emptiness nobody looked for must never render as one somebody did.
+    const grepFor = (headings) => (opts.headings ? `${headings}.*(${pattern})` : pattern)
 
     // Local branches plus origin's, minus the symbolic HEAD which duplicates whatever it points at.
     // Deliberately NOT `--all`: that pulls in tags and refs/stash, which add noise without adding docs.
@@ -160,11 +217,30 @@ export function priorArt(terms, opts = {}) {
     // the REPO defect, one row wider. The numbering and headings are byte-identical to the table
     // this replaced; the self-test pins them, because a reader has learned to scan for them.
     const SECTIONS = [
-        ...DOC_AREAS.map((a, i) => [String(i + 1), `${a.name} - ${a.dir}/`, [`${a.dir}/`]]),
-        [String(DOC_AREAS.length + 1), 'Everything else under docs/', [
-            'docs/', ...DOC_AREAS.map((a) => `:(exclude)${a.dir}/`)]],
+        ...areas.map((a, i) => ({
+            n: String(i + 1), heading: `${a.name} - ${a.dir}/`, pathspec: [`${a.dir}/`],
+            // `undefined` is "no rule declared, take the corpus default"; `null` is the area
+            // declaring that it HAS no headings. The two must not collapse - `??` would.
+            headings: a.headings === undefined ? PROSE_HEADING_ERE : a.headings,
+        })),
+        {
+            n: String(areas.length + 1), heading: 'Everything else under docs/',
+            pathspec: ['docs/', ...areas.map((a) => `:(exclude)${a.dir}/`)],
+            headings: PROSE_HEADING_ERE,
+        },
     ]
-    for (const [n, heading, pathspec] of SECTIONS) {
+    for (const { n, heading, pathspec, headings } of SECTIONS) {
+        if (opts.headings && headings === null) {
+            // A section the mode cannot apply to is REPORTED, never rendered as a zero-hit search.
+            // Named apart from `section` below deliberately: the one-anchor mutation the self-test
+            // uses to prove an empty section is still reported would otherwise land on this push,
+            // which no default run reaches, and pass while proving nothing.
+            const unsearched = { n, heading, pathspec, hits: [], unsearchable: 'it holds no headings and no keyed records' }
+            result.sections.push(unsearched)
+            opts.onSection?.(unsearched, result)
+            continue
+        }
+        const grepPattern = grepFor(headings)
         // git grep exits 1 for "no match" and >1 for a real error; only the latter is a problem.
         // Without `-l` in headings mode, because the heading TEXT is the answer there, not the path.
         const grepArgs = opts.headings
@@ -255,19 +331,8 @@ export function priorArt(terms, opts = {}) {
         result.github.lists.push({ heading, note, entries: lines(res.out), failed: !res.ok })
     }
 
-    ghList('6. Open PRs whose title or body matches (collision check)', undefined,
-        ['pr', 'list', '-R', REPO, '--state', 'open', '--limit', '200', '--json', 'number,title,body',
-            '--jq', jqSelect('"  #\\(.number) \\(.title)"')])
-
-    ghList('7. MERGED PRs whose title or body matches',
-        '(the PR that already solved something in your file is, by definition, merged)',
-        ['pr', 'list', '-R', REPO, '--state', 'merged', '--limit', '200', '--json', 'number,title,body',
-            '--jq', jqSelect('"  #\\(.number) \\(.title)"')])
-
-    ghList('8. Issues, --state all (fork issues and upstream-mirror ones)',
-        "(read the upstream original, not the mirror's summary)",
-        ['issue', 'list', '-R', REPO, '--state', 'all', '--limit', '400', '--json', 'number,title,body,state',
-            '--jq', jqSelect('"  #\\(.number) [\\(.state)] \\(.title)"')])
+    const first = githubFirstOf(result)
+    GITHUB_LISTS.forEach((l, i) => ghList(`${first + i}. ${l.heading}`, l.note, l.args(jqSelect)))
 
     return result
 }
@@ -279,6 +344,15 @@ export function priorArt(terms, opts = {}) {
 // precisely because the search handed back the data rather than a page of text.
 // ================================================================================================
 
+/**
+ * How many matched lines one hit names before the rest becomes a count.
+ *
+ * The flag exists to cut volume, and without a bound it can ADD volume: a prose document contributes
+ * the handful of headings that mention the term, where a record - whose every line is a declaration -
+ * can contribute a dozen and turn the narrowing mode into the noisy one.
+ */
+const TEXTS_SHOWN = 5
+
 /** The header every view shares - what was searched, and how much of it. */
 export function formatHeader(r) {
     const head = `prior-art: searching ${r.refsSearched} refs for /${r.pattern}/i  (baseline: ${r.baseline})\n`
@@ -289,13 +363,22 @@ export function formatHeader(r) {
 /** One section, per path. The default view, and the one streamed as sections complete. */
 export function formatSection(section, r) {
     const out = [`=== ${section.n}. ${section.heading} ===`]
+    // NOT THE SAME ANSWER AS "nothing", and the whole point of this file is that they never read
+    // alike: one is a corpus searched and found empty, the other is a corpus never searched.
+    if (section.unsearchable) {
+        out.push(`  NOT SEARCHED in --headings mode - ${section.unsearchable}. This is not "nothing found":`)
+        out.push(`  run the same terms without --headings to search it.\n`)
+        return out.join('\n')
+    }
     if (section.hits.length === 0) {
         out.push(`  nothing, across ${r.refsSearched} refs\n`)
         return out.join('\n')
     }
     for (const h of section.hits) {
         out.push(`  ${h.path}`)
-        for (const text of h.headings ?? []) out.push(`      ${text}`)
+        const texts = h.headings ?? []
+        for (const text of texts.slice(0, TEXTS_SHOWN)) out.push(`      ${text}`)
+        if (texts.length > TEXTS_SHOWN) out.push(`      ... and ${texts.length - TEXTS_SHOWN} more matched lines in this document`)
         out.push(h.onBaseline
             ? `      on ${r.baseline}`
             : `      NOT ON ${r.baseline} - e.g. ${h.refs[0]} (${h.refs.length} refs)`)
@@ -353,7 +436,7 @@ export function formatByRef(r) {
 
 /** Commits and GitHub - identical in both views, because neither is per-path. */
 export function formatTail(r) {
-    const out = ['=== 5. Commits that added or removed the term (git log --all -S) ===']
+    const out = [`=== ${commitsSectionOf(r)}. Commits that added or removed the term (git log --all -S) ===`]
     if (r.commits.length === 0) out.push(`  nothing, across every ref`)
     for (const c of r.commits) {
         out.push(`  -- ${c.term}`)
@@ -363,7 +446,7 @@ export function formatTail(r) {
     out.push('')
 
     if (!r.github.ran) {
-        out.push(`=== 6-8. GitHub checks SKIPPED - ${r.github.skipped} ===`)
+        out.push(`=== ${githubFirstOf(r)}-${githubLastOf(r)}. GitHub checks SKIPPED - ${r.github.skipped} ===`)
         out.push('  These are NOT "nothing found". Run the gh checks in AGENTS.md by hand.')
         out.push('')
         return out.join('\n')
