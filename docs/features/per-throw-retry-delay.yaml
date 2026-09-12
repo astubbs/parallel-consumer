@@ -1,0 +1,47 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: A failing record names its own retry delay, on the throw
+category: operability
+module: parallel-consumer-core
+maturity: alpha
+availability:
+  status: planned
+  target_release: next-0x
+release_assumptions:
+  - Not in 0.6.0.0. Until the release that carries it is cut, everything here is a claim about the source, not about a published artifact.
+summary: >-
+  A processing function that already knows how long to wait says so on the exception it throws -
+  PCRetriableException(message).retryAfter(duration) - instead of the engine asking a configured
+  delay provider that has to work the answer out again from the record's history.
+use_this_when:
+  - The failure itself carries the wait: a Retry-After header, a rate-limit reset time, a broker or database backoff the client reported.
+  - You want a growing backoff per record and do not want to maintain an attempt ledger of your own to compute it.
+  - Only some failures need a different delay, and setting a delay provider for the instance would change every failure to get at those.
+setup:
+  mechanism: >-
+    throw new PCRetriableException(message).retryAfter(Duration.ofSeconds(30)) from the processing
+    function. The delay applies to that hand-back only; the next failure of the same record is
+    decided afresh.
+  applies_to: Every classic-API entry point, because it travels on the exception rather than on the options.
+  nothing_to_configure: No option is involved. A throw carrying no delay behaves exactly as it always has.
+opt_in:
+  mechanism: Call retryAfter(duration) on the PCRetriableException you throw. Throwing one without it is unchanged.
+  isolated_from_stable_modules: false
+boundaries:
+  - A carried delay wins over both retryDelayProvider and defaultMessageRetryDelay for that hand-back, so an instance can have a policy and still be overridden record by record. Reading the configured policy will not tell you what a given record is waiting for.
+  - A negative duration is refused at the call site with IllegalArgumentException, before the engine ever sees the throw.
+  - The delay is a retry target, not a schedule. The record becomes eligible after it, and is then selected on an ordinary control-loop pass behind whatever ordering and concurrency limits apply - the same guarantee retryDelayProvider gives.
+  - A duration large enough that the failure time plus the delay leaves the representable instant range is not honoured. It is replaced with the configured default and logged, naming a park as the thing you probably meant. Use park for "never", never a very large delay - see park-in-place-engine.yaml.
+  - Combining it with notAnAttempt() on a first delivery writes the deadline but does not make the record eligible to wait on it, so the delay is not observed. See hand-back-without-an-attempt.yaml, which owns that boundary.
+validation:
+  - Throw with a delay far longer than the configured one and confirm the record is not redelivered before it elapses.
+  - Confirm a throw that carries no delay still follows whichever of retryDelayProvider or defaultMessageRetryDelay you configured.
+references:
+  - label: The exception and the facts a throw can carry
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/PCRetriableException.java
+  - label: Unit tests for what the exception carries
+    path: parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/PCRetriableExceptionTest.java
+  - label: The configured alternative, for an instance-wide policy
+    path: docs/features/custom-retry-delay.yaml
