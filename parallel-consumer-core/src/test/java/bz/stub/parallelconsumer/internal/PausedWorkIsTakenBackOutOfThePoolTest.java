@@ -31,6 +31,9 @@ import java.util.function.Function;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
 
 /**
  * A pause has to reach the worker pool, not only the controller (KTD14).
@@ -95,6 +98,12 @@ class PausedWorkIsTakenBackOutOfThePoolTest {
 
     private ThreadPoolExecutor pool;
 
+    /**
+     * Only the batching test builds one, because only it needs a batch of more than one record. Torn down beside
+     * {@link #pc} so its pool and its threads do not outlive the test.
+     */
+    private TestParallelEoSStreamProcessor<String, String> batchingPc;
+
     private WorkManager<String, String> wm;
 
     private long nextOffset = 0;
@@ -116,6 +125,12 @@ class PausedWorkIsTakenBackOutOfThePoolTest {
     @AfterEach
     void tearDown() {
         releaseTheWorker.countDown();
+        if (batchingPc != null) {
+            var batchingPool = batchingPc.workerThreadPool.get();
+            batchingPc.setState(State.CLOSED);
+            batchingPc.close();
+            batchingPool.shutdownNow();
+        }
         pc.setState(State.CLOSED);
         pc.close();
         pool.shutdownNow();
@@ -224,6 +239,62 @@ class PausedWorkIsTakenBackOutOfThePoolTest {
 
         assertThat(pc.purgeQueuedWork()).isEqualTo(0);
         assertThat(pool.getQueue()).hasSize(1);
+    }
+
+    /**
+     * <b>A batch is dequeued before its hand-backs run, so one hand-back must not take the rest with it.</b>
+     * {@code queue.remove()} has already succeeded by the time {@code onAbandonedBeforeStarting} is called, and it
+     * cannot be undone - so a throw escaping that loop leaves every container behind the failing one marked in
+     * flight forever: never returned to selection, never run, and under KEY ordering stalling its shard. That is
+     * the same stall the purge exists to prevent, reached through a different door. Found by the review of
+     * astubbs/parallel-consumer#506, and it needs a batch of more than one to be visible at all - every other
+     * test here uses a single-record batch.
+     * <p>
+     * The failure is still surfaced, because a container whose bookkeeping threw is unaccounted for and PC does not
+     * continue past one. What changes is that it is surfaced <em>after</em> the loop rather than out of the middle
+     * of it.
+     * <p>
+     * <b>Proved by sabotage:</b> removing the per-container try/catch from the purge loop reddens this test alone,
+     * at the "still have been handed back" assertion, and leaves the other six here green - so the isolation is
+     * detected here and nowhere else.
+     */
+    @Test
+    void oneHandbackThrowingDoesNotStrandTheRestOfItsBatch() throws InterruptedException {
+        // Its own instance, because every other test here wants single-record batches and this one cannot be written
+        // with them: makeBatches splits by batchSize, so two records at the default size are two queued batches and
+        // a throw in the first simply leaves the second in the queue. The stranding needs them in ONE batch.
+        batchingPc = new TestParallelEoSStreamProcessor<>(ParallelConsumerOptions.<String, String>builder()
+                .consumer(new MockConsumer<String, String>(OffsetResetStrategy.LATEST))
+                .maxConcurrency(1)
+                .batchSize(2)
+                .build());
+        batchingPc.setWm(wm);
+        var batchingPool = batchingPc.workerThreadPool.get();
+        batchingPc.setState(State.RUNNING);
+        batchingPc.submitWorkToPool(blockingUserFunction, callback, UniLists.of(takeWork(), takeWork()));
+        assertWithMessage("the first batch must be inside the function before the second is queued behind it")
+                .that(aBatchHasStarted.await(30, TimeUnit.SECONDS)).isTrue();
+        var queuedBatch = UniLists.of(takeWork(), takeWork());
+        batchingPc.submitWorkToPool(blockingUserFunction, callback, queuedBatch);
+        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> batchingPool.getQueue().size() == 1);
+
+        WorkManager<String, String> handbackFailsOnTheFirst = spy(wm);
+        doThrow(new IllegalStateException("deliberate - PC's own bookkeeping throws for one container"))
+                .when(handbackFailsOnTheFirst).onAbandonedBeforeStarting(queuedBatch.get(0));
+        batchingPc.setWm(handbackFailsOnTheFirst);
+        batchingPc.setState(State.PAUSED);
+
+        assertWithMessage("a record PC can no longer account for is not something it continues past")
+                .that(assertThrows(IllegalStateException.class, batchingPc::purgeQueuedWork))
+                .hasMessageThat().contains("deliberate");
+
+        WorkContainer<String, String> behindTheFailure = queuedBatch.get(1);
+        assertWithMessage("the container behind the failing one must still have been handed back - stranded, it "
+                + "stays in flight forever and holds its shard")
+                .that(behindTheFailure.isNotInFlight()).isTrue();
+        assertWithMessage("...and it spent nothing, so it is selectable again")
+                .that(behindTheFailure.isAvailableToTakeAsWork()).isTrue();
+        assertThat(wm.getWorkIfAvailable(10)).contains(behindTheFailure);
     }
 
     /**

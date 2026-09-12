@@ -47,7 +47,7 @@ class ParkedRecordsHoldTheKeyNotThePartitionTest extends AbstractFluentEngineTes
     void parkUnderKeyOrderingHoldsItsKeyWhileOtherKeysCarryOn() {
         var behindTheParkedKey = new AtomicInteger();
         var otherKeys = new AtomicInteger();
-        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.KEY);
+        var pc = ParallelConsumer.connect(props()).withDefaultOrdering(ProcessingOrder.KEY);
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))

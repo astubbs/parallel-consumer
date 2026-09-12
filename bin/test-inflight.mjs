@@ -1871,7 +1871,7 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
-            '        headings: added.filter((l) => /^#{1,6}\\s/.test(l)),',
+            '        headings: added.filter((l) => (record ? /^[A-Za-z_][\\w.-]*:/ : /^#{1,6}\\s/).test(l)),',
             '        headings: [],'),
     },
     {
@@ -1948,15 +1948,18 @@ const CHECKS = [
             const p = await lib(binDir)
             return inDir(docsFixture(), () => {
                 const r = p.priorArt(['note'], { github: false })
-                if (!r.ok || r.sections.length !== 4) return false
+                if (!r.ok || r.sections.length !== 5) return false
                 // Byte-identical to the headings the hard-coded list produced, captured before the
-                // derivation - the point is that deriving them changed nothing a reader sees.
+                // derivation - the point is that deriving them changed nothing a reader sees. The
+                // features row was APPENDED for that reason: 1 to 3 still say what they always did.
                 const expected = [
                     ['1', 'Prior investigations - docs/plans/', ['docs/plans/']],
                     ['2', 'Solved problems - docs/solutions/', ['docs/solutions/']],
                     ['3', 'In-flight state - docs/inflight/', ['docs/inflight/']],
-                    ['4', 'Everything else under docs/',
-                        ['docs/', ':(exclude)docs/plans/', ':(exclude)docs/solutions/', ':(exclude)docs/inflight/']],
+                    ['4', 'Shipped and planned capability - docs/features/', ['docs/features/']],
+                    ['5', 'Everything else under docs/',
+                        ['docs/', ':(exclude)docs/plans/', ':(exclude)docs/solutions/', ':(exclude)docs/inflight/',
+                            ':(exclude)docs/features/']],
                 ]
                 return r.sections.every((s, i) => s.n === expected[i][0] && s.heading === expected[i][1]
                     && JSON.stringify(s.pathspec) === JSON.stringify(expected[i][2]))
@@ -1973,14 +1976,16 @@ const CHECKS = [
             const n = await notes(binDir)
             const perf = await perfOf(binDir)
             return inDir(docsFixture(), () => {
-                const blobs = g.treeEntries('master', 'docs').entries.map((e) => e.blob)
-                if (blobs.length < 3) return false
+                // The PATH travels with the blob: a title read without one is read as prose, which
+                // is the wrong rule for every record in the features area.
+                const entries = g.treeEntries('master', 'docs').entries.map((e) => ({ blob: e.blob, path: e.path }))
+                if (entries.length < 3) return false
                 perf.perfReset()
-                const titles = n.blobTitles(blobs)
+                const titles = n.blobTitles(entries)
                 if (callCount(perf.perfReport(), 'git cat-file') !== 1) return false
-                if (titles.size !== blobs.length) return false
-                return blobs.every((b) => titles.get(b) === n.blobTitle(b))
-                    && titles.get(blobs[0]) !== null
+                if (titles.size !== new Set(entries.map((e) => e.blob)).size) return false
+                return entries.every((e) => titles.get(e.blob) === n.blobTitle(e.blob, e.path))
+                    && titles.get(entries[0].blob) !== null
             })
         },
         // Forks once per blob, which is the loop the batch replaced.
@@ -2498,6 +2503,169 @@ const CHECKS = [
             ' ? null : /^---\\r?\\n([\\s\\S]*?)\\r?\\n---/.exec(text)', ' ? null : null'),
     },
     {
+        id: 'feature-records-are-an-area-of-the-corpus-not-an-uncategorised-tail',
+        why: 'feature data spans branches exactly as notes and plans do, and until it was an area the only command that reached it was a working-tree grep - which answered "nobody has specified this" for a record that existed on another branch',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const bare = invoke(binDir, ['docs'], { cwd: dir })
+            if (bare.code !== 0 || !bare.out.includes('Shipped and planned capability  docs/features/')) return false
+            if (!bare.out.includes('bin/inflight.mjs docs list features')) return false
+            const listed = invoke(binDir, ['docs', 'list', 'features', 'operability'], { cwd: dir })
+            // The branch-only record is THE case: master's working tree cannot show it at all.
+            return listed.code === 0 && listed.out.includes('Pause and resume')
+                && listed.out.includes('A capability only this branch records')
+                && listed.out.includes('(off baseline - on only-here)')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'repo.mjs'),
+            "    { dir: FEATURES_DIR, name: 'Shipped and planned capability', documents: /\\.ya?ml$/ },\n", ''),
+    },
+    {
+        id: 'a-feature-record-is-titled-by-its-title-key-never-by-its-copyright-comment',
+        why: "every record opens with `# Copyright (C) 2026 ...`, so the markdown heading rule gives one identical wrong title to every capability in the area - a listing that looks complete and names nothing",
+        run: async (binDir) => {
+            const t = await tagsLib(binDir)
+            const rec = (body) => `# Copyright (C) 2026 Antony Stubbs and contributors\n\nschema_version: 1\n${body}`
+            if (t.titleOf(rec('title: The real name\ncategory: processing\n'), 'docs/features/x.yaml') !== 'The real name') return false
+            if (t.titleOf(rec('title: "Quoted: because of the colon"\n'), 'docs/features/x.yaml') !== 'Quoted: because of the colon') return false
+            // A nested `title:` belongs to the block it sits in - a reference's label is not the record's name.
+            return t.titleOf(rec('references:\n  - title: a link\n'), 'docs/features/x.yaml').startsWith('NO title: KEY')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'inflight-tags.mjs'),
+            "    if (/\\.ya?ml$/.test(path)) return dataRecordTitle(text, path)\n", ''),
+    },
+    {
+        id: 'a-feature-record-with-no-title-key-says-so-rather-than-showing-its-filename',
+        why: 'falling back to the stem renders a schema that has moved on - a renamed key, a record written to the wrong shape - as a tidy list of filenames that reads exactly like a working area',
+        run: async (binDir) => {
+            const t = await tagsLib(binDir)
+            if (t.titleOf('# Copyright (C) 2026 x\n\nkind: feature\n', 'docs/features/x.yaml') !== 'NO title: KEY - x') return false
+            const listed = invoke(binDir, ['docs', 'list', 'features', 'processing'], { cwd: docsFixture() })
+            return listed.code === 0 && listed.out.includes('NO title: KEY - no-title')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'inflight-tags.mjs'),
+            'return raw || `NO title: KEY - ${stemOf(path)}`', 'return raw || stemOf(path)'),
+    },
+    {
+        id: 'feature-records-group-by-the-category-they-declare',
+        why: "a solution's category is a directory and a feature's is a key, so the area that groups by path puts every record in one bucket called uncategorised - a group nobody can ask for is not a group",
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const area = invoke(binDir, ['docs', 'list', 'features'], { cwd: dir })
+            if (area.code !== 0) return false
+            if (!['operability', 'processing', 'staging'].every((g) => area.out.includes(`bin/inflight.mjs docs list features ${g}`))) return false
+            if (area.out.includes('uncategorised')) return false
+            const processing = invoke(binDir, ['docs', 'list', 'features', 'processing'], { cwd: dir })
+            return processing.code === 0 && processing.out.includes('Batch processing') && !processing.out.includes('Pause and resume')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-shape.mjs'),
+            'features: groupFeatures }', 'features: groupSolutions }'),
+    },
+    {
+        id: 'a-staged-feature-record-is-grouped-as-staged-and-not-by-the-category-it-declares',
+        why: 'docs/features/staging/ holds records the tree contradicts, and filing one under `integration` beside published records is how it gets read as shipped - the one thing that directory exists to prevent',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const staged = invoke(binDir, ['docs', 'list', 'features', 'staging'], { cwd: dir })
+            if (staged.code !== 0 || !staged.out.includes('A capability not settled yet')) return false
+            if (!staged.out.includes('not settled in the tree yet, so not published')) return false
+            // It declares `category: integration`, and that must not have become a group.
+            const declared = invoke(binDir, ['docs', 'list', 'features', 'integration'], { cwd: dir })
+            return declared.code === 0 && declared.out.includes("no group named 'integration' in features")
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-shape.mjs'),
+            "        const key = rest.startsWith(`${STAGED_GROUP}/`) ? STAGED_GROUP : (d.feature?.category || 'uncategorised')",
+            "        const key = d.feature?.category || 'uncategorised'"),
+    },
+    {
+        id: 'prior-art-searches-feature-records-under-their-own-heading',
+        why: 'the records were reachable only as "Everything else under docs/", a heading that says nothing about what was found - and the whole point of a section is that a reader knows what kind of prior art it is',
+        run: async (binDir) => {
+            const p = await lib(binDir)
+            return inDir(docsFixture(), () => {
+                const r = p.priorArt(['only this branch records'], { github: false })
+                if (!r.ok) return false
+                const PATH = 'docs/features/branch-only-capability.yaml'
+                const own = r.sections.find((s) => s.heading === 'Shipped and planned capability - docs/features/')
+                const hit = own?.hits.find((h) => h.path === PATH)
+                if (!hit || hit.onBaseline !== false || !hit.refs.includes('only-here')) return false
+                // ...and exactly once: the everything-else sweep excludes every area, this one included.
+                return r.sections.filter((s) => s.hits.some((h) => h.path === PATH)).length === 1
+            })
+        },
+        // The sections stop one area short - the shape the hard-coded list had before it was derived.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
+            '        ...DOC_AREAS.map((a, i) => [String(i + 1), `${a.name} - ${a.dir}/`, [`${a.dir}/`]]),',
+            '        ...DOC_AREAS.slice(0, 3).map((a, i) => [String(i + 1), `${a.name} - ${a.dir}/`, [`${a.dir}/`]]),'),
+    },
+    {
+        id: 'docs-header-answers-for-a-feature-record-and-the-refusal-names-every-area',
+        why: 'refusing `docs header docs/features/<x>.yaml` as an uncovered path was the exact moment a session should have been handed the record; and a refusal that lists the areas from memory goes stale the moment one is added',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const hdr = invoke(binDir, ['docs', 'header', 'docs/features/branch-only-capability.yaml'], { cwd: dir })
+            if (hdr.code !== 0 || hdr.out.includes('outside the areas this command covers')) return false
+            if (!hdr.out.includes('docs/features/branch-only-capability.yaml from only-here')) return false
+            // A path under no area still refuses - and names all four, from the table rather than prose.
+            const outside = invoke(binDir, ['docs', 'header', 'docs/data/schema.yaml'], { cwd: dir })
+            return outside.code === 0 && outside.out.includes('outside the areas this command covers')
+                && ['docs/plans/', 'docs/solutions/', 'docs/inflight/', 'docs/features/'].every((a) => outside.out.includes(a))
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
+            'const inCorpus = (path) => DOC_AREAS.some((a) => path.startsWith(`${a.dir}/`))',
+            'const inCorpus = (path) => DOC_AREAS.slice(0, 3).some((a) => path.startsWith(`${a.dir}/`))'),
+    },
+    {
+        id: 'the-session-index-lists-capability-records-on-the-baseline-and-on-branches',
+        why: 'the index is what every session gets without asking, and a capability that exists only on a branch is precisely what an agent proposing to build it never learns any other way',
+        run: async (binDir) => {
+            const r = invoke(binDir, ['docs', 'index'], { cwd: docsFixture() })
+            if (r.code !== 0 || !r.out.includes('# What the product does - capability records')) return false
+            if (!r.out.includes('- Pause and resume  _published_  `docs/features/pause.yaml`')) return false
+            return r.out.includes('# Capabilities recorded only on branches')
+                && r.out.includes('A capability only this branch records')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
+            "const INDEX_AREA_ORDER = ['solutions', 'inflight', 'plans', 'features']",
+            "const INDEX_AREA_ORDER = ['solutions', 'inflight', 'plans']"),
+    },
+    {
+        id: 'an-area-whose-records-are-not-markdown-declares-which-files-are-its-documents',
+        why: 'the corpus-wide markdown filter dropped every YAML record while the area still printed a heading and a count, which is an empty area that reads as an area with nothing in it',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const s = await docsShapeLib(binDir)
+            return inDir(docsFixture(), () => {
+                const index = n.corpusIndex()
+                const shape = s.docsShape({ index, stranded: n.stranded(index) })
+                if (!shape.ok) return false
+                const area = shape.areas.find((a) => a.key === 'features')
+                const docs = area.groups.flatMap((g) => g.docs)
+                if (docs.length !== 5 || !docs.every((d) => d.path.endsWith('.yaml'))) return false
+                // The area's own README is not one of its documents, whatever the extension rule says.
+                return !docs.some((d) => /README/.test(d.path))
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-shape.mjs'),
+            'export const documentsRe = (area) => area.documents ?? DOCUMENT_RE',
+            'export const documentsRe = () => DOCUMENT_RE'),
+    },
+    {
+        id: 'a-blob-title-read-with-its-path-reads-a-record-as-a-record',
+        why: 'the drift views and the prompt-keyword query title a blob through their own reader, and without the path it answered the copyright comment for every version of every feature record',
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const n = await notes(binDir)
+            return inDir(docsFixture(), () => {
+                const e = g.treeEntries('master', 'docs').entries.find((x) => x.path.endsWith('features/pause.yaml'))
+                if (!e) return false
+                const title = n.blobTitle(e.blob, e.path)
+                return title === 'Pause and resume' && !/Copyright/.test(title)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            "    if (path && /\\.ya?ml$/.test(path)) {", '    if (false) {'),
+    },
+    {
         id: 'help-lists-docs-list-with-its-when-line',
         why: 'the bare call points at docs list; a command help cannot find is one the agent will not trust',
         run: async (binDir) => {
@@ -2545,13 +2713,14 @@ const CHECKS = [
         run: async (binDir) => {
             const dir = docsIndexFixture()
             // Four in-flight branch sets exist off the baseline (workstream, only-here, second, third).
-            // Twelve lines is four per area: the workstream group (heading, three notes, blank) fits
-            // with the solutions area's spare line and nothing after it does.
-            const capped = invoke(binDir, ['docs', 'index', '--max-lines', '12'], { cwd: dir })
+            // Sixteen lines is four per area - the cap is divided across every area the shape holds,
+            // features included - so the workstream group (heading, three notes, blank) fits with the
+            // solutions area's spare line and nothing after it does.
+            const capped = invoke(binDir, ['docs', 'index', '--max-lines', '16'], { cwd: dir })
             if (capped.code !== 0) return false
             const inflight = capped.out.split('# In flight only on branches')[1]?.split('\n# ')[0] ?? ''
             const shown = inflight.split('\n').filter((l) => l.startsWith('## only on ')).length
-            if (shown !== 1 || !inflight.includes('... 3 more branch sets holding 3 documents, past the 12-line cap')) return false
+            if (shown !== 1 || !inflight.includes('... 3 more branch sets holding 3 documents, past the 16-line cap')) return false
             if (!inflight.includes('bin/inflight.mjs docs list inflight')) return false
             // Uncapped, every set is shown and no count line appears anywhere.
             const full = invoke(binDir, ['docs', 'index', '--max-lines', '1000'], { cwd: dir })

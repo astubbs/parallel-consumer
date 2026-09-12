@@ -83,11 +83,11 @@ public class FluentApiSnippets {
     void instanceAndRouteSettings() {
         // tag::fluentSettings[]
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties())
-                .commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)  // <1>
-                .defaultOrdering(KEY)                                   // <2>
-                .defaultConcurrency(100)
-                .defaultRetryLimit(10)
-                .defaultRetryDelay(Duration.ofSeconds(1));
+                .withCommitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)  // <1>
+                .withDefaultOrdering(KEY)                                   // <2>
+                .withDefaultConcurrency(100)
+                .withDefaultRetryLimit(10)
+                .withDefaultRetryDelay(Duration.ofSeconds(1));
 
         pc.json("payments", Order.class)
                 .retryLimit(3)                                          // <3>
@@ -152,8 +152,8 @@ public class FluentApiSnippets {
     void handBuiltClients() {
         // tag::fluentOwnClients[]
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties())
-                .consumer(myOwnConsumer())      // <1>
-                .producer(myOwnProducer());     // <2>
+                .withConsumer(myOwnConsumer())      // <1>
+                .withProducer(myOwnProducer());     // <2>
         // end::fluentOwnClients[]
     }
 

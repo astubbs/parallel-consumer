@@ -45,7 +45,7 @@ class RetryAndParkTest extends AbstractFluentEngineTest {
     void underTheExplicitUnboundedLimitAnAlwaysFailingRecordRetriesForeverAndBlocksItsPartition() {
         var attempts = new AtomicInteger();
         var laterRecordsRun = new AtomicInteger();
-        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.PARTITION);
+        var pc = ParallelConsumer.connect(props()).withDefaultOrdering(ProcessingOrder.PARTITION);
         pc.string(TOPIC)
                 .retryForever()
                 .retryDelay(Duration.ofMillis(10))
@@ -111,7 +111,7 @@ class RetryAndParkTest extends AbstractFluentEngineTest {
     @Test
     void aRecordAtItsLimitParksAndThePartitionCommitsPastIt() {
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.KEY);
+        var pc = ParallelConsumer.connect(props()).withDefaultOrdering(ProcessingOrder.KEY);
         pc.string(TOPIC)
                 .retryLimit(2)
                 .retryDelay(Duration.ofMillis(10))

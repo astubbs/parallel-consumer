@@ -60,8 +60,8 @@ class InstanceLifecycleTest extends AbstractFluentEngineTest {
         var entered = new AtomicInteger();
         var completed = new AtomicInteger();
         var pc = ParallelConsumer.connect(props())
-                .defaultOrdering(ProcessingOrder.UNORDERED)
-                .defaultConcurrency(concurrency);
+                .withDefaultOrdering(ProcessingOrder.UNORDERED)
+                .withDefaultConcurrency(concurrency);
         pc.string(TOPIC).process(context -> {
             entered.incrementAndGet();
             // Long enough that the block below exits inside the first wave, which is what bounds enteredAtExit.
@@ -248,7 +248,7 @@ class InstanceLifecycleTest extends AbstractFluentEngineTest {
      */
     @Test
     void aStopRequestThatEndsItFirstReleasesTheWaiterCleanly() throws Exception {
-        var pc = ParallelConsumer.connect(props()).whenClosing(ClosePath.DONT_DRAIN_FIRST);
+        var pc = ParallelConsumer.connect(props()).withClosePath(ClosePath.DONT_DRAIN_FIRST);
         pc.string(TOPIC).process(context -> Outcome.stop("the deployment cannot handle this record"));
         ParallelConsumerInstance started = runtime.startAndAssign(pc, 1);
         handle = started;

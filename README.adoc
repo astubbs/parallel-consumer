@@ -154,7 +154,7 @@ What 1.0 is waiting on is a settled API surface, the functionality still intende
         kafkaProperties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
 
         ParallelConsumerDefinition pc = ParallelConsumer.connect(kafkaProperties) // <2>
-                .defaultOrdering(KEY);
+                .withDefaultOrdering(KEY);
 
         pc.json("orders", Order.class) // <3>
                 .process(context -> {
@@ -723,7 +723,7 @@ NOTE: `connect` opens nothing. It follows Kafka's own client, which takes its co
 
 *A route binds one topic to one function.* Registering a second route for a topic already routed is refused at definition time, as is naming one of your own routed topics as a dead-letter destination, or supplying a deserialiser in the connection properties -- every check runs before a connection is opened, and every message names the topic or the setting.
 
-*A route naming a topic the cluster does not have fails the start, by name.* This is the one check that does reach the cluster: `start()` asks it once, before the instance joins the group, and refuses a definition it cannot satisfy. What it replaces is silence -- Kafka's consumer auto-creates a topic it subscribes to unless the broker forbids it, so a misspelled name became an empty topic with a partition count nobody chose, and where the broker did forbid it the route simply processed nothing. Declare `whenTopicMissing(MissingTopic.CREATE)` to have the start create what is missing, with the broker's own partition count and replication factor, or `whenTopicMissing(MissingTopic.IGNORE)` to start anyway with the missing topics named in a warning.
+*A route naming a topic the cluster does not have fails the start, by name.* This is the one check that does reach the cluster: `start()` asks it once, before the instance joins the group, and refuses a definition it cannot satisfy. What it replaces is silence -- Kafka's consumer auto-creates a topic it subscribes to unless the broker forbids it, so a misspelled name became an empty topic with a partition count nobody chose, and where the broker did forbid it the route simply processed nothing. Declare `withMissingTopicPolicy(MissingTopic.CREATE)` to have the start create what is missing, with the broker's own partition count and replication factor, or `withMissingTopicPolicy(MissingTopic.IGNORE)` to start anyway with the missing topics named in a warning.
 
 The format-named routes are sugar: `json`, `avro`, `protobuf`, `bytes` and `string`, each with the topic and, where the format needs one, the type. The key defaults to a string. `json(topic)` with no class at all yields the payload as a map of field names to values, so a topic nobody has a class for can still be consumed and read by field name.
 
@@ -751,16 +751,16 @@ For anything the helpers do not cover -- a key that is not a string, a deseriali
 [[fluent-settings]]
 ==== Instance settings and per-route defaults
 
-*Almost nothing is instance-wide.* The engine has one consumer, one commit and one transaction, so the commit mode is a property of the instance; everything else is a per-route setting with an instance default, and the two are named apart -- instance-wide settings plain, per-route defaults with a `default` prefix.
+*Almost nothing is instance-wide.* The engine has one consumer, one commit and one transaction, so the commit mode is a property of the instance; everything else is a per-route setting with an instance default. Every setting on the definition carries a `with` prefix, and the two kinds are still named apart: an instance-wide setting stops at the prefix, a per-route default keeps `default` inside the name after it.
 
 [source,java,indent=0]
 ----
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties())
-                .commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)  // <1>
-                .defaultOrdering(KEY)                                   // <2>
-                .defaultConcurrency(100)
-                .defaultRetryLimit(10)
-                .defaultRetryDelay(Duration.ofSeconds(1));
+                .withCommitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)  // <1>
+                .withDefaultOrdering(KEY)                                   // <2>
+                .withDefaultConcurrency(100)
+                .withDefaultRetryLimit(10)
+                .withDefaultRetryDelay(Duration.ofSeconds(1));
 
         pc.json("payments", Order.class)
                 .retryLimit(3)                                          // <3>
@@ -781,8 +781,8 @@ An existing user with hand-built clients reaches the fluent API without changing
 [source,java,indent=0]
 ----
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties())
-                .consumer(myOwnConsumer())      // <1>
-                .producer(myOwnProducer());     // <2>
+                .withConsumer(myOwnConsumer())      // <1>
+                .withProducer(myOwnProducer());     // <2>
 ----
 <1> The consumer must be unsubscribed -- the library subscribes it -- and configured for raw bytes, because each route deserialises its own records. That second one cannot be checked at definition time, since a consumer's type parameters are erased, so a consumer configured for anything else stops the instance on its first record with a message naming its deserialisers, rather than retrying for ever.
 <2> A supplied producer is an instance rather than a configuration, and *producer recovery does not run on an instance path*. A definition that supplies its own producer forgoes recovery; one that supplies only properties gets it.
@@ -905,6 +905,9 @@ What is on the fluent API only:
 ----
 
 <1> Setup your clients as per normal.
+A Consumer is required: hand PC either a finished `Consumer` instance, or the configuration to build one from as `consumerConfig` - any `ConsumerConfig` key, and PC builds it with `new KafkaConsumer<>(config)`.
+That configuration must carry `key.deserializer` and `value.deserializer`, because PC is generic over its key and value types and has no basis for choosing them for you.
+`enable.auto.commit` is set to false on a consumer PC builds, and setting it to true is refused rather than silently overridden.
 A Producer is only required if using the `produce` flows: hand PC either a finished `Producer` instance, or the configuration to build one from as `producerConfig` - any `ProducerConfig` key, serializers included, and PC builds it with `new KafkaProducer<>(config)`.
 In the transactional commit mode, set `transactional.id` in that configuration as you would when building the producer yourself.
 <2> Choose your ordering type, `KEY` in this case.

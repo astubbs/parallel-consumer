@@ -31,7 +31,7 @@ import org.apache.kafka.common.annotation.InterfaceStability;
  * API's own method names, {@code closeDrainFirst()} and {@code closeDontDrainFirst()}, which is what a reader
  * arriving from that API already has in their hands.
  *
- * @see ParallelConsumerDefinition#whenClosing(ClosePath)
+ * @see ParallelConsumerDefinition#withClosePath(ClosePath)
  */
 @InterfaceStability.Unstable
 public enum ClosePath {

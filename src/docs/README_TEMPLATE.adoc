@@ -643,7 +643,7 @@ NOTE: `connect` opens nothing. It follows Kafka's own client, which takes its co
 
 *A route binds one topic to one function.* Registering a second route for a topic already routed is refused at definition time, as is naming one of your own routed topics as a dead-letter destination, or supplying a deserialiser in the connection properties -- every check runs before a connection is opened, and every message names the topic or the setting.
 
-*A route naming a topic the cluster does not have fails the start, by name.* This is the one check that does reach the cluster: `start()` asks it once, before the instance joins the group, and refuses a definition it cannot satisfy. What it replaces is silence -- Kafka's consumer auto-creates a topic it subscribes to unless the broker forbids it, so a misspelled name became an empty topic with a partition count nobody chose, and where the broker did forbid it the route simply processed nothing. Declare `whenTopicMissing(MissingTopic.CREATE)` to have the start create what is missing, with the broker's own partition count and replication factor, or `whenTopicMissing(MissingTopic.IGNORE)` to start anyway with the missing topics named in a warning.
+*A route naming a topic the cluster does not have fails the start, by name.* This is the one check that does reach the cluster: `start()` asks it once, before the instance joins the group, and refuses a definition it cannot satisfy. What it replaces is silence -- Kafka's consumer auto-creates a topic it subscribes to unless the broker forbids it, so a misspelled name became an empty topic with a partition count nobody chose, and where the broker did forbid it the route simply processed nothing. Declare `withMissingTopicPolicy(MissingTopic.CREATE)` to have the start create what is missing, with the broker's own partition count and replication factor, or `withMissingTopicPolicy(MissingTopic.IGNORE)` to start anyway with the missing topics named in a warning.
 
 The format-named routes are sugar: `json`, `avro`, `protobuf`, `bytes` and `string`, each with the topic and, where the format needs one, the type. The key defaults to a string. `json(topic)` with no class at all yields the payload as a map of field names to values, so a topic nobody has a class for can still be consumed and read by field name.
 
@@ -663,7 +663,7 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 [[fluent-settings]]
 ==== Instance settings and per-route defaults
 
-*Almost nothing is instance-wide.* The engine has one consumer, one commit and one transaction, so the commit mode is a property of the instance; everything else is a per-route setting with an instance default, and the two are named apart -- instance-wide settings plain, per-route defaults with a `default` prefix.
+*Almost nothing is instance-wide.* The engine has one consumer, one commit and one transaction, so the commit mode is a property of the instance; everything else is a per-route setting with an instance default. Every setting on the definition carries a `with` prefix, and the two kinds are still named apart: an instance-wide setting stops at the prefix, a per-route default keeps `default` inside the name after it.
 
 [source,java,indent=0]
 ----
@@ -760,6 +760,9 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 ----
 
 <1> Setup your clients as per normal.
+A Consumer is required: hand PC either a finished `Consumer` instance, or the configuration to build one from as `consumerConfig` - any `ConsumerConfig` key, and PC builds it with `new KafkaConsumer<>(config)`.
+That configuration must carry `key.deserializer` and `value.deserializer`, because PC is generic over its key and value types and has no basis for choosing them for you.
+`enable.auto.commit` is set to false on a consumer PC builds, and setting it to true is refused rather than silently overridden.
 A Producer is only required if using the `produce` flows: hand PC either a finished `Producer` instance, or the configuration to build one from as `producerConfig` - any `ProducerConfig` key, serializers included, and PC builds it with `new KafkaProducer<>(config)`.
 In the transactional commit mode, set `transactional.id` in that configuration as you would when building the producer yourself.
 <2> Choose your ordering type, `KEY` in this case.

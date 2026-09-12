@@ -132,7 +132,7 @@ class MissingTopicPolicyTest extends AbstractFluentEngineTest {
     @Test
     void createMakesTheMissingTopicAndStarts() throws Exception {
         clusterHas(TOPIC);
-        var pc = ParallelConsumer.connect(props()).whenTopicMissing(MissingTopic.CREATE);
+        var pc = ParallelConsumer.connect(props()).withMissingTopicPolicy(MissingTopic.CREATE);
         pc.string(TOPIC).process(context -> Outcome.succeeded());
         pc.string(MISSING_TOPIC).process(context -> Outcome.succeeded());
 
@@ -149,7 +149,7 @@ class MissingTopicPolicyTest extends AbstractFluentEngineTest {
     @Test
     void ignoreStartsAndNamesWhatIsMissing() throws Exception {
         clusterHas(TOPIC);
-        var pc = ParallelConsumer.connect(props()).whenTopicMissing(MissingTopic.IGNORE);
+        var pc = ParallelConsumer.connect(props()).withMissingTopicPolicy(MissingTopic.IGNORE);
         pc.string(TOPIC).process(context -> Outcome.succeeded());
         pc.string(MISSING_TOPIC).process(context -> Outcome.succeeded());
 
@@ -234,7 +234,7 @@ class MissingTopicPolicyTest extends AbstractFluentEngineTest {
      */
     @Test
     void ignoreStartsEvenWhenTheClusterCannotAnswer() {
-        var pc = ParallelConsumer.connect(props()).whenTopicMissing(MissingTopic.IGNORE);
+        var pc = ParallelConsumer.connect(props()).withMissingTopicPolicy(MissingTopic.IGNORE);
         pc.string(TOPIC).process(context -> Outcome.succeeded());
         RecordingClientRuntime unreachable = new RecordingClientRuntime() {
 
@@ -259,7 +259,7 @@ class MissingTopicPolicyTest extends AbstractFluentEngineTest {
     void thePolicyMayNotBeNull() {
         var pc = ParallelConsumer.connect(props());
 
-        NullPointerException refused = assertThrows(NullPointerException.class, () -> pc.whenTopicMissing(null));
+        NullPointerException refused = assertThrows(NullPointerException.class, () -> pc.withMissingTopicPolicy(null));
 
         assertThat(refused).hasMessageThat().contains("missing-topic policy");
     }

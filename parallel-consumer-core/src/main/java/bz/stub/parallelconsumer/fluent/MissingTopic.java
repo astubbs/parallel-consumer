@@ -17,7 +17,7 @@ import org.apache.kafka.common.annotation.InterfaceStability;
  * the instance warns that a routed topic was assigned no partition, which names two possible causes and cannot say
  * which one it is.
  *
- * @see ParallelConsumerDefinition#whenTopicMissing(MissingTopic)
+ * @see ParallelConsumerDefinition#withMissingTopicPolicy(MissingTopic)
  */
 @InterfaceStability.Unstable
 public enum MissingTopic {

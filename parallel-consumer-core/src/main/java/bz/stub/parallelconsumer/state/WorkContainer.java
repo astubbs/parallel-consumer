@@ -577,6 +577,15 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     private Instant computeRetryDueAt(Instant failedAt, PCRetriableException handback) {
         if (handback != null && handback.isParked()) {
             // Parked. The deadline is only what orders the retry queue; isParked() is what decides due-ness.
+            if (handback.getRetryAfter() != null && log.isDebugEnabled()) {
+                // Said out loud, because the fluent API invites the combination and the loss is otherwise silent.
+                // DEBUG rather than WARN: the precedence is documented on both methods, so a caller who asked for
+                // both gets what the contract says, and a hand-back runs at full processing rate during an outage.
+                log.debug("A hand-back asked both to park ({}) and to retry after {} - the park wins, so the delay "
+                                + "is discarded: a park is never due again, which no deadline can express. Ask for "
+                                + "one or the other. Record: {}",
+                        handback.getParkReason(), handback.getRetryAfter(), this);
+            }
             return Instant.MAX;
         }
         Duration carried = handback == null ? null : handback.getRetryAfter();

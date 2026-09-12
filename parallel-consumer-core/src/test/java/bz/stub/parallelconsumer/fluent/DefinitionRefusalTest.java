@@ -94,7 +94,7 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
 
         assertThat(thrown).hasMessageThat().contains("ordering");
         assertThat(thrown).hasMessageThat().contains("orders");
-        assertThat(thrown).hasMessageThat().contains("defaultOrdering");
+        assertThat(thrown).hasMessageThat().contains("withDefaultOrdering");
     }
 
     @Test
@@ -255,7 +255,7 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
 
     @Test
     void theTransactionalCommitModeWithNoTransactionalIdNamesTheSetting() {
-        var pc = define().commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+        var pc = define().withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
         pc.string("orders").process(context -> Outcome.succeeded());
 
         assertThat(refusal(pc)).hasMessageThat().contains(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
@@ -362,7 +362,7 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
      */
     @Test
     void theInstanceDefaultParkCycleIsRefusedThroughTheRouteThatCopiedIt() {
-        var definition = define().defaultAfterRetries(park().forCycles(2));
+        var definition = define().withDefaultAfterRetries(park().forCycles(2));
         definition.string("orders").process(context -> Outcome.succeeded());
 
         var thrown = refusal(definition);
@@ -408,14 +408,14 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
      */
     @Test
     void theInstanceDefaultPolicyIsRefusedBesideTheInstanceDefaultRetryForever() {
-        var definition = define().defaultRetryForever().defaultAfterRetries(park());
+        var definition = define().withDefaultRetryForever().withDefaultAfterRetries(park());
         definition.string("orders").process(context -> Outcome.succeeded());
 
         var thrown = refusal(definition);
 
         assertThat(thrown).hasMessageThat().contains("orders");
-        assertThat(thrown).hasMessageThat().contains("defaultRetryForever()");
-        assertThat(thrown).hasMessageThat().contains("defaultAfterRetries(...)");
+        assertThat(thrown).hasMessageThat().contains("withDefaultRetryForever()");
+        assertThat(thrown).hasMessageThat().contains("withDefaultAfterRetries(...)");
         assertThat(thrown).hasMessageThat().contains("nothing to react to");
     }
 
@@ -425,7 +425,7 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
      */
     @Test
     void theStoppingReactionIsRefusedBesideRetryForeverJustAsParkingIs() {
-        var definition = define().defaultRetryForever().defaultAfterRetries(AfterRetries.stop());
+        var definition = define().withDefaultRetryForever().withDefaultAfterRetries(AfterRetries.stop());
         definition.string("orders").process(context -> Outcome.succeeded());
 
         var thrown = refusal(definition);
@@ -470,27 +470,27 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
      */
     @Test
     void aRoutesRetryForeverIsRefusedBesideTheInstanceDefaultPolicy() {
-        var definition = define().defaultAfterRetries(park());
+        var definition = define().withDefaultAfterRetries(park());
         definition.string("orders").retryForever().process(context -> Outcome.succeeded());
 
         var thrown = refusal(definition);
 
         assertThat(thrown).hasMessageThat().contains("orders");
         assertThat(thrown).hasMessageThat().contains("retryForever()");
-        assertThat(thrown).hasMessageThat().contains("defaultAfterRetries(...)");
+        assertThat(thrown).hasMessageThat().contains("withDefaultAfterRetries(...)");
     }
 
     @Test
     void aRoutesOwnPolicyIsRefusedBesideTheInstanceDefaultRetryForever() {
-        var definition = define().defaultRetryForever();
+        var definition = define().withDefaultRetryForever();
         definition.string("orders").afterRetries(park()).process(context -> Outcome.succeeded());
 
         var thrown = refusal(definition);
 
         assertThat(thrown).hasMessageThat().contains("orders");
-        assertThat(thrown).hasMessageThat().contains("defaultRetryForever()");
+        assertThat(thrown).hasMessageThat().contains("withDefaultRetryForever()");
         assertThat(thrown).hasMessageThat().contains("after-retries policy of its own");
-        assertThat(thrown).hasMessageThat().contains("defaultRetryLimit(...)");
+        assertThat(thrown).hasMessageThat().contains("withDefaultRetryLimit(...)");
     }
 
     /**
@@ -500,7 +500,7 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
      */
     @Test
     void retryForeverWithNoPolicyDeclaredAnywhereIsAccepted() {
-        var definition = define().defaultRetryForever();
+        var definition = define().withDefaultRetryForever();
         definition.string("orders").process(context -> Outcome.succeeded());
 
         definition.buildOptions(runtime);
@@ -512,7 +512,7 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
      */
     @Test
     void aBoundedRouteKeepsTheInstanceDefaultPolicyLegalBesideDefaultRetryForever() {
-        var definition = define().defaultRetryForever().defaultAfterRetries(park());
+        var definition = define().withDefaultRetryForever().withDefaultAfterRetries(park());
         definition.string("orders").retryLimit(3).process(context -> Outcome.succeeded());
 
         definition.buildOptions(runtime);

@@ -99,8 +99,8 @@ final class TopicExistenceCheck {
         switch (policy) {
             case FAIL:
                 throw new MissingTopicsException(msg("These topics are named by this definition's routes and do not "
-                        + "exist on the cluster: {}. Create them, or declare whenTopicMissing({}) to have this "
-                        + "start create them, or whenTopicMissing({}) to start anyway. A start that carried on "
+                        + "exist on the cluster: {}. Create them, or declare withMissingTopicPolicy({}) to have this "
+                        + "start create them, or withMissingTopicPolicy({}) to start anyway. A start that carried on "
                         + "would leave those routes processing nothing.",
                         missing, MissingTopic.CREATE, MissingTopic.IGNORE), missing);
             case CREATE:
