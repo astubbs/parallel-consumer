@@ -219,7 +219,7 @@ This plan owns milestone one: one instance, read-only. The breakdown below is th
 - Which further non-secret configuration values join the allowlist (R7, R19).
 - Tool granularity: one snapshot tool with sections, or one tool per section; decided against what makes AE1 pass with the least description text (R5, R11).
 - How the staged scenario is driven for AE1 and whether it runs as an integration test with a scripted agent, a recorded transcript, or both (R15, R16).
-- Whether the staged pause is driven by natural fill or by the test-only threshold override the existing back-pressure test uses (R15).
+- **Where the MCP server's code lives, given the module it is meant to share does not exist on master** (KD14, R1). The dashboard module is carried by astubbs#268, a draft PR, and inherits the project's Java 8 target. So planning must choose: wait for astubbs#268 to land and then raise that module's floor, stack this work on its branch, or give the MCP server its own module after all - which contradicts KD14 and would need the owner. This is the first thing planning has to settle, because it decides where every unit puts its files.
 
 ### Sources / Research
 
