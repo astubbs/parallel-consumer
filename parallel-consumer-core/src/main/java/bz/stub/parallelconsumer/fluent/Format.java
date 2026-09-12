@@ -120,9 +120,16 @@ public final class Format<T> implements Serde<T> {
     /**
      * A supplier that answers with the one instance it was given, for every factory that takes a finished
      * serialiser: those formats share it, which is what their own javadoc says.
+     * <p>
+     * <b>A null instance yields a null supplier, not a supplier of null</b>, because an absent half is a real state
+     * of this type and {@link #hasSerializer()} answers from the supplier. A format helper whose serialiser is not
+     * on the classpath passes null deliberately - see {@code Formats}, where the serialiser is documented as
+     * optional - and wrapping that in a supplier would make the format claim it can write and then fail with a
+     * {@code NullPointerException} at the first produced record, instead of being refused by {@link Produced} the
+     * way an unwritable format is.
      */
     private static <S> Supplier<S> shared(S instance) {
-        return () -> instance;
+        return instance == null ? null : () -> instance;
     }
 
     /**

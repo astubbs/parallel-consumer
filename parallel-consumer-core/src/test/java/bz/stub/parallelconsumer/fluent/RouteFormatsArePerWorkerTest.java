@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
@@ -123,6 +124,68 @@ class RouteFormatsArePerWorkerTest extends AbstractFluentEngineTest {
         for (ThreadConfinedDeserializer each : made) {
             assertWithMessage("every instance the supplier made was closed: %s", each)
                     .that(each.closed.get()).isAtLeast(1);
+        }
+    }
+
+    /**
+     * A format helper whose serialiser is not on the classpath passes null deliberately - {@code Formats} documents
+     * the serialiser as optional - and that must stay an ABSENT half rather than becoming a supplier of null. A
+     * format that claimed it could write and then failed with a NullPointerException at the first produced record
+     * would have replaced {@link Produced}'s refusal with a crash.
+     */
+    @Test
+    void anAbsentHalfStaysAbsentRatherThanBecomingASupplierOfNull() {
+        Format<String> readOnly = Format.named(new ThreadConfinedDeserializer(), null, "read-only", String.class);
+
+        assertThat(readOnly.hasDeserializer()).isTrue();
+        assertWithMessage("a null serialiser is an absent half, not one that throws when asked")
+                .that(readOnly.hasSerializer()).isFalse();
+        assertThat(readOnly.serializer()).isNull();
+    }
+
+    /**
+     * Wrapping a per-worker format to classify its decode failures must keep it per worker. Wrapping a single
+     * instance would collapse it into a shared one and put back the very race the supplier removes - silently, since
+     * the wrapper itself is stateless and looks innocent.
+     */
+    @Test
+    void classifyingDecodeFailuresKeepsAPerWorkerFormatPerWorker() {
+        Format<String> perWorker = Format.readingPerWorker(this::newDeserializer);
+        Format<String> classified = Formats.classifyDecodeFailures(perWorker, Decode::transientFailure);
+
+        int madeBeforeDecoding = made.size();
+        decodeOnANewThread(classified, "first");
+        decodeOnANewThread(classified, "second");
+
+        assertWithMessage("each decoding thread got its own inner deserialiser through the classifying wrapper")
+                .that(made.size() - madeBeforeDecoding).isAtLeast(2);
+        assertWithMessage("and none of them was used from a thread other than its own")
+                .that(rejections()).isEqualTo(0);
+    }
+
+    /**
+     * Decodes one value on a thread of its own and waits for it, so each call is a distinct worker as far as the
+     * format is concerned.
+     */
+    private void decodeOnANewThread(Format<String> format, String value) {
+        AtomicReference<RuntimeException> failed = new AtomicReference<>();
+        Thread worker = new Thread(() -> {
+            try {
+                String ignoredDecoded = format.deserializer()
+                        .deserialize(TOPIC, value.getBytes(StandardCharsets.UTF_8));
+            } catch (RuntimeException thrown) {
+                failed.set(thrown);
+            }
+        }, "decoder-" + value);
+        worker.start();
+        try {
+            worker.join(defaultTimeout.toMillis());
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted waiting for " + worker.getName(), interrupted);
+        }
+        if (failed.get() != null) {
+            throw failed.get();
         }
     }
 
