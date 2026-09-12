@@ -17,6 +17,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongFunction;
 
 /**
@@ -93,6 +94,12 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     private MockProducer<K, V> producer;
 
     /**
+     * Whether this sandbox has settled since the last record the caller piped in - see the field of the same name
+     * on {@link Sandbox}, which owns the reasoning. Every read on a {@link SandboxOutputTopic} checks it.
+     */
+    private final AtomicBoolean settled = new AtomicBoolean();
+
+    /**
      * Null until {@link #startDriving}, which is what {@link #awaitBound(Duration)} and
      * {@link #drivenRecords()} each check before reaching for it - a sandbox asked about a run that has not
      * started should say so.
@@ -152,9 +159,10 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     }
 
     /**
-     * The read side of this sandbox: the producer built by {@link #producer(Serializer, Serializer)}, whose
-     * {@code history()} holds every record the instance produced - the counterpart of
-     * {@link #pipe(String, Object, Object)} putting one in.
+     * The whole producer built by {@link #producer(Serializer, Serializer)}, whose {@code history()} holds every
+     * record the instance produced and whose transactional state only a {@code MockProducer} can answer. <b>For
+     * reading what came out of one topic, reach for {@link #createOutputTopic(String)}</b>, which carries the read
+     * verbs, a cursor and the settle guard.
      *
      * @return that producer, or null when this definition asked for none
      */
@@ -193,18 +201,66 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      */
     public long pipe(String topic, K key, V value) {
         Objects.requireNonNull(topic, "A topic must be supplied");
-        if (!topics.contains(topic)) {
-            throw new IllegalArgumentException("This classic sandbox does not hold topic " + topic + " - it holds "
-                    + topics + ". A record for a topic the instance is not subscribed to would never be "
-                    + "delivered.");
-        }
+        requireTopic(topic);
         int partition = Math.floorMod(valueHashOf(key), partitionsPerTopic);
+        // This record is now in flight, so anything read out of the run is a race until something settles again.
+        settled.set(false);
         long offset = consumer.publish(topic, partition, key, value);
         if (offset < 0) {
             throw new IllegalStateException("This classic sandbox's consumer has closed, so " + topic + " can take "
                     + "no more records - the instance is no longer running.");
         }
         return offset;
+    }
+
+    /**
+     * One topic's way in as an object - {@code classic.createInputTopic("orders").pipeInput(key, value)} - the shape
+     * the broker-free test drivers of the stream-processing libraries users compare us with have.
+     * <p>
+     * {@link #pipe(String, Object, Object)} is the flat form, and both reach the same partition choice. Nothing is
+     * encoded on this path either way, so the instance's function receives the very object handed over.
+     *
+     * @param topic one of this sandbox's topics
+     * @throws IllegalArgumentException naming this sandbox's topics, if it does not hold the one named
+     */
+    public SandboxInputTopic<K, V> createInputTopic(String topic) {
+        Objects.requireNonNull(topic, "A topic must be supplied");
+        requireTopic(topic);
+        return new SandboxInputTopic<>(topic, this::pipe);
+    }
+
+    /**
+     * One topic's way out: what the instance produced onto it, which on this API is what a {@code pollAndProduce}
+     * definition writes. {@link SandboxOutputTopic} owns the contract - reading consumes, and every read refuses
+     * until the run has settled.
+     * <p>
+     * The topic is not checked against this sandbox's topics: those are the ones the instance consumes, and a
+     * definition produces wherever its function says.
+     *
+     * @throws IllegalStateException if this definition asked for no producer, because then there is no history to
+     *                               read - build one with {@link #producer(Serializer, Serializer)} before the
+     *                               options
+     */
+    public SandboxOutputTopic<K, V> createOutputTopic(String topic) {
+        Objects.requireNonNull(topic, "A topic must be supplied");
+        if (producer == null) {
+            throw new IllegalStateException("This classic sandbox has no producer, so nothing records what the "
+                    + "instance produced - build one with producer(keySerializer, valueSerializer) and hand it to "
+                    + "ParallelConsumerOptions.builder().producer(...) before reading " + topic + ".");
+        }
+        return new SandboxOutputTopic<>(topic, producer::history, settled::get);
+    }
+
+    /**
+     * Refuses a topic this sandbox does not hold, naming the ones it does. One place, so the refusal a pipe gives
+     * and the refusal an input topic gives are the same sentence.
+     */
+    private void requireTopic(String topic) {
+        if (!topics.contains(topic)) {
+            throw new IllegalArgumentException("This classic sandbox does not hold topic " + topic + " - it holds "
+                    + topics + ". A record for a topic the instance is not subscribed to would never be "
+                    + "delivered.");
+        }
     }
 
     /**
@@ -226,6 +282,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     public void awaitSettled() {
         consumer.awaitEveryPublishedRecordCommitted();
         refuseIfAnythingIsOutstanding();
+        settled.set(true);
     }
 
     /**
@@ -236,6 +293,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         Objects.requireNonNull(budget, "A budget must be supplied");
         consumer.awaitEveryPublishedRecordCommitted(budget);
         refuseIfAnythingIsOutstanding();
+        settled.set(true);
     }
 
     /**
@@ -316,7 +374,13 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
             throw new IllegalStateException("This classic sandbox is unbounded, so it will never reach a bound - "
                     + "declare one with Sandbox.builder().bound(...)");
         }
-        return driver.awaitBound(timeout);
+        boolean reached = driver.awaitBound(timeout);
+        if (reached) {
+            // A reached bound has already waited for every driven record to be accounted for, so it settles this
+            // sandbox as surely as awaitSettled does - and earns the reads on an output topic.
+            settled.set(true);
+        }
+        return reached;
     }
 
     /**

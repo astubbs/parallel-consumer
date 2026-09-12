@@ -4,10 +4,25 @@
 
 /**
  * The sandbox: run any Parallel Consumer definition with no broker, no Docker and no test environment, against
- * records you publish or records it makes up.
+ * records you pipe in or records it makes up.
+ *
+ * <h2>The vocabulary is theirs, on purpose</h2>
+ * <b>pipe</b> in, <b>read</b> out, per topic - the verbs and the per-topic objects of the broker-free test drivers
+ * of the stream-processing libraries users compare us with, so a user arriving from one of them has nothing to
+ * learn here (KTD16):
+ * {@link bz.stub.parallelconsumer.sandbox.Sandbox#createInputTopic(java.lang.String)} gives a
+ * {@link bz.stub.parallelconsumer.sandbox.SandboxInputTopic} carrying {@code pipeInput},
+ * {@link bz.stub.parallelconsumer.sandbox.Sandbox#createOutputTopic(java.lang.String)} gives a
+ * {@link bz.stub.parallelconsumer.sandbox.SandboxOutputTopic} carrying {@code readValue}, {@code readRecord},
+ * {@code readValuesToList}, {@code readRecordsToList}, {@code readKeyValuesToMap}, {@code queueSize} and
+ * {@code isEmpty}. Reading consumes, and every read refuses until the run has settled - that class owns both
+ * contracts. {@code Sandbox#pipe(topic, key, value)} is the flat form of the first, for a test that pipes once.
+ * <p>
+ * <b>What this module cannot copy is the settle</b>, and the settle is the reason: their engines are
+ * single-threaded, so their pipe call runs the topology and the next line can assert. Ours is the real engine.
  *
  * <h2>The two shapes, and which one to reach for</h2>
- * <b>Publish, settle, assert</b> - for a test that knows its own data, which is most of them:
+ * <b>Pipe, settle, assert</b> - for a test that knows its own data, which is most of them:
  *
  * <pre>{@code
  * Sandbox sandbox = Sandbox.builder().handPublished().build();
@@ -32,7 +47,7 @@
  * <p><b>Why a settle exists at all</b>, when the broker-free drivers of the stream-processing libraries users
  * compare us with need none: those engines are single-threaded, so a piped record is processed on the caller's
  * thread and an assertion on the next line is already safe. This one is the real engine - polled on one thread,
- * dispatched on a worker, committed on the control thread - so a publish that returned would say nothing about
+ * dispatched on a worker, committed on the control thread - so a pipe call that returned would say nothing about
  * whether the function had run.
  *
  * <p>The close differs between the two for the same reason: a close cannot be run from inside the engine it

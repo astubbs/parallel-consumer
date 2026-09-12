@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongFunction;
 
 /**
@@ -59,6 +60,15 @@ import java.util.function.LongFunction;
  * says the function has run. The broker-free drivers of the stream-processing libraries users compare us with
  * process a piped record synchronously, because those engines are single-threaded, and so they need no such call.
  * This one is the price of the thing being exercised being the real engine.
+ *
+ * <h2>Per-topic objects, on both sides</h2>
+ * {@link #createInputTopic(String)} and {@link #createOutputTopic(String)} are the same two shapes the broker-free
+ * drivers of the stream-processing libraries users compare us with hand out (KTD16): the first carries
+ * {@code pipeInput}, for a test that pipes into one topic repeatedly rather than naming it on every line, and the
+ * second carries the read verbs - {@code readValue}, {@code readRecord}, {@code readValuesToList},
+ * {@code readRecordsToList}, {@code readKeyValuesToMap}, {@code queueSize} and {@code isEmpty} - over what the
+ * instance produced. {@link SandboxOutputTopic} owns the two contracts a caller has to know: <b>reading
+ * consumes</b>, and <b>every read refuses until the run has settled</b>.
  *
  * <h2>The convenience on top: a driver that publishes for you</h2>
  * For a soak or a demo, where the point is volume rather than particular records, the module publishes on a
@@ -172,6 +182,17 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      */
     private final MockProducer<byte[], byte[]> producer =
             new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+
+    /**
+     * Whether this sandbox has settled since the last record the caller piped in - false at the start, true after a
+     * settle or a reached bound, false again on the next {@link #pipe}. It is what every read on a
+     * {@link SandboxOutputTopic} checks first, because a read taken while work is in flight comes back empty and an
+     * empty read is indistinguishable from a definition that produced nothing.
+     * <p>
+     * Atomic because the flag is written from whichever thread piped or waited and read from whichever thread
+     * asserts, and those are not required to be the same one.
+     */
+    private final AtomicBoolean settled = new AtomicBoolean();
 
     // Null until the definition is started - which is the whole shape of this class: it is asked for clients,
     // then told the instance is running. NullAway reads a field a constructor does not set as a fault, and the
@@ -373,11 +394,9 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     public long pipe(String topic, Object key, Object value) {
         Objects.requireNonNull(topic, "A topic must be supplied");
         requireStarted();
-        RoutePublisher publisher = publishers.get(topic);
-        if (publisher == null) {
-            throw new IllegalArgumentException("No route in this definition claims topic " + topic + " - it routes "
-                    + publishers.keySet() + ". A record published to an unrouted topic would never be delivered.");
-        }
+        RoutePublisher publisher = routeFor(topic);
+        // This record is now in flight, so anything read out of the run is a race until something settles again.
+        settled.set(false);
         long offset = publisher.publish(key, value);
         if (offset < 0) {
             throw new IllegalStateException("This sandbox's consumer has closed, so " + topic + " can take no "
@@ -385,6 +404,56 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
                     + "that holds the instance, and settle before you leave it.");
         }
         return offset;
+    }
+
+    /**
+     * One topic's way in as an object, which is the shape the broker-free test drivers of the stream-processing
+     * libraries users compare us with have: {@code sandbox.createInputTopic("orders").pipeInput(key, value)}.
+     * <p>
+     * Reach for it when a test pipes repeatedly into one topic, and for {@link #pipe(String, Object, Object)} when
+     * it pipes once - both go through this sandbox's one encoding and one partition choice. No serialisers here
+     * either, for the reason {@link #pipe(String, Object, Object)} gives.
+     *
+     * @param topic a topic one of this definition's routes claims
+     * @throws IllegalStateException    if this sandbox has not been started
+     * @throws IllegalArgumentException naming the routed topics, if no route claims this one
+     */
+    public SandboxInputTopic<Object, Object> createInputTopic(String topic) {
+        Objects.requireNonNull(topic, "A topic must be supplied");
+        requireStarted();
+        // Called for its refusal, not its value: a topic nothing routes is named here, at the line that spells it,
+        // rather than at whichever pipe happens to be first.
+        RoutePublisher ignoredPublisher = routeFor(topic);
+        return new SandboxInputTopic<>(topic, this::pipe);
+    }
+
+    /**
+     * One topic's way out: what the instance produced onto it. {@link SandboxOutputTopic} owns the contract -
+     * reading consumes, and every read refuses until the run has settled.
+     * <p>
+     * The topic is not checked against the definition's routes, because a definition produces wherever its function
+     * says and those are output topics, which no route claims. On the fluent API what fills it is export, so until
+     * export lands this reads honestly empty; the classic API's {@code pollAndProduce} fills it today.
+     *
+     * @throws IllegalStateException if this sandbox has not been started
+     */
+    public SandboxOutputTopic<byte[], byte[]> createOutputTopic(String topic) {
+        Objects.requireNonNull(topic, "A topic must be supplied");
+        requireStarted();
+        return new SandboxOutputTopic<>(topic, producer::history, settled::get);
+    }
+
+    /**
+     * The route that claims a topic, or a refusal naming what this definition does route. One place, so the
+     * refusal a pipe gives and the refusal an input topic gives are the same sentence.
+     */
+    private RoutePublisher routeFor(String topic) {
+        RoutePublisher publisher = publishers.get(topic);
+        if (publisher == null) {
+            throw new IllegalArgumentException("No route in this definition claims topic " + topic + " - it routes "
+                    + publishers.keySet() + ". A record published to an unrouted topic would never be delivered.");
+        }
+        return publisher;
     }
 
     /**
@@ -425,6 +494,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
             throw endedShort(shortfall.getMessage(), shortfall);
         }
         settledOrRefuse();
+        settled.set(true);
     }
 
     /**
@@ -442,6 +512,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
             throw endedShort(shortfall.getMessage(), shortfall);
         }
         settledOrRefuse();
+        settled.set(true);
     }
 
     /**
@@ -544,9 +615,10 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * The read side of the sandbox: the mock producer, whose {@code history()} holds every record the instance
      * produced - exported records included, once export lands.
      * <p>
-     * Named for what a caller reaches for it to do rather than for the client it hands back, so that reading what
-     * came out is the counterpart of {@link #pipe(String, Object, Object)} putting something in. The client itself
-     * is what a definition asks for, through {@link #producer(DefinitionView)}.
+     * This is the whole client, across every topic, and the escape hatch for what only a {@code MockProducer} can
+     * answer - {@code transactionInitialized()}, the transactional offset history. <b>For reading what came out of
+     * one topic, reach for {@link #createOutputTopic(String)}</b>, which carries the read verbs, a cursor and the
+     * settle guard. The client a definition asks for is {@link #producer(DefinitionView)}.
      */
     public MockProducer<byte[], byte[]> readRecords() {
         return producer;
@@ -586,7 +658,13 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
             throw new IllegalStateException("This sandbox is unbounded, so it will never reach a bound - declare "
                     + "one with Sandbox.builder().bound(...), or close the instance to end the run");
         }
-        return driver.awaitBound(timeout);
+        boolean reached = driver.awaitBound(timeout);
+        if (reached) {
+            // The bound waits for every driven record to be accounted for and then closes the instance, so a true
+            // return is a settle by another route - and reads on an output topic are earned by it.
+            settled.set(true);
+        }
+        return reached;
     }
 
     /**
