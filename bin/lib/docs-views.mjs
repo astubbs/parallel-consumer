@@ -55,6 +55,17 @@ export const HEADER_TOP = 3
 const ADDS_SHOWN = 5
 
 /**
+ * How many added CONTENT lines the same line names, when there were no headings to name.
+ *
+ * Fewer than the headings, because they are not the same kind of thing. A heading is a few words by
+ * construction; a content line is prose, and in a record it is a folded-scalar line that can run the
+ * width of the file. Deliberately NOT truncated to compensate: the whole point of showing more than
+ * one is that two versions get different evidence, and clipping them to a common width is a way to
+ * hand two different versions the same string again.
+ */
+const CONTENT_SHOWN = 3
+
+/**
  * THE ONE-LINE FORM OF A WARNING THAT VOIDS THE ANSWER, for the renderers with no room for the
  * full text: the summary tier of the header and a match block's count line. A shallow or
  * never-fetched clone truncates the history the divergent set is computed against, so the count
@@ -117,14 +128,24 @@ export function formatDivergenceHeader(d, { tier = 'summary', top = HEADER_TOP, 
         out.push(`    ${sizeText.padEnd(14)} ${named.join(', ')}${more > 0 ? ` and ${plural(more, 'more ref')}` : ''}`)
         if (c.preview) {
             const headings = c.preview.headings
+            // WHAT THE EVIDENCE IS AGAINST, said out loud whenever it is not the merge-base. A
+            // version the merge-base has never held is compared with a sibling version instead,
+            // because "what the whole file contains" is the same sentence for every version of it -
+            // and a reader choosing between versions cannot act on evidence whose baseline is unstated.
+            const adds = c.preview.againstRef ? `has, and ${c.preview.againstRef} does not` : 'adds'
+            const named = (xs, cap) => `${xs.slice(0, cap).map((h) => `"${h}"`).join(', ')}`
+                + `${xs.length > cap ? ` and ${xs.length - cap} more` : ''}`
+            const content = c.preview.contentLines ?? []
             if (headings.length > 0) {
-                const named = headings.slice(0, ADDS_SHOWN).map((h) => `"${h}"`).join(', ')
-                const rest = headings.length - ADDS_SHOWN
-                out.push(`        adds: ${named}${rest > 0 ? ` and ${rest} more` : ''}`)
+                out.push(`        ${adds}: ${named(headings, ADDS_SHOWN)}`)
             // The word follows the document kind: a YAML record has keys where prose has headings,
             // and "no heading added" about a file that cannot hold one is a sentence a reader has
             // to decode before discarding.
-            } else if (c.preview.firstLine !== null) out.push(`        adds: "${c.preview.firstLine}" (no ${c.preview.kind === 'record' ? 'key' : 'heading'} added)`)
+            } else if (content.length > 0) {
+                out.push(`        ${adds}: ${named(content, CONTENT_SHOWN)} (no ${c.preview.kind === 'record' ? 'key' : 'heading'} added)`)
+            // A version wholly contained in the one it was compared with is a real finding, and a
+            // different one from "the diff could not be read" - which renders as no line at all.
+            } else if (c.preview.againstRef) out.push(`        nothing ${c.preview.againstRef}'s version does not already have`)
             else out.push('        adds: nothing visible in a line diff')
         }
     }

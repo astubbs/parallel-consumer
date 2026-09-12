@@ -45,6 +45,17 @@ export const RECORD_KEY_RE = /^[A-Za-z_][\w.-]*:/
 /** A `#` line inside a record is a COMMENT - in this repository, always the copyright header. */
 export const RECORD_COMMENT_RE = /^\s*#/
 
+/**
+ * A RECORD LINE CARRYING NOTHING BUT YAML PUNCTUATION: a list dash, a block-scalar indicator
+ * (`>`, `|`, and their chomping suffixes), a document separator. Structure, never content.
+ *
+ * It earns a name because it defeated a preview. Two different versions of one record were each
+ * summarised as `"  - >-"` - the line that opens a folded scalar - so the evidence distinguishing
+ * them was punctuation they happened to share, and the reader was back to two identical answers.
+ * A line like this is the record's equivalent of a blank one, and the fallback skips both.
+ */
+export const RECORD_PUNCTUATION_RE = /^[\s>|+-]*$/
+
 /** Which of the two rules answers "is this line a heading" for the document at `path`. */
 export const headingRe = (path) => (isRecord(path) ? RECORD_KEY_RE : PROSE_HEADING_RE)
 

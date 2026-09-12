@@ -471,6 +471,54 @@ function buildDocsIndexFixture() {
 const docsIndexFixture = () => (DOCS_INDEX ??= buildDocsIndexFixture())
 
 /**
+ * THE CORPUS FIXTURE PLUS THREE VERSIONS OF ONE RECORD, none of them on the baseline - the shape the
+ * divergence preview could not tell apart and no check covered.
+ *
+ * Every version carries the SAME schema preamble, the same title and the same category, because that
+ * is what defeated the preview: a version the merge-base has never held counts as wholly added, so
+ * the evidence was the keys every record of that kind opens with, identical for all three and
+ * indistinguishable from evidence.
+ *
+ * The three differ on purpose in three ways, not one. `rival-b` REPLACES the entry `rival-a` holds -
+ * two versions that disagree. `rival-c` KEEPS that entry and adds a second - a version that contains
+ * another, which is the case a one-line preview describes with the line they share. And each entry is
+ * a folded scalar, so the first line of a structural difference is `  - >-`: punctuation both sides
+ * hold, which is the third way two different versions come out reading the same.
+ *
+ * Its own repository for the reason bin/lib/fixture-repos.mjs gives: the drift checks on the shared
+ * corpus assert exact ref and version counts, and three more live refs would move them.
+ */
+let RECORD_VERSIONS = null
+const RIVAL = 'docs/features/rival.yaml'
+function buildRecordVersionsFixture() {
+    const { dir, git, commit, write } = buildDocsFixture()
+    const rival = (entries, keys = []) => ['# Copyright (C) 2026 Antony Stubbs and contributors', '',
+        'schema_version: 1', 'kind: feature', 'title: A capability three branches describe differently',
+        'category: processing', 'module: parallel-consumer-core', 'availability:', '  status: planned',
+        'summary: what it does, in one line.', ...keys, 'boundaries:',
+        ...entries.flatMap((e) => ['  - >-', `    ${e}`]), ''].join('\n')
+    const branch = (name, entries, keys) => {
+        git('checkout', '-q', '-b', name, 'master')
+        write(RIVAL, rival(entries, keys))
+        commit(`the record as ${name} describes it`)
+    }
+    branch('rival-a', ['alpha is the only entry here'])
+    branch('rival-b', ['beta replaces alpha entirely'])
+    // ...and one TOP-LEVEL KEY no other version declares, so a record's own table of contents is
+    // reachable as evidence. Without it every difference here is nested, and the rule that reads a
+    // record's keys where a document's headings would be could be reverted with nothing going red -
+    // which is how that fix shipped unguarded in the first place.
+    branch('rival-c', ['alpha is the only entry here', 'gamma adds a second entry'], ['readme_anchor: park-in-place'])
+    git('checkout', '-q', 'master')
+    return dir
+}
+const recordVersionsFixture = () => (RECORD_VERSIONS ??= buildRecordVersionsFixture())
+
+/** The evidence one divergent version's preview carries, as the header would render it, by ref. */
+const evidenceByRef = (d) => new Map(d.divergent.map((c) => [c.refs[0],
+    [c.preview?.againstRef ?? '', ...(c.preview?.headings ?? []), ...(c.preview?.contentLines ?? [])].join(' | ')]))
+
+/**
  * The corpus fixture plus the two shapes the shared-tree index build is specified against and the
  * shared fixture does not hold: refs that SHARE a `docs/` tree object (`src-only-a` and `src-only-b`
  * edit source only, so both name master's tree - the common case on the real repository, where
@@ -1872,6 +1920,79 @@ const CHECKS = [
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
             '        headings: added.filter((l) => isHeading.test(l)),', '        headings: [],'),
+    },
+    {
+        id: 'two-versions-of-one-record-do-not-get-the-same-preview',
+        why: 'the preview is the evidence a reader chooses which branch to read from; three different versions of one record all reported the same added keys, which is output shaped like evidence that carries none - worse than no preview at all, because it looks answered',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(recordVersionsFixture(), () => {
+                const d = n.drift(RIVAL, { prs: new Map() })
+                if (!d.found || d.onBaseline || d.divergent.length !== 3) return false
+                const ev = evidenceByRef(d)
+                if (ev.size !== 3) return false
+                // THE CLAIM: pairwise distinct. This is what reverting the fix breaks - every
+                // version then reports the schema preamble every record of this kind opens with.
+                if (new Set(ev.values()).size !== 3) return false
+                // No version has a merge-base copy to diff against, so every row must NAME the
+                // version it was compared with - evidence whose baseline is unstated is not evidence.
+                if ([...d.divergent].some((c) => !c.preview || !c.preview.againstRef)) return false
+                // And the evidence is content, never the preamble that says nothing about a version.
+                const all = [...ev.values()].join(' ')
+                if (/schema_version|kind: feature|category: processing/.test(all)) return false
+                // Each version's own words reach its own row.
+                return ev.get('rival-b').includes('beta replaces alpha') && ev.get('rival-c').includes('gamma adds a second')
+            })
+        },
+        // The pre-fix behaviour exactly: a version with no merge-base copy is treated as wholly
+        // added, so what it "adds" is its whole self - the same sentence for every version of it.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '    const sibling = stat.newFile && peer && peer.blob !== blob ? peer : null',
+            '    const sibling = null'),
+    },
+    {
+        id: 'a-record-version-preview-names-the-keys-it-added-not-markdown-headings',
+        why: "a record's only `#` line is its copyright comment, so the markdown-heading rule gave every version of every record the same one-line evidence - and the fix for that shipped with no check behind it, which a reviewer proved by reverting it and watching the whole suite stay green",
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(recordVersionsFixture(), () => {
+                const d = n.drift(RIVAL, { prs: new Map() })
+                if (!d.found) return false
+                const c = d.divergent.find((x) => x.refs.includes('rival-c'))
+                if (!c?.preview) return false
+                // The one top-level key this version declares and no other does IS its table of
+                // contents entry, and it is what the preview must name.
+                if (!c.preview.headings.some((l) => l.startsWith('readme_anchor:'))) return false
+                if (c.preview.kind !== 'record') return false
+                // Never the copyright comment - the wrong answer the old rule gave, every time.
+                return !c.preview.headings.some((l) => /Copyright/.test(l))
+                    && !(c.preview.contentLines ?? []).some((l) => /Copyright/.test(l))
+            })
+        },
+        // The pre-fix rule, restored: markdown headings for every document, records included.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '    const isHeading = headingRe(path)', '    const isHeading = /^#{1,6}\\s/'),
+    },
+    {
+        id: 'a-record-version-is-not-summarised-by-punctuation-it-shares-with-the-other',
+        why: 'a folded scalar opens with `- >-`, so the first line of a structural difference is a token both versions hold - two different records summarised by the same punctuation is the same indistinguishability one layer down, and it survived the first fix',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(recordVersionsFixture(), () => {
+                const d = n.drift(RIVAL, { prs: new Map() })
+                if (!d.found || d.divergent.length !== 3) return false
+                const previews = d.divergent.map((c) => c.preview)
+                if (previews.some((p) => !p || p.contentLines.length === 0)) return false
+                // Not one line of evidence anywhere is YAML structure with no content in it.
+                const punctuation = /^[\s>|+-]*$/
+                if (previews.some((p) => p.contentLines.some((l) => punctuation.test(l)))) return false
+                // `firstLine` is the first of them, so the single-line callers get content too.
+                return previews.every((p) => p.firstLine === p.contentLines[0] && !punctuation.test(p.firstLine))
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '    const content = added.filter((l) => l.trim().length > 0 && !(record && RECORD_PUNCTUATION_RE.test(l)))',
+            '    const content = added.filter((l) => l.trim().length > 0)'),
     },
     {
         id: 'a-tag-only-version-is-preserved-not-divergent',

@@ -49,7 +49,7 @@
 
 
 import { cacheRead, cacheWrite } from './cache.mjs'
-import { RECORD_COMMENT_RE, headingRe, isRecord } from './doc-kind.mjs'
+import { RECORD_COMMENT_RE, RECORD_PUNCTUATION_RE, headingRe, isRecord } from './doc-kind.mjs'
 import { DOC_AREAS, NOTES_DIR, REPO } from './repo.mjs'
 import {
     baseline, blobContents, blobDiffAddedLines, blobDiffStat, blobsForPath, exec, lines, mergeBaseBlobs, mergeBases,
@@ -446,22 +446,49 @@ export function addedSinceMergeBase(base, ref, path, blob) {
  * Top-level keys are the record's own table of contents, which is what a heading is; comment lines
  * are excluded from the fallback line for the same reason the copyright header is not a title.
  *
+ * THAT FIX WAS NOT ENOUGH, and the second half is the one worth reading. Fixing the pattern left
+ * every version of a branch-only record still reporting the SAME added keys, because a `newFile`
+ * version has no merge-base copy to diff against: the whole file counts as added, and every record
+ * opens with the schema preamble its kind requires. Three genuinely different versions of one record
+ * produced byte-identical evidence. So when there is no merge-base version but a SIBLING version
+ * exists on another ref, the diff is taken against the sibling, and `againstRef` names it - the
+ * reader is then told what this version has that that one does not, which is the question they were
+ * choosing between versions to answer. A record wholly new everywhere has no sibling, its whole
+ * content genuinely is what it adds, and `againstRef` is null to say so.
+ *
  * Null when there is nothing to say for a reason worth not hiding: the size lookup failed, or
  * there was no merge-base to diff against. Both render as absent, never as "adds nothing".
+ *
+ * @param {{blob: string, ref: string}|null} [peer] a sibling version of the same path, used ONLY
+ *   when there is no merge-base version - it is the difference between two versions, which is what
+ *   `newFile` means the merge-base cannot tell you.
  */
-function previewOf(stat, blob, path) {
+function previewOf(stat, blob, path, peer = null) {
     if (!stat || stat.diffFailed) return null
-    const diff = blobDiffAddedLines(stat.newFile ? null : stat.against, blob)
+    const sibling = stat.newFile && peer && peer.blob !== blob ? peer : null
+    const diff = blobDiffAddedLines(sibling ? sibling.blob : (stat.newFile ? null : stat.against), blob)
     if (!diff.ok) return null
     const record = isRecord(path)
     // A `#` line in a record is a comment, never a heading - bin/lib/doc-kind.mjs owns that rule
     // now, and owns it for every reader, because this was the third place to re-derive it.
     const added = record ? diff.lines.filter((l) => !RECORD_COMMENT_RE.test(l)) : diff.lines
     const isHeading = headingRe(path)
+    // A record's blank line includes the ones holding only YAML punctuation: summarising two
+    // different versions as the `- >-` that opens a folded scalar in both is the same
+    // indistinguishability one layer down.
+    const content = added.filter((l) => l.trim().length > 0 && !(record && RECORD_PUNCTUATION_RE.test(l)))
     return {
         kind: record ? 'record' : 'document',
+        againstRef: sibling ? sibling.ref : null,
         headings: added.filter((l) => isHeading.test(l)),
-        firstLine: added.find((l) => l.trim().length > 0) ?? null,
+        // THE CONTENT LINES, NOT JUST THE FIRST, and that is the last of the three ways this
+        // preview could report two different versions identically. Two versions that both contain a
+        // line a third does not are each described by that shared line when only one is shown -
+        // true of both, and useless for telling them apart. The list is what separates them, and
+        // the renderer bounds it exactly as it bounds the headings.
+        contentLines: content,
+        // Kept as the first of them: callers that want one line should not have to know that.
+        firstLine: content[0] ?? null,
     }
 }
 
@@ -682,19 +709,44 @@ export function drift(path, {
         cluster.title = titles.get(blob) ?? null
         return cluster
     }
-    /** The expensive half: who carries it, in facts, and what it added. Summary clusters never get it. */
-    const detailed = (cluster) => {
-        if (summary) return cluster
-        cluster.branches = cluster.refs.slice(0, maxBranchesPerCluster).map((r) => branchFacts(r, prs, base))
-        cluster.preview = cluster.isBaseline ? null : previewOf(cluster.added, cluster.blob, path)
-        return cluster
-    }
-
     // Most-carried first is the order this returns, and the order the header ranks from - so the
     // clusters detailed here are chosen over that SAME order, or a tie on added size could put a
     // bare cluster in the header's top rows while a detailed one sat just below them.
     const divergentClusters = divergent.map(build).sort((a, b) => b.refs.length - a.refs.length)
-    if (!summary) for (const c of largestFirst(divergentClusters).slice(0, previewLimit)) detailed(c)
+
+    /**
+     * THE VERSION A `newFile` PREVIEW IS COMPARED AGAINST, when the merge-base holds none: the
+     * baseline's own copy if it has one, else the NEIGHBOUR - the version rendered beside this one.
+     *
+     * THE NEIGHBOUR, AND NOT ONE FIXED REFERENCE VERSION, and that was a real choice. Describing
+     * every version against the most-carried one reads tidier and reintroduces the defect a row
+     * later: two versions that differ from that reference in the same place carry the same evidence
+     * line, so a reader comparing them is back to two identical answers about two different files.
+     * Chained against the neighbour, each adjacent pair is told apart by construction. The frames
+     * differ between rows, which is why the renderer NAMES the ref it compared against on every row
+     * rather than saying it once in a heading.
+     */
+    const peerFor = (cluster, neighbour) => {
+        if (baseBlob && baseBlob !== cluster.blob) return { blob: baseBlob, ref: base }
+        const other = neighbour && neighbour.blob !== cluster.blob
+            ? neighbour : divergentClusters.find((c) => c.blob !== cluster.blob)
+        return other ? { blob: other.blob, ref: other.refs[0] } : null
+    }
+
+    /** The expensive half: who carries it, in facts, and what it added. Summary clusters never get it. */
+    const detailed = (cluster, neighbour = null) => {
+        if (summary) return cluster
+        cluster.branches = cluster.refs.slice(0, maxBranchesPerCluster).map((r) => branchFacts(r, prs, base))
+        cluster.preview = cluster.isBaseline ? null : previewOf(cluster.added, cluster.blob, path, peerFor(cluster, neighbour))
+        return cluster
+    }
+    // The neighbour chain runs over the order the HEADER renders, which is what `largestFirst` is
+    // for and why both sides call it: a version told apart from a row the reader cannot see is a
+    // comparison they cannot follow. The first row's neighbour is the second, so no row is unpaired.
+    if (!summary) {
+        const ranked = largestFirst(divergentClusters)
+        ranked.slice(0, previewLimit).forEach((c, i) => detailed(c, ranked[i === 0 ? 1 : i - 1] ?? null))
+    }
 
     return {
         path, ok: true, found: true, detail, baseline: base, onBaseline: baseBlob !== null,
