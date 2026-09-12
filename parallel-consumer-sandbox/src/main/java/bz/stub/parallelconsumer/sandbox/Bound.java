@@ -62,7 +62,7 @@ public final class Bound {
     }
 
     /**
-     * Generate until the instance is closed.
+     * Drive until the instance is closed.
      */
     public static Bound none() {
         return NONE;

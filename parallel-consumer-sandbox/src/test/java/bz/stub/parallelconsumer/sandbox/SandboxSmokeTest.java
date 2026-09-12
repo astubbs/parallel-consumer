@@ -52,7 +52,7 @@ class SandboxSmokeTest {
     private static final TopicPartition DISPATCHES_0 = new TopicPartition(DISPATCHES_TOPIC, 0);
 
     @Test
-    void aTwoRouteDefinitionConsumesGeneratedRecordsWithNoBroker() {
+    void aTwoRouteDefinitionConsumesDrivenRecordsWithNoBroker() {
         // What each route's own function saw, kept apart so that "both routes ran" is a fact rather than a total.
         ConcurrentLinkedQueue<String> ordersSeen = new ConcurrentLinkedQueue<>();
         ConcurrentLinkedQueue<String> dispatchesSeen = new ConcurrentLinkedQueue<>();

@@ -46,7 +46,7 @@ import java.util.function.LongFunction;
  * reached. {@link #startDriving} is both.
  *
  * <h2>Nothing is encoded on this path</h2>
- * A mock consumer holds records of the user's own types, so the generated objects go in as they are and the
+ * A mock consumer holds records of the user's own types, so the objects a feed makes go in as they are and the
  * instance's own deserialisers never run - which is exactly the difference from the fluent path, where the engine
  * reads raw bytes and every record has to be encoded with its route's serialiser first. A classic definition's
  * deserialisation is therefore <em>not</em> exercised by the sandbox, and the documentation says so rather than
