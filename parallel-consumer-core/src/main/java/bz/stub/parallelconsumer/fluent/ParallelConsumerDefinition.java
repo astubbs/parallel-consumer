@@ -587,7 +587,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             processor.poll(dispatcher::dispatchWithoutProducing);
         }
         // After the subscription, so a fake consumer's partitions can be assigned to a listener that now exists,
-        // and with the instance, so a generator with a bound can close it when it reaches one (KTD9).
+        // and with the instance, so a driver with a bound can close it when it reaches one (KTD9).
         runtime.started(instance);
         return instance;
     }
