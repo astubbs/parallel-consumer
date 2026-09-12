@@ -39,8 +39,9 @@ export function windowRepo() {
  *   master            docs/features/batching.yaml and pause.yaml - published records in two
  *                     categories; docs/features/no-title.yaml - a record whose `title:` key is
  *                     MISSING, which the title chain must report rather than paper over with the
- *                     filename; docs/features/staging/planned-thing.yaml - a staged record, which
- *                     is grouped by its directory and not by the category it declares
+ *                     filename; docs/features/staging/planned-thing.yaml - a staged record which
+ *                     DECLARES ITSELF PUBLISHED, so both readers of that fact - the group and the
+ *                     line's tail - have to agree that the directory wins
  *   adds-heading      note.md plus a new `## ...` section - a divergent version that ADDED A HEADING
  *   adds-line         note.md plus one plain line - a divergent version that added NO heading
  *   only-here         docs/inflight/branch-only.md and docs/features/branch-only-capability.yaml,
@@ -86,7 +87,11 @@ export function buildDocsFixture() {
     write('docs/features/batching.yaml', feature({ title: 'Batch processing', category: 'processing', status: 'published' }))
     write('docs/features/pause.yaml', feature({ title: 'Pause and resume', category: 'operability', status: 'published' }))
     write('docs/features/no-title.yaml', feature({ category: 'processing', status: 'published' }))
-    write('docs/features/staging/planned-thing.yaml', feature({ title: 'A capability not settled yet', category: 'integration', status: 'planned' }))
+    // DECLARES `published` ON PURPOSE, and that is the whole point of it: a staged record whose own
+    // status contradicts the directory it sits in is the shape the index rendered as `_published_`
+    // under a heading saying "not settled in the tree yet". A staged record that agreed with its
+    // directory could not have caught it, and the live corpus holds one that does not agree.
+    write('docs/features/staging/planned-thing.yaml', feature({ title: 'A capability not settled yet', category: 'integration', status: 'published' }))
     commit('the corpus')
 
     git('checkout', '-q', '-b', 'adds-heading')

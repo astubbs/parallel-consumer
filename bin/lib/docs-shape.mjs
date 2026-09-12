@@ -112,10 +112,11 @@ const groupSolutions = (docs, dir) => {
 }
 
 /**
- * WHAT A FEATURE RECORD SAYS ABOUT ITSELF, for the group and the line that lists it. Two keys, and
- * both are read from the record rather than from its path: `category` is the axis the schema
- * already asks every record to declare, and `availability.status` is the one thing a reader needs
- * beside the title - whether the capability EXISTS today or is planned.
+ * WHAT A FEATURE RECORD SAYS ABOUT ITSELF, for the group and the line that lists it. Two keys read
+ * from the record: `category` is the axis the schema already asks every record to declare, and
+ * `availability.status` is the one thing a reader needs beside the title - whether the capability
+ * EXISTS today or is planned. Plus one fact the record cannot state about itself, `staged`, which
+ * is where it SITS - see `isStaged` for why that has to travel with the record.
  *
  * Column-0 anchored for `category:`, so a nested key of that name cannot answer for the record; the
  * status is read from inside the `availability:` block for the same reason, since `status` is a
@@ -123,15 +124,26 @@ const groupSolutions = (docs, dir) => {
  * the shape reports (`uncategorised`, no tail on the line), never an error to throw, which is the
  * rule `classifyNote` follows for an unknown marker.
  */
-export function classifyFeature(text) {
+export function classifyFeature(text, path, dir) {
     const category = /^category:[ \t]*(.*)$/m.exec(text)?.[1]?.trim() ?? ''
     const block = /^availability:[ \t]*\r?\n((?:[ \t]+.*\r?\n?)*)/m.exec(text)?.[1] ?? ''
     const status = /^[ \t]+status:[ \t]*(.*)$/m.exec(block)?.[1]?.trim() ?? ''
-    return { category, status }
+    return { category, status, staged: isStaged(path, dir) }
 }
 
 /** The group a staged record takes, whatever it declares - the directory is the stronger claim. */
 const STAGED_GROUP = 'staging'
+
+/**
+ * IS THIS RECORD STAGED - the one place that answers it, because it was answered in two and they
+ * disagreed inside a single rendered line. `groupFeatures` filed a record under `staging` while the
+ * tail ten lines away echoed its own `availability.status` and called it published, in an index
+ * whose whole job is to say what the product already does. docs/features/staging/README.md is
+ * explicit that "a record that asserts something the tree contradicts is worse than a missing one",
+ * so the directory wins and the flag travels ON the record rather than being re-derived by each
+ * renderer from a path it may not have.
+ */
+export const isStaged = (path, dir) => typeof path === 'string' && path.startsWith(`${dir}/${STAGED_GROUP}/`)
 
 /**
  * Features: the record's own `category`, alphabetically, with staged records in their own group
@@ -151,8 +163,7 @@ const STAGED_GROUP = 'staging'
 const groupFeatures = (docs, dir) => {
     const buckets = new Map()
     for (const d of docs) {
-        const rest = d.path.slice(dir.length + 1)
-        const key = rest.startsWith(`${STAGED_GROUP}/`) ? STAGED_GROUP : (d.feature?.category || 'uncategorised')
+        const key = d.feature?.staged ? STAGED_GROUP : (d.feature?.category || 'uncategorised')
         if (!buckets.has(key)) buckets.set(key, [])
         buckets.get(key).push(d)
     }
@@ -232,7 +243,7 @@ export function docsShape({ index, stranded, areas = index.areas }) {
         const text = batch.contents.get(w.blob) ?? ''
         const doc = { path: w.path, ref: w.ref, offBaseline: w.offBaseline, title: titleOf(text, w.path) }
         if (w.area.dir === NOTES_DIR) doc.note = classifyNote(text, w.path)
-        if (w.area.dir === FEATURES_DIR) doc.feature = classifyFeature(text)
+        if (w.area.dir === FEATURES_DIR) doc.feature = classifyFeature(text, w.path, w.area.dir)
         perArea.get(w.area.dir).push(doc)
     }
 

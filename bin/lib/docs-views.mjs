@@ -391,8 +391,22 @@ const noteTail = (d) => {
     return d.note.impact ? `  _${d.note.impact}_` : ''
 }
 
-/** The disposition a feature line carries: whether the capability EXISTS yet, which the title cannot say. */
-const featureTail = (d) => (d.feature?.status ? `  _${d.feature.status}_` : '')
+/**
+ * The disposition a feature line carries: whether the capability EXISTS yet, which the title cannot
+ * say.
+ *
+ * THE DIRECTORY OUTRANKS THE DECLARATION, and this line is where the two used to disagree inside one
+ * rendered line: a record under `staging/` was grouped as staged and then tailed `_published_`,
+ * because this read `availability.status` verbatim and never learned what the grouping had already
+ * decided. An agent scanning the index for shipped capability read the tail, not the heading above
+ * it, and proposed work against a capability the tree does not have - the exact outcome
+ * docs/features/staging/README.md forbids. `staged` now travels on the record (bin/lib/docs-shape.mjs
+ * -> `isStaged`), so there is one answer for both readers rather than two derivations of one fact.
+ */
+const featureTail = (d) => {
+    if (d.feature?.staged) return '  _staged_'
+    return d.feature?.status ? `  _${d.feature.status}_` : ''
+}
 
 /** One document as a line of the index, in the shape the hook gave that area's lines. */
 const INDEX_LINE = {

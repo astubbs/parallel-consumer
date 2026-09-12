@@ -2572,8 +2572,33 @@ const CHECKS = [
             return declared.code === 0 && declared.out.includes("no group named 'integration' in features")
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'docs-shape.mjs'),
-            "        const key = rest.startsWith(`${STAGED_GROUP}/`) ? STAGED_GROUP : (d.feature?.category || 'uncategorised')",
+            "        const key = d.feature?.staged ? STAGED_GROUP : (d.feature?.category || 'uncategorised')",
             "        const key = d.feature?.category || 'uncategorised'"),
+    },
+    {
+        id: 'a-staged-record-is-not-tailed-with-the-status-it-declares',
+        why: 'the group said staged and the tail on the same line said published, in the one listing a session reads to find out what the product already does - a reader who takes the tail proposes work against a capability the tree does not have',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const index = invoke(binDir, ['docs', 'index'], { cwd: dir })
+            if (index.code !== 0) return false
+            const line = index.out.split('\n').find((l) => l.includes('A capability not settled yet'))
+            // The fixture record DECLARES published, so a tail echoing the record contradicts its
+            // own heading. Both halves asserted: the contradiction gone, and the fact still stated.
+            if (!line || line.includes('_published_') || !line.includes('_staged_')) return false
+            // A published record still says what it is - the fix is the directory winning, not the
+            // tail going quiet.
+            const published = index.out.split('\n').find((l) => l.includes('Batch processing'))
+            if (!published || !published.includes('_published_')) return false
+            // And the two readers of that fact take it from the SAME place: the record carries it.
+            const sh = await import(pathToFileURL(join(binDir, 'lib', 'docs-shape.mjs')).href)
+            const staged = sh.classifyFeature('availability:\n  status: published\n',
+                'docs/features/staging/x.yaml', 'docs/features')
+            const plain = sh.classifyFeature('availability:\n  status: published\n', 'docs/features/x.yaml', 'docs/features')
+            return staged.staged === true && plain.staged === false && staged.status === 'published'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
+            "    if (d.feature?.staged) return '  _staged_'", '    if (false) return \'  _staged_\''),
     },
     {
         id: 'prior-art-searches-feature-records-under-their-own-heading',
