@@ -38,6 +38,7 @@
         <module>parallel-consumer-vertx</module>
         <module>parallel-consumer-reactor</module>
         <module>parallel-consumer-mutiny</module>
+        <module>parallel-consumer-streams-conformance</module>
         <module>parallel-consumer-examples</module>
     </modules>
 
@@ -880,10 +881,11 @@
                         <excludeVulnerabilityId>CVE-2026-59295</excludeVulnerabilityId>
                         <excludeVulnerabilityId>CVE-2026-59296</excludeVulnerabilityId>
 
-                        <!-- com.fasterxml.jackson.core:jackson-databind (example-streams only). False
-                             positive: GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and
-                             the module resolves a 2.18.x - see jackson.examples.version in the
-                             examples parent for which one. Stated as the line rather than the exact
+                        <!-- com.fasterxml.jackson.core:jackson-databind (example-streams and the
+                             streams-conformance module, test scope). False positive:
+                             GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and both
+                             modules resolve a 2.18.x - see jackson.examples.version in the examples
+                             parent and jackson.conformance.version in the conformance pom for which one. Stated as the line rather than the exact
                              version deliberately: what makes this a false positive is being below
                              2.21.0, so a patch bump must not be able to make this comment wrong. It
                              already did once, when 2.18.9 here went stale the moment the bom moved to

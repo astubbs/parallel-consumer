@@ -218,6 +218,22 @@ module_evidence:
     inspect:
       - astubbs#240
     limitation: No stable-module reliability claim applies before this module has its own release-time evidence.
+  - id: streams-conformance
+    artifact: parallel-consumer-streams-conformance
+    coverage: >-
+      A language-neutral case corpus run through a live oracle - plain Apache Kafka Streams under
+      TopologyTestDriver - with a determinism control arm and a perturbed-twin positive control on every
+      case, and a coverage gate that credits a builder operation only when the topology the oracle built
+      contains a node for it. Test-only: the module publishes nothing and nothing downstream may depend on it.
+    inspect:
+      - ./mvnw -pl parallel-consumer-streams-conformance -am test
+      - parallel-consumer-streams-conformance/README.md
+      - docs/plans/2026-09-05-001-test-streams-conformance-net-plan.md
+    limitation: >-
+      The claim is bounded to final state, computed under TopologyTestDriver at the reactor's one pinned
+      Kafka version, with no broker row and no binding measured. It evidences the oracle and the net around
+      it, never that any engine conforms; the first engine row, the real-broker row and the update-stream
+      observable are the driver rung's, tracked in ../inflight/test-streams-conformance-driver-rung-obligations.md
 regression_controls:
   diagnosis_first:
     # AGENTS.md states this rule; it is not restated here, because a paraphrase that cites the

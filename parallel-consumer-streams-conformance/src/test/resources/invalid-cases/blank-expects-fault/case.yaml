@@ -1,0 +1,13 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# A case that names its class and then names nothing: expects-fault is present and empty. It is
+# neither a refusal-class case (it names no fault a driver could map) nor an outcome case (its
+# author plainly did not mean one), so it is refused by name rather than silently becoming the
+# other one.
+name: blank-expects-fault
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: in, source: {topic: in}}
+  - {id: g, group-by-key: {of: in}}
+  - {id: c, count: {of: g, store: counts}}
+expects-fault: ""

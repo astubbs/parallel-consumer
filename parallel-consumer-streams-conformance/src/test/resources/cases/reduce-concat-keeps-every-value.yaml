@@ -1,0 +1,24 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# KTD13's `concat` half of the reduce vocabulary, and the corpus's one case whose whole final state
+# is a store: no sink, so if the store were not read there would be nothing to compare, which is the
+# shape the loader's observable-final-state rule exists to keep honest.
+#
+# The twin changes the FIRST value, the deliberate opposite of the last-wins case: concat keeps every
+# value in arrival order, so an early change survives into the accumulated result rather than being
+# overwritten by what follows.
+name: reduce-concat-keeps-every-value
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: in, source: {topic: in}}
+  - {id: g, group-by-key: {of: in}}
+  - {id: t, reduce: {of: g, fn: concat, store: concatenated}}
+inputs:
+  - {key: a, value: "p", at-ms: 0}
+  - {key: a, value: "q", at-ms: 1000}
+  - {key: b, value: "r", at-ms: 2000}
+perturbation:                           # a's FIRST value; concat cannot overwrite it away
+  - {key: a, value: "x", at-ms: 0}
+  - {key: a, value: "q", at-ms: 1000}
+  - {key: b, value: "r", at-ms: 2000}
+agreement: final-state
