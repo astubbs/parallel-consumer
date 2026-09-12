@@ -18,7 +18,7 @@ import java.util.Optional;
  * clients from the connection properties; the sandbox module implements it over the mock consumer that already ships
  * in this artefact, so <b>the definition does not change between sandbox and broker - only the start call does</b>
  * (R33). Both methods are handed the validated {@link DefinitionView}, which is enough to know which topics to serve
- * and what each route consumes, so a fake can generate records of the right types.
+ * and what each route consumes, so a fake can hydrate records of the right types.
  * <p>
  * Both clients are typed {@code byte[]}: the engine below the facade consumes and produces raw bytes and each route
  * applies its own serialisers (KTD2). A consumer configured for anything else is a definition fault that cannot be
@@ -75,7 +75,7 @@ public interface ClientRuntime {
      * <p>
      * It exists because a fake needs a moment that a client factory method cannot give it: <b>after</b> the engine
      * has subscribed, so a mock consumer's partitions can be assigned to a listener that now exists, and with the
-     * instance in hand, so a generator with a bound can close it when it reaches one. Without it the
+     * instance in hand, so a driver with a bound can close it when it reaches one. Without it the
      * sandbox would need its own entry point and {@code definition.start(runtime)} would silently run unbounded
      * (R33, KTD9).
      * <p>

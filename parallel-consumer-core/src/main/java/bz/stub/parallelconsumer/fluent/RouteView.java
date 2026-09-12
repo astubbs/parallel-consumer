@@ -13,7 +13,7 @@ import java.util.Set;
 /**
  * One route as a reader sees it: its topics, its types and its resolved policy, with no way to change any of it.
  * <p>
- * This is what the runtime seam is handed (KTD9). The sandbox reads the types to know what to generate and how to
+ * This is what the runtime seam is handed (KTD9). The sandbox reads the types to know what to hydrate and how to
  * encode it; the dispatch wrapper reads the policy to know when a record has run out of attempts.
  */
 @InterfaceStability.Unstable
@@ -26,13 +26,13 @@ public interface RouteView {
     Set<String> topics();
 
     /**
-     * How this route reads key bytes. A fake reads it to encode a generated key the way the route expects to decode
+     * How this route reads key bytes. A fake reads it to encode a hydrated key the way the route expects to decode
      * it, which is what lets one definition run against either world (KTD9).
      */
     Format<?> consumedKey();
 
     /**
-     * How this route reads value bytes - the other half of what a fake needs to generate records this route accepts.
+     * How this route reads value bytes - the other half of what a fake needs to hydrate records this route accepts.
      */
     Format<?> consumedValue();
 
