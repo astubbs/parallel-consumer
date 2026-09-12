@@ -258,12 +258,9 @@ which consumer group each instance belongs to. An instance carries its applicati
 attributes; neither bounds the fleet. The word is deliberately wider than a consumer group because
 the people who ask fleet questions run deployments, not groups.
 
-A fleet has one place its state fans in to: an elected controller node, which is the same node
-that coordinates named shared resources across applications. The controller is a role, not a
-kind of process: it runs inside one of the application instances or as a standalone process that
-hosts no application, and the two are the same code. No instance holds the fleet's state,
-and no instance pulls from every other - either shape is quadratic in the fleet's size. A question
-about the fleet goes to the controller; a question about one instance is answered by that instance.
+The word says nothing about topology. How a fleet's state is gathered, who holds it, and where a
+question about it is answered are design decisions owned by the plan that makes them, not part of
+what the term means.
 
 ## Ratchet
 
