@@ -249,7 +249,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * and is a later milestone, so in this version it is the instance default and nothing else (R6).
      */
     public ParallelConsumerDefinition withDefaultOrdering(ProcessingOrder ordering) {
-        defaults.ordering(Objects.requireNonNull(ordering, "An ordering must be supplied"));
+        changingDefaults().ordering(Objects.requireNonNull(ordering, "An ordering must be supplied"));
         return this;
     }
 
@@ -262,7 +262,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             throw new IllegalArgumentException(msg("withDefaultConcurrency ({}) must be at least one - it is each "
                     + "route's admission target", limit));
         }
-        defaults.concurrency(limit);
+        changingDefaults().concurrency(limit);
         return this;
     }
 
@@ -274,7 +274,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             throw new IllegalArgumentException(msg("withDefaultRetryLimit ({}) cannot be negative - it counts the "
                     + "attempts after the first; use withDefaultRetryForever() to ask for unbounded retries", attempts));
         }
-        defaults.retryLimit(OptionalInt.of(attempts));
+        changingDefaults().retryLimit(OptionalInt.of(attempts));
         return this;
     }
 
@@ -282,7 +282,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * Retry forever, as the classic API always has. Opt-in on purpose (R10).
      */
     public ParallelConsumerDefinition withDefaultRetryForever() {
-        defaults.retryLimit(OptionalInt.empty());
+        changingDefaults().retryLimit(OptionalInt.empty());
         return this;
     }
 
@@ -294,7 +294,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         if (delay.isNegative()) {
             throw new IllegalArgumentException(msg("withDefaultRetryDelay ({}) cannot be negative", delay));
         }
-        defaults.retryDelay(delay);
+        changingDefaults().retryDelay(delay);
         return this;
     }
 
@@ -302,7 +302,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * What happens to a record that runs out of attempts, on every route that declares nothing of its own (R27).
      */
     public ParallelConsumerDefinition withDefaultAfterRetries(AfterRetries policy) {
-        defaults.afterRetries(Objects.requireNonNull(policy, "An after-retries policy must be supplied"));
+        changingDefaults().afterRetries(Objects.requireNonNull(policy, "An after-retries policy must be supplied"));
         return this;
     }
 
@@ -314,8 +314,30 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * types.
      */
     public ParallelConsumerDefinition withDefaultOnParked(ParkObserver<Object, Object> observer) {
-        defaults.parkObserver(Objects.requireNonNull(observer, "A park observer must be supplied"));
+        changingDefaults().parkObserver(Objects.requireNonNull(observer, "A park observer must be supplied"));
         return this;
+    }
+
+    /**
+     * The defaults, handed out for writing - and every route that has already resolved against them invalidated on
+     * the way past.
+     * <p>
+     * <b>This is the only way a {@code withDefault} setter touches them</b>, because a route caches what it
+     * resolved and the cache is what made a later default invisible. A route resolves on the first read of its
+     * policy, and two ordinary sequences do that read before the definition is finished: {@code validate()},
+     * documented as failing early while the definition stays mutable, and reading a route through
+     * {@link DefinitionView}. Either one made {@code pc.validate(); pc.withDefaultRetryLimit(0); pc.start()} run
+     * with the limit of ten it had already resolved, with nothing to say so. Invalidating here rather than
+     * re-resolving keeps the resolution lazy and keeps its publication edge intact - see
+     * {@link RouteState#invalidateResolution()}.
+     *
+     * @return the defaults to write to
+     */
+    private InstanceDefaults changingDefaults() {
+        for (RouteState route : routes) {
+            route.invalidateResolution();
+        }
+        return defaults;
     }
 
     // ---------------------------------------------------------------- pre-built clients (Java binding only)
@@ -581,12 +603,20 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             throw new IllegalStateException("This definition has already been started - define a second one to run a "
                     + "second instance");
         }
-        started = true;
 
         // Before any client of the instance exists, and after the definition has been refused for its own faults:
         // a topic that is not there is a fault of the definition too, and the start that carries on regardless is
         // the one this replaces (owner decision, 2026-09-11).
         TopicExistenceCheck.enforce(whenTopicMissing, topics(), runtime, this);
+
+        // The definition is spent only once every pre-start refusal has passed, and the check above is why: the
+        // exception it throws documents a recovery path - catch it, create the topics it names, start the same
+        // definition again - which a flag set before the check silently withdrew, because the second start then
+        // failed with "already been started" instead. Nothing above this line has built anything, so a refusal
+        // there leaves the definition exactly as the user wrote it; from here on each step either constructs a
+        // client or hands one to the engine, so a failure past this point is not a start that can be retried and
+        // the flag stays set for it.
+        started = true;
 
         this.dispatcher = new RouteDispatcher(routesByTopic, defaults.retryDelay(), preBuiltConsumerDescription);
 

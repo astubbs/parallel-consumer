@@ -207,7 +207,7 @@ final class DefinitionRules {
     private void validatePolicy() {
         refuseAPolicyNothingCanTrigger();
         for (RouteState route : routes) {
-            refuseHalfAParkCycle(route.afterRetries(), route.describeTopics());
+            refuseHalfAParkCycle(route.resolvedAfterRetries(), route.describeTopics());
         }
     }
 

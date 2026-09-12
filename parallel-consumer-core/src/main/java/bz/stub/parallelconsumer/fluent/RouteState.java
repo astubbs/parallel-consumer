@@ -179,8 +179,16 @@ class RouteState implements RouteView {
      * Called by every setter below, so that a setting declared after a resolution has already happened still takes
      * effect. It clears the flag only: the stale {@code resolved*} values stay until the next
      * {@link #resolveDefaults()} overwrites them, because no reader may look at them while the flag is false.
+     * <p>
+     * <b>Package-private, not private, because the definition's own defaults are the other half of a resolution.</b>
+     * A route resolves against {@link InstanceDefaults}, so moving an instance default has to invalidate every route
+     * that inherited from it - see {@code ParallelConsumerDefinition#changingDefaults()}. Without that, a
+     * definition whose routes had already resolved went on running the old value: {@code validate()} is documented
+     * as failing early while the definition stays mutable, so {@code pc.validate(); pc.withDefaultRetryLimit(0);
+     * pc.start()} silently kept the limit of ten, and merely reading a route through {@code DefinitionView} first
+     * did the same.
      */
-    private void invalidateResolution() {
+    void invalidateResolution() {
         resolved = false;
     }
 
@@ -271,11 +279,29 @@ class RouteState implements RouteView {
     }
 
     /**
-     * Satisfies {@link RouteView#afterRetries()}, resolving first. The policy handed back is this route's own copy,
-     * so a caller that mutates it changes this route and no other (R6).
+     * Satisfies {@link RouteView#afterRetries()}, resolving first - and hands back <b>a copy</b>, because this is
+     * the read-only view of a route and the resolved policy is not read-only.
+     * <p>
+     * It used to hand back the very object the workers read. A caller holding the definition after startup could
+     * then call {@code thenRetryAfter} or {@code forCycles} through a view that promises to change nothing: past
+     * every validation rule, and onto two plain fields that a worker reads once per failed record with no edge to
+     * carry the write - so a worker could see a half-configured cycle, or silently start running a schedule nobody
+     * declared. A copy makes the view honest and leaves the workers reading what resolution published.
+     * <p>
+     * The wrapper and the validation rules take {@link #resolvedAfterRetries()} instead, which is the same object
+     * they always read.
      */
     @Override
     public AfterRetries afterRetries() {
+        return resolvedAfterRetries().copy();
+    }
+
+    /**
+     * The resolved policy itself, for the dispatch wrapper and the validation rules inside this package - the
+     * readers that must see what the workers see rather than a copy of it, and that are inside the publication
+     * edge {@link #resolved} establishes.
+     */
+    AfterRetries resolvedAfterRetries() {
         resolveDefaults();
         return resolvedAfterRetries;
     }

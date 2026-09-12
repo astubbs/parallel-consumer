@@ -278,7 +278,7 @@ class RouteDispatcher {
      * every rebalance.
      */
     private static int cyclesUsed(RouteState route, int attempts) {
-        int cycles = route.afterRetries().parkCycles();
+        int cycles = route.resolvedAfterRetries().parkCycles();
         OptionalInt limit = route.retryLimit();
         if (cycles == 0 || !limit.isPresent() || attempts <= limit.getAsInt()) {
             return 0;
@@ -497,7 +497,7 @@ class RouteDispatcher {
                                           Throwable failure, int attempts) {
         ConsumerRecord<byte[], byte[]> record = context.raw();
         if (isExhausted(route, attempts)) {
-            AfterRetries policy = route.afterRetries();
+            AfterRetries policy = route.resolvedAfterRetries();
             int cycles = cyclesUsed(route, attempts);
             if (policy.parkCycles() > cycles) {
                 return parkCycle(record, policy, failure, attempts, cycles + 1);
@@ -737,7 +737,7 @@ class RouteDispatcher {
             return fallbackRetryDelay;
         }
         if (spendsAParkCycle(route, attempts)) {
-            return route.afterRetries().parkDelay();
+            return route.resolvedAfterRetries().parkDelay();
         }
         return route.retryDelay();
     }
@@ -747,7 +747,8 @@ class RouteDispatcher {
      * same two conditions, in the same order, read from the same two functions.
      */
     private static boolean spendsAParkCycle(RouteState route, int attempts) {
-        return isExhausted(route, attempts) && route.afterRetries().parkCycles() > cyclesUsed(route, attempts);
+        return isExhausted(route, attempts)
+                && route.resolvedAfterRetries().parkCycles() > cyclesUsed(route, attempts);
     }
 
     // ---------------------------------------------------------------- decoding, running and serialising
