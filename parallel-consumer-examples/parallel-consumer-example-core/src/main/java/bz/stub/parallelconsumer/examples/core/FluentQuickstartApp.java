@@ -42,7 +42,7 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
  *       a parked record - it is the highest sequential succeeded offset plus one, and a parked record is never
  *       sequentially succeeded - so consumer-group lag reads as stuck at the oldest parked record for the life of
  *       the assignment. The README's park section owns that consequence. No dead-letter topic is
- *       involved, and none can be - copying a record out to one is a later milestone.</li>
+ *       involved, and none is declared - export at capacity is a later milestone.</li>
  *   <li><b>The parked set.</b> {@link #reportParked} asks the instance what is parked and why.</li>
  *   <li><b>Typed routes.</b> Two topics, two value types, one function each - no casts, no {@code instanceof} on a
  *       shared handler, no hand-rolled deserialisation.</li>

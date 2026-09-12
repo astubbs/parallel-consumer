@@ -12,11 +12,11 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 import java.time.Instant;
 
 /**
- * One record parked in place: what the parked view lists (R27, R28).
+ * One record parked in place: what the parked view lists, and what an export would copy (R27, R28).
  * <p>
  * A parked record stays incomplete in the offset map, holds no worker, and is not attempted again until it is
- * resumed, or a restart re-delivers it. This entry is the index into it - everything an operator needs to decide
- * which of those it deserves, without going back to the broker.
+ * resumed, exported, or a restart re-delivers it. This entry is the index into it - everything an operator needs to
+ * decide which of those it deserves, without going back to the broker.
  *
  * <h2>It is a view, not a copy</h2>
  * The engine holds the record: its bytes and headers, how many attempts it took, what the last failure was, when
@@ -26,8 +26,8 @@ import java.time.Instant;
  * this route's deserialiser reads it, and the {@link #cycles()} the record spent.
  * <p>
  * Holding the record is also what makes R27's small advantage of park in place real: the instance can still resume
- * a parked record after the broker's retention has removed it, because the record never left memory. Only a restart
- * loses it, since it can no longer be re-polled.
+ * or export a parked record after the broker's retention has removed it, because the record never left memory. Only
+ * a restart loses it, since it can no longer be re-polled.
  *
  * @see ParkObserver
  */
@@ -37,7 +37,7 @@ public final class ParkedRecord {
     /**
      * The engine's own record, held rather than copied. Every question but the decoded key and the cycle count is
      * answered from here, which is what stops the list an operator reads drifting from the record the engine holds -
-     * and what lets a parked record be resumed after the broker's retention has dropped it.
+     * and what lets a parked record be resumed or exported after the broker's retention has dropped it.
      */
     private final RecordContext<byte[], byte[]> recordContext;
 
@@ -81,7 +81,7 @@ public final class ParkedRecord {
 
     /**
      * Where the partition's committed offset is held for as long as this record stays parked, and the identity an
-     * operator resumes by.
+     * operator resumes or exports by.
      */
     public long offset() {
         return recordContext.offset();
@@ -139,7 +139,8 @@ public final class ParkedRecord {
     }
 
     /**
-     * The record as it arrived, still in bytes, and the only form a record that never decoded has.
+     * The record as it arrived, still in bytes - what an export copies, and the only form a record that never
+     * decoded has.
      */
     public ConsumerRecord<byte[], byte[]> raw() {
         return recordContext.getConsumerRecord();

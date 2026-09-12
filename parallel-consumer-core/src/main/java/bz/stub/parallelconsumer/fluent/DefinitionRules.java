@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.fluent;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.state.PartitionStateManager;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 
@@ -36,8 +37,8 @@ final class DefinitionRules {
     private final List<RouteState> routes;
 
     /**
-     * The route table, read by {@link #routedTopics()} so that a refusal about a superseded connection property can
-     * name the routes that supersede it.
+     * The route table, used for the one check that asks whether this instance reads a topic itself - a dead-letter
+     * destination it also consumes.
      */
     private final Map<String, RouteState> routesByTopic;
 
@@ -47,8 +48,8 @@ final class DefinitionRules {
     private final ConnectionProperties connection;
 
     /**
-     * The instance-wide commit mode, read by the one refusal that says the transactional id and the commit mode
-     * must agree.
+     * The instance-wide commit mode, which two refusals read: the transactional id must agree with it, and an
+     * export destination is refused under the transactional mode until producer recovery lands.
      */
     private final CommitMode commitMode;
 
@@ -57,6 +58,12 @@ final class DefinitionRules {
      * from the instance - the message names the scope, so the author is pointed at the call they wrote.
      */
     private final InstanceDefaults defaults;
+
+    /**
+     * The instance-wide export percentage as declared, or null when nothing declared one. Held only to be refused
+     * by name: the trigger it would drive reads an engine accessor that does not exist yet (KTD5).
+     */
+    private final Integer instancePayloadPercentage;
 
     /**
      * Whether the caller supplied a finished producer, which is what excuses a transactional definition from
@@ -69,12 +76,14 @@ final class DefinitionRules {
                     ConnectionProperties connection,
                     CommitMode commitMode,
                     InstanceDefaults defaults,
+                    Integer instancePayloadPercentage,
                     boolean preBuiltProducerSupplied) {
         this.routes = routes;
         this.routesByTopic = routesByTopic;
         this.connection = connection;
         this.commitMode = commitMode;
         this.defaults = defaults;
+        this.instancePayloadPercentage = instancePayloadPercentage;
         this.preBuiltProducerSupplied = preBuiltProducerSupplied;
     }
 
@@ -200,23 +209,63 @@ final class DefinitionRules {
      * Policy last, once every route has resolved its defaults, so each check reads the policy the route will
      * actually run with rather than the one it declared.
      * <p>
-     * Everything refused here is a setting that could not be honoured - a policy no exhaustion can reach, or half
-     * of a park cycle. Each refusal names its topic, because a policy mistake is a mistake about one route
-     * (R27, AE7).
+     * Everything refused here is a setting that could not be honoured - a trigger with no destination, a
+     * destination with no trigger, a destination this instance reads itself, or one under a commit mode that
+     * cannot recover from a failed export. Each refusal names its topic, because a policy mistake is a mistake
+     * about one route (R27, AE7).
      */
     private void validatePolicy() {
+        if (instancePayloadPercentage != null) {
+            throw refusedPercentage(instancePayloadPercentage, null);
+        }
         refuseAPolicyNothingCanTrigger();
         for (RouteState route : routes) {
-            refuseHalfAParkCycle(route.afterRetries(), route.describeTopics());
+            AfterRetries policy = route.afterRetries();
+            String topic = route.describeTopics();
+            refuseHalfAParkCycle(policy, topic);
+            if (policy.payloadPercentage().isPresent()) {
+                throw refusedPercentage(policy.payloadPercentage().getAsInt(), topic);
+            }
+            if (policy.destination() == null) {
+                if (policy.isDlqImmediately()) {
+                    throw noDestination("dlqImmediately", topic);
+                }
+                if (policy.ageBound() != null) {
+                    throw noDestination("dlqOlderThan", topic);
+                }
+                continue;
+            }
+            if (!policy.hasExportTrigger()) {
+                throw new IllegalArgumentException(msg("Topic {} declares the dead-letter destination {} with no "
+                        + "trigger, so nothing would ever be exported to it. The payload-fraction trigger needs an "
+                        + "engine accessor that does not exist yet (KTD5), so declare dlqImmediately() or "
+                        + "dlqOlderThan(...), or drop the destination and let records park in place.",
+                        topic, policy.destination()));
+            }
+            if (routesByTopic.containsKey(policy.destination())) {
+                throw new IllegalArgumentException(msg("Topic {} names {} as its dead-letter destination, and this "
+                        + "instance routes {} itself - it would consume its own exports. Send them to a topic this "
+                        + "definition does not read (R13).",
+                        topic, policy.destination(), policy.destination()));
+            }
+            if (commitMode == CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER) {
+                throw new IllegalArgumentException(msg("Topic {} declares the dead-letter destination {} under the "
+                        + "{} commit mode, which is refused until producer recovery lands (astubbs#410, closing "
+                        + "astubbs#225): an export send that fails inside the transaction aborts it, the instance "
+                        + "terminates, and on restart the attempt counts reset - a persistently failing export would "
+                        + "loop. Park in place under this commit mode, or use a consumer commit mode (R14).",
+                        topic, policy.destination(), commitMode));
+            }
         }
     }
 
     /**
      * An after-retries policy is the answer to "what happens when a record runs out of attempts", so retrying
      * forever leaves it nothing to react to. Exhaustion is the only thing that consults a policy, and under
-     * unbounded retries no record ever reaches it: the reaction - park <em>and</em> stop alike - and the park
-     * cycles go inert together. This is not a reaction that merely never fires in practice; it is a setting the
-     * code can never read, which is the one thing this definition refuses to produce (R10, R27, AE7).
+     * unbounded retries no record ever reaches it: the reaction - park <em>and</em> stop alike - the park cycles
+     * and the export triggers all go inert together. This is not a reaction that merely never fires in practice;
+     * it is a setting the code can never read, which is the one thing this definition refuses to produce
+     * (R10, R27, AE7).
      * <p>
      * Checked per route and against what was actually <em>declared</em>, because either half may be declared at
      * either scope and all four pairings are the same mistake: retryForever() on the route or
@@ -241,7 +290,7 @@ final class DefinitionRules {
             throw new IllegalArgumentException(msg("Topic {} {}, and {} - so the policy can never fire. Running out "
                             + "of attempts is the only thing that consults an after-retries policy, and a record "
                             + "that retries forever never runs out, so retrying forever leaves the policy nothing "
-                            + "to react to: the reaction and the park cycles are both inert. "
+                            + "to react to: the reaction, the park cycles and the export triggers are all inert. "
                             + "Declare {}, or drop the policy (R10, R27).",
                     route.describeTopics(),
                     route.declaresOwnRetryLimit()
@@ -278,6 +327,41 @@ final class DefinitionRules {
                             + "forCycles(...) beside it, or drop it (R27).",
                     topic, policy.parkDelay()));
         }
+    }
+
+    /**
+     * The shared wording for an export trigger declared with nothing to send to: two settings, one sentence, so
+     * the two cannot drift into answering the same mistake differently (R27).
+     *
+     * @param setting the trigger that was declared without a destination
+     * @param topic   the route's topics, named so the reader knows which route to fix
+     * @return the exception to throw, so the call site reads as {@code throw noDestination(...)}
+     */
+    private IllegalArgumentException noDestination(String setting, String topic) {
+        return new IllegalArgumentException(msg("Topic {} declares {} with no dead-letter destination - declare "
+                + "dlqTo(...) beside it, or drop it and let records park in place (R27)", topic, setting));
+    }
+
+    /**
+     * One refusal covering both halves of R27's rule: no explicit percentage is accepted in this version at all, and
+     * a value above the ceiling would never be reached even when they are.
+     */
+    private IllegalArgumentException refusedPercentage(int percentage, String topic) {
+        // Named once rather than passed in: both call sites are this one setting, and the message has to keep
+        // matching the method a user actually wrote.
+        String setting = "dlqWhenOffsetPayloadReaches";
+        String where = topic == null ? "the definition" : "topic " + topic;
+        String ceiling = percentage > AfterRetries.MAX_PAYLOAD_PERCENTAGE
+                ? msg(" It is also above the ceiling of {}: the engine stops a partition taking work at {}% of the "
+                        + "commit-metadata cap, so a percentage at or near that is never reached.",
+                AfterRetries.MAX_PAYLOAD_PERCENTAGE,
+                (int) (PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT * 100))
+                : "";
+        return new IllegalArgumentException(msg("{} ({}) on {} is not supported in this version: the trigger reads a "
+                        + "partition's encoded payload length, and the engine has no accessor for it yet, so an "
+                        + "explicit percentage would be a setting that never fires (KTD5). Records park in place "
+                        + "until it lands; declare dlqImmediately() or dlqOlderThan(...) for an export today.{}",
+                setting, percentage, where, ceiling));
     }
 
     /**

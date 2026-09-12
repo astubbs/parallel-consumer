@@ -33,11 +33,11 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * is what makes {@link #count()} and {@link #records()} agree with each other.
  *
  * <h2>What is not available yet, and why</h2>
- * Two of R28's figures read empty in this version, and each is empty for the same reason: it is engine state with
- * no accessor. The payload fraction is computed inside the offset encoder at commit time and never stored, and the
- * count of records held behind a parked key is known only to its shard. Both arrive with the small-tier engine
- * accessors, and until then an empty answer is the honest one - a fabricated number an operator acted on would be
- * worse than none.
+ * Three of R28's figures read empty in this version, and each is empty for the same reason: it is engine state with
+ * no accessor. The payload fraction is computed inside the offset encoder at commit time and never stored; the
+ * time-to-export estimate is derived from it; and the count of records held behind a parked key is known only to
+ * its shard. All three arrive with the small-tier engine accessors, and until then an empty answer is the honest
+ * one - a fabricated number an operator acted on would be worse than none.
  *
  * @see ParallelConsumerInstance#topic(String)
  * @see ParallelConsumerInstance#parkedAllTopics()
@@ -237,6 +237,14 @@ public final class ParkedView {
     }
 
     /**
+     * How long until this partition's payload reaches the export percentage, at the current park rate - <b>empty in
+     * this version</b>, because it is derived from {@link #payloadFraction()}.
+     */
+    public Optional<Duration> estimatedTimeToExport() {
+        return Optional.empty();
+    }
+
+    /**
      * How many records are waiting behind this parked record because they share its key under key ordering - the
      * blast-radius figure (R28). <b>Empty in this version</b>: only the record's shard knows, and the shard has no
      * accessor for it.
@@ -247,7 +255,7 @@ public final class ParkedView {
         return OptionalInt.empty();
     }
 
-    // ---------------------------------------------------------------- the one command
+    // ---------------------------------------------------------------- the two commands
 
     /**
      * Attempt this record again now.
@@ -269,7 +277,27 @@ public final class ParkedView {
     }
 
     /**
-     * The one refusal this command raises, written once so that its two entry points cannot drift into two
+     * Send this record to the route's dead-letter destination now.
+     *
+     * @throws UnsupportedOperationException always in this version - export is a re-dispatch on a later pass, and
+     *                                       this version refuses a dead-letter destination at start for the same
+     *                                       reason
+     */
+    public void dlq(ParkedRecord parked) {
+        throw notYetSupported("dlq", parked);
+    }
+
+    /**
+     * Send every record in this view to the route's dead-letter destination now.
+     *
+     * @see #dlq(ParkedRecord)
+     */
+    public void dlq() {
+        throw notYetSupported("dlq", null);
+    }
+
+    /**
+     * The one refusal both commands raise, written once so that the four entry points cannot drift into four
      * accounts of the same absence. It says what is missing, and then says that nothing is lost while it is
      * missing - a park holds no worker and keeps the record in the offset map - because the question an operator
      * asks next is whether they have to act now.
@@ -303,15 +331,17 @@ public final class ParkedView {
 
     /**
      * The whole view on one line, for a log statement about a parked set. It names the view, its partition when it
-     * has one, and the figures R28 asks for - including the one that reads empty in this version, because a line
-     * that silently dropped it would look like a complete answer.
+     * has one, and the four figures R28 asks for - including the ones that read empty in this version, because a
+     * line that silently dropped them would look like a complete answer.
      */
     @Override
     public String toString() {
-        // Derived rather than hardcoded: the payload fraction reads empty in this version, and when the engine
-        // accessor lands and it starts answering, this line has to start answering with it.
+        // Derived rather than hardcoded: the two figures below read empty in this version, and when the engine
+        // accessors land and they start answering, this line has to start answering with them.
         return "ParkedView(" + name + (partition == null ? "" : ", partition=" + partition) + ", count=" + count()
                 + ", oldest=" + oldestAge().map(Duration::toString).orElse("none")
-                + ", payloadFraction=" + describe(payloadFraction()) + ")";
+                + ", payloadFraction=" + describe(payloadFraction())
+                + ", estimatedTimeToExport=" + estimatedTimeToExport().map(Duration::toString)
+                .orElse(NOT_AVAILABLE) + ")";
     }
 }

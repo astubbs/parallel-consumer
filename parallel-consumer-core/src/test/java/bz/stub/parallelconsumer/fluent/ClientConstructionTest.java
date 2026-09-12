@@ -21,6 +21,7 @@ import org.mockito.Mockito;
 import java.util.Collections;
 import java.util.Properties;
 
+import static bz.stub.parallelconsumer.fluent.AfterRetries.dlqImmediately;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -62,6 +63,64 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
     }
 
     @Test
+    void aDeadLetterDestinationIsEnoughToNeedAProducer() {
+        var pc = ParallelConsumer.connect(props());
+        pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
+
+        assertThat(pc.requiresProducer()).isTrue();
+        ParallelConsumerOptions<byte[], byte[]> options = pc.buildOptions(runtime);
+
+        assertThat(runtime.producerCalls).isEqualTo(1);
+        assertThat(options.getProducer()).isNotNull();
+    }
+
+    /**
+     * ...and yet starting is refused, because export does not run in this release.
+     * <p>
+     * The two claims sit together on purpose. What a destination <em>means</em> for the clients is settled - it
+     * needs a producer, and the test above says so at the level that answers it. What is not yet built is the
+     * thing that would use it: a record that runs out of attempts parks in place, and nothing copies it on. So the
+     * refusal lives at start rather than at validation, and it goes away with the unit that adds export - leaving
+     * the producer decision above untouched.
+     * <p>
+     * A definition-time refusal is this project's answer to any setting it cannot honour, and the alternative here
+     * is the one thing worse than a refusal: {@code dlqTo} accepted and silently doing nothing.
+     */
+    @Test
+    void aDeadLetterDestinationIsRefusedAtStartUntilExportLands() {
+        var pc = ParallelConsumer.connect(props());
+        pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
+
+        var thrown = assertThrows(IllegalArgumentException.class, () -> pc.start(runtime));
+
+        assertThat(thrown).hasMessageThat().contains("orders.dlq");
+        assertThat(thrown).hasMessageThat().contains("does not run in this release");
+        assertThat(thrown).hasMessageThat().contains("parks in place");
+        // Refused before anything was built, like every other refusal this definition makes.
+        assertThat(runtime.builtNothing()).isTrue();
+    }
+
+    /**
+     * The dead-letter <em>reaction</em> reaches both of the answers above by the same route as the export trigger
+     * that precedes it: it names a destination, so it needs a producer, and it is refused at start because nothing
+     * copies a record on yet. The verb exists so the shape is settled before the engine work; this pins that
+     * offering it changed neither answer.
+     */
+    @Test
+    void theDeadLetterReactionNeedsAProducerAndIsStillRefusedAtStart() {
+        var pc = ParallelConsumer.connect(props());
+        pc.string("orders").afterRetries(AfterRetries.dlq("orders.dlq")).process(context -> Outcome.succeeded());
+
+        assertThat(pc.requiresProducer()).isTrue();
+
+        var thrown = assertThrows(IllegalArgumentException.class, () -> pc.start(runtime));
+
+        assertThat(thrown).hasMessageThat().contains("orders.dlq");
+        assertThat(thrown).hasMessageThat().contains("does not run in this release");
+        assertThat(runtime.builtNothing()).isTrue();
+    }
+
+    @Test
     void aRouteThatDeclaresProducedTypesNeedsAProducer() {
         var pc = ParallelConsumer.connect(props());
         pc.string("orders")
@@ -91,11 +150,7 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
     void aRuntimeThatSuppliesNoProducerGetsTheConfigurationInsteadWithRawByteSerialisers() {
         var declining = RecordingClientRuntime.decliningToSupplyAProducer();
         var pc = ParallelConsumer.connect(props());
-        // Produced types are what makes this definition need a producer; any of the triggers in requiresProducer()
-        // would do, and this is the one that needs no properties of its own.
-        pc.string("orders")
-                .produced(Produced.with(Serdes.String(), Serdes.String()))
-                .process(context -> Outcome.succeeded());
+        pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
 
         ParallelConsumerOptions<byte[], byte[]> options = pc.buildOptions(declining);
 
