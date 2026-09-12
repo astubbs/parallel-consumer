@@ -25,11 +25,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /**
  * What the sandbox refuses, and when.
  * <p>
- * The generator has to <b>encode</b> what it makes with the same format the route <b>decodes</b> it with, because
- * the engine under the facade reads raw bytes. That gives it two requirements a route need not otherwise meet: the
- * format has to be able to write, and something has to name the Java type to fill. A route missing either is
- * refused at start, naming the topic - the alternative being a record the route cannot read, failing one poll
- * later with a message about the payload rather than about the definition.
+ * The sandbox has to <b>encode</b> what it publishes with the same format the route <b>decodes</b> it with,
+ * because the engine under the facade reads raw bytes. That gives a route one requirement it need not otherwise
+ * meet - its format has to be able to write - and a driven sandbox one more: something has to say what a record
+ * of that topic contains, because this artefact's driver has no idea. Both are refused at start, naming the topic;
+ * the alternative is a record the route cannot read, failing one poll later with a message about the payload
+ * rather than about the definition, or a route that silently never fires.
  */
 @Timeout(60)
 class RouteRefusalTest {
@@ -60,7 +61,7 @@ class RouteRefusalTest {
     }
 
     @Test
-    void theSameRouteWithASerialiserAndATypeGeneratesAndEncodes() {
+    void theSameRouteWithASerialiserPublishesAndEncodes() {
         ParallelConsumerDefinition definition = SandboxFixtures.definition();
         definition.topic("legacy")
                 .consumed(Consumed.with(Formats.string(), Format.of(SHOUTY_READER, SHOUTY_WRITER, String.class)))
@@ -69,6 +70,7 @@ class RouteRefusalTest {
         Sandbox sandbox = Sandbox.builder()
                 .perSecond(500)
                 .bound(Bound.afterRecords(5))
+                .feeding("legacy", index -> "scan-" + index)
                 .build();
 
         try (ConsumerHandle handle = definition.start(sandbox)) {
@@ -83,28 +85,54 @@ class RouteRefusalTest {
      * The middle case, and the one that would be easy to get wrong in the other direction: the format can write,
      * so the first check passes, but nothing names the type to fill. Refused with the cure in the message.
      */
+    /**
+     * A driven sandbox with nothing to publish on a topic is refused at start, naming it - and the refusal says
+     * both ways out, because the two shapes of this module are the two answers.
+     * <p>
+     * <b>Up front rather than at the first record.</b> A driver that skipped a topic it had no values for would
+     * present as a definition whose route never fires, which is a far harder thing to diagnose than a refusal.
+     */
     @Test
-    void aRouteWithASerialiserButNoNamedTypeIsRefusedAndTheBuilderIsTheWayOut() {
+    void aDrivenTopicWithNoValueFunctionIsRefusedAndTheRefusalSaysBothWaysOut() {
         Sandbox refusing = Sandbox.builder().build();
 
         IllegalArgumentException refusal = assertThrows(IllegalArgumentException.class,
                 () -> untypedRoute().start(refusing));
 
         assertThat(refusal).hasMessageThat().contains("legacy");
-        assertThat(refusal).hasMessageThat().contains("does not name a Java type");
+        assertThat(refusal).hasMessageThat().contains("nothing has said what a record of it should contain");
         assertWithMessage("a refusal that does not say what to do about it is only half a message")
-                .that(refusal).hasMessageThat().contains("generating(\"legacy\"");
+                .that(refusal).hasMessageThat().contains("feeding(\"legacy\"");
+        assertWithMessage("the other way out is to publish by hand, and a caller who wanted that reads it here")
+                .that(refusal).hasMessageThat().contains("handPublished()");
 
         Sandbox told = Sandbox.builder()
                 .perSecond(500)
                 .bound(Bound.afterRecords(3))
-                .generating("legacy", String.class)
+                .feeding("legacy", index -> "scan-" + index)
                 .build();
         try (ConsumerHandle handle = untypedRoute().start(told)) {
             assertThat(told.awaitBound(Duration.ofSeconds(30))).isTrue();
             handle.awaitShutdown();
         }
         assertThat(told.generatedRecords()).isEqualTo(3);
+    }
+
+    /**
+     * The same route on a hand-published sandbox is <b>not</b> refused: nothing is driving it, so nothing needs to
+     * know what a record contains until the caller says, by publishing one.
+     */
+    @Test
+    void aHandPublishedSandboxNeedsNoValueFunctionAtAll() {
+        Sandbox handPublished = Sandbox.builder().handPublished().build();
+
+        try (ConsumerHandle handle = untypedRoute().start(handPublished)) {
+            var ignoredOffset = handPublished.publish("legacy", "cust-1", "scan-1");
+            handPublished.awaitSettled();
+            assertThat(handle.parkedAllTopics().count()).isEqualTo(0);
+        }
+        assertWithMessage("the driver published nothing, because there is no driver")
+                .that(handPublished.generatedRecords()).isEqualTo(0);
     }
 
     /**

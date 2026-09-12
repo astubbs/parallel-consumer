@@ -7,8 +7,6 @@ package bz.stub.parallelconsumer.sandbox;
 import bz.stub.parallelconsumer.fluent.ConsumerHandle;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
-import bz.stub.parallelconsumer.sandbox.demo.Dispatch;
-import bz.stub.parallelconsumer.sandbox.demo.Order;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -24,7 +22,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * broker would run, consumes generated records with no broker anywhere.
  *
  * <h2>Both halves of that claim, in one place</h2>
- * <b>The plumbing this module owns</b> - generation, encoding, seeding, assignment, pacing, the bound, the close -
+ * <b>The plumbing this module owns</b> - the feeds, encoding, offset seeding, assignment, pacing, the bound, the close -
  * shows up as generated records consumed and their offsets committed.
  * <p>
  * <b>And the dispatch above it</b>: each route's function ran, on its OWN topic's records, decoded into its own
@@ -56,15 +54,15 @@ class SandboxSmokeTest {
     @Test
     void aTwoRouteDefinitionConsumesGeneratedRecordsWithNoBroker() {
         // What each route's own function saw, kept apart so that "both routes ran" is a fact rather than a total.
-        ConcurrentLinkedQueue<Order> ordersSeen = new ConcurrentLinkedQueue<>();
-        ConcurrentLinkedQueue<Dispatch> dispatchesSeen = new ConcurrentLinkedQueue<>();
+        ConcurrentLinkedQueue<String> ordersSeen = new ConcurrentLinkedQueue<>();
+        ConcurrentLinkedQueue<String> dispatchesSeen = new ConcurrentLinkedQueue<>();
 
         ParallelConsumerDefinition definition = SandboxFixtures.definition();
-        definition.json(ORDERS_TOPIC, Order.class).process(context -> {
+        definition.string(ORDERS_TOPIC).process(context -> {
             ordersSeen.add(context.value());
             return Outcome.succeeded();
         });
-        definition.json(DISPATCHES_TOPIC, Dispatch.class).process(context -> {
+        definition.string(DISPATCHES_TOPIC).process(context -> {
             dispatchesSeen.add(context.value());
             return Outcome.succeeded();
         });
@@ -74,7 +72,10 @@ class SandboxSmokeTest {
                 // thing being exercised rather than a tight loop.
                 .perSecond(500)
                 .bound(Bound.afterRecords(RECORD_BOUND))
-                .seed(7)
+                // Each topic's value names its own topic, which is what makes "each route saw its OWN records"
+                // an assertion rather than a count.
+                .feeding(ORDERS_TOPIC, SandboxFixtures.countedValues(ORDERS_TOPIC))
+                .feeding(DISPATCHES_TOPIC, SandboxFixtures.countedValues(DISPATCHES_TOPIC))
                 .build();
 
         try (ConsumerHandle handle = definition.start(sandbox)) {
@@ -102,22 +103,23 @@ class SandboxSmokeTest {
 
     /**
      * The half the placeholder wrapper could not support: each route's function ran, and what it was handed was
-     * its own topic's records decoded into its own type - not the other route's, and not raw bytes.
+     * its own topic's records, decoded - not the other route's, and not raw bytes.
      */
-    private static void assertRoutesRanOnTheirOwnRecords(ConcurrentLinkedQueue<Order> ordersSeen,
-                                                         ConcurrentLinkedQueue<Dispatch> dispatchesSeen) {
+    private static void assertRoutesRanOnTheirOwnRecords(ConcurrentLinkedQueue<String> ordersSeen,
+                                                         ConcurrentLinkedQueue<String> dispatchesSeen) {
         assertWithMessage("the orders route's own function should have run").that(ordersSeen).isNotEmpty();
         assertWithMessage("the dispatches route's own function should have run").that(dispatchesSeen).isNotEmpty();
-        assertWithMessage("between them the two functions saw every record the bound generated")
+        assertWithMessage("between them the two functions saw every record the bound published")
                 .that(ordersSeen.size() + dispatchesSeen.size()).isEqualTo(RECORD_BOUND);
 
-        // Decoded, and filled - a route handed an empty instance would satisfy the counts above.
-        Order order = ordersSeen.peek();
-        assertThat(order.getOrderId()).isNotEmpty();
-        assertThat(order.getEmail()).contains("@");
-        Dispatch dispatch = dispatchesSeen.peek();
-        assertThat(dispatch.getDispatchId()).isNotEmpty();
-        assertThat(dispatch.getDepotCity()).isNotEmpty();
+        // Each value names the topic its own feed published it to, so a route handed the OTHER route's records -
+        // which is what a feed wired to the wrong publisher would do - fails here rather than passing the counts.
+        for (String order : ordersSeen) {
+            assertThat(order).startsWith(ORDERS_TOPIC + "-");
+        }
+        for (String dispatch : dispatchesSeen) {
+            assertThat(dispatch).startsWith(DISPATCHES_TOPIC + "-");
+        }
     }
 
     /**

@@ -174,11 +174,12 @@ This is the <<fluent-api,fluent API>>, which is *incubating* -- see that section
 ----
 include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/test/java/bz/stub/parallelconsumer/examples/core/FluentQuickstartAppTest.java[tag=quickstartSandbox]
 ----
-<1> Generated records per second, per source topic, with each route's declared type filled with realistic random data.
-<2> Stop generating after ten seconds and close, draining first. Without a bound the run ends when you close the handle.
+<1> Records per second, per source topic.
+<2> Stop publishing after ten seconds and close, draining first. Without a bound the run ends when you close the handle.
 <3> How many distinct keys the driver draws from. Keys have to repeat for key ordering to have anything to order, and they have to repeat rarely for a topic to look like a real one.
-<4> The one line that differs from a run against a broker.
-<5> The bound closes the instance, so this returns when the run ends.
+<4> *What a record contains is yours*: a function from the record's index to its value. The sandbox knows how to pace and stop; only your application knows what an order looks like. A test that wants particular records skips the driver entirely and publishes them itself -- see <<sandbox,the sandbox>>.
+<5> The one line that differs from a run against a broker.
+<6> The bound closes the instance, so this returns when the run ends.
 
 An overview article to the library can also be found on Confluent's https://www.confluent.io/blog/[blog]: https://www.confluent.io/blog/introducing-confluent-parallel-message-processing-client/[Introducing the Confluent Parallel Consumer].
 
@@ -733,7 +734,9 @@ try (ConsumerHandle handle = pc.start(sandbox)) {
 
 *Why there is a settle at all*, when the broker-free drivers of the stream-processing libraries you may be comparing us with need none: those engines are single-threaded, so a piped record is processed on the caller's thread and an assertion on the next line is already safe. This is the real engine -- polled on one thread, dispatched on a worker, committed on the control thread -- so a publish that returned would tell you nothing about whether your function had run. `awaitSettled()` is what makes the next line mean something.
 
-*A driver that publishes for you* -- for a soak or a demo, where the point is volume rather than particular records: it fills each route's declared value type with realistic random data, encodes it with that route's own serialiser, paces it at a rate you declare, and takes an optional bound after which it settles and closes the run itself. That is what a sandbox does unless `handPublished()` says otherwise.
+*A driver that publishes for you* -- for a soak or a demo, where the point is volume rather than particular records. You give it a function from a record's index to its value, per topic (`feeding("orders", index -> anOrder(index))`); it encodes with that route's own serialiser, paces at a rate you declare, and takes an optional bound after which it settles and closes the run itself. That is what a sandbox does unless `handPublished()` says otherwise.
+
+The sandbox has *no third-party dependencies*: it is the engine plus the mock clients that already ship with it. It knows how to pace and stop, and nothing about what an order looks like -- so a routed topic that nothing has said how to fill is refused when a driven sandbox starts, naming the topic.
 
 Two things follow. It is the *demo*: a new reader can run a real definition against real records without provisioning anything. And it is the *broker-free test kit*, which is how this project's own primary build signal works. It serves the classic API too, so an existing options-builder application runs broker-free with its start call changed and nothing else -- and it has both shapes as well.
 

@@ -121,6 +121,33 @@ public class FluentQuickstartApp {
      * Stands in for your own inventory client. The quickstart never fails here, so the orders route shows the two
      * outcomes a healthy route reaches: succeeded, and filtered.
      */
+    /**
+     * One order for the sandbox to publish, addressed by the record's index.
+     * <p>
+     * <b>The sandbox knows how to pace and stop; it does not know what an order looks like.</b> That is this
+     * method - and it is the shape any application writes, because nothing but the application knows its own
+     * data. It is deliberately not random: one order in five is RETURNED, so the filtered outcome the README
+     * calls out happens on a schedule a reader can follow rather than when a dice roll says so.
+     */
+    static Order anOrder(long index) {
+        String status = index % 5 == 0 ? "RETURNED" : "IN_TRANSIT";
+        return new Order("order-" + index, "customer-" + index, CITIES[(int) (index % CITIES.length)],
+                1 + (int) (index % 3), status);
+    }
+
+    /**
+     * One parcel scan for the sandbox to publish. The scans route always fails and parks, so what a scan says
+     * matters only in the log line that reports the park.
+     */
+    static String aScan(long index) {
+        return "scan-" + index + " at " + CITIES[(int) (index % CITIES.length)];
+    }
+
+    /**
+     * A handful of destinations, so a run reads like a topic rather than like one city repeated.
+     */
+    private static final String[] CITIES = {"Leeds", "Bristol", "Glasgow", "Cardiff"};
+
     private static void reserveStock(Order order) {
         log.info("Reserving stock for order {} - {} parcel(s) to {}",
                 order.getOrderId(), order.getParcelCount(), order.getDestinationCity());

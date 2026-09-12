@@ -7,7 +7,6 @@ package bz.stub.parallelconsumer.sandbox;
 import bz.stub.parallelconsumer.fluent.ConsumerHandle;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.internal.utils.LogCapture;
-import bz.stub.parallelconsumer.sandbox.demo.Order;
 import ch.qos.logback.classic.Level;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
@@ -69,8 +68,8 @@ class ParkedRunBoundTest {
 
     @Test
     void aBoundedRunWhoseRecordsParkEndsAtItsBoundRatherThanWaitingOutTheBudget() {
-        ParallelConsumerDefinition definition = SandboxFixtures.succeedingJsonRoute(
-                SandboxFixtures.definition().defaultOrdering(KEY), ORDERS, Order.class);
+        ParallelConsumerDefinition definition = SandboxFixtures.succeedingStringRoute(
+                SandboxFixtures.definition().defaultOrdering(KEY), ORDERS);
         definition.string(SCANS)
                 .retryLimit(1)
                 .retryDelay(Duration.ofMillis(50))
@@ -82,6 +81,8 @@ class ParkedRunBoundTest {
                 .perSecond(100)
                 .bound(Bound.afterRecords(RECORDS))
                 .keyCardinality((int) RECORDS)
+                .feeding(ORDERS, SandboxFixtures.countedValues(ORDERS))
+                .feeding(SCANS, SandboxFixtures.countedValues(SCANS))
                 .build();
 
         ConsumerHandle handle;

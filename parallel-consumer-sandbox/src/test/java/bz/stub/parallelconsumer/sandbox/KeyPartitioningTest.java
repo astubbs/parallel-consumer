@@ -10,7 +10,6 @@ import bz.stub.parallelconsumer.fluent.ConsumerHandle;
 import bz.stub.parallelconsumer.fluent.Formats;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
-import bz.stub.parallelconsumer.sandbox.demo.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -20,6 +19,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.LongFunction;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -29,14 +29,12 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *
  * <h2>Two promises, and they were both broken for every key type but String</h2>
  * A key sticks to a partition - which is what makes a key-ordered run in the sandbox shard the way it would
- * against a broker - and a seed reproduces a run, which {@code Sandbox.Builder#seed} states as "two runs with the
- * same seed generate the same records, in the same order".
+ * against a broker - and two runs of one program place it the same way, so a sandbox failure can be reproduced.
  * <p>
- * The generator used to partition on {@code Objects.hashCode} of the key <b>object</b>. {@code RandomObjects#key}
- * returns a pooled {@code String} for {@code String} keys, but a <em>freshly built</em> {@code byte[]} for
- * {@code Formats#bytes()} and a freshly instantiated object for anything else - and neither overrides
- * {@code hashCode}, so that was the identity hash: a different partition for every record of the same logical key,
- * and a different placement between two runs of one seed.
+ * The feed used to partition on {@code Objects.hashCode} of the key <b>object</b>. A pooled {@code String} key
+ * survives that, but a key function returning a <em>freshly built</em> {@code byte[]} - the ordinary shape for a
+ * {@code Formats#bytes()} route - overrides no {@code hashCode}, so that was the identity hash: a different
+ * partition for every record of the same logical key, and a different placement on the next run.
  * <p>
  * <b>Nothing could have caught it</b>, which is half of why it is worth a file: {@code partitionsPerTopic(} had no
  * caller anywhere in the tree outside its own builder method, and every other test runs one partition, where
@@ -61,12 +59,24 @@ class KeyPartitioningTest {
      */
     private static final int RECORD_BOUND = 60;
 
+    /**
+     * <b>A FRESH {@code byte[]} on every call</b>, which is the hazard this test exists for rather than an
+     * accident of how it is written: an array's inherited {@code hashCode} is its identity, so a key placed by
+     * {@code Objects.hashCode} would land somewhere different for every record of the same logical key and
+     * somewhere different again on a second run. Reusing one array per key would hide exactly that.
+     * <p>
+     * It used to come from the module's own filler, which manufactured the same shape; written out here, the test
+     * says what it is testing instead of depending on something else to be careless in the right way.
+     */
+    private static final LongFunction<byte[]> FRESH_BYTE_ARRAY_KEYS =
+            index -> ("key-" + Math.floorMod(index, KEYS)).getBytes(StandardCharsets.UTF_8);
+
     @Test
     void aByteArrayKeyStaysOnOnePartitionAndOneSeedPlacesItTheSameWayTwice() {
-        Map<String, Set<Integer>> first = placementsOfARunSeeded(11);
-        Map<String, Set<Integer>> second = placementsOfARunSeeded(11);
+        Map<String, Set<Integer>> first = placementsOfARun();
+        Map<String, Set<Integer>> second = placementsOfARun();
 
-        assertWithMessage("every key the generator draws from should have been seen")
+        assertWithMessage("every key the feed draws from should have been seen")
                 .that(first).hasSize(KEYS);
         for (Map.Entry<String, Set<Integer>> key : first.entrySet()) {
             assertWithMessage("key %s went to partitions %s - a key that does not stick to one partition makes "
@@ -84,8 +94,8 @@ class KeyPartitioningTest {
         assertWithMessage("the keys have to be spread over more than one partition or this test cannot fail")
                 .that(used.size()).isGreaterThan(1);
 
-        assertWithMessage("the same seed has to place the same keys on the same partitions, or a sandbox failure "
-                + "is not reproducible")
+        assertWithMessage("two runs of the same program have to place the same keys on the same partitions, or a "
+                + "sandbox failure is not reproducible")
                 .that(second).isEqualTo(first);
     }
 
@@ -97,8 +107,8 @@ class KeyPartitioningTest {
      */
     @Test
     void theClassicPathAlsoKeepsAByteArrayKeyOnOnePartitionAcrossTwoSeededRuns() {
-        Map<String, Set<Integer>> first = classicPlacementsOfARunSeeded(11);
-        Map<String, Set<Integer>> second = classicPlacementsOfARunSeeded(11);
+        Map<String, Set<Integer>> first = classicPlacementsOfARun();
+        Map<String, Set<Integer>> second = classicPlacementsOfARun();
 
         assertThat(first).hasSize(KEYS);
         for (Map.Entry<String, Set<Integer>> key : first.entrySet()) {
@@ -117,25 +127,25 @@ class KeyPartitioningTest {
     /**
      * The classic arm of {@link #placementsOfARunSeeded}: an options-builder instance over byte-array keys.
      */
-    private static Map<String, Set<Integer>> classicPlacementsOfARunSeeded(long seed) {
+    private static Map<String, Set<Integer>> classicPlacementsOfARun() {
         Map<String, Set<Integer>> placements = new ConcurrentHashMap<>();
 
         Sandbox sandbox = Sandbox.builder()
                 .perSecond(500)
                 .partitionsPerTopic(PARTITIONS)
-                .keyCardinality(KEYS)
                 .bound(Bound.afterRecords(RECORD_BOUND))
-                .seed(seed)
                 .build();
 
-        try (ClassicSandbox<byte[], Order> classic = sandbox.classic(byte[].class, Order.class, TOPIC)) {
-            ParallelEoSStreamProcessor<byte[], Order> pc = SandboxFixtures.startClassic(classic,
+        try (ClassicSandbox<byte[], String> classic = sandbox.classic(byte[].class, String.class, TOPIC)) {
+            ParallelEoSStreamProcessor<byte[], String> pc = SandboxFixtures.startClassic(classic,
                     SandboxFixtures.partitionOrdered(classic),
                     context -> {
                         var record = context.getSingleRecord();
                         placements.computeIfAbsent(new String(record.key(), StandardCharsets.UTF_8),
                                 absent -> ConcurrentHashMap.newKeySet()).add(record.partition());
-                    });
+                    },
+                    FRESH_BYTE_ARRAY_KEYS,
+                    index -> TOPIC + "-" + index);
 
             assertWithMessage("the record bound should have been reached")
                     .that(classic.awaitBound(Duration.ofSeconds(60))).isTrue();
@@ -150,12 +160,12 @@ class KeyPartitioningTest {
      *
      * @return key, as the UTF-8 text its bytes carry, to the set of partitions it arrived on
      */
-    private static Map<String, Set<Integer>> placementsOfARunSeeded(long seed) {
+    private static Map<String, Set<Integer>> placementsOfARun() {
         Map<String, Set<Integer>> placements = new ConcurrentHashMap<>();
 
         ParallelConsumerDefinition definition = SandboxFixtures.definition();
         definition.topic(TOPIC)
-                .consumed(Consumed.with(Formats.bytes(), Formats.json(Order.class)))
+                .consumed(Consumed.with(Formats.bytes(), Formats.string()))
                 .process(context -> {
                     String key = new String(context.key(), StandardCharsets.UTF_8);
                     placements.computeIfAbsent(key, absent -> ConcurrentHashMap.newKeySet())
@@ -166,9 +176,9 @@ class KeyPartitioningTest {
         Sandbox sandbox = Sandbox.builder()
                 .perSecond(500)
                 .partitionsPerTopic(PARTITIONS)
-                .keyCardinality(KEYS)
                 .bound(Bound.afterRecords(RECORD_BOUND))
-                .seed(seed)
+                .feedingKeys(TOPIC, FRESH_BYTE_ARRAY_KEYS)
+                .feeding(TOPIC, index -> TOPIC + "-" + index)
                 .build();
 
         try (ConsumerHandle handle = definition.start(sandbox)) {

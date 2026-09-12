@@ -6,7 +6,6 @@ package bz.stub.parallelconsumer.sandbox;
 
 import bz.stub.parallelconsumer.fluent.ConsumerHandle;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
-import bz.stub.parallelconsumer.sandbox.demo.Order;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -42,11 +41,12 @@ class RecordCountBoundTest {
     @Test
     void aRecordCountBoundEndsTheRunAndDrainsBeforeClosing() {
         ParallelConsumerDefinition definition =
-                SandboxFixtures.succeedingJsonRoute(SandboxFixtures.definition(), "orders", Order.class);
+                SandboxFixtures.succeedingStringRoute(SandboxFixtures.definition(), "orders");
 
         Sandbox sandbox = Sandbox.builder()
                 .perSecond(2000)
                 .bound(Bound.afterRecords(RECORDS))
+                .feeding("orders", SandboxFixtures.countedValues("orders"))
                 .build();
 
         ConsumerHandle handle = definition.start(sandbox);
@@ -75,9 +75,12 @@ class RecordCountBoundTest {
     @Test
     void anUnboundedSandboxSaysSoRatherThanWaitingForever() {
         ParallelConsumerDefinition definition =
-                SandboxFixtures.succeedingJsonRoute(SandboxFixtures.definition(), "orders", Order.class);
+                SandboxFixtures.succeedingStringRoute(SandboxFixtures.definition(), "orders");
 
-        Sandbox sandbox = Sandbox.builder().perSecond(100).build();
+        Sandbox sandbox = Sandbox.builder()
+                .perSecond(100)
+                .feeding("orders", SandboxFixtures.countedValues("orders"))
+                .build();
         try (ConsumerHandle handle = definition.start(sandbox)) {
             IllegalStateException refusal = assertThrows(IllegalStateException.class,
                     () -> sandbox.awaitBound(Duration.ofSeconds(1)));

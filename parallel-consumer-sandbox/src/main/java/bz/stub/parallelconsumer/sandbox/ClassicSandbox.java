@@ -17,6 +17,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.LongFunction;
 
 /**
  * The classic API's sandbox: the same mock consumer, producer and driver, handed to an options builder rather
@@ -58,19 +59,7 @@ import java.util.Objects;
 public final class ClassicSandbox<K, V> implements AutoCloseable {
 
     /**
-     * The key type to generate. Declared by the caller rather than read from a definition, because a classic
-     * application's types live in its options builder's generics and erasure has taken them by the time anything
-     * here could look.
-     */
-    private final Class<K> keyType;
-
-    /**
-     * The value type to generate, declared for the same reason as {@link #keyType}.
-     */
-    private final Class<V> valueType;
-
-    /**
-     * The topics to generate into - the ones the caller will subscribe its instance to. Unmodifiable, because the
+     * The topics to publish into - the ones the caller will subscribe its instance to. Unmodifiable, because the
      * consumer below was built with these exact partitions and a later addition would have nowhere to go.
      */
     private final List<String> topics;
@@ -91,18 +80,6 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * than waiting for something that will never happen.
      */
     private final Bound bound;
-
-    /**
-     * The run's seed, given to each feed's own {@link RandomObjects} so that two runs of a seed generate the same
-     * records.
-     */
-    private final long seed;
-
-    /**
-     * How many distinct keys to draw from. A pool rather than a key per record, because repeating keys is what
-     * makes shard behaviour something a sandbox run can show.
-     */
-    private final int keyCardinality;
 
     /**
      * The broker. Built in the constructor rather than on demand, because the caller hands it to its options
@@ -127,22 +104,14 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * Package-private: a classic sandbox is built by {@link Sandbox#classic(Class, Class, String...)}, so that the
      * settings below come from one builder rather than from eight arguments at a call site.
      */
-    ClassicSandbox(Class<K> keyType,
-                   Class<V> valueType,
-                   Collection<String> topics,
+    ClassicSandbox(Collection<String> topics,
                    int partitionsPerTopic,
                    double perSecond,
-                   Bound bound,
-                   long seed,
-                   int keyCardinality) {
-        this.keyType = keyType;
-        this.valueType = valueType;
+                   Bound bound) {
         this.topics = Collections.unmodifiableList(new ArrayList<>(topics));
         this.partitionsPerTopic = partitionsPerTopic;
         this.perSecond = perSecond;
         this.bound = bound;
-        this.seed = seed;
-        this.keyCardinality = keyCardinality;
         this.consumer = new SandboxConsumer<>(this.topics, partitionsPerTopic);
     }
 
@@ -288,11 +257,20 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * tells the consumer how to find them and it answers zero for every partition, which on this path is the
      * truth.
      *
+     * <b>Both functions are the caller's</b>, and they are addressed by the record's index within its topic rather
+     * than called in sequence, so record <em>n</em> of a topic is the same whatever order the topics were served
+     * in and whatever the pacing did. This artefact's driver has no idea what a value of {@code V} looks like;
+     * saying so is the price of it not having to.
+     *
      * @param instance the Parallel Consumer instance to close at the bound; every processor type implements
      *                 {@link DrainingCloseable}
+     * @param keys     the key for a record at an index - repeat keys, or a shard has nothing to order
+     * @param values   the value for a record at an index
      */
-    public void startGenerating(DrainingCloseable instance) {
+    public void startGenerating(DrainingCloseable instance, LongFunction<K> keys, LongFunction<V> values) {
         Objects.requireNonNull(instance, "The instance to close at the bound must be supplied");
+        Objects.requireNonNull(keys, "A key function must be supplied");
+        Objects.requireNonNull(values, "A value function must be supplied");
         if (driver != null) {
             throw new IllegalStateException("This classic sandbox is already generating");
         }
@@ -300,7 +278,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
 
         List<TopicFeed> feeds = new ArrayList<>();
         for (String topic : topics) {
-            feeds.add(new TypedFeed(topic));
+            feeds.add(new TypedFeed(topic, keys, values));
         }
         driver = new RecordDriver(feeds, perSecond, bound, () -> {
             try {
@@ -312,7 +290,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
                 instance.closeDrainFirst();
             }
         });
-        log.info("Classic sandbox running: {} at {}/s per topic, seed {}, {}", topics, perSecond, seed, bound);
+        log.info("Classic sandbox driving: {} at {}/s per topic, {}", topics, perSecond, bound);
         driver.start();
     }
 
@@ -361,16 +339,23 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         private final String topic;
 
         /**
-         * A filler per feed, each seeded with the run's seed, so that record <em>n</em> of a topic depends on
-         * the seed and <em>n</em> alone and not on how the topics interleaved.
+         * This feed's key for a given record index - the caller's, shared by every topic of this sandbox because
+         * a classic sandbox has one pair of types rather than one per route.
          */
-        private final RandomObjects random = RandomObjects.seededWith(seed);
+        private final LongFunction<K> keys;
+
+        /**
+         * This feed's value for a given record index, the caller's for the same reason as {@link #keys}.
+         */
+        private final LongFunction<V> values;
 
         /**
          * @param topic one of the sandbox's topics
          */
-        private TypedFeed(String topic) {
+        private TypedFeed(String topic, LongFunction<K> keys, LongFunction<V> values) {
             this.topic = topic;
+            this.keys = keys;
+            this.values = values;
         }
 
         /**
@@ -382,30 +367,29 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         }
 
         /**
-         * One record: a key from the pool, a value filled from the declared type, and a partition chosen by the
-         * key's value hash so the key sticks to it.
+         * One record: ask for the key and the value at this index, and put it on the partition the key's value
+         * hash names so the key sticks to it.
          *
          * @param index the record's index in this feed's sequence, which is what makes it reproducible
          * @return false once the consumer has closed, which is how the driver learns the run is over
          */
         @Override
         public boolean publish(long index) {
-            K key = random.key(keyType, index, keyCardinality);
-            V value = random.create(valueType, index);
+            K key = keys.apply(index);
+            V value = values.apply(index);
             int partition = Math.floorMod(valueHashOf(key), partitionsPerTopic);
             return consumer.publish(topic, partition, key, value) >= 0;
         }
     }
 
     /**
-     * A <b>value-based</b> hash of a generated key, so that one key always lands on one partition and a seed
-     * reproduces the placement - which is what {@code Sandbox.Builder#seed} promises and what makes a key-ordered
-     * run in the sandbox shard the way it would against a broker.
+     * A <b>value-based</b> hash of a key, so that one key always lands on one partition and the same run places
+     * it the same way twice - which is what makes a key-ordered run in the sandbox shard the way it would against
+     * a broker.
      * <p>
-     * Arrays are the case {@code Objects.hashCode} gets wrong, and the case the hydration manufactures:
-     * {@code RandomObjects#key} builds a <em>fresh</em> {@code byte[]} on every call for a {@code byte[]} key
-     * type, so the identity hash differs for every record of the same logical key and differs again between two
-     * runs of one seed.
+     * Arrays are the case {@code Objects.hashCode} gets wrong, and the case a key function manufactures: one that
+     * builds a <em>fresh</em> {@code byte[]} on every call overrides no {@code hashCode}, so the identity hash
+     * differs for every record of the same logical key and differs again between two runs of the same program.
      * <p>
      * This is deliberately the same treatment {@code ShardKey.KeyWithEquals} gives a key when the engine above
      * shards on it - arrays by value, everything else by its own {@code hashCode} - so the sandbox partitions a

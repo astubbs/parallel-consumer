@@ -70,19 +70,22 @@
  *       it looked like. A definition that parks by design is an ordinary bounded run here.</li>
  * </ol>
  *
- * <h2>The hydration</h2>
- * {@link bz.stub.parallelconsumer.sandbox.RandomObjects} fills each route's declared value type with realistic
- * random data - Instancio for the object graph, Datafaker for leaf values chosen by field <em>name</em>, so an
- * {@code email} field holds an email address and a {@code totalAmount} holds money - and Avro's own
- * {@code RandomData} for a specific record, whose schema knows more about its fields than its Java types do. A
- * Protobuf message type is refused naming the type: this version has no filler for one. A seed makes a run
- * reproducible, and records are addressed by index rather than by sequence, so one record can be reproduced
- * without replaying the run.
+ * <h2>What a record contains is not this module's business</h2>
+ * The driver is fed by a function from a record's index to its value, one per topic, and a driven sandbox with a
+ * topic nobody has supplied one for is refused at start naming it. <b>This module therefore has no third-party
+ * dependencies at all</b>: it is core, plus the mock clients core already ships. Realistic fake objects - an
+ * {@code email} field that holds an email address, an {@code Instant} inside a plausible window, an Avro record
+ * filled from its own schema - are a separate concern, and a separate artefact supplies them as exactly such a
+ * function.
  *
- * <p>Each generated object is encoded with its own route's serialiser before it reaches the mock consumer, because
- * the engine under the facade reads raw bytes (KTD2). That is why a route declared with a hand-written
- * deserialiser and no serialiser beside it is refused at start, naming its topic: there would be nothing to
- * encode with, and a record the route cannot read back is worse than a refusal.
+ * <p>Addressed by <em>index</em> rather than called in sequence, so the record at a given index is the same
+ * whatever order the topics were served in and whatever the pacing did - which is what makes a sandbox failure
+ * reproducible without replaying the run up to it.
+ *
+ * <p>Each value is encoded with its own route's serialiser before it reaches the mock consumer, because the engine
+ * under the facade reads raw bytes (KTD2). That is why a route declared with a hand-written deserialiser and no
+ * serialiser beside it is refused at start, naming its topic: there would be nothing to encode with, and a record
+ * the route cannot read back is worse than a refusal.
  *
  * <h2>The classic API</h2>
  * {@link bz.stub.parallelconsumer.sandbox.ClassicSandbox} hands the same clients and driver to an options

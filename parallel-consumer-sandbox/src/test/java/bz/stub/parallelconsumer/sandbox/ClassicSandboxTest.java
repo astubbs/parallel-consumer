@@ -9,7 +9,6 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
-import bz.stub.parallelconsumer.sandbox.demo.Order;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -30,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * start call changed and nothing else.
  * <p>
  * Note what this path does <b>not</b> exercise: a mock consumer holds records of the instance's own types, so the
- * generated orders go in as {@link Order} objects and the instance's deserialisers never run. That is a real
+ * values the feed makes go in as the objects they are and the instance's deserialisers never run. That is a real
  * difference from the fluent path and from a broker, and it is stated here so that a green run is not read as
  * covering deserialisation.
  */
@@ -43,34 +42,39 @@ class ClassicSandboxTest {
     /**
      * A serialiser for the produce side only - the consume side needs none, which is the point above.
      */
-    private static final Serializer<Order> ORDER_WRITER =
-            (topic, order) -> order == null ? null : order.toString().getBytes(StandardCharsets.UTF_8);
+    private static final Serializer<String> ORDER_WRITER =
+            (topic, order) -> order == null ? null : order.getBytes(StandardCharsets.UTF_8);
 
     @Test
-    void aClassicDefinitionConsumesGeneratedRecordsOfItsOwnDeclaredTypes() {
-        ConcurrentLinkedQueue<Order> seen = new ConcurrentLinkedQueue<>();
+    void aClassicDefinitionConsumesDrivenRecordsOfItsOwnDeclaredTypes() {
+        ConcurrentLinkedQueue<String> seen = new ConcurrentLinkedQueue<>();
 
         Sandbox sandbox = Sandbox.builder()
                 .perSecond(1000)
                 .bound(Bound.afterRecords(RECORDS))
                 .build();
 
-        try (ClassicSandbox<String, Order> classic = sandbox.classic(String.class, Order.class, "orders")) {
+        try (ClassicSandbox<String, String> classic = sandbox.classic(String.class, String.class, "orders")) {
             // SandboxFixtures.partitionOrdered is the ordinary options builder with one line changed - the
             // consumer is this sandbox's - which is the whole of what a classic application alters.
-            ParallelEoSStreamProcessor<String, Order> pc = SandboxFixtures.startClassic(classic,
+            ParallelEoSStreamProcessor<String, String> pc = SandboxFixtures.startClassic(classic,
                     SandboxFixtures.partitionOrdered(classic),
-                    context -> seen.add(context.getSingleRecord().value()));
+                    context -> seen.add(context.getSingleRecord().value()),
+                    SandboxFixtures.pooledKeys(RECORDS),
+                    index -> "order-" + index);
 
             assertThat(classic.awaitBound(Duration.ofSeconds(30))).isTrue();
             pc.closeDrainFirst();
         }
 
         assertThat(seen).hasSize(RECORDS);
-        Order first = seen.peek();
-        assertWithMessage("the classic path hands over the generated objects themselves, filled the same way "
-                + "the fluent path fills them").that(first.getEmail()).contains("@");
-        assertThat(first.getCustomerName()).isNotEmpty();
+        assertWithMessage("the classic path hands the instance the caller's own objects, with nothing encoded or "
+                + "decoded in between - so every record that arrived is one the value function made, and no two "
+                + "of them are the same record")
+                .that(seen).containsNoDuplicates();
+        for (String order : seen) {
+            assertThat(order).startsWith("order-");
+        }
     }
 
     /**
@@ -85,16 +89,18 @@ class ClassicSandboxTest {
                 .bound(Bound.afterRecords(RECORDS))
                 .build();
 
-        try (ClassicSandbox<String, Order> classic = sandbox.classic(String.class, Order.class, "orders")) {
+        try (ClassicSandbox<String, String> classic = sandbox.classic(String.class, String.class, "orders")) {
             var producer = classic.producer(new StringSerializer(), ORDER_WRITER);
-            ParallelEoSStreamProcessor<String, Order> pc = SandboxFixtures.startClassic(classic,
-                    ParallelConsumerOptions.<String, Order>builder()
+            ParallelEoSStreamProcessor<String, String> pc = SandboxFixtures.startClassic(classic,
+                    ParallelConsumerOptions.<String, String>builder()
                             .consumer(classic.consumer())
                             .producer(producer)
                             .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
                             .ordering(ProcessingOrder.PARTITION)
                             .build(),
-                    context -> log.debug("{}", context.getSingleRecord().value()));
+                    context -> log.debug("{}", context.getSingleRecord().value()),
+                    SandboxFixtures.pooledKeys(RECORDS),
+                    index -> "order-" + index);
 
             // Read after the instance was constructed, which is when the producer wrapper decides: the flag is a
             // latch, so asking once the run has started says the same thing as asking a moment earlier.
@@ -129,9 +135,9 @@ class ClassicSandboxTest {
     @Test
     void anExternalEngineRefusesTheTransactionalCommitModeBeforeItReadsAnyClient() {
         Sandbox sandbox = Sandbox.builder().build();
-        try (ClassicSandbox<String, Order> classic = sandbox.classic(String.class, Order.class, "orders")) {
-            ParallelConsumerOptions<String, Order> transactional = ParallelConsumerOptions
-                    .<String, Order>builder()
+        try (ClassicSandbox<String, String> classic = sandbox.classic(String.class, String.class, "orders")) {
+            ParallelConsumerOptions<String, String> transactional = ParallelConsumerOptions
+                    .<String, String>builder()
                     .consumer(classic.consumer())
                     .producer(classic.producer(new StringSerializer(), ORDER_WRITER))
                     .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)

@@ -115,10 +115,12 @@ class FluentQuickstartAppTest {
                     .perSecond(50)                                   // <1>
                     .bound(Bound.after(Duration.ofSeconds(10)))      // <2>
                     .keyCardinality(5_000)                           // <3>
+                    .feeding(FluentQuickstartApp.ORDERS_TOPIC, FluentQuickstartApp::anOrder)   // <4>
+                    .feeding(FluentQuickstartApp.SCANS_TOPIC, FluentQuickstartApp::aScan)
                     .build();
 
-            handle = pc.start(sandbox);                              // <4>
-            handle.awaitShutdown();                                  // <5>
+            handle = pc.start(sandbox);                              // <5>
+            handle.awaitShutdown();                                  // <6>
             // end::quickstartSandbox[]
 
             // OUTSIDE the tagged region deliberately: awaitShutdown() is what the README shows a demo doing, and
@@ -130,7 +132,7 @@ class FluentQuickstartAppTest {
             // is astubbs#504's own defect class leaving its own primary success signal green. The bound has
             // already been reached by the time awaitShutdown returns, so this is a verdict rather than a wait.
             assertWithMessage("the ten-second bound should have been reached and its close completed, with the "
-                    + "generator recording no failure")
+                    + "driver recording no failure")
                     .that(sandbox.awaitBound(Duration.ofSeconds(60))).isTrue();
 
             assertConsole(console);

@@ -989,6 +989,14 @@ the shipped module differs from it, and the vocabulary to read it with.**
   anticipated ("the generator can be replaced by hand-written records"). It is `Sandbox.builder().handPublished()`,
   `Sandbox#publish` and `Sandbox#awaitSettled`, with the same pair on `ClassicSandbox`. The driver's own behaviour is
   unchanged.
+- **The hydration ships as its own pull request above this one, and the driver takes a function instead.** Point 2's
+  first half, point 5, and this unit's Instancio/Datafaker/Avro dependency set - with the bytecode-level pinning the
+  Java 8 release target needed, which the Files and Risks entries below describe - move to `feat/504-sandbox-hydration`.
+  What is left in the sandbox module is a function from a record's index to its value, per topic
+  (`Sandbox.Builder#feeding`), so **the module has no third-party dependencies at all**; a driven sandbox with a topic
+  nothing has said how to fill is refused at start, naming it. The hydration artefact supplies exactly such a function.
+  The README quickstart therefore names its own two value functions rather than relying on the module to invent
+  records - which also makes AE24's *filtered* outcome fire on a schedule rather than on a dice roll.
 
 
 - **Goal:** Any definition, fluent or classic, runs with no broker against generated records at a declared rate, bounded or until closed, and the same module is the broker-free test kit.

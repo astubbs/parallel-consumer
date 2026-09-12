@@ -18,6 +18,7 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Properties;
 import java.util.function.Consumer;
+import java.util.function.LongFunction;
 
 /**
  * The setup every sandbox run-level test repeats: an empty definition, a route that always succeeds, and the
@@ -42,14 +43,23 @@ final class SandboxFixtures {
     }
 
     /**
-     * Adds a JSON route whose function always succeeds, which is what a test that is about the plumbing - the
+     * Adds a String route whose function always succeeds, which is what a test that is about the plumbing - the
      * driver, the bound, the wait - wants its records to do.
+     * <p>
+     * A String route rather than a typed one because these tests are not about what is in a record: this module's
+     * driver is fed by functions the caller writes, and {@link #countedValues(String)} is the smallest honest one.
      */
-    static <V> ParallelConsumerDefinition succeedingJsonRoute(ParallelConsumerDefinition definition,
-                                                              String topic,
-                                                              Class<V> valueType) {
-        definition.json(topic, valueType).process(context -> Outcome.succeeded());
+    static ParallelConsumerDefinition succeedingStringRoute(ParallelConsumerDefinition definition, String topic) {
+        definition.string(topic).process(context -> Outcome.succeeded());
         return definition;
+    }
+
+    /**
+     * The value function a test uses when it does not care what is in the record, only that there is one: the
+     * topic and the record's index, which is enough to tell two records apart in a failure message.
+     */
+    static LongFunction<Object> countedValues(String topic) {
+        return index -> topic + "-" + index;
     }
 
     /**
@@ -69,18 +79,29 @@ final class SandboxFixtures {
      * repeated, which the duplicate-code check flagged as an eighteen-line clone.
      * <p>
      * The options are the caller's, because what a classic test varies is exactly the options; the poll function
-     * is the caller's, because that is where the test's evidence is collected; and the instance is returned
-     * rather than closed here, because a bound closes it and a test that reaches its bound still calls
+     * is the caller's, because that is where the test's evidence is collected; the key and value functions are
+     * the caller's, because this module's driver has no opinion about what a record contains; and the instance is
+     * returned rather than closed here, because a bound closes it and a test that reaches its bound still calls
      * {@code closeDrainFirst()} afterwards to cover the run that did not.
      */
     static <K, V> ParallelEoSStreamProcessor<K, V> startClassic(ClassicSandbox<K, V> classic,
                                                                 ParallelConsumerOptions<K, V> options,
-                                                                Consumer<PollContext<K, V>> onPoll) {
+                                                                Consumer<PollContext<K, V>> onPoll,
+                                                                LongFunction<K> keys,
+                                                                LongFunction<V> values) {
         ParallelEoSStreamProcessor<K, V> pc = new ParallelEoSStreamProcessor<>(options);
         pc.subscribe(classic.topics());
         pc.poll(onPoll);
-        classic.startGenerating(pc);
+        classic.startGenerating(pc, keys, values);
         return pc;
+    }
+
+    /**
+     * The keys a classic test uses when it is not about keys: a pool of strings, the same shape the fluent path
+     * gives a topic that declared none.
+     */
+    static LongFunction<String> pooledKeys(int cardinality) {
+        return index -> "key-" + Math.floorMod(index, cardinality);
     }
 
     /**
