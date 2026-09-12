@@ -1681,15 +1681,23 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 } finally {
                     failPendingRevokeCommitOnControlThreadExit();
                 }
+                // Inside the try, not after it, because the comment above is the contract and these two lines are
+                // part of the body: the clean-exit log runs the caller's logging binding over a state binding, so
+                // it can throw - and that is the exact hazard the try was written for. Outside, a throw from here
+                // left the completion never completed while the submitted Future still failed, so a waiter hung:
+                // the one case controlThreadCompletion()'s javadoc promises cannot happen. Raised by the review of
+                // astubbs/parallel-consumer#506, which found the code and its own comment disagreeing.
+                log.info("Control loop ending clean (state:{})...", state);
+                // false would mean something completed it first, which nothing does - the only writers are here.
+                boolean ignoredWasFirstToComplete = controlThreadCompletion.complete(null);
             } catch (Throwable controlThreadFailure) {
                 // Armed BEFORE the rethrow, so a waiter released by this completion already has the cause; the
                 // submitted future carries the same throwable, and the two must not disagree about why it ended.
-                // false would mean something completed it first, which nothing does - the only writers are here.
+                // A clean completion arriving first makes this a no-op, which is the right outcome: only the clean
+                // log line can throw after it, and a consumer that finished its loop did finish it.
                 boolean ignoredWasFirstToComplete = controlThreadCompletion.completeExceptionally(controlThreadFailure);
                 throw controlThreadFailure;
             }
-            log.info("Control loop ending clean (state:{})...", state);
-            boolean ignoredWasFirstToComplete = controlThreadCompletion.complete(null);
             return true;
         };
         Future<Boolean> controlTaskFutureResult;

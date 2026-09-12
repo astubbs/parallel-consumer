@@ -30,6 +30,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * <p>
  * The three cases below are the contract, and the third is the one a reader gets wrong: an instance whose user
  * function throws has not ended, and must not report that it has.
+ * <p>
+ * <b>Proved by sabotage, not by assumption</b>, per the test-tree rules. Arming the clean completion two seconds
+ * late, from a thread of its own, reddens {@link #itCompletesWhenTheInstanceIsClosed} at its {@code isDone()}
+ * assertion and nothing else - which is the mutation the previous shape of that test could not see, because it
+ * waited on {@code get()} first and then asked a question that cannot fail after one.
+ * {@code ControlThreadCompletionOnLoggingFailureTest} owns the fourth case, where the task body's own clean-exit log
+ * throws.
  *
  * @see AbstractParallelEoSStreamProcessor#controlThreadCompletion()
  */
@@ -55,12 +62,18 @@ class ControlThreadCompletionTest extends ParallelEoSStreamProcessorTestBase {
 
         parallelConsumer.closeDrainFirst();
 
-        // No await: the control task completes this before it returns, and close() waits on the task's own future,
-        // so by the time close() has returned this is already done. A poll here would hide an ordering mistake.
+        // The ordering claim, asserted rather than described: the control task completes this BEFORE it returns, and
+        // close() waits on the task's own future, so by the time close() has returned this is already done. Asked
+        // before the get() on purpose - a get() first would wait for the completion and then find it done, which is
+        // true of a completion armed a minute late as well.
+        assertWithMessage("close() has returned, so the control task has ended and armed this already - waiting "
+                + "here instead of asserting would hide an arming that happens too late")
+                .that(completion.isDone())
+                .isTrue();
+        // What proves the completion is CLEAN: get() rethrows as an ExecutionException on an exceptional one, so
+        // returning normally is the assertion. isCompletedExceptionally() after a successful get() cannot fail, and
+        // said so for a while until the review of astubbs/parallel-consumer#506 traced it.
         Void ignoredResult = completion.get(WAIT_SECONDS, TimeUnit.SECONDS);
-        assertWithMessage("a clean close is a clean completion - there is nothing to rethrow")
-                .that(completion.isCompletedExceptionally())
-                .isFalse();
     }
 
     /**
