@@ -83,7 +83,7 @@ by `8954824e6`, on the strength of a read-only investigation that cited
 `internal.ConsumerOwnership.Phase` having a generated `Subject` as proof that discovery is
 reachability-based. It is not proof - `Phase` is swept because everything is swept - and `ed68074d6`
 re-established the constraint by measurement shortly afterwards. Both commits are on
-`docs/ux-modernisation`.
+astubbs/parallel-consumer#502, which this PR is the base of.
 
 ## What was tried
 
