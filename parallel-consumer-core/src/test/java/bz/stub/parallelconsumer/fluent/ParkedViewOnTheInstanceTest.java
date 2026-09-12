@@ -109,11 +109,11 @@ class ParkedViewOnTheInstanceTest extends AbstractFluentEngineTest {
     }
 
     /**
-     * The two commands an operator will reach for, and the answer they get today: a refusal that says which
-     * milestone brings them, rather than a silent no-op or an empty success.
+     * The command an operator will reach for, and the answer it gives today: a refusal that says which milestone
+     * brings it, rather than a silent no-op or an empty success. Both entry points refuse, and both say why.
      */
     @Test
-    void resumeAndDlqRefuseAndSayWhy() {
+    void resumeRefusesAndSaysWhy() {
         ParkedView parked = oneParkedRecordOn(TOPIC);
         ParkedRecord record = parked.records().get(0);
 
@@ -121,24 +121,19 @@ class ParkedViewOnTheInstanceTest extends AbstractFluentEngineTest {
                 .hasMessageThat().contains("resume is not supported in this version");
         assertThat(assertThrows(UnsupportedOperationException.class, parked::resume))
                 .hasMessageThat().contains("engine accessor");
-        assertThat(assertThrows(UnsupportedOperationException.class, () -> parked.dlq(record)))
-                .hasMessageThat().contains("dlq is not supported in this version");
-        assertThat(assertThrows(UnsupportedOperationException.class, parked::dlq))
-                .hasMessageThat().contains("engine accessor");
 
         // The record is still parked afterwards: a refused command changes nothing.
         assertThat(handle.topic(TOPIC).parked().count()).isEqualTo(1);
     }
 
     /**
-     * The three figures R28 asks for that this version cannot answer read empty rather than zero. Zero would be a
+     * The two figures R28 asks for that this version cannot answer read empty rather than zero. Zero would be a
      * number an operator could act on, and it would be wrong.
      */
     @Test
     void thePayloadFiguresReadEmptyUntilTheEngineAccessorsLand() {
         ParkedView parked = oneParkedRecordOn(TOPIC);
         assertThat(parked.payloadFraction().isPresent()).isFalse();
-        assertThat(parked.estimatedTimeToExport().isPresent()).isFalse();
         assertThat(parked.heldBehind(parked.records().get(0)).isPresent()).isFalse();
         assertThat(parked.toString()).contains("not available");
     }

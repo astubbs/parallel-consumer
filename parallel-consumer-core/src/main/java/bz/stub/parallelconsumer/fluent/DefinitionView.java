@@ -63,9 +63,9 @@ public interface DefinitionView {
     ProcessingOrder ordering();
 
     /**
-     * Whether anything in this definition needs a producer: a route that declares produced types, a dead-letter
-     * destination, or the transactional commit mode (R4, KTD2). When this is false the facade opens no producer and
-     * starts on the plain poll flow.
+     * Whether anything in this definition needs a producer: a route that declares produced types, or the
+     * transactional commit mode (R4, KTD2). When this is false the facade opens no producer and starts on the plain
+     * poll flow.
      */
     boolean requiresProducer();
 

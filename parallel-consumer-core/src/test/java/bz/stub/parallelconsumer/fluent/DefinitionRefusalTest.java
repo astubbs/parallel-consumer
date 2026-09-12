@@ -16,7 +16,6 @@ import java.util.Arrays;
 import java.util.Properties;
 import java.util.regex.Pattern;
 
-import static bz.stub.parallelconsumer.fluent.AfterRetries.dlqImmediately;
 import static bz.stub.parallelconsumer.fluent.AfterRetries.park;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -122,114 +121,6 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
         assertThat(refusal(pc)).hasMessageThat().contains(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG);
     }
 
-    @Test
-    void exportImmediatelyWithNoDestinationNamesTheSettingAndTheTopic() {
-        var pc = define();
-        pc.string("orders").afterRetries(park().dlqImmediately()).process(context -> Outcome.succeeded());
-
-        var thrown = refusal(pc);
-
-        assertThat(thrown).hasMessageThat().contains("dlqImmediately");
-        assertThat(thrown).hasMessageThat().contains("orders");
-    }
-
-    @Test
-    void anAgeBoundWithNoDestinationNamesTheSettingAndTheTopic() {
-        var pc = define();
-        pc.string("orders").afterRetries(park().dlqOlderThan(Duration.ofDays(2)))
-                .process(context -> Outcome.succeeded());
-
-        var thrown = refusal(pc);
-
-        assertThat(thrown).hasMessageThat().contains("dlqOlderThan");
-        assertThat(thrown).hasMessageThat().contains("orders");
-    }
-
-    @Test
-    void aDestinationWithNoTriggerNamesTheTopicAndTheDestination() {
-        var pc = define();
-        pc.string("orders").afterRetries(park().dlqTo("orders.dlq")).process(context -> Outcome.succeeded());
-
-        var thrown = refusal(pc);
-
-        assertThat(thrown).hasMessageThat().contains("orders.dlq");
-        assertThat(thrown).hasMessageThat().contains("no trigger");
-    }
-
-    /**
-     * KTD5: in this version the payload-fraction trigger has no engine accessor to read, so <em>any</em> explicit
-     * percentage is refused - not only one above the ceiling.
-     */
-    @Test
-    void anyExplicitExportPercentageIsRefusedNamingTheSetting() {
-        var pc = define();
-        pc.string("orders").afterRetries(park().dlqTo("orders.dlq").dlqWhenOffsetPayloadReaches(50))
-                .process(context -> Outcome.succeeded());
-
-        var thrown = refusal(pc);
-
-        assertThat(thrown).hasMessageThat().contains("dlqWhenOffsetPayloadReaches");
-        assertThat(thrown).hasMessageThat().contains("orders");
-        assertThat(thrown).hasMessageThat().contains("50");
-    }
-
-    @Test
-    void anExportPercentageAboveTheCeilingAlsoNamesTheCeilingAndThePauseThreshold() {
-        var pc = define();
-        pc.string("orders").afterRetries(park().dlqTo("orders.dlq")
-                .dlqWhenOffsetPayloadReaches(AfterRetries.MAX_PAYLOAD_PERCENTAGE + 1))
-                .process(context -> Outcome.succeeded());
-
-        var thrown = refusal(pc);
-
-        assertThat(thrown).hasMessageThat().contains("ceiling");
-        assertThat(thrown).hasMessageThat().contains(String.valueOf(AfterRetries.MAX_PAYLOAD_PERCENTAGE));
-        assertThat(thrown).hasMessageThat().contains("75");
-    }
-
-    @Test
-    void theInstanceWideExportPercentageIsRefusedNamingTheSetting() {
-        var pc = define().dlqWhenOffsetPayloadReaches(60);
-        pc.string("orders").process(context -> Outcome.succeeded());
-
-        assertThat(refusal(pc)).hasMessageThat().contains("dlqWhenOffsetPayloadReaches");
-    }
-
-    /**
-     * The ceiling is derived from the engine's own pause threshold rather than written down twice, so a change to
-     * that threshold moves both together.
-     */
-    @Test
-    void theCeilingIsFivePointsBelowTheEnginesPauseThreshold() {
-        assertThat(AfterRetries.MAX_PAYLOAD_PERCENTAGE).isEqualTo(70);
-    }
-
-    @Test
-    void aDestinationThatIsOneOfTheInstancesOwnTopicsNamesBoth() {
-        var pc = define();
-        pc.string("audit").process(context -> Outcome.succeeded());
-        pc.string("orders").afterRetries(dlqImmediately("audit")).process(context -> Outcome.succeeded());
-
-        var thrown = refusal(pc);
-
-        assertThat(thrown).hasMessageThat().contains("orders");
-        assertThat(thrown).hasMessageThat().contains("audit");
-        assertThat(thrown).hasMessageThat().contains("own exports");
-    }
-
-    @Test
-    void aDestinationUnderTheTransactionalCommitModeNamesTheDependencyItWaitsFor() {
-        Properties properties = props();
-        properties.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "refusal-test");
-        var pc = new ParallelConsumerDefinition(properties)
-                .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
-        pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
-
-        var thrown = refusal(pc);
-
-        assertThat(thrown).hasMessageThat().contains("orders");
-        assertThat(thrown).hasMessageThat().contains("astubbs#410");
-    }
 
     @Test
     void aPatternSubscriptionNamesThePatternAndTheAlternative() {
@@ -290,14 +181,15 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
     }
 
     /**
-     * The two reactions are alternatives, so a stopping policy refuses an export setting where it is written rather
+     * The two reactions are alternatives, so a stopping policy refuses a park setting where it is written rather
      * than carrying one that could never fire.
      */
     @Test
-    void anExportSettingOnAStoppingPolicyNamesTheSetting() {
-        var thrown = assertThrows(IllegalArgumentException.class, () -> AfterRetries.stop().dlqTo("orders.dlq"));
+    void aParkSettingOnAStoppingPolicyNamesTheSetting() {
+        var thrown = assertThrows(IllegalArgumentException.class,
+                () -> AfterRetries.stop().thenRetryAfter(Duration.ofSeconds(1)));
 
-        assertThat(thrown).hasMessageThat().contains("dlqTo");
+        assertThat(thrown).hasMessageThat().contains("thenRetryAfter");
         assertThat(thrown).hasMessageThat().contains("stop()");
     }
 
@@ -377,9 +269,9 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
     /**
      * The owner's question on astubbs/parallel-consumer#502: what happens when retry-forever meets an
      * after-retries policy? Nothing did - exhaustion is the only thing that consults a policy, and a record that
-     * retries forever never exhausts, so the reaction, the park cycles and the export triggers were all inert and
-     * the definition said nothing. Either half may be declared at either scope, so all four pairings are covered
-     * here, in both reactions.
+     * retries forever never exhausts, so the reaction and the park cycles were both inert and the definition said
+     * nothing. Either half may be declared at either scope, so all four pairings are covered here, in both
+     * reactions.
      */
     @Test
     void theInstanceDefaultPolicyIsRefusedBesideTheInstanceDefaultRetryForever() {

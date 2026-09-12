@@ -16,7 +16,7 @@ import java.util.Objects;
 /**
  * The terminal outcome a route's processing function reports for one record.
  * <p>
- * Every record reaches exactly one terminal outcome - succeeded, filtered, parked or exported - and a retry is a step
+ * Every record reaches exactly one terminal outcome - succeeded, filtered or parked - and a retry is a step
  * towards one of these rather than an outcome of its own: a retry is reported by throwing, never by returning
  * (R7, R9).
  *

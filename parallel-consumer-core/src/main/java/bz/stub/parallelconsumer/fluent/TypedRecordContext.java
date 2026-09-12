@@ -19,8 +19,8 @@ import org.apache.kafka.common.header.Headers;
  * route's deserialisers read them. Everything else is delegated, so there is one answer to each question rather than
  * a copy that can drift.
  * <p>
- * {@link #raw()} is the undecoded record, which is what an exported record carries and what the park observer
- * receives when decoding itself failed (R13, R16).
+ * {@link #raw()} is the undecoded record, which is what the park observer receives when decoding itself failed
+ * (R16).
  * <p>
  * <b>Why the name says typed.</b> The obvious name is {@code RecordContext}, and it is taken - by the very class
  * this delegates to, which is on the engine and is part of the classic API. The two could not share a name even if

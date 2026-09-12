@@ -23,7 +23,6 @@ import java.util.Map;
 import java.util.Properties;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
-import static bz.stub.parallelconsumer.fluent.AfterRetries.dlqImmediately;
 import static bz.stub.parallelconsumer.fluent.AfterRetries.park;
 import static bz.stub.parallelconsumer.fluent.AfterRetries.stop;
 import static bz.stub.parallelconsumer.fluent.Formats.json;
@@ -97,7 +96,7 @@ public class FluentApiSnippets {
     }
 
     /**
-     * What happens to a record that has run out of attempts: the three reactions, as data.
+     * What happens to a record that has run out of attempts: the reactions this release offers, as data.
      */
     void afterRetriesPolicy() {
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties());
@@ -112,12 +111,8 @@ public class FluentApiSnippets {
                         .forCycles(4))
                 .process(context -> Outcome.succeeded());
 
-        pc.json("payments", Order.class)
-                .afterRetries(dlqImmediately("payments.dlq"))                 // <3>
-                .process(context -> Outcome.succeeded());
-
         pc.json("schema-sensitive", Order.class)
-                .afterRetries(stop())                                         // <4>
+                .afterRetries(stop())                                         // <3>
                 .process(context -> Outcome.succeeded());
         // end::fluentAfterRetries[]
     }
@@ -159,14 +154,15 @@ public class FluentApiSnippets {
 
     /**
      * The first documented workaround: a dead-letter topic written by hand, with the failure swallowed so that the
-     * offset commits.
+     * offset commits. Park is what replaces it - the record stops being retried without being copied anywhere and
+     * without the offset being advanced over a record nobody looked at.
      */
     void migrationDeadLetter() {
         ParallelConsumerDefinition pc = ParallelConsumer.connect(connectionProperties());
         // tag::fluentMigrationDeadLetter[]
         pc.json("orders", Order.class)
                 .retryLimit(5)
-                .afterRetries(park())          // or dlqTo("orders.dlq") once export lands
+                .afterRetries(park())          // the record stays put; nothing is copied anywhere
                 .process(context -> {
                     warehouse(context.value());
                     return Outcome.succeeded();

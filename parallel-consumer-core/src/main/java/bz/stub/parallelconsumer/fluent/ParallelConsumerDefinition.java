@@ -46,8 +46,8 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * no consumer and no producer at all.
  * <p>
  * <b>Starting builds exactly what the definition needs.</b> A producer is opened only when something asks for one: a
- * route that declares produced types, a dead-letter destination, or the transactional commit mode. Every other
- * definition runs on the plain poll flow with no producer (R4, KTD2).
+ * route that declares produced types, or the transactional commit mode. Every other definition runs on the plain
+ * poll flow with no producer (R4, KTD2).
  *
  * <h2>Instance-wide settings and per-route defaults are spelled apart</h2>
  * An instance-wide setting is plain - {@link #commitMode} - because the engine has one consumer, one commit and one
@@ -116,13 +116,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * fields reached through six accessors (KD11, R6).
      */
     private final InstanceDefaults defaults = new InstanceDefaults();
-
-    /**
-     * The instance-wide export percentage as declared, held only so validation can refuse it by name: the trigger
-     * it would drive reads an engine accessor that does not exist yet (KTD5). Boxed so that null means nothing was
-     * declared - a zero would be a value somebody typed.
-     */
-    private Integer instancePayloadPercentage;
 
     /**
      * Whether the caller supplied a finished consumer, so that start does not ask the runtime for one. A flag
@@ -319,36 +312,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         return this;
     }
 
-    /**
-     * How full the offset payload may get before the oldest parked records are exported to the dead-letter topic to
-     * make room. This is the instance default a route's own park policy may override (R6, R27).
-     *
-     * <h2>What the offset payload is</h2>
-     * Committing progress as a single number - "everything up to offset N is done" - cannot describe a partition
-     * where record 100 is parked while records 101 to 400 have all succeeded. So this library commits two things:
-     * the ordinary committed offset, held back at the oldest record still incomplete, and beside it, in the small
-     * metadata field every Kafka commit carries, a compact encoded map marking which records past that offset are
-     * still incomplete. That map is the <em>offset payload</em>. It is what lets processing run on ahead of a record
-     * that is stuck, without either losing the work done past it or re-delivering all of it after a restart.
-     * <p>
-     * Kafka caps how large that metadata field may be, and every parked record is one more thing the map must
-     * carry - a parked record is precisely a record the committed offset cannot move past. So the more records park
-     * on a partition, the closer its map comes to the cap, and a partition that reaches the cap can take on no new
-     * work at all. This setting is the release valve: at the given percentage of the cap, the partition's
-     * oldest-parked records are copied to the declared dead-letter topic and completed, which shortens the map
-     * again. A higher percentage leaves records parked for longer and leaves less headroom; a lower one exports
-     * sooner and keeps more.
-     * <p>
-     * <b>Refused in this version</b>, at validation, along with a percentage on any route: the accessor it reads -
-     * a partition's encoded payload length - does not exist in the engine yet, so an explicit percentage would be a
-     * setting that never fires (KTD5). The default of {@link AfterRetries#MAX_PAYLOAD_PERCENTAGE} applies once that
-     * accessor lands.
-     */
-    public ParallelConsumerDefinition dlqWhenOffsetPayloadReaches(int percentage) {
-        this.instancePayloadPercentage = percentage;
-        return this;
-    }
-
     // ---------------------------------------------------------------- pre-built clients (Java binding only)
 
     /**
@@ -375,8 +338,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * <p>
      * <b>A supplied producer forgoes producer recovery</b> (astubbs#410): recovery rebuilds the producer from its
      * configuration, and an instance handed a finished producer has no configuration to rebuild from. Leave this out
-     * and the definition's properties build one that can recover. Under the transactional commit mode this also
-     * forgoes export (R1, R14).
+     * and the definition's properties build one that can recover (R1).
      */
     public ParallelConsumerDefinition producer(Producer<byte[], byte[]> producer) {
         Objects.requireNonNull(producer, "A producer must be supplied");
@@ -508,7 +470,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @throws IllegalArgumentException naming the offending topic or setting
      */
     public void validate() {
-        new DefinitionRules(routes, routesByTopic, connection, commitMode, defaults, instancePayloadPercentage,
+        new DefinitionRules(routes, routesByTopic, connection, commitMode, defaults,
                 preBuiltProducerSupplied).validate();
     }
 
@@ -526,7 +488,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * broker, changing nothing else about it (R33, KTD9).
      */
     public ParallelConsumerInstance start(ClientRuntime runtime) {
-        refuseExportUntilItLands();
         ParallelConsumerOptions<byte[], byte[]> built = buildOptions(runtime);
         // The module, not the static factory: it is what owns this instance's PCMetrics, and registering the
         // route meters through it is what puts them in the user's own registry beside every engine meter and has
@@ -592,29 +553,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             return;
         }
         instance.close();
-    }
-
-    /**
-     * Refused <b>at start</b>, not at validation: a definition with a destination is still a definition that needs
-     * a producer, which is what {@link #requiresProducer()} answers and what the client-construction tests read.
-     * <p>
-     * The wrapper parks a record that runs out of attempts and nothing sends it on yet - export is a re-dispatch on
-     * a later pass, and that unit has not landed (KTD5). Starting anyway would make {@code dlqTo} a silent no-op,
-     * which is the one outcome this definition refuses to produce: every other setting it cannot honour is refused
-     * at definition time for the same reason. The refusal goes away with the export unit.
-     */
-    private void refuseExportUntilItLands() {
-        for (RouteState route : routes) {
-            String destination = route.afterRetries().destination();
-            if (destination != null) {
-                throw new IllegalArgumentException(msg("Topic {} declares the dead-letter destination {}, and export "
-                                + "does not run in this release: a record that runs out of attempts parks in place, "
-                                + "and nothing copies it on yet. Starting would make dlqTo a silent no-op. Drop the "
-                                + "destination and let records park - they stay incomplete in the offset map, hold "
-                                + "no worker, and offsets past them still commit (R11, R27).",
-                        route.describeTopics(), destination));
-            }
-        }
     }
 
     /**
@@ -754,8 +692,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
 
     /**
      * Derived from the routes each time rather than tracked as a flag, so it stays true however late a route that
-     * produces or exports is declared. It is also read at start to choose the produce-many arm over the plain poll
-     * one, so the two decisions cannot disagree (R4, KTD2).
+     * produces is declared. It is also read at start to choose the produce-many arm over the plain poll one, so the
+     * two decisions cannot disagree (R4, KTD2).
      */
     @Override
     public boolean requiresProducer() {
@@ -763,7 +701,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             return true;
         }
         for (RouteState route : routes) {
-            if (route.producesRecords() || route.afterRetries().destination() != null) {
+            if (route.producesRecords()) {
                 return true;
             }
         }

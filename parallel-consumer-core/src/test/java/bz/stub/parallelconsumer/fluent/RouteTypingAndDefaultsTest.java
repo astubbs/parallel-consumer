@@ -147,12 +147,10 @@ class RouteTypingAndDefaultsTest {
     void theStopReactionCopiesIntoEveryRouteAndARouteMayOverrideIt() {
         var pc = define().defaultAfterRetries(AfterRetries.stop());
         pc.string("orders").process(context -> Outcome.succeeded());
-        pc.string("audit").afterRetries(AfterRetries.dlqImmediately("audit.dlq"))
-                .process(context -> Outcome.succeeded());
+        pc.string("audit").afterRetries(AfterRetries.park()).process(context -> Outcome.succeeded());
 
         assertThat(pc.route("orders").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.STOP);
         assertThat(pc.route("audit").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.PARK);
-        assertThat(pc.route("audit").afterRetries().destination()).isEqualTo("audit.dlq");
     }
 
     @Test
@@ -195,7 +193,6 @@ class RouteTypingAndDefaultsTest {
 
         assertThat(pc.route("orders").retryLimit().getAsInt()).isEqualTo(10);
         assertThat(pc.route("orders").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.PARK);
-        assertThat(pc.route("orders").afterRetries().destination()).isNull();
     }
 
     /**

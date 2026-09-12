@@ -391,7 +391,7 @@ class RouteDispatcher {
         int alreadyFailed = recordContext.getNumberOfFailedAttempts();
         int attempts = alreadyFailed + 1;
 
-        // Whatever decoded before the failure, which is what the park observer and an export are given: both sides
+        // Whatever decoded before the failure, which is what the park observer is given: both sides
         // when the record decoded, the key alone when only the value failed, neither when nothing did (R13, R16).
         Object key = null;
         Object value = null;
@@ -569,11 +569,6 @@ class RouteDispatcher {
      * after its partition was revoked, and what it would report then belongs to whoever owns the partition now.
      * The engine already knows - it drops the container rather than holding it parked - so this asks it rather
      * than keeping an assignment view of its own.
-     * <p>
-     * <b>Seam for the export unit.</b> Export is a re-dispatch, not a send from this failure path (KTD5): on a
-     * later dispatch of an already-parked record the wrapper returns the export record instead of calling the
-     * function, reading the entry the engine holds for the provenance headers. The definition refuses a dead-letter
-     * destination at start until that lands, so no definition reaching here has one.
      *
      * @param countsAsAttempt false for a park that spent no attempt at the user's work - a payload that can never
      *                        be decoded (R12)

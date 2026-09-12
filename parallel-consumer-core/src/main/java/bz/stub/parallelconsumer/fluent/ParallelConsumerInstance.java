@@ -53,9 +53,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * roll-up, both read from the engine's own retry queue (R28). The same figures are published as meters (R19).
  *
  * <h2>What this milestone does not do</h2>
- * The parked view's payload fraction, time-to-export estimate and held-behind count read empty - each needs an
- * engine accessor that does not exist yet, see {@link ParkedView} - and {@link ParkedView#resume} and
- * {@link ParkedView#dlq} refuse.
+ * The parked view's payload fraction and held-behind count read empty - each needs an engine accessor that does not
+ * exist yet, see {@link ParkedView} - and {@link ParkedView#resume} refuses.
  */
 @Slf4j
 @InterfaceStability.Unstable
@@ -186,8 +185,7 @@ public class ParallelConsumerInstance implements AutoCloseable {
      * engine unparks a record, and a parked record can never reach the later ordinary failure that would clear
      * its reason, because it is never due again. So a park is released by a restart or a rebalance and by nothing
      * else, which is what the README's park section says under "What releases a parked record today";
-     * {@code resume} and {@code dlq} on this instance refuse for that reason and arrive with the engine commands
-     * they need.
+     * {@code resume} on this instance refuses for that reason and arrives with the engine command it needs.
      */
     private List<WorkContainer<?, ?>> parkedContainers() {
         // A revoked record belongs to whoever holds its partition now, so it is not on the list of what THIS
