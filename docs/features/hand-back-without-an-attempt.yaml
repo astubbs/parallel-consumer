@@ -33,7 +33,7 @@ boundaries:
   - The attempt count is what a retry budget and any attempt-derived backoff read, so a record returned this way can be returned without limit and nothing will ever stop it. Bounding the loop is yours - a condition that never clears is an infinite one.
   - It is not a skip and not a success. The record stays incomplete and its offset stays uncommitted, so the partition does not advance past it while the condition holds.
   - A retry-delay provider that computes backoff from the failure count sees a count that is not moving, and will keep returning the same delay.
-  - On a record's FIRST delivery, pairing it with retryAfter(delay) does not produce that delay. The deadline is written, but a record that has never failed is not asked whether its deadline has passed, so the controller re-selects it on its next pass. Use it with park when the record must stop, or let the hand-back count as an attempt when the delay is the point.
+  - Pairing it with retryAfter(delay) DOES produce that delay, on a first delivery as on any other - the two facts are independent, and a withheld delivery that asked to wait 30 seconds waits them. Eligibility is asked of whether a deadline was ever written, not of the attempt count, so suppressing the count does not suppress the wait.
   - It does not suppress anything in the logs beyond what PCRetriableException already suppresses - see controlled-retry-exception.yaml.
 validation:
   - Return the same record several times this way and confirm its failed-attempt count is unchanged, while an ordinary retriable throw advances it.

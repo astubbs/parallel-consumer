@@ -34,7 +34,7 @@ boundaries:
   - A negative duration is refused at the call site with IllegalArgumentException, before the engine ever sees the throw.
   - The delay is a retry target, not a schedule. The record becomes eligible after it, and is then selected on an ordinary control-loop pass behind whatever ordering and concurrency limits apply - the same guarantee retryDelayProvider gives.
   - A duration large enough that the failure time plus the delay leaves the representable instant range is not honoured. It is replaced with the configured default and logged, naming a park as the thing you probably meant. Use park for "never", never a very large delay - see park-in-place-engine.yaml.
-  - Combining it with notAnAttempt() on a first delivery writes the deadline but does not make the record eligible to wait on it, so the delay is not observed. See hand-back-without-an-attempt.yaml, which owns that boundary.
+  - Combining it with notAnAttempt() keeps the delay, on a first delivery as on any other - the two facts are independent, so a withheld delivery that asked for a delay waits it while spending no attempt. See hand-back-without-an-attempt.yaml, which owns that boundary.
 validation:
   - Throw with a delay far longer than the configured one and confirm the record is not redelivered before it elapses.
   - Confirm a throw that carries no delay still follows whichever of retryDelayProvider or defaultMessageRetryDelay you configured.

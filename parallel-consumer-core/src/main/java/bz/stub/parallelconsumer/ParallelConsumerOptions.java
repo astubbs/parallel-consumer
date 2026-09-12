@@ -549,6 +549,21 @@ public class ParallelConsumerOptions<K, V> {
         return getMaxConcurrency() * getBatchSize();
     }
 
+    /**
+     * Refuses a configuration that cannot work, at construction, naming the option the caller set.
+     * <p>
+     * <b>Every refusal here is an {@link IllegalArgumentException}, including a missing consumer.</b> That one used to
+     * be an {@link NullPointerException} from a bare {@code Objects.requireNonNull(consumer, ...)}; it became an
+     * {@code IllegalArgumentException} when there stopped being one way to supply a consumer, because the refusal now
+     * has to name two options and "this argument was null" is no longer what is wrong. Recorded because it is
+     * externally visible on a published library and a caller could be catching the old type - though catching an
+     * unchecked exception from a builder's own validation to do anything but fail is hard to construct a reason for,
+     * which is why it is stated rather than re-litigated. It rode in with the {@code consumerConfig} option and was
+     * named in no commit body at the time - found by the review of astubbs/parallel-consumer#506, and recorded here
+     * because a javadoc is where a user looks and a commit body is not.
+     *
+     * @throws IllegalArgumentException for any invalid or self-contradictory configuration
+     */
     public void validate() {
         consumerSourceValidation();
         producerSourceValidation();

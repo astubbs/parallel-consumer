@@ -593,8 +593,11 @@ public class ShardManager<K, V> {
      * qualifies and stops, so collecting every match would be work thrown away on a path the control loop takes
      * once per pass.
      *
-     * @param wanted asked once per entry, on the controller thread, while the read lock is held - so it must not
-     *               take another lock
+     * @param wanted asked once per entry, while the read lock is held - so it must not take another lock and must
+     *               not block. Deliberately no named thread: {@link #purgeDepartedRetryEntries()} asks from the
+     *               controller, and {@code getParkedWorkContainers} is reached both from a user's own thread and,
+     *               through {@code PartitionState}'s parked gauges, from whichever thread drives the user's
+     *               {@code MeterRegistry}. The lock is the constraint; the caller's identity is not
      */
     private List<WorkContainer<?, ?>> collectFromRetryQueue(Predicate<WorkContainer<?, ?>> wanted) {
         List<WorkContainer<?, ?>> collected = new ArrayList<>();
