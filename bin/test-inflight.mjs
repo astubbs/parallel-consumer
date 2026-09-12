@@ -1995,6 +1995,48 @@ const CHECKS = [
             '    const content = added.filter((l) => l.trim().length > 0)'),
     },
     {
+        id: 'a-record-comment-is-not-a-heading-and-does-not-outrank-a-real-match',
+        why: "adding docs/features/ to the prompt query sent YAML to a reader that was never made path-aware: a record's `# ` line is its copyright comment, and calling it a heading put it in the tier that OUTRANKS body - so a prompt word appearing in any record's comment surfaced a block of identically-titled records above the documents that matched on substance",
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            return inDir(docsFixture(), () => {
+                // `contributors` appears in every record's copyright comment and nowhere else in
+                // the corpus, so every hit it returns is a line that is NOT about anything.
+                const r = t.matchDocs(['contributors'])
+                if (!r.ok || r.hits.length === 0) return false
+                const records = r.hits.filter((h) => h.path.endsWith('.yaml'))
+                if (records.length === 0) return false
+                if (records.some((h) => h.tier === 'heading')) return false
+                if (records.some((h) => /Copyright/.test(h.title ?? ''))) return false
+                // THE POSITIVE CONTROL: a markdown heading is still a heading, and still ranks.
+                const prose = t.matchDocs(['What the branch learned'])
+                const doc = prose.hits.find((h) => h.path === 'docs/inflight/note.md')
+                return !!doc && doc.tier === 'heading'
+                    // And a record's own declared field still reaches the tier a claim belongs in.
+                    && t.tierOfLine(5, 'category: processing', 'docs/features/x.yaml') === 'frontmatter'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            "    if (!isRecord(path) && /^#{1,6}\\s/.test(text)) return 'heading'",
+            "    if (/^#{1,6}\\s/.test(text)) return 'heading'"),
+    },
+    {
+        id: 'a-record-hit-is-titled-by-the-reader-that-knows-records-not-by-the-matched-line',
+        why: 'taking the matched `# ` line as the title also SKIPPED the path-aware title read entirely, because the cheap read wins - so the one reader that knows a record is named by its `title:` key was never reached for the area it was taught to serve',
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            return inDir(docsFixture(), () => {
+                const r = t.matchDocs(['contributors'])
+                if (!r.ok) return false
+                const batching = r.hits.find((h) => h.path === 'docs/features/batching.yaml')
+                return !!batching && batching.title === 'Batch processing'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            "        if (doc.heading === null && !isRecord(path) && /^#\\s/.test(text))",
+            "        if (doc.heading === null && /^#\\s/.test(text))"),
+    },
+    {
         id: 'a-tag-only-version-is-preserved-not-divergent',
         why: 'a version parked in a tag before a re-cut is preserved on purpose; counting it as divergent sends someone to rescue what nobody lost',
         run: async (binDir) => {
@@ -3105,7 +3147,8 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
-            "if (/^#{1,6}\\s/.test(text)) return 'heading'", "if (/^#{1,6}\\s/.test(text)) return 'body'"),
+            "if (!isRecord(path) && /^#{1,6}\\s/.test(text)) return 'heading'",
+            "if (!isRecord(path) && /^#{1,6}\\s/.test(text)) return 'body'"),
     },
     {
         id: 'match-docs-body-hits-are-capped-per-term-and-the-rest-counted',

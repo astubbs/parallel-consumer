@@ -34,6 +34,7 @@
 // bin/test-inflight.mjs asserts no library under bin/lib/ contains a process exit.
 
 import { INVALIDATING_WARNINGS, baseline as baselineRef, exec, freshnessWarnings, lines, refTips } from './git.mjs'
+import { isRecord } from './doc-kind.mjs'
 import { blobTitles, drift } from './notes.mjs'
 import { DOC_AREAS } from './repo.mjs'
 
@@ -205,12 +206,22 @@ export function termsFromBranch(ref, { prs = null } = {}) {
 const TIER_RANK = { frontmatter: 3, heading: 2, body: 1 }
 
 /**
- * Which tier one hit line belongs to, from its shape and position alone - the header explains
- * why the frontmatter block's true extent is not read.
+ * Which tier one hit line belongs to, from its shape, its position and its PATH - the header
+ * explains why the frontmatter block's true extent is not read.
+ *
+ * THE PATH DECIDES WHETHER A `#` LINE IS A HEADING, and in a data record it never is: a record's
+ * only `#` line is its copyright comment. Without the path this read that comment as a heading, and
+ * the cost was not the wrong label - `heading` outranks `body` in TIER_RANK, so any prompt word
+ * appearing in a record's comment promoted a block of records above the ones that matched on
+ * substance. A record's own claims reach the frontmatter tier through the key rule below, which is
+ * the right tier for them: a field is something the author declared on purpose.
+ *
+ * @param {string|null} [path] the document's path; absent means prose, which is the corpus default
+ *   everywhere else that asks this question (bin/lib/doc-kind.mjs owns the rule).
  */
-export function tierOfLine(lineNo, text) {
+export function tierOfLine(lineNo, text, path = null) {
     if (/^\s*<!--\s*inflight-/.test(text)) return 'frontmatter'
-    if (/^#{1,6}\s/.test(text)) return 'heading'
+    if (!isRecord(path) && /^#{1,6}\s/.test(text)) return 'heading'
     if (lineNo <= FRONTMATTER_LINES && (/^[A-Za-z_][A-Za-z0-9_]*:(\s|$)/.test(text) || /^\s+-\s/.test(text))) return 'frontmatter'
     return 'body'
 }
@@ -286,14 +297,17 @@ export function matchDocs(terms, { areas = DOC_AREAS, bodyCap = BODY_CAP_PER_TER
         const lower = text.toLowerCase()
         const named = terms.filter((t, n) => namesTerm(text, lower, n))
         if (named.length === 0) continue
-        const tier = tierOfLine(lineNo, text)
+        const tier = tierOfLine(lineNo, text, path)
         if (!byPath.has(path)) byPath.set(path, { path, tier: 'body', terms: new Set(), refs: new Set(), heading: null })
         const doc = byPath.get(path)
         doc.refs.add(ref)
         for (const t of named) doc.terms.add(t)
         if (TIER_RANK[tier] > TIER_RANK[doc.tier]) doc.tier = tier
         // The document's own title, when the term sits in it: the cheapest title read there is.
-        if (doc.heading === null && /^#\s/.test(text)) doc.heading = text.replace(/^#\s+/, '').trim()
+        // NOT FOR A RECORD, whose `# ` line is its copyright comment - taking it here also skipped
+        // `blobTitles`, the one reader that knows a record is titled by its `title:` key, because
+        // `title` below prefers whatever this found. A record falls through to it instead.
+        if (doc.heading === null && !isRecord(path) && /^#\s/.test(text)) doc.heading = text.replace(/^#\s+/, '').trim()
     }
 
     const ranked = [...byPath.values()]
