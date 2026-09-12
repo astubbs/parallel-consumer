@@ -2,11 +2,15 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: reliability -->
+<!-- post-merge: checked - every mention of astubbs#506 here is past tense about what that PR did to two accessors, which stays true once it lands; the note is about the surface, not about the PR -->
 <!-- inflight-state: deferred - needs a product decision: does this fork's published surface return live engine objects or projections of them? Two accessors widened by astubbs#506 are blocked on the same answer, and neither is urgent because the exposure predates them -->
 
+<!-- post-merge: checked-begin - what astubbs#506 did is history once it lands; the exposure it widened is what this note is about -->
 A user who can reach a `WorkManager` or a `PartitionState` can call the engine's own mutators on it.
-This is **not new** and astubbs#506 did not open it - but that PR widened it twice and the sibling PR
-hands one of the two lists to end users, so the question stops being theoretical there.
+This is **not new**, and astubbs#506 did not open it - it widened it twice, and the fluent API's
+`ConsumerHandle.parkedContainers()` hands one of the two lists to end users, which is where the
+question stops being theoretical.
+<!-- post-merge: checked-end -->
 
 ## What is reachable, and what it would do
 
@@ -22,11 +26,13 @@ and the same for `WorkContainer.java`.
   `onUserFunctionFailure` are all public on them, so a caller can record a verdict the user function
   never gave.
 
+<!-- post-merge: checked-begin - a statement about what a past review concluded and what a landed PR changed; neither moves on merge -->
 **The exposure is pre-existing.** The same live `PartitionState` was already reachable through the
 public `getPartitionState(TopicPartition)` on the same public class, and live `WorkContainer`s through
 pre-existing public `WorkManager` methods, all of it through the public `getWm()`. Widening two
 accessors changed the blast radius, not the boundary - which is why the defect astubbs#506's review
 actually charged was a false javadoc claim, corrected in place, and not these methods.
+<!-- post-merge: checked-end -->
 
 ## The decision
 
