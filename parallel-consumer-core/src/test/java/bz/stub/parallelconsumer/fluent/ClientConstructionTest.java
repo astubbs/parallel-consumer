@@ -22,6 +22,7 @@ import java.util.Collections;
 import java.util.Properties;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -109,16 +110,23 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
     }
 
     /**
-     * R23: routes do not compete for one shared limit, so the engine's total admission is the sum of the routes'
-     * targets rather than the instance default.
+     * The engine's admission limit is the instance-wide setting, whatever the routes are - so adding a route does not
+     * raise it.
+     * <p>
+     * <b>Retargeted from the sum this used to assert.</b> Per-route concurrency is withdrawn from this milestone
+     * (owner-directed, 2026-09-12), so the sum of the routes' targets is no longer a number a user can influence
+     * and a test of it would assert arithmetic over one value. What is worth pinning instead is that the limit a
+     * user declares is the limit the engine gets, and that route count has nothing to do with it - which is what
+     * the second route here is for.
      */
     @Test
-    void theEnginesAdmissionTargetIsTheSumOfTheRoutesTargets() {
+    void theEnginesAdmissionTargetIsTheInstanceWideSettingWhateverTheRoutes() {
         var pc = ParallelConsumer.connect(props()).withDefaultConcurrency(10);
         pc.string("orders").process(context -> Outcome.succeeded());
-        pc.string("audit").concurrency(100).process(context -> Outcome.succeeded());
+        pc.string("audit").process(context -> Outcome.succeeded());
 
-        assertThat(pc.buildOptions(runtime).getMaxConcurrency()).isEqualTo(110);
+        assertWithMessage("two routes do not add up to twice the declared limit")
+                .that(pc.buildOptions(runtime).getMaxConcurrency()).isEqualTo(10);
     }
 
     @Test

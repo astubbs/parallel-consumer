@@ -75,11 +75,6 @@ public interface RouteView {
     Duration retryDelay();
 
     /**
-     * This route's admission target: routes do not compete for one shared limit (R23, KD6).
-     */
-    int concurrency();
-
-    /**
      * What happens once a record on this route runs out of attempts (R27).
      */
     AfterRetries afterRetries();

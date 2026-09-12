@@ -154,8 +154,15 @@ public final class Formats {
         Objects.requireNonNull(inner, "A format to wrap must be supplied");
         Objects.requireNonNull(classifier, "A classifier must be supplied");
         Format<T> wrapped = Format.of(inner);
-        Deserializer<T> classifying = new ClassifyingDeserializer<>(wrapped.deserializer(), classifier);
-        return Format.named(classifying, wrapped.serializer(), "classified(" + wrapped + ")", wrapped.type());
+        // Suppliers, not instances, so that wrapping a per-worker format keeps it per worker. Each worker thread
+        // gets its own classifying wrapper around ITS OWN inner deserialiser, because wrapped.deserializer() is
+        // asked on that worker's thread; wrapping a single instance here would have collapsed a per-worker format
+        // into a shared one and put back the race the supplier exists to remove. For a format that shares its
+        // halves this costs one thin stateless wrapper per worker and changes nothing else.
+        return Format.namedPerWorker(
+                () -> new ClassifyingDeserializer<>(wrapped.deserializer(), classifier),
+                wrapped.hasSerializer() ? wrapped::serializer : null,
+                "classified(" + wrapped + ")", wrapped.type());
     }
 
     /**

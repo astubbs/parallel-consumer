@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.Properties;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * Covers AE8 - a route's declared types reach the function and the records it returns, with no casts - and R6's
@@ -131,7 +132,6 @@ class RouteTypingAndDefaultsTest {
             RouteView route = pc.route(topic);
             assertThat(route.retryLimit().getAsInt()).isEqualTo(7);
             assertThat(route.retryDelay()).isEqualTo(Duration.ofSeconds(3));
-            assertThat(route.concurrency()).isEqualTo(9);
             assertThat(route.afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.PARK);
         }
         // A copy, not the instance's own object: a route editing part of a policy must not edit every other route's.
@@ -156,13 +156,11 @@ class RouteTypingAndDefaultsTest {
     @Test
     void aRoutesOwnSettingOverridesOnlyItsOwnCopy() {
         var pc = define().withDefaultRetryLimit(7).withDefaultConcurrency(9);
-        pc.string("orders").retryLimit(2).concurrency(4).process(context -> Outcome.succeeded());
+        pc.string("orders").retryLimit(2).process(context -> Outcome.succeeded());
         pc.string("audit").process(context -> Outcome.succeeded());
 
         assertThat(pc.route("orders").retryLimit().getAsInt()).isEqualTo(2);
-        assertThat(pc.route("orders").concurrency()).isEqualTo(4);
         assertThat(pc.route("audit").retryLimit().getAsInt()).isEqualTo(7);
-        assertThat(pc.route("audit").concurrency()).isEqualTo(9);
     }
 
     /**
@@ -184,6 +182,66 @@ class RouteTypingAndDefaultsTest {
     }
 
     /**
+     * A definition stays mutable until it starts, and {@code validate()} is documented as a way to fail early
+     * without ending that - so a default moved after either of those still has to reach every route that inherits
+     * it. A route resolves and caches on the first read of its policy, and both of these sequences take that read
+     * before the definition is finished: validating early, and reading a route through the view.
+     */
+    @Test
+    void aDefaultMovedAfterARouteHasResolvedStillReachesIt() {
+        var pc = define();
+        pc.string("orders").process(context -> Outcome.succeeded());
+        // Both of the reads that resolve a route, before the default moves.
+        pc.validate();
+        assertThat(pc.route("orders").retryLimit().getAsInt()).isEqualTo(10);
+
+        pc.withDefaultRetryLimit(0).withDefaultRetryDelay(Duration.ofSeconds(5))
+                .withDefaultConcurrency(3).withDefaultAfterRetries(AfterRetries.stop());
+
+        assertThat(pc.route("orders").retryLimit().getAsInt()).isEqualTo(0);
+        assertThat(pc.route("orders").retryDelay()).isEqualTo(Duration.ofSeconds(5));
+        assertThat(pc.route("orders").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.STOP);
+        // And the engine is configured from the same resolved value, not from the one it had already cached.
+        assertThat(pc.buildOptions(new RecordingClientRuntime()).getMaxConcurrency()).isEqualTo(3);
+    }
+
+    /**
+     * A route that declared its own setting is not disturbed by the default moving under it: invalidating a
+     * resolution re-runs the same fallback, it does not overwrite a declaration (R6).
+     */
+    @Test
+    void aRoutesOwnSettingSurvivesTheDefaultMoving() {
+        var pc = define().withDefaultRetryLimit(7);
+        pc.string("orders").retryLimit(2).process(context -> Outcome.succeeded());
+        assertThat(pc.route("orders").retryLimit().getAsInt()).isEqualTo(2);
+
+        pc.withDefaultRetryLimit(0);
+
+        assertThat(pc.route("orders").retryLimit().getAsInt()).isEqualTo(2);
+    }
+
+    /**
+     * {@link RouteView} promises to change nothing, and the after-retries policy is the one setting on it that is a
+     * mutable object - so it is handed out as a copy. Editing what the view returns used to reach past every
+     * validation rule and onto the two plain fields a worker reads once per failed record.
+     */
+    @Test
+    void thePolicyOnTheViewCannotBeUsedToChangeTheRoute() {
+        var pc = define();
+        pc.string("orders").afterRetries(AfterRetries.park().thenRetryAfter(Duration.ofSeconds(30)).forCycles(2))
+                .process(context -> Outcome.succeeded());
+
+        AfterRetries throughTheView = pc.route("orders").afterRetries();
+        AfterRetries ignoredSameObject = throughTheView.thenRetryAfter(Duration.ofMinutes(10)).forCycles(99);
+
+        assertThat(pc.route("orders").afterRetries().parkDelay()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(pc.route("orders").afterRetries().parkCycles()).isEqualTo(2);
+        assertWithMessage("two reads of the view are two copies, so neither can be the route's own")
+                .that(pc.route("orders").afterRetries())
+                .isNotSameInstanceAs(pc.route("orders").afterRetries());
+    }
+
+    /**
      * The default with nothing declared: ten attempts then park (R10, AE1's second clause).
      */
     @Test
@@ -196,17 +254,21 @@ class RouteTypingAndDefaultsTest {
     }
 
     /**
-     * A set of topics is one route: one function, one type pair, one admission target (R5).
+     * A set of topics is one route: one function, one type pair, one policy (R5).
+     * <p>
+     * It used to say "one admission target" and prove it with a per-route concurrency declaration; that setting is
+     * withdrawn from this milestone (owner-directed, 2026-09-12), so the retry limit carries the same claim - what
+     * matters is that both topics resolve through the same route object rather than which setting demonstrates it.
      */
     @Test
-    void aSetOfTopicsIsOneRouteWithOneAdmissionTarget() {
+    void aSetOfTopicsIsOneRouteWithOnePolicy() {
         var pc = define();
-        pc.bytes(java.util.Arrays.asList("audit", "audit-replay")).concurrency(4)
+        pc.bytes(java.util.Arrays.asList("audit", "audit-replay")).retryLimit(4)
                 .process(context -> Outcome.succeeded());
 
         assertThat(pc.topics()).containsExactly("audit", "audit-replay");
         assertThat(pc.routes()).hasSize(1);
         assertThat(pc.route("audit")).isSameInstanceAs(pc.route("audit-replay"));
-        assertThat(pc.route("audit").concurrency()).isEqualTo(4);
+        assertThat(pc.route("audit-replay").retryLimit().getAsInt()).isEqualTo(4);
     }
 }

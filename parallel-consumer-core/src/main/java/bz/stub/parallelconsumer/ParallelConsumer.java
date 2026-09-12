@@ -44,7 +44,7 @@ public interface ParallelConsumer<K, V> extends DrainingCloseable {
      * The fluent API ships beside the options-builder API above it as an equal - neither is deprecated, both are
      * documented, and this factory is the one addition the classic surface takes for it. The classic API remains the
      * right choice for a running application that needs nothing new; an existing user with hand-built clients can
-     * pass them to a definition with {@code consumer(...)} and {@code producer(...)} rather than migrate.
+     * pass them to a definition with {@code withConsumer(...)} and {@code withProducer(...)} rather than migrate.
      * <p>
      * <b>Incubating.</b> Everything the returned definition exposes is
      * {@link org.apache.kafka.common.annotation.InterfaceStability.Unstable} while the surface settles - see

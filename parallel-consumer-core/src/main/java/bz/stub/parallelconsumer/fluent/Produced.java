@@ -6,6 +6,8 @@ package bz.stub.parallelconsumer.fluent;
 
 import org.apache.kafka.common.annotation.InterfaceStability;
 import org.apache.kafka.common.serialization.Serde;
+
+import java.util.function.Supplier;
 import org.apache.kafka.common.serialization.Serializer;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
@@ -45,7 +47,21 @@ public final class Produced<PK, PV> {
     }
 
     /**
+     * <b>Each worker thread gets its own pair of serialisers</b>, made by these suppliers - the mirror of
+     * {@link Consumed#perWorker(Supplier, Supplier)}, and needed for the same reason: the produce path runs on the
+     * same worker threads a decode does, so a stateful serialiser is no safer there than a stateful deserialiser is
+     * (owner-directed, 2026-09-12).
+     */
+    public static <PK, PV> Produced<PK, PV> perWorker(Supplier<Serializer<PK>> key,
+                                                      Supplier<Serializer<PV>> value) {
+        return new Produced<>(Format.writingPerWorker(key), Format.writingPerWorker(value));
+    }
+
+    /**
      * Both sides from Serdes - the common case, for a caller who already holds a Serde for each type.
+     * <p>
+     * <b>A serde hands out one serialiser, so both are shared by every worker thread</b> and must be thread-safe;
+     * {@link #perWorker(Supplier, Supplier)} gives each worker its own.
      */
     public static <PK, PV> Produced<PK, PV> with(Serde<PK> key, Serde<PV> value) {
         return new Produced<>(Format.of(key), Format.of(value));

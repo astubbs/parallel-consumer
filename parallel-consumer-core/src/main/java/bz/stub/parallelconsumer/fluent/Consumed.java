@@ -8,6 +8,8 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serde;
 
+import java.util.function.Supplier;
+
 /**
  * A route's consumed types: how its key and value bytes become values (R4).
  * <p>
@@ -26,6 +28,10 @@ import org.apache.kafka.common.serialization.Serde;
  * would be a promise one consumer cannot keep. A <b>source name</b> would be redundant by construction: a topic
  * carries exactly one route (KD11) and a route's parked set is asked for as {@code instance.topic("orders")}, so the
  * topic already is the route's name.
+ * <p>
+ * <b>A deserialiser handed in as an instance is shared by every worker thread</b>, so it must be thread-safe;
+ * {@link #perWorker(Supplier, Supplier)} is how each worker is given its own instead. {@link Format} owns that
+ * reasoning.
  * <p>
  * <b>Both halves are required and there is no configuration-level default.</b> The original accepts a null half and
  * falls back to a default serde declared in configuration; this has no such fallback, so a null here throws rather
@@ -59,7 +65,24 @@ public final class Consumed<K, V> {
     }
 
     /**
+     * <b>Each worker thread gets its own pair of deserialisers</b>, made by these suppliers - the declaration for
+     * deserialisers that hold state and are therefore only safe on one thread, which is all Kafka's interface
+     * promises (owner-directed, 2026-09-12).
+     * <p>
+     * Every other factory on this class takes finished instances and shares them across workers, which is correct
+     * for Kafka's own stock serdes and for anything else written to be thread-safe. This is the declaration for
+     * everything else. Each supplier is called once per worker thread, never once per record - see {@link Format}
+     * for why the instance is thread-scoped rather than call-scoped.
+     */
+    public static <K, V> Consumed<K, V> perWorker(Supplier<Deserializer<K>> key, Supplier<Deserializer<V>> value) {
+        return new Consumed<>(Format.readingPerWorker(key), Format.readingPerWorker(value));
+    }
+
+    /**
      * Both sides from Serdes - the common case, for a caller who already holds a Serde for each type.
+     * <p>
+     * <b>A serde hands out one deserialiser, so both are shared by every worker thread</b> and must be thread-safe.
+     * Kafka's own are; for a stateful one of your own, declare {@link #perWorker(Supplier, Supplier)} instead.
      */
     public static <K, V> Consumed<K, V> with(Serde<K> key, Serde<V> value) {
         return new Consumed<>(Format.of(key), Format.of(value));
