@@ -13,7 +13,7 @@ import java.util.Objects;
  * When a sandbox run should stop generating and close: after so many records, after so long, or not at all.
  *
  * <h2>Reaching a bound waits for every record to be accounted for, then closes drain first</h2>
- * Either bound - the count or the duration - ends the same way (R33, R17): the generator stops publishing, then
+ * Either bound - the count or the duration - ends the same way (R33, R17): the driver stops publishing, then
  * waits until every record it published is accounted for, and only then closes the instance. So what a test reads
  * after the close is the end of the run rather than the middle of it. Without a bound the run ends when its handle
  * is closed, which is what an interactive demo wants and what a test almost never does.
@@ -103,7 +103,7 @@ public final class Bound {
 
     /**
      * Whether this many records reaches a count bound. Answers false for a duration bound and for none, so the
-     * generator can ask both questions of every bound without asking first which kind it holds.
+     * driver can ask both questions of every bound without asking first which kind it holds.
      *
      * @param generated records generated so far, across every topic
      */
@@ -123,7 +123,7 @@ public final class Bound {
     }
 
     /**
-     * The duration bound in nanoseconds, to compare against the generator's own elapsed-nanos reading.
+     * The duration bound in nanoseconds, to compare against the driver's own elapsed-nanos reading.
      */
     private long durationNanos() {
         // No check of our own, deliberately: Duration.toNanos() THROWS ArithmeticException past about 292 years
@@ -133,7 +133,7 @@ public final class Bound {
     }
 
     /**
-     * Rendered into the run's opening log line and into the generator's "did not stop" error, so it reads as the
+     * Rendered into the run's opening log line and into the driver's "did not stop" error, so it reads as the
      * end of a sentence about what the run is doing.
      */
     @Override

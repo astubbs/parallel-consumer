@@ -84,7 +84,7 @@ class SandboxSmokeTest {
         }
 
         assertThat(sandbox.generatedRecords()).isEqualTo(RECORD_BOUND);
-        assertWithMessage("the generator reads the definition, so a topic no route claims is a topic nothing is "
+        assertWithMessage("the driver reads the definition, so a topic no route claims is a topic nothing is "
                 + "generated for")
                 .that(sandbox.consumer().publishedCounts().keySet())
                 .containsExactly(ORDERS_0, DISPATCHES_0);

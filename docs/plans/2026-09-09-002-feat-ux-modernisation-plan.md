@@ -973,6 +973,23 @@ rest of the fluent API in astubbs/parallel-consumer#502. That made it reviewable
 fluent API's own pull request would have bought nothing while making both harder to read. It ships from
 `feat/504-sandbox`, stacked on astubbs/parallel-consumer#502.
 
+**Annotated 2026-09-11, owner-directed. The text above and below is left as it was written; these are the two ways
+the shipped module differs from it, and the vocabulary to read it with.**
+
+- **"The generator" in this unit names two separate things, and the word is retired.** The **driver** runs a feed on
+  its own thread until a stopping rule is met, then settles and closes the run - that is what points 2 (second half)
+  and 3 describe, and the type is `RecordDriver`. The **hydration** makes the realistic values - points 2 (first half)
+  and 5, and the `RandomObjects`/`FieldValues`/`ValueTypes`/`AvroValues` family with the `demo/` types. A **feed** is a
+  stream of records into the sandbox for one route or topic. Conflating the first two sent an analysis at the wrong
+  one, which is why the word is gone from new prose rather than merely clarified here.
+- **The driver is no longer the only way in, and is no longer the primary one.** This unit's goal says "runs with no
+  broker against generated records at a declared rate", and that is now the *convenience*: a soak, or a demo. The
+  primary shape is the caller's - publish records, block until everything published has settled, assert - which is the
+  shape of the broker-free test drivers of the stream-processing libraries users compare us with, and which R33 already
+  anticipated ("the generator can be replaced by hand-written records"). It is `Sandbox.builder().handPublished()`,
+  `Sandbox#publish` and `Sandbox#awaitSettled`, with the same pair on `ClassicSandbox`. The driver's own behaviour is
+  unchanged.
+
 
 - **Goal:** Any definition, fluent or classic, runs with no broker against generated records at a declared rate, bounded or until closed, and the same module is the broker-free test kit.
 - **Requirements:** R33, R36 (test kit); AE24 (sandbox half), AE26; KD7; KTD1, KTD9.

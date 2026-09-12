@@ -19,7 +19,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The classic API's sandbox: the same mock consumer, producer and generator, handed to an options builder rather
+ * The classic API's sandbox: the same mock consumer, producer and driver, handed to an options builder rather
  * than to a definition (R33, AE26).
  *
  * <pre>{@code
@@ -82,7 +82,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     private final int partitionsPerTopic;
 
     /**
-     * The declared rate, per topic, handed to the generator when the run starts.
+     * The declared rate, per topic, handed to the driver when the run starts.
      */
     private final double perSecond;
 
@@ -111,7 +111,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     private final SandboxConsumer<K, V> consumer;
 
     // Both stay null until asked for - a definition that produces nothing never builds a producer, and nothing
-    // generates until startGenerating. See the note on the same fields in Sandbox.
+    // is driven until startGenerating. See the note on the same fields in Sandbox.
     @SuppressWarnings("NullAway.Init")
     private MockProducer<K, V> producer;
 
@@ -121,7 +121,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * started should say so.
      */
     @SuppressWarnings("NullAway.Init")
-    private RecordGenerator generator;
+    private RecordDriver driver;
 
     /**
      * Package-private: a classic sandbox is built by {@link Sandbox#classic(Class, Class, String...)}, so that the
@@ -156,7 +156,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
 
     /**
      * The topics to subscribe the instance to - {@code pc.subscribe(classic.topics())}. The same list the
-     * generator publishes into, so a subscription and a feed cannot come to disagree.
+     * driver publishes into, so a subscription and a feed cannot come to disagree.
      */
     public List<String> topics() {
         return topics;
@@ -280,7 +280,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
 
     /**
      * Assign the partitions - the instance must already have subscribed - and start generating. When the bound is
-     * reached the generator stops, waits until every record it published has been accounted for
+     * reached the driver stops, waits until every record it published has been accounted for
      * ({@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}), and only then closes {@code instance} drain
      * first - so what is readable afterwards is the end of the run.
      * <p>
@@ -293,7 +293,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      */
     public void startGenerating(DrainingCloseable instance) {
         Objects.requireNonNull(instance, "The instance to close at the bound must be supplied");
-        if (generator != null) {
+        if (driver != null) {
             throw new IllegalStateException("This classic sandbox is already generating");
         }
         consumer.assignAfterSeeding();
@@ -302,7 +302,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         for (String topic : topics) {
             feeds.add(new TypedFeed(topic));
         }
-        generator = new RecordGenerator(feeds, perSecond, bound, () -> {
+        driver = new RecordDriver(feeds, perSecond, bound, () -> {
             try {
                 // See SandboxConsumer#awaitEveryPublishedRecordCommitted: draining is not the same as finishing,
                 // so the bound waits for the instance to account for what was published rather than trusting the
@@ -313,7 +313,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
             }
         });
         log.info("Classic sandbox running: {} at {}/s per topic, seed {}, {}", topics, perSecond, seed, bound);
-        generator.start();
+        driver.start();
     }
 
     /**
@@ -321,21 +321,21 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * asking what a run produced before it started has its answer.
      */
     public long generatedRecords() {
-        return generator == null ? 0 : generator.generatedRecords();
+        return driver == null ? 0 : driver.generatedRecords();
     }
 
     /**
      * @see Sandbox#awaitBound(Duration)
      */
     public boolean awaitBound(Duration timeout) {
-        if (generator == null) {
+        if (driver == null) {
             throw new IllegalStateException("This classic sandbox has not started generating");
         }
         if (!bound.isBounded()) {
             throw new IllegalStateException("This classic sandbox is unbounded, so it will never reach a bound - "
                     + "declare one with Sandbox.builder().bound(...)");
         }
-        return generator.awaitBound(timeout);
+        return driver.awaitBound(timeout);
     }
 
     /**
@@ -344,8 +344,8 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      */
     @Override
     public void close() {
-        if (generator != null) {
-            generator.close();
+        if (driver != null) {
+            driver.close();
         }
     }
 
@@ -361,7 +361,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         private final String topic;
 
         /**
-         * A generator per feed, each seeded with the run's seed, so that record <em>n</em> of a topic depends on
+         * A filler per feed, each seeded with the run's seed, so that record <em>n</em> of a topic depends on
          * the seed and <em>n</em> alone and not on how the topics interleaved.
          */
         private final RandomObjects random = RandomObjects.seededWith(seed);
@@ -374,7 +374,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         }
 
         /**
-         * Named in the generator's log line when the run ends because the consumer closed under it.
+         * Named in the driver's log line when the run ends because the consumer closed under it.
          */
         @Override
         public String topic() {
@@ -386,7 +386,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
          * key's value hash so the key sticks to it.
          *
          * @param index the record's index in this feed's sequence, which is what makes it reproducible
-         * @return false once the consumer has closed, which is how the generator learns the run is over
+         * @return false once the consumer has closed, which is how the driver learns the run is over
          */
         @Override
         public boolean publish(long index) {
@@ -402,7 +402,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * reproduces the placement - which is what {@code Sandbox.Builder#seed} promises and what makes a key-ordered
      * run in the sandbox shard the way it would against a broker.
      * <p>
-     * Arrays are the case {@code Objects.hashCode} gets wrong, and the case this generator manufactures:
+     * Arrays are the case {@code Objects.hashCode} gets wrong, and the case the hydration manufactures:
      * {@code RandomObjects#key} builds a <em>fresh</em> {@code byte[]} on every call for a {@code byte[]} key
      * type, so the identity hash differs for every record of the same logical key and differs again between two
      * runs of one seed.

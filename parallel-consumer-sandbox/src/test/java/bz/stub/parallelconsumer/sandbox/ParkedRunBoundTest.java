@@ -30,13 +30,13 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * thirty-six seconds for a ten-second run and logging an error while it did.
  * <p>
  * <b>One assertion carries this, and the other is a backstop - they are not independent, whatever the earlier
- * version of this paragraph said.</b> The wait that runs out refuses, the generator records that refusal
+ * version of this paragraph said.</b> The wait that runs out refuses, the driver records that refusal
  * <em>and</em> logs it at error, and {@code awaitBound} rethrows a recorded failure - so the {@code awaitBound}
  * line below throws before the log assertion is ever reached. What that line pins is the timing:
  * {@link #WELL_INSIDE_THE_BUDGET} is comfortably under the budget-plus-close a run that ignored parked records
  * would need, and comfortably over what this one takes. The log assertion cannot fail while the rethrow stands;
  * it is kept because it is the half that would still have teeth if the rethrow were ever loosened, and because a
- * generator that logged an error without recording it is a shape nothing else here would catch.
+ * driver that logged an error without recording it is a shape nothing else here would catch.
  * <p>
  * <b>What this run still spends, and what it is not.</b> Most of the wall clock here is the drain-first close
  * afterwards, which sits out its drain timeout on parked work it can never take - the engine's behaviour, not the
@@ -85,7 +85,7 @@ class ParkedRunBoundTest {
                 .build();
 
         ConsumerHandle handle;
-        try (LogCapture generatorLog = LogCapture.of(RecordGenerator.class, Level.WARN)) {
+        try (LogCapture driverLog = LogCapture.of(RecordDriver.class, Level.WARN)) {
             handle = definition.start(sandbox);
             assertWithMessage("the bound has to finish inside %s: every scan parks, so the only thing that could "
                     + "hold the wait open is a wait that does not count a parked record as accounted for",
@@ -93,9 +93,9 @@ class ParkedRunBoundTest {
                     .that(sandbox.awaitBound(WELL_INSIDE_THE_BUDGET)).isTrue();
             handle.awaitShutdown();
 
-            assertWithMessage("the bound's wait refusing is logged as an error by the generator, so a run that "
-                    + "ends cleanly logs none: %s", generatorLog.messagesAt(Level.ERROR))
-                    .that(generatorLog.messagesAt(Level.ERROR)).isEmpty();
+            assertWithMessage("the bound's wait refusing is logged as an error by the driver, so a run that "
+                    + "ends cleanly logs none: %s", driverLog.messagesAt(Level.ERROR))
+                    .that(driverLog.messagesAt(Level.ERROR)).isEmpty();
         }
 
         assertWithMessage("the scans route's downstream always throws, so its records are what the run left "

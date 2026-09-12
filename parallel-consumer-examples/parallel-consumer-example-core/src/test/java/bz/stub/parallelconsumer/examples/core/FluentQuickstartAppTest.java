@@ -123,7 +123,7 @@ class FluentQuickstartAppTest {
 
             // OUTSIDE the tagged region deliberately: awaitShutdown() is what the README shows a demo doing, and
             // it returns whatever the run did. Asking the bound is the TEST's step, and it is the only one that
-            // can fail - sandbox.awaitBound is the sole route to RecordGenerator#rethrowAnyFailure, and the
+            // can fail - sandbox.awaitBound is the sole route to RecordDriver#rethrowAnyFailure, and the
             // bound's own callback wraps its wait in try/finally { handle.close() }, so a wait that REFUSED still
             // closes the handle, awaitShutdown() still returns normally, and the recorded failure never leaves the
             // log. A run that failed to account for its records would otherwise be read as a completed one - which

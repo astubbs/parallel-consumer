@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@code start + n * interval}, so a slow tick is absorbed by the next one rather than added to it.
  */
 @Slf4j
-final class RecordGenerator implements AutoCloseable {
+final class RecordDriver implements AutoCloseable {
 
     /**
      * Named rather than written as a literal beside the division that turns a rate into an interval, which is the
@@ -55,7 +55,7 @@ final class RecordGenerator implements AutoCloseable {
 
     /**
      * What to do when the bound is reached: wait for the instance to account for every record already published -
-     * completed, or parked - then close it. Run on this generator's own thread, because a close cannot be run from inside the
+     * completed, or parked - then close it. Run on this driver's own thread, because a close cannot be run from inside the
      * engine it closes (KTD6) and this thread is outside it.
      * <p>
      * It runs <b>before</b> {@link #finished} counts down, so {@link #awaitFinished(Duration)} covers the whole
@@ -66,7 +66,7 @@ final class RecordGenerator implements AutoCloseable {
 
     /**
      * Records published across every topic. Atomic because a caller reads it from its own thread while this
-     * generator's thread increments it, and because the count bound is tested against the value the increment
+     * driver's thread increments it, and because the count bound is tested against the value the increment
      * returned rather than against a later read of it.
      */
     private final AtomicLong generated = new AtomicLong();
@@ -92,20 +92,20 @@ final class RecordGenerator implements AutoCloseable {
     private final AtomicBoolean boundWasReached = new AtomicBoolean();
 
     /**
-     * What killed the generator thread, if anything did. Kept rather than only logged, so that
-     * {@link #rethrowAnyFailure()} can put it in front of whoever is waiting: a generator that dies leaves a run
+     * What killed the driver thread, if anything did. Kept rather than only logged, so that
+     * {@link #rethrowAnyFailure()} can put it in front of whoever is waiting: a driver that dies leaves a run
      * that consumes nothing, and a test then fails on its own timeout with no mention of the actual cause. That is
      * how a jackson-core/databind version split first showed up here - as a sixty-second timeout.
      */
     private volatile Throwable failure;
 
     /**
-     * The generator's own thread, or null before {@link #start()}.
+     * The driver's own thread, or null before {@link #start()}.
      * <p>
      * Volatile because {@link #close()} reads it from whatever thread closes the sandbox, and that is not always
      * the thread that started it: a demo closes from a shutdown hook, and a handle can be closed by any caller
-     * holding it. A close that read a stale null would return having neither interrupted nor joined a generator
-     * that is still running - and a generator outliving its sandbox goes on publishing into a closed consumer.
+     * holding it. A close that read a stale null would return having neither interrupted nor joined a driver
+     * that is still running - and a driver outliving its sandbox goes on publishing into a closed consumer.
      * The tests do not reach the race, because a closer thread they start themselves inherits the write through
      * {@code Thread.start()}'s own happens-before edge; a thread that already existed inherits nothing.
      */
@@ -119,9 +119,9 @@ final class RecordGenerator implements AutoCloseable {
      * @param bound             when to stop, or {@link Bound#none()}
      * @param onBoundReached    what reaching the bound starts - see the field
      */
-    RecordGenerator(List<TopicFeed> feeds, double perSecondPerTopic, Bound bound, Runnable onBoundReached) {
+    RecordDriver(List<TopicFeed> feeds, double perSecondPerTopic, Bound bound, Runnable onBoundReached) {
         if (perSecondPerTopic <= 0) {
-            throw new IllegalArgumentException("A generator rate of " + perSecondPerTopic + " records per second "
+            throw new IllegalArgumentException("A driver rate of " + perSecondPerTopic + " records per second "
                     + "would generate nothing");
         }
         this.feeds = feeds;
@@ -131,16 +131,16 @@ final class RecordGenerator implements AutoCloseable {
     }
 
     /**
-     * Starts generating on a thread of this generator's own, and returns immediately.
+     * Starts publishing on a thread of this driver's own, and returns immediately.
      *
      * @throws IllegalStateException if it is already running - two threads over one set of feeds would interleave
      *                               their record indices, and a seeded run would stop being reproducible
      */
     void start() {
         if (!running.compareAndSet(false, true)) {
-            throw new IllegalStateException("This generator is already running");
+            throw new IllegalStateException("This driver is already running");
         }
-        thread = new Thread(this::generate, "pc-sandbox-generator");
+        thread = new Thread(this::generate, "pc-sandbox-driver");
         // A daemon so that a demo whose main method returns without closing its handle does not hang the JVM. The
         // bound and close() are the real stops; this is only the backstop.
         thread.setDaemon(true);
@@ -163,20 +163,20 @@ final class RecordGenerator implements AutoCloseable {
     }
 
     /**
-     * Rethrows whatever killed the generator thread, wrapped so the stack trace of the waiting thread is kept too.
+     * Rethrows whatever killed the driver thread, wrapped so the stack trace of the waiting thread is kept too.
      * Called from {@link #awaitBound(Duration)}, so a failure surfaces in front of whoever waited on the run
      * rather than only in the log.
      */
     private void rethrowAnyFailure() {
         Throwable died = failure;
         if (died != null) {
-            throw new IllegalStateException("The sandbox generator failed after " + generated.get()
+            throw new IllegalStateException("The sandbox driver failed after " + generated.get()
                     + " records: " + died, died);
         }
     }
 
     /**
-     * Waits for the run to finish - the bound reached <b>and its close completed</b>, or the generator closed.
+     * Waits for the run to finish - the bound reached <b>and its close completed</b>, or the driver closed.
      * <p>
      * The close is inside the wait deliberately: what a bounded run promises is that the state readable
      * afterwards is the end of the run, and that is not true until the engine has committed what it was given.
@@ -197,14 +197,14 @@ final class RecordGenerator implements AutoCloseable {
     /**
      * Waits for the run to reach its bound and finish what reaching it starts, and answers whether it got there.
      * <p>
-     * The tail both sandboxes share, here rather than written twice: the wait, then the rethrow - so a generator
+     * The tail both sandboxes share, here rather than written twice: the wait, then the rethrow - so a driver
      * that died puts its failure in front of the caller rather than being reported as a bound that was not
      * reached - then the two conditions together, because a wait that ran out and a run that ended without its
      * bound are both false and neither is a failure. The guard clauses stay with the callers: what is refused
      * differs between the two APIs, and their tests assert those messages.
      *
      * @return false if the wait ran out, or if the run ended without reaching its bound
-     * @throws IllegalStateException wrapping whatever killed the generator thread
+     * @throws IllegalStateException wrapping whatever killed the driver thread
      */
     boolean awaitBound(Duration timeout) {
         boolean finishedInTime = awaitFinished(timeout);
@@ -213,7 +213,7 @@ final class RecordGenerator implements AutoCloseable {
     }
 
     /**
-     * The generating loop, which is the whole of what the generator thread does.
+     * The driving loop, which is the whole of what the driver thread does.
      * <p>
      * One record per feed per tick, the bound asked after each record and on both sides of the sleep - before it
      * so a reached duration does not wait out one more interval first, after it because the sleep is where the
@@ -233,7 +233,7 @@ final class RecordGenerator implements AutoCloseable {
                     if (!feed.publish(tick)) {
                         // The consumer was closed under us: the run is over, and for an unbounded run that is
                         // the ordinary way it ends. Anything else that goes wrong throws, and is caught below
-                        // rather than swallowed - a generator that stops silently reads exactly like a
+                        // rather than swallowed - a driver that stops silently reads exactly like a
                         // definition that consumes nothing, which is the harder bug of the two to find.
                         log.debug("Sandbox consumer closed while generating for {}", feed.topic());
                         return;
@@ -261,7 +261,7 @@ final class RecordGenerator implements AutoCloseable {
             // library version split, and an Error killing this thread is exactly as invisible as an exception.
             // Recorded as well as logged - see the failure field.
             failure = e;
-            log.error("The sandbox generator stopped after {} records", generated.get(), e);
+            log.error("The sandbox driver stopped after {} records", generated.get(), e);
         } finally {
             running.set(false);
             boundWasReached.set(boundReached);
@@ -285,7 +285,7 @@ final class RecordGenerator implements AutoCloseable {
     }
 
     /**
-     * @return false when the wait was interrupted, which is how {@link #close()} stops a generator mid-sleep
+     * @return false when the wait was interrupted, which is how {@link #close()} stops a driver mid-sleep
      */
     private boolean sleepUntil(long deadlineNanos) {
         long remaining = deadlineNanos - System.nanoTime();
@@ -302,9 +302,9 @@ final class RecordGenerator implements AutoCloseable {
     }
 
     /**
-     * Stops generating without running the bound's close - the caller is closing this down itself.
+     * Stops publishing without running the bound's close - the caller is closing this down itself.
      *
-     * <h2>An interrupt is for a generator that is still generating, and for nothing else</h2>
+     * <h2>An interrupt is for a driver that is still publishing, and for nothing else</h2>
      * The interrupt exists to end a {@link #sleepUntil} between two ticks. If the bound has already been reached
      * the thread is somewhere else entirely: inside {@link #onBoundReached}, which waits for the instance to
      * account for what was published and then closes it. Interrupting it there turns an orderly end into a
@@ -327,20 +327,20 @@ final class RecordGenerator implements AutoCloseable {
     @Override
     public void close() {
         running.set(false);
-        Thread generator = thread;
-        if (generator != null && generator != Thread.currentThread()) {
+        Thread driver = thread;
+        if (driver != null && driver != Thread.currentThread()) {
             if (!boundWasReached.get()) {
-                generator.interrupt();
+                driver.interrupt();
             }
             try {
-                generator.join(Duration.ofSeconds(10).toMillis());
+                driver.join(Duration.ofSeconds(10).toMillis());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-            if (generator.isAlive()) {
-                // Loud, because a generator that outlives its sandbox goes on publishing into a closed consumer
+            if (driver.isAlive()) {
+                // Loud, because a driver that outlives its sandbox goes on publishing into a closed consumer
                 // and the resulting exception is attributed to whatever runs next.
-                log.error("The sandbox generator thread did not stop within the close's ten seconds (bound "
+                log.error("The sandbox driver thread did not stop within the close's ten seconds (bound "
                         + "reached: {} - if true it was waited out rather than interrupted, and what it is "
                         + "waiting for is the instance accounting for what was published)", boundWasReached.get());
             }

@@ -183,7 +183,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * null pointer.
      */
     @SuppressWarnings("NullAway.Init")
-    private RecordGenerator generator;
+    private RecordDriver driver;
 
     /**
      * The running instance, from {@link #started(ConsumerHandle)}. Held for two things the caller-published shape
@@ -280,28 +280,28 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
                     + "awaitSettled()", definition.topics(), seed);
             return;
         }
-        generator = new RecordGenerator(fluentFeeds(), perSecond, bound, () -> {
+        driver = new RecordDriver(fluentFeeds(), perSecond, bound, () -> {
             try {
-                // The bound stops the generator; the engine still has to finish and commit what it was already
+                // The bound stops the driver; the engine still has to finish and commit what it was already
                 // given. A drain-first close does not do that for us - see
                 // SandboxConsumer#awaitEveryPublishedRecordCommitted for what it does instead, and why a committed
                 // offset or a park is what means a record is done with.
                 consumer.awaitEveryPublishedRecordCommitted();
             } finally {
                 // Closed either way: a handle left open outlives whatever made it, and the wait's own refusal
-                // still reaches the caller through the generator's recorded failure.
+                // still reaches the caller through the driver's recorded failure.
                 handle.close();
             }
         });
         log.info("Sandbox running: {} at {}/s per topic, seed {}, {}",
                 definition.topics(), perSecond, seed, bound);
-        generator.start();
+        driver.start();
     }
 
     // ---------------------------------------------------------------- classic API
 
     /**
-     * The classic API's entry (R33, AE26): a typed mock consumer and a generator behind it, for an options
+     * The classic API's entry (R33, AE26): a typed mock consumer and a driver behind it, for an options
      * builder rather than a definition.
      * <p>
      * The classic API has no runtime seam - it takes a finished consumer - so the wiring is explicit rather than
@@ -538,12 +538,12 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * How many records have been generated across every topic.
      */
     public long generatedRecords() {
-        return generator == null ? 0 : generator.generatedRecords();
+        return driver == null ? 0 : driver.generatedRecords();
     }
 
     /**
      * Waits for the run to reach its bound, <b>and for the bound to finish what reaching it starts</b>: the
-     * generator stops, every published record is accounted for - committed, or parked - and the instance closes.
+     * driver stops, every published record is accounted for - committed, or parked - and the instance closes.
      * So a true return means the state readable afterwards is the end of the run rather than the middle of it. An
      * unbounded run never reaches a bound, so this is the wait a test uses and a demo does not.
      * <p>
@@ -552,7 +552,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * bare false where that wait would have named the partition and the shortfall.
      *
      * @return false if the bound had not been reached when the wait ran out
-     * @throws IllegalStateException wrapping whatever stopped the generator or failed the bound's wait
+     * @throws IllegalStateException wrapping whatever stopped the driver or failed the bound's wait
      */
     public boolean awaitBound(Duration timeout) {
         if (handPublished) {
@@ -560,14 +560,14 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
                     + "bound - publish the records you want and call awaitSettled(), or drop "
                     + "Sandbox.builder().handPublished() to have the driver publish for you");
         }
-        if (generator == null) {
+        if (driver == null) {
             throw new IllegalStateException("This sandbox has not been started");
         }
         if (!bound.isBounded()) {
             throw new IllegalStateException("This sandbox is unbounded, so it will never reach a bound - declare "
                     + "one with Sandbox.builder().bound(...), or close the handle to end the run");
         }
-        return generator.awaitBound(timeout);
+        return driver.awaitBound(timeout);
     }
 
     /**
@@ -582,8 +582,8 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      */
     @Override
     public void close() {
-        if (generator != null) {
-            generator.close();
+        if (driver != null) {
+            driver.close();
         }
         if (handle != null) {
             handle.close();
@@ -650,7 +650,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * Refuses, at start-up, every route this sandbox could not generate for - naming the topic and what to do
      * about it.
      * <p>
-     * Up front rather than at the first record, because a generator that skipped a topic it could not fill would
+     * Up front rather than at the first record, because a feed that skipped a topic it could not fill would
      * present as a definition whose route never fires, which is a far harder thing to diagnose than a refusal
      * naming the topic. The cure is on the definition: a format helper that carries its type, a declared type on
      * the builder, or a serialiser for a route that only reads.
@@ -666,7 +666,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
                 if (ValueTypes.of(route.consumedValue()) == null) {
                     throw new IllegalArgumentException("The sandbox cannot generate records for topic " + topic
                             + ": its value format (" + route.consumedValue() + ") does not name a Java type, and "
-                            + "the generator has to fill an instance of one. Declare the route with a format "
+                            + "the hydration has to fill an instance of one. Declare the route with a format "
                             + "helper (json/avro/protobuf/string/bytes), with Format.of(deserializer, "
                             + "serializer, YourType.class), or tell the sandbox with "
                             + "Sandbox.builder().generating(\"" + topic + "\", YourType.class).");
@@ -682,7 +682,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     }
 
     /**
-     * Refuses a format the generator could read from but not write to. The sandbox has to <em>produce</em> the
+     * Refuses a format the sandbox could read from but not write to. The sandbox has to <em>produce</em> the
      * records the definition consumes, so a read-only format leaves it with a value it cannot put on the wire.
      *
      * @param side "key" or "value", so the refusal names which half of the record is the problem
@@ -690,7 +690,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     private static void requireWritable(String topic, Format<?> format, String side) {
         if (!format.hasSerializer()) {
             throw new IllegalArgumentException("The sandbox cannot generate records for topic " + topic
-                    + ": its " + side + " format (" + format + ") can only read. The generator has to encode "
+                    + ": its " + side + " format (" + format + ") can only read. The sandbox has to encode "
                     + "what it makes with the same format the route decodes it with, so a route declared with a "
                     + "hand-written deserialiser needs a serialiser beside it - Consumed.with(..., "
                     + "Format.of(deserializer, serializer)) - or the route needs feeding by hand.");

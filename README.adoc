@@ -213,7 +213,7 @@ This is the <<fluent-api,fluent API>>, which is *incubating* -- see that section
 ----
 <1> Generated records per second, per source topic, with each route's declared type filled with realistic random data.
 <2> Stop generating after ten seconds and close, draining first. Without a bound the run ends when you close the handle.
-<3> How many distinct keys the generator draws from. Keys have to repeat for key ordering to have anything to order, and they have to repeat rarely for a topic to look like a real one.
+<3> How many distinct keys the driver draws from. Keys have to repeat for key ordering to have anything to order, and they have to repeat rarely for a topic to look like a real one.
 <4> The one line that differs from a run against a broker.
 <5> The bound closes the instance, so this returns when the run ends.
 

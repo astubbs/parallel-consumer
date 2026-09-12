@@ -123,7 +123,7 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
      * <p>
      * It holds one entry per distinct commit, which is the same order as the commit history the mock consumer
      * keeps for the life of the run anyway. Concurrent because {@link #highestCommittedOffsets()} is public and a
-     * test may read it from another thread while the generator thread waits.
+     * test may read it from another thread while the driver thread waits.
      */
     private final Map<OffsetAndMetadata, Long> completedPerCommit = new ConcurrentHashMap<>();
 
@@ -187,7 +187,7 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
      * match - so a consumer-group lag reading in the sandbox is the same shape as one against a broker.
      *
      * @return the offset it was published at, or -1 when this consumer has already been closed - which is how a
-     * generator learns that its run is over rather than by an exception it would have to classify
+     * driver learns that its run is over rather than by an exception it would have to classify
      */
     public synchronized long publish(String topic, int partition, K key, V value) {
         if (closed()) {
@@ -383,7 +383,7 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
             try {
                 Thread.sleep(WAIT_INTERVAL_MS);
             } catch (InterruptedException e) {
-                // The only interrupt that reaches here is RecordGenerator#close asking this generator thread to
+                // The only interrupt that reaches here is RecordDriver#close asking this driver thread to
                 // stop, and that caller closes the instance itself - so returning is right, and the flag is put
                 // back for whatever runs next on this thread.
                 Thread.currentThread().interrupt();
@@ -416,7 +416,7 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
 
     // Synchronized to match the method it overrides: MockConsumer guards addRecord, poll, commitSync and close
     // with one monitor, and an unsynchronized override would quietly widen that contract. The wait inside the
-    // simulated long poll releases the monitor, so this does not block a generator publishing into it.
+    // simulated long poll releases the monitor, so this does not block a driver publishing into it.
     @Override
     public synchronized ConsumerRecords<K, V> poll(Duration timeout) {
         ConsumerRecords<K, V> records = super.poll(timeout);

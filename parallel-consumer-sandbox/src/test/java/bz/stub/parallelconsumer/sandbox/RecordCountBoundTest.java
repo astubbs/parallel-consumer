@@ -50,7 +50,7 @@ class RecordCountBoundTest {
                 .build();
 
         ConsumerHandle handle = definition.start(sandbox);
-        // The bound does all three things on the generator's own thread - stop generating, wait for every
+        // The bound does all three things on the driver's own thread - stop publishing, wait for every
         // published record's offset to commit, close the handle - and awaitBound covers all three, so this
         // returning true is already the end of the run.
         assertThat(sandbox.awaitBound(Duration.ofSeconds(30))).isTrue();

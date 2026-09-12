@@ -5,18 +5,18 @@ package bz.stub.parallelconsumer.sandbox;
  */
 
 /**
- * One topic's supply of generated records, as {@link RecordGenerator} sees it.
+ * One topic's supply of generated records, as {@link RecordDriver} sees it.
  * <p>
- * The seam between pacing and content: the generator owns the rate, the bound and the thread and knows nothing
+ * The seam between pacing and content: the driver owns the rate, the bound and the thread and knows nothing
  * about types or encoding; a feed owns exactly one topic's records and knows nothing about when to publish them.
  * That is what lets the fluent path (which must encode with each route's serialisers, because the engine below
  * the facade reads raw bytes) and the classic path (which hands the mock consumer typed objects and encodes
- * nothing) share one generator rather than two.
+ * nothing) share one driver rather than two.
  */
 interface TopicFeed {
 
     /**
-     * The topic this feed publishes into, for the generator's logging - the generator itself never routes on it,
+     * The topic this feed publishes into, for the driver's logging - the driver itself never routes on it,
      * because a feed already knows where its records go.
      */
     String topic();

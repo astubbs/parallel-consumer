@@ -43,7 +43,7 @@ final class SandboxFixtures {
 
     /**
      * Adds a JSON route whose function always succeeds, which is what a test that is about the plumbing - the
-     * generator, the bound, the wait - wants its records to do.
+     * driver, the bound, the wait - wants its records to do.
      */
     static <V> ParallelConsumerDefinition succeedingJsonRoute(ParallelConsumerDefinition definition,
                                                               String topic,
