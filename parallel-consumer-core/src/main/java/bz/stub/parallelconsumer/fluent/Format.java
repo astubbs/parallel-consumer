@@ -25,7 +25,7 @@ import java.util.function.Supplier;
  * format helper from {@link Formats} are interchangeable wherever {@link Consumed} and {@link Produced} take one.
  * The difference from a plain {@code Serde} is that the serialiser may be <em>absent</em>: a route declared with a
  * hand-written {@link Deserializer} can read a topic that nothing here can write. {@link #hasSerializer()} answers
- * that, and the sandbox - which must encode what it generates - refuses such a route naming its topic (KTD9).
+ * that, and the sandbox - which must encode what it hydrates - refuses such a route naming its topic (KTD9).
  *
  * @param <T> the value type this format reads and, when it can, writes
  */
@@ -96,7 +96,7 @@ public final class Format<T> implements Serde<T> {
 
     /**
      * The Java type this format reads into, or null when nothing told it. Nothing in the facade reads this; it is
-     * carried for the sandbox, which cannot generate a record for a class it cannot name.
+     * carried for the sandbox, which cannot hydrate a record for a class it cannot name.
      *
      * @see #type()
      */
@@ -206,8 +206,8 @@ public final class Format<T> implements Serde<T> {
     }
 
     /**
-     * A format that can read and write, naming the Java type it carries - which is what lets the sandbox generate
-     * records for a route declared with hand-written serialisers.
+     * A format that can read and write, naming the Java type it carries - which is what lets the sandbox feed a
+     * route declared with hand-written serialisers.
      *
      * @see #type()
      */
@@ -340,8 +340,8 @@ public final class Format<T> implements Serde<T> {
     }
 
     /**
-     * How this format writes its type back to bytes, for the produce path and for anything that must generate
-     * records a route would accept.
+     * How this format writes its type back to bytes, for the produce path and for anything that must feed a route
+     * with records it would accept.
      *
      * @return the serialiser, or null when this format can only read - test with {@link #hasSerializer()} first
      */
@@ -383,8 +383,8 @@ public final class Format<T> implements Serde<T> {
     }
 
     /**
-     * Whether this format can write as well as read. A route that produces, and a route the sandbox must generate
-     * records for, needs this to be true.
+     * Whether this format can write as well as read. A route that produces, and a route the sandbox must feed,
+     * needs this to be true.
      */
     public boolean hasSerializer() {
         return serializerSupplier != null;
@@ -396,7 +396,7 @@ public final class Format<T> implements Serde<T> {
      * A {@link Formats} helper always knows - {@code json(Order.class)} was told. A format built from a bare
      * {@link Deserializer} or a Kafka {@link Serde} does not: the type is erased and nothing here can recover it.
      * <p>
-     * Nothing in the facade needs this. <b>The sandbox does</b>, because generating a record means filling an
+     * Nothing in the facade needs this. <b>The sandbox does</b>, because hydrating a record means filling an
      * instance of a class, and a route whose type it cannot name is refused there naming the topic (KTD9) - the
      * cure being either a format helper or the {@code Class}-taking factories above.
      */
