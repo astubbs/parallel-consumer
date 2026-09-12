@@ -5,12 +5,17 @@ package bz.stub.parallelconsumer.fluent;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.utils.LogCapture;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import ch.qos.logback.classic.Level;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.MockAdminClient;
+import org.apache.kafka.clients.consumer.OffsetResetStrategy;
+import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartitionInfo;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -18,6 +23,7 @@ import org.junit.jupiter.api.Timeout;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 import java.util.regex.Pattern;
 
@@ -249,6 +255,56 @@ class MissingTopicPolicyTest extends AbstractFluentEngineTest {
         handle = unreachable.startAndAssign(pc, 1);
 
         assertThat(handle.processor().isClosedOrFailed()).isFalse();
+    }
+
+    /**
+     * R1 lets a definition supply finished clients <em>in place of</em> connection properties, and the README
+     * advertises it - so a definition that brings its own consumer and producer and names no broker must start.
+     * <p>
+     * This check asks the runtime for an admin client, and the real runtime builds one from those same properties;
+     * asking unconditionally made a definition with no broker address fail at start with a complaint about a
+     * bootstrap server it was never required to give, under every policy including {@link MissingTopic#IGNORE}.
+     * The runtime now answers empty for a definition whose clients are its connection source, which is the
+     * documented "there is no cluster to ask" answer rather than a refusal.
+     */
+    @Test
+    void preBuiltClientsInPlaceOfPropertiesStillStart() {
+        var pc = ParallelConsumer.connect(new Properties())
+                .withConsumer(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST))
+                .withProducer(new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer()));
+        // A topic that exists on no cluster, so nothing but a skipped check can let this through.
+        pc.string(MISSING_TOPIC).process(context -> Outcome.succeeded());
+
+        // The real Kafka runtime, which is the one the no-argument start() reaches for.
+        ParallelConsumerOptions<byte[], byte[]> options = pc.buildOptions(ClientRuntime.kafka());
+
+        assertWithMessage("the supplied consumer went to the engine, so the start was not refused")
+                .that(options.getConsumer()).isNotNull();
+        assertThat(options.getProducer()).isNotNull();
+    }
+
+    /**
+     * {@link MissingTopicsException}'s own javadoc documents the recovery: catch it, create the topics it names,
+     * start again. That only works if the refused start did not consume the definition - and marking it started
+     * before this check ran meant the second call failed with "already been started" instead, leaving the
+     * documented path unreachable.
+     */
+    @Test
+    void aStartRefusedForMissingTopicsCanBeRetriedOnceTheTopicsExist() throws Exception {
+        clusterHas(TOPIC);
+        var pc = ParallelConsumer.connect(props());
+        pc.string(TOPIC).process(context -> Outcome.succeeded());
+        pc.string(MISSING_TOPIC).process(context -> Outcome.succeeded());
+
+        MissingTopicsException refused = assertThrows(MissingTopicsException.class,
+                () -> pc.start(runtimeWithAdmin));
+        // Exactly the recovery the exception describes, driven from what it reported rather than from the constant.
+        clusterHas(refused.missingTopics().toArray(new String[0]));
+
+        handle = runtimeWithAdmin.startAndAssign(pc, 1);
+
+        assertWithMessage("the same definition started once the topics it named existed")
+                .that(handle.processor().isClosedOrFailed()).isFalse();
     }
 
     /**
