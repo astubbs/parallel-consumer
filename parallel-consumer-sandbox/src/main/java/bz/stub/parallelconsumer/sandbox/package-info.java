@@ -12,13 +12,13 @@
  * <pre>{@code
  * Sandbox sandbox = Sandbox.builder().handPublished().build();
  * try (ParallelConsumerInstance instance = pc.start(sandbox)) {
- *     sandbox.publish("orders", "cust-1", new Order("o-1"));
+ *     sandbox.pipe("orders", "cust-1", new Order("o-1"));
  *     sandbox.awaitSettled();
  *     assertThat(inventory.reserved()).containsExactly("o-1");
  * }
  * }</pre>
  *
- * {@link bz.stub.parallelconsumer.sandbox.Sandbox#publish(java.lang.String, java.lang.Object, java.lang.Object)}
+ * {@link bz.stub.parallelconsumer.sandbox.Sandbox#pipe(java.lang.String, java.lang.Object, java.lang.Object)}
  * encodes with the route's own serialiser and publishes from the caller's thread;
  * {@link bz.stub.parallelconsumer.sandbox.Sandbox#awaitSettled()} blocks until every record published so far is
  * accounted for - completed, or parked - and refuses if the run ended before it got there. The classic API has

@@ -35,7 +35,7 @@ import java.util.function.LongFunction;
 /**
  * Runs a definition with no broker, against records you publish or records it makes up.
  *
- * <h2>The primary shape: publish, settle, assert</h2>
+ * <h2>The primary shape: pipe, settle, assert</h2>
  * A test knows its own data, so it supplies it and then waits for the instance to finish with it:
  * <pre>{@code
  * ParallelConsumerDefinition pc = ParallelConsumer.connect(props);
@@ -44,13 +44,13 @@ import java.util.function.LongFunction;
  *
  * Sandbox sandbox = Sandbox.builder().handPublished().build();
  * try (ParallelConsumerInstance instance = pc.start(sandbox)) {   // against a broker, this line reads pc.start()
- *     sandbox.publish("orders", "cust-1", new Order("o-1"));
- *     sandbox.publish("orders", "cust-1", new Order("o-2"));
+ *     sandbox.pipe("orders", "cust-1", new Order("o-1"));
+ *     sandbox.pipe("orders", "cust-1", new Order("o-2"));
  *     sandbox.awaitSettled();
  *     assertThat(inventory.reserved()).hasSize(2);
  * }
  * }</pre>
- * {@link #publish(String, Object, Object)} encodes with the route's own serialiser and hands the record to the
+ * {@link #pipe(String, Object, Object)} encodes with the route's own serialiser and hands the record to the
  * mock consumer from <em>your</em> thread; {@link #awaitSettled()} blocks until every record published so far is
  * accounted for - completed, or parked - and then the try-with-resources closes the instance.
  * <p>
@@ -102,8 +102,8 @@ import java.util.function.LongFunction;
  * <h2>The classic API too</h2>
  * {@link #classic} hands the same mock consumer, producer and driver to an options builder, so an existing
  * classic-API application or example runs broker-free with its start call changed and nothing else (R33, AE26).
- * It has both shapes as well - {@link ClassicSandbox#publish} and {@link ClassicSandbox#awaitSettled()}, or
- * {@link ClassicSandbox#startGenerating}.
+ * It has both shapes as well - {@link ClassicSandbox#pipe} and {@link ClassicSandbox#awaitSettled()}, or
+ * {@link ClassicSandbox#startDriving}.
  *
  * @see Bound
  * @see ClassicSandbox
@@ -156,7 +156,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     /**
      * Whether the caller publishes rather than the driver. True means {@link #started(ParallelConsumerInstance)}
      * assigns the partitions and stops there, so the only records this sandbox holds are the ones
-     * {@link #publish} was given.
+     * {@link #pipe} was given.
      * <p>
      * An opt-out rather than the default, even though publishing by hand is the primary shape, because the driver
      * was here first and a demo that declared a rate and a bound must go on running: a sandbox that silently
@@ -205,7 +205,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
 
     /**
      * One per routed topic, built at {@code start} from the route that claims it: what turns a key and a value
-     * into an encoded record on a partition. Shared by {@link #publish} and by the driver's own feeds, so a
+     * into an encoded record on a partition. Shared by {@link #pipe} and by the driver's own feeds, so a
      * hand-published record and a driven one reach the engine by exactly the same path.
      */
     private Map<String, RoutePublisher> publishers = Collections.emptyMap();
@@ -315,7 +315,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * <p>
      * The classic API has no runtime seam - it takes a finished consumer - so the wiring is explicit rather than
      * one call: build the options with {@link ClassicSandbox#consumer()}, subscribe, poll, then either
-     * {@link ClassicSandbox#publish} or {@link ClassicSandbox#startGenerating}. Note that no encoding happens on
+     * {@link ClassicSandbox#pipe} or {@link ClassicSandbox#startDriving}. Note that no encoding happens on
      * this path at all: the mock consumer holds records of the user's own types, so objects go in as they are.
      *
      * @param keyType   the classic instance's key type. <b>A type witness</b>: it is what fixes {@code K}, since a
@@ -344,7 +344,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     // ---------------------------------------------------------------- publish, settle, assert
 
     /**
-     * Publishes one record into a routed topic, from the calling thread, encoded with that route's own serialisers
+     * Pipes one record into a routed topic, from the calling thread, encoded with that route's own serialisers
      * - the front door for a test that knows its own data.
      *
      * <h2>What it does with what you give it</h2>
@@ -358,7 +358,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * encode a record its own definition could not read.
      *
      * <h2>It returns as soon as the record is on the queue</h2>
-     * Publishing is not processing. The engine polls on its own thread and commits on another, so
+     * Piping a record is not processing it. The engine polls on its own thread and commits on another, so
      * {@link #awaitSettled()} is what makes an assertion afterwards meaningful.
      *
      * @param topic a topic one of this definition's routes claims
@@ -370,7 +370,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      *                                  routes would never be delivered, and a silent publish would read as a
      *                                  function that never ran
      */
-    public long publish(String topic, Object key, Object value) {
+    public long pipe(String topic, Object key, Object value) {
         Objects.requireNonNull(topic, "A topic must be supplied");
         requireStarted();
         RoutePublisher publisher = publishers.get(topic);
@@ -541,18 +541,23 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     }
 
     /**
-     * The mock producer, whose {@code history()} holds everything the instance produced - exported records
-     * included, once export lands.
+     * The read side of the sandbox: the mock producer, whose {@code history()} holds every record the instance
+     * produced - exported records included, once export lands.
+     * <p>
+     * Named for what a caller reaches for it to do rather than for the client it hands back, so that reading what
+     * came out is the counterpart of {@link #pipe(String, Object, Object)} putting something in. The client itself
+     * is what a definition asks for, through {@link #producer(DefinitionView)}.
      */
-    public MockProducer<byte[], byte[]> producer() {
+    public MockProducer<byte[], byte[]> readRecords() {
         return producer;
     }
 
     /**
-     * How many records have been generated across every topic.
+     * How many records the driver has put in, across every topic. A sandbox nothing is driving has none, so this
+     * reads zero however much a caller piped - {@link SandboxConsumer#publishedCounts()} is what counts that.
      */
-    public long generatedRecords() {
-        return driver == null ? 0 : driver.generatedRecords();
+    public long drivenRecords() {
+        return driver == null ? 0 : driver.drivenRecords();
     }
 
     /**
@@ -626,7 +631,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * One publisher per routed topic, each encoding with its own route's serialisers - the engine below the facade
      * consumes raw bytes, so a value has to become bytes the route's deserialiser will read back (KTD2).
      * <p>
-     * Built at {@code start} rather than per record, and shared: {@link #publish} and the driver's feeds both go
+     * Built at {@code start} rather than per record, and shared: {@link #pipe} and the driver's feeds both go
      * through these, so there is one encoding and one partition choice rather than two that could drift.
      */
     private Map<String, RoutePublisher> routePublishers(DefinitionView view) {
@@ -673,7 +678,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     }
 
     /**
-     * Refuses, at start-up, every route this sandbox could not generate for - naming the topic and what to do
+     * Refuses, at start-up, every route this sandbox could not feed - naming the topic and what to do
      * about it.
      * <p>
      * Up front rather than at the first record, because a feed that skipped a topic it could not fill would
@@ -697,7 +702,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
                             + "record of it should contain. Either say so - "
                             + "Sandbox.builder().feeding(\"" + topic + "\", index -> yourValue(index)) - or "
                             + "publish the records yourself with Sandbox.builder().handPublished() and "
-                            + "sandbox.publish(...).");
+                            + "sandbox.pipe(...).");
                 }
             }
         }
@@ -711,7 +716,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      */
     private static void requireWritable(String topic, Format<?> format, String side) {
         if (!format.hasSerializer()) {
-            throw new IllegalArgumentException("The sandbox cannot generate records for topic " + topic
+            throw new IllegalArgumentException("The sandbox cannot encode records for topic " + topic
                     + ": its " + side + " format (" + format + ") can only read. The sandbox has to encode "
                     + "what it makes with the same format the route decodes it with, so a route declared with a "
                     + "hand-written deserialiser needs a serialiser beside it - Consumed.with(..., "
@@ -724,7 +729,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
      * the encoded key, publish it.
      * <p>
      * Apart from the feed above it, because both callers need it and they are not the same caller: the driver's
-     * feed asks for record <em>n</em> of a made-up sequence, and {@link Sandbox#publish} hands over a value the
+     * feed asks for record <em>n</em> of a made-up sequence, and {@link Sandbox#pipe} hands over a value the
      * test wrote. Keeping the encoding and the placement here is what makes those two indistinguishable to the
      * engine - a test cannot accidentally exercise a different path from the one a demo does.
      */
@@ -772,7 +777,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
 
         /**
          * @return the offset it was published at, or -1 once the consumer has closed - which is how the driver
-         * learns the run is over, and what {@link Sandbox#publish} turns into a refusal
+         * learns the run is over, and what {@link Sandbox#pipe} turns into a refusal
          */
         private long publish(Object key, Object value) {
             byte[] keyBytes = encode(keyFormat, key);
@@ -922,9 +927,9 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         }
 
         /**
-         * <b>The caller publishes; nothing is driven.</b> The sandbox assigns its partitions at {@code start} and
+         * <b>The caller pipes; nothing is driven.</b> The sandbox assigns its partitions at {@code start} and
          * then waits, so the records the instance sees are exactly the ones
-         * {@link Sandbox#publish(String, Object, Object)} was given - which is what a test that knows its own data
+         * {@link Sandbox#pipe(String, Object, Object)} was given - which is what a test that knows its own data
          * wants, and what makes {@link Sandbox#awaitSettled()} a statement about that data rather than about a
          * rate.
          * <p>
@@ -956,7 +961,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         }
 
         /**
-         * How many partitions each generated topic has. One by default: more of them is what a partition-ordered
+         * How many partitions each of the sandbox's topics has. One by default: more of them is what a partition-ordered
          * definition needs to show any parallelism at all.
          */
         public Builder partitionsPerTopic(int partitions) {
@@ -972,7 +977,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
         public Builder keyCardinality(int distinctKeys) {
             if (distinctKeys < 1) {
                 throw new IllegalArgumentException("A key cardinality of " + distinctKeys + " leaves no keys to "
-                        + "generate");
+                        + "choose from");
             }
             this.keyCardinality = distinctKeys;
             return this;

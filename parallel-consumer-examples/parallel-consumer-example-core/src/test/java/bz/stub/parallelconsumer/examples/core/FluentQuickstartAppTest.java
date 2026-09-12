@@ -41,7 +41,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * whether it did what the README says it does.
  *
  * <h2>Why this is the signal rather than a compile check</h2>
- * A quickstart that compiles proves the names still exist. This one runs: records are generated into the
+ * A quickstart that compiles proves the names still exist. This one runs: records are driven into the
  * definition's own topics, decoded by each route's own deserialiser, handed to each route's own function, and the
  * outcomes they report are read back off the instance and off the meters. When the fluent API drifts - a renamed
  * method, an outcome that stops being counted, a park that quietly becomes a retry - this goes red, and so does the
@@ -55,7 +55,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * definition rather than a race.
  *
  * <h2>Why the counts are floors rather than numbers</h2>
- * The generator paces on wall-clock time and the run shares a machine with whatever else CI is doing, so the record
+ * The driver paces on wall-clock time and the run shares a machine with whatever else CI is doing, so the record
  * counts are asserted as floors. What is asserted exactly is what the definition fixes: which topics exist, how
  * many times a parked record's function ran, and which outcome each route reached.
  */
@@ -76,7 +76,7 @@ class FluentQuickstartAppTest {
      * The two topics the quickstart routes, spelled here because the example spells them as literals: the constants
      * it used to hold read badly in a README, where a reader can see the reference but not the declaration, so they
      * went with the wrapper. A test needs names for them either way, and these are asserted against what the run
-     * actually generated, so a drift between the two shows up as a topic nothing was published to.
+     * actually drove, so a drift between the two shows up as a topic nothing was published to.
      */
     private static final String ORDERS_TOPIC = "orders";
 
@@ -105,7 +105,7 @@ class FluentQuickstartAppTest {
     private final Map<String, Double> outcomesAtClose = new ConcurrentHashMap<>();
 
     /**
-     * AE24, whole: the definition the README shows, unaltered, against generated records with no broker; both
+     * AE24, whole: the definition the README shows, unaltered, against driven records with no broker; both
      * routes see their own topic's records decoded into their own type; the failing route's records park before the
      * bound; and the console says so.
      */
@@ -154,22 +154,22 @@ class FluentQuickstartAppTest {
 
         // Everything the run left behind, read after the close: the bound closes the instance drain first, so what
         // is here is the end of the run rather than the middle of it.
-        assertGenerated(sandbox);
+        assertDriven(sandbox);
         assertOutcomes();
         assertParked(instance, app);
     }
 
     /**
-     * About five hundred records into each of the definition's two topics, and into no others: the generator reads
-     * the definition, so a topic the definition does not route is a topic nothing is generated for.
+     * About five hundred records into each of the definition's two topics, and into no others: the driver reads
+     * the definition, so a topic the definition does not route is a topic nothing is driven for.
      */
-    private static void assertGenerated(Sandbox sandbox) {
+    private static void assertDriven(Sandbox sandbox) {
         assertThat(sandbox.consumer().publishedCounts().keySet()).containsExactly(
                 new TopicPartition(ORDERS_TOPIC, 0),
                 new TopicPartition(SCANS_TOPIC, 0));
         long orders = sandbox.consumer().publishedCounts()
                 .get(new TopicPartition(ORDERS_TOPIC, 0));
-        assertWithMessage("about %s orders should have been generated in %s at %s/s, but %s were",
+        assertWithMessage("about %s orders should have been driven in %s at %s/s, but %s were",
                 EXPECTED_PER_TOPIC, RUN, RATE_PER_SECOND, orders)
                 .that(orders).isAtLeast(LOWEST_CREDIBLE_PER_TOPIC);
     }
@@ -182,8 +182,8 @@ class FluentQuickstartAppTest {
         assertWithMessage("orders should have been processed, but the outcome counters at close were %s",
                 outcomesAtClose).that(outcome(ORDERS_TOPIC, "succeeded")).isGreaterThan(0.0);
         assertWithMessage("the filtered outcome is one of the README's callouts, so a run in which it never fires "
-                + "leaves that line of the example unproven; the generator fills the status field from a known set "
-                + "of parcel statuses, one of which is RETURNED. Counters at close: %s", outcomesAtClose)
+                + "leaves that line of the example unproven; the example's own value function makes every fifth "
+                + "order RETURNED. Counters at close: %s", outcomesAtClose)
                 .that(outcome(ORDERS_TOPIC, "filtered")).isGreaterThan(0.0);
         // Absent and zero are the same reading here - outcome() defaults a missing counter to 0.0, and the
         // counters are created on first use, so a route that never parks has no parked counter at all. What

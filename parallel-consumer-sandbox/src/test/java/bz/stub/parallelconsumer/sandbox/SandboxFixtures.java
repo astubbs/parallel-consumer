@@ -75,7 +75,7 @@ final class SandboxFixtures {
     }
 
     /**
-     * Builds a classic instance over a sandbox and starts generating into it - the four lines every classic test
+     * Builds a classic instance over a sandbox and starts driving into it - the four lines every classic test
      * repeated, which the duplicate-code check flagged as an eighteen-line clone.
      * <p>
      * The options are the caller's, because what a classic test varies is exactly the options; the poll function
@@ -92,7 +92,7 @@ final class SandboxFixtures {
         ParallelEoSStreamProcessor<K, V> pc = new ParallelEoSStreamProcessor<>(options);
         pc.subscribe(classic.topics());
         pc.poll(onPoll);
-        classic.startGenerating(pc, keys, values);
+        classic.startDriving(pc, keys, values);
         return pc;
     }
 

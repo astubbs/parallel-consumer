@@ -19,11 +19,11 @@ import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * The end-to-end claim, and the first test written here: a two-route definition, unaltered from the shape a
- * broker would run, consumes generated records with no broker anywhere.
+ * broker would run, consumes driven records with no broker anywhere.
  *
  * <h2>Both halves of that claim, in one place</h2>
  * <b>The plumbing this module owns</b> - the feeds, encoding, offset seeding, assignment, pacing, the bound, the close -
- * shows up as generated records consumed and their offsets committed.
+ * shows up as driven records consumed and their offsets committed.
  * <p>
  * <b>And the dispatch above it</b>: each route's function ran, on its OWN topic's records, decoded into its own
  * type. That assertion was left for later when this test was first written, because the facade's dispatching
@@ -84,9 +84,9 @@ class SandboxSmokeTest {
             instance.awaitShutdown();
         }
 
-        assertThat(sandbox.generatedRecords()).isEqualTo(RECORD_BOUND);
+        assertThat(sandbox.drivenRecords()).isEqualTo(RECORD_BOUND);
         assertWithMessage("the driver reads the definition, so a topic no route claims is a topic nothing is "
-                + "generated for")
+                + "driven for")
                 .that(sandbox.consumer().publishedCounts().keySet())
                 .containsExactly(ORDERS_0, DISPATCHES_0);
         // ...and the key set alone says only that, so each topic's count is asserted separately.
@@ -94,7 +94,7 @@ class SandboxSmokeTest {
         assertThat(sandbox.consumer().publishedCounts().get(DISPATCHES_0)).isGreaterThan(0L);
 
         long committed = totalCommittedOffsets(sandbox);
-        assertWithMessage("every generated record should have been consumed and its offset committed; the "
+        assertWithMessage("every driven record should have been consumed and its offset committed; the "
                 + "sandbox published %s", sandbox.consumer().publishedCounts())
                 .that(committed).isEqualTo(RECORD_BOUND);
 

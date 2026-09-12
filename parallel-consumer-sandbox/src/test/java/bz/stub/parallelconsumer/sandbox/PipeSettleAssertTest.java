@@ -23,19 +23,19 @@ import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * The sandbox's front door: the caller publishes, waits for the run to settle, and asserts - all from its own
+ * The sandbox's front door: the caller pipes records in, waits for the run to settle, and asserts - all from its own
  * thread, inside one try-with-resources.
  *
  * <h2>Why this is the primary shape and the driver is the convenience</h2>
  * A test knows what it wants the instance to see. Handing it a rate and a stopping rule and then asserting on
  * whatever came out is a longer way round, and it makes every assertion a statement about a population rather
- * than about a record. So {@code publish} and {@code awaitSettled} are the pair, and the driver stays for the
+ * than about a record. So {@code pipe} and {@code awaitSettled} are the pair, and the driver stays for the
  * cases that really are about volume: a soak, and a demo.
  *
  * <h2>Why there is a settle at all</h2>
  * The broker-free drivers of the stream-processing libraries users compare us with pipe a record and process it
  * on the caller's thread, so an assertion on the next line is already safe. This engine is concurrent by
- * construction - polled on one thread, dispatched on a worker, committed on the control thread - so a publish
+ * construction - polled on one thread, dispatched on a worker, committed on the control thread - so a pipe call
  * that returned would tell a test nothing at all. That is what {@code awaitSettled} is for, and it is the whole
  * difference between the two shapes.
  *
@@ -47,7 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * vocabulary is refused on a sandbox nothing is driving.
  */
 @Timeout(60)
-class PublishSettleAssertTest {
+class PipeSettleAssertTest {
 
     private static final String ORDERS_TOPIC = "orders";
 
@@ -67,7 +67,7 @@ class PublishSettleAssertTest {
     private static final Duration IMPATIENT = Duration.ofSeconds(2);
 
     @Test
-    void aDefinitionConsumesTheRecordsTheCallerPublishedAndCommitsThem() {
+    void aDefinitionConsumesTheRecordsTheCallerPipedAndCommitsThem() {
         ConcurrentLinkedQueue<String> seen = new ConcurrentLinkedQueue<>();
         ParallelConsumerDefinition definition = SandboxFixtures.definition();
         definition.string(ORDERS_TOPIC).process(context -> {
@@ -77,9 +77,9 @@ class PublishSettleAssertTest {
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
         try (ParallelConsumerInstance instance = definition.start(sandbox)) {
-            assertThat(sandbox.publish(ORDERS_TOPIC, "cust-1", "first")).isEqualTo(0L);
-            assertThat(sandbox.publish(ORDERS_TOPIC, "cust-2", "second")).isEqualTo(1L);
-            assertThat(sandbox.publish(ORDERS_TOPIC, "cust-1", "third")).isEqualTo(2L);
+            assertThat(sandbox.pipe(ORDERS_TOPIC, "cust-1", "first")).isEqualTo(0L);
+            assertThat(sandbox.pipe(ORDERS_TOPIC, "cust-2", "second")).isEqualTo(1L);
+            assertThat(sandbox.pipe(ORDERS_TOPIC, "cust-1", "third")).isEqualTo(2L);
 
             sandbox.awaitSettled();
 
@@ -99,7 +99,7 @@ class PublishSettleAssertTest {
      * consumer holds records of the instance's own types, so the function receives the very object published.
      */
     @Test
-    void aClassicInstanceConsumesTheRecordsTheCallerPublishedAndCommitsThem() {
+    void aClassicInstanceConsumesTheRecordsTheCallerPipedAndCommitsThem() {
         ConcurrentLinkedQueue<String> seen = new ConcurrentLinkedQueue<>();
         Sandbox sandbox = Sandbox.builder().handPublished().build();
 
@@ -115,8 +115,8 @@ class PublishSettleAssertTest {
                 // listener to assign to.
                 classic.assignAfterSeeding();
 
-                assertThat(classic.publish(ORDERS_TOPIC, "cust-1", "first")).isEqualTo(0L);
-                assertThat(classic.publish(ORDERS_TOPIC, "cust-2", "second")).isEqualTo(1L);
+                assertThat(classic.pipe(ORDERS_TOPIC, "cust-1", "first")).isEqualTo(0L);
+                assertThat(classic.pipe(ORDERS_TOPIC, "cust-2", "second")).isEqualTo(1L);
 
                 classic.awaitSettled();
 
@@ -132,7 +132,7 @@ class PublishSettleAssertTest {
 
     /**
      * A settle with nothing outstanding returns on its first read of the accounting rather than waiting for
-     * anything, which is what makes it cheap enough to call after every publish rather than once at the end.
+     * anything, which is what makes it cheap enough to call after every pipe rather than once at the end.
      */
     @Test
     void aSettleWithNothingOutstandingReturnsWithoutWaiting() {
@@ -142,7 +142,7 @@ class PublishSettleAssertTest {
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
         try (ParallelConsumerInstance ignoredInstance = definition.start(sandbox)) {
-            var ignoredOffset = sandbox.publish(ORDERS_TOPIC, "cust-1", "first");
+            var ignoredOffset = sandbox.pipe(ORDERS_TOPIC, "cust-1", "first");
             sandbox.awaitSettled();
 
             // A budget nothing could be waited out in: only a sandbox that is already settled can satisfy this,
@@ -173,7 +173,7 @@ class PublishSettleAssertTest {
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
         try (ParallelConsumerInstance instance = definition.start(sandbox)) {
-            var ignoredOffset = sandbox.publish(ORDERS_TOPIC, "cust-1", "first");
+            var ignoredOffset = sandbox.pipe(ORDERS_TOPIC, "cust-1", "first");
 
             sandbox.awaitSettled();
 
@@ -210,7 +210,7 @@ class PublishSettleAssertTest {
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
         try (ParallelConsumerInstance instance = definition.start(sandbox)) {
-            var ignoredOffset = sandbox.publish(ORDERS_TOPIC, "cust-1", "first");
+            var ignoredOffset = sandbox.pipe(ORDERS_TOPIC, "cust-1", "first");
 
             IllegalStateException refusal = assertThrows(IllegalStateException.class, sandbox::awaitSettled);
 
@@ -239,7 +239,7 @@ class PublishSettleAssertTest {
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
         try (ParallelConsumerInstance ignoredInstance = definition.start(sandbox)) {
-            var ignoredOffset = sandbox.publish(ORDERS_TOPIC, "cust-1", "first");
+            var ignoredOffset = sandbox.pipe(ORDERS_TOPIC, "cust-1", "first");
 
             IllegalStateException refusal =
                     assertThrows(IllegalStateException.class, () -> sandbox.awaitSettled(IMPATIENT));
@@ -252,14 +252,14 @@ class PublishSettleAssertTest {
     }
 
     @Test
-    void publishingToATopicNoRouteClaimsIsRefusedNamingTheOnesThatAreRouted() {
+    void pipingToATopicNoRouteClaimsIsRefusedNamingTheOnesThatAreRouted() {
         ParallelConsumerDefinition definition = SandboxFixtures.definition();
         definition.string(ORDERS_TOPIC).process(context -> Outcome.succeeded());
 
         Sandbox sandbox = Sandbox.builder().handPublished().build();
         try (ParallelConsumerInstance ignoredInstance = definition.start(sandbox)) {
             IllegalArgumentException refusal = assertThrows(IllegalArgumentException.class,
-                    () -> sandbox.publish("parcel-scans", "cust-1", "first"));
+                    () -> sandbox.pipe("parcel-scans", "cust-1", "first"));
 
             assertWithMessage("a record published to an unrouted topic would never be delivered, and a silent "
                     + "publish would read as a function that never ran")
@@ -268,11 +268,11 @@ class PublishSettleAssertTest {
     }
 
     @Test
-    void publishingBeforeTheDefinitionHasStartedIsRefusedRatherThanFailingOnANullConsumer() {
+    void pipingBeforeTheDefinitionHasStartedIsRefusedRatherThanFailingOnANullConsumer() {
         Sandbox sandbox = Sandbox.builder().handPublished().build();
 
         IllegalStateException refusal = assertThrows(IllegalStateException.class,
-                () -> sandbox.publish(ORDERS_TOPIC, "cust-1", "first"));
+                () -> sandbox.pipe(ORDERS_TOPIC, "cust-1", "first"));
 
         assertThat(refusal).hasMessageThat().contains("has not been started");
     }

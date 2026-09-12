@@ -44,7 +44,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *
  * <h2>Key ordering, and why the key pool is not cosmetic</h2>
  * A parked record holds its key under key ordering (R11), so a second record on the same key would queue behind it
- * and never be accounted for at all. A key each models a customer each, and is what makes every generated scan
+ * and never be accounted for at all. A key each models a customer each, and is what makes every driven scan
  * reach its own park rather than the first one blocking the rest.
  */
 @Timeout(120)
@@ -106,7 +106,7 @@ class ParkedRunBoundTest {
                 + "accounted for by its commit, the other by its parked records")
                 .that(SandboxFixtures.highestCommittedOffset(sandbox, new TopicPartition(ORDERS, 0)))
                 .isGreaterThan(0L);
-        assertThat(sandbox.generatedRecords()).isEqualTo(RECORDS);
+        assertThat(sandbox.drivenRecords()).isEqualTo(RECORDS);
 
         instance.close();
     }

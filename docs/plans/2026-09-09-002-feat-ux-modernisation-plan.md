@@ -996,6 +996,19 @@ the shipped module differs from it, and the vocabulary to read it with.**
   anticipated ("the generator can be replaced by hand-written records"). It is `Sandbox.builder().handPublished()`,
   `Sandbox#publish` and `Sandbox#awaitSettled`, with the same pair on `ClassicSandbox`. The driver's own behaviour is
   unchanged.
+- **Annotated 2026-09-12, owner-directed: the sandbox's verbs are now the ones users already know from the
+  broker-free test drivers of the stream-processing libraries users compare us with (KTD16).** The bullet above
+  names `Sandbox#publish`; it is `Sandbox#pipe` from here on. Four renames, and the text above is left as it was:
+  `publish` becomes **`pipe`** - flat, taking a topic, a key and a value, rather than through a per-topic handle,
+  because the route already declared both halves of its format, so a handle would carry nothing the argument list
+  does not; the no-argument `producer()` accessor becomes **`readRecords()`**, reading what came out as the
+  counterpart of piping something in; `ClassicSandbox#startGenerating` becomes **`startDriving`**, the type it
+  starts being `RecordDriver` and "generating" naming a concept the annotation above retired; and
+  `generatedRecords()` becomes **`drivenRecords()`**, because it counts what the driver put in and the old name
+  also read as the consumer's own published-record accounting. **`awaitSettled` keeps its name** - it is the one
+  divergence KTD16 licenses, our engine being concurrent where theirs is single-threaded, and that reasoning is
+  recorded above. Renamed outright with no deprecated delegates, per KD15: the module has never shipped, so
+  nothing outside this repository can be calling it.
 - **The hydration ships as its own pull request above this one, and the driver takes a function instead.** Point 2's
   first half, point 5, and this unit's Instancio/Datafaker/Avro dependency set - with the bytecode-level pinning the
   Java 8 release target needed, which the Files and Risks entries below describe - move to `feat/504-sandbox-hydration`.

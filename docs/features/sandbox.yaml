@@ -13,7 +13,8 @@ release_assumptions:
   - The module is first published in 0.6.0.0; the record is conditional until that release is cut.
   - It builds at the reactor's Java 8 release target with no third-party dependencies of its own; what a record contains comes from a function the caller supplies.
 summary: >-
-  Run a Parallel Consumer definition - fluent or classic - against records it generates itself, with no broker, no
+  Run a Parallel Consumer definition - fluent or classic - against records piped in by the caller or driven by the
+  module itself, with no broker, no
   Docker and no test environment: the same engine and the same definition, with the Kafka clients replaced.
 use_this_when:
   - You want to see a definition process real-looking records before provisioning a cluster.
@@ -38,7 +39,7 @@ boundaries:
     topic. The sandbox has to encode what it publishes with the same format the route decodes it with.
   - Protobuf message types are refused when their first record is generated. There is no filler for one in this
     version; supply records by hand for such a route.
-  - The generated data is realistic in shape, not in meaning. Field values are chosen by field name and type, so a
+  - The hydrated data is realistic in shape, not in meaning. Field values are chosen by field name and type, so a
     definition whose behaviour depends on the relationships between fields needs records of its own.
   - A seed makes a run reproducible; without one, two runs differ.
 validation:

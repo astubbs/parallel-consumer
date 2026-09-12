@@ -16,10 +16,10 @@ import lombok.NoArgsConstructor;
  * produces - but a quickstart that needs a {@code @JsonCreator} before it runs is teaching Jackson rather than
  * Parallel Consumer.
  * <p>
- * <b>The field names are chosen, not arbitrary.</b> The sandbox's generator fills a value by field <em>name</em>,
+ * <b>The field names are chosen, not arbitrary.</b> The sandbox's hydration fills a value by field <em>name</em>,
  * so {@code status} arrives as one of the parcel statuses it knows, {@code parcelCount} as a plausible small
  * quantity and {@code destinationCity} as a city - which is what lets the quickstart's filtered outcome fire on
- * generated data rather than sit as a branch nothing ever takes.
+ * hydrated data rather than sit as a branch nothing ever takes.
  *
  * @see FluentQuickstartApp
  */

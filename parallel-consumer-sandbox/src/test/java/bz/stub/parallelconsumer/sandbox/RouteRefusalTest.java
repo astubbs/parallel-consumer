@@ -78,7 +78,7 @@ class RouteRefusalTest {
             instance.awaitShutdown();
         }
 
-        assertThat(sandbox.generatedRecords()).isEqualTo(5);
+        assertThat(sandbox.drivenRecords()).isEqualTo(5);
     }
 
     /**
@@ -115,24 +115,24 @@ class RouteRefusalTest {
             assertThat(told.awaitBound(Duration.ofSeconds(30))).isTrue();
             instance.awaitShutdown();
         }
-        assertThat(told.generatedRecords()).isEqualTo(3);
+        assertThat(told.drivenRecords()).isEqualTo(3);
     }
 
     /**
      * The same route on a hand-published sandbox is <b>not</b> refused: nothing is driving it, so nothing needs to
-     * know what a record contains until the caller says, by publishing one.
+     * know what a record contains until the caller says, by piping one in.
      */
     @Test
     void aHandPublishedSandboxNeedsNoValueFunctionAtAll() {
         Sandbox handPublished = Sandbox.builder().handPublished().build();
 
         try (ParallelConsumerInstance instance = untypedRoute().start(handPublished)) {
-            var ignoredOffset = handPublished.publish("legacy", "cust-1", "scan-1");
+            var ignoredOffset = handPublished.pipe("legacy", "cust-1", "scan-1");
             handPublished.awaitSettled();
             assertThat(instance.parkedAllTopics().count()).isEqualTo(0);
         }
         assertWithMessage("the driver published nothing, because there is no driver")
-                .that(handPublished.generatedRecords()).isEqualTo(0);
+                .that(handPublished.drivenRecords()).isEqualTo(0);
     }
 
     /**
