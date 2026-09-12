@@ -56,7 +56,7 @@ class ParkedViewOnTheInstanceTest extends AbstractFluentEngineTest {
     }
 
     private ParallelConsumerDefinition definitionThatParksEverything(String... topics) {
-        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props()).withDefaultOrdering(ProcessingOrder.UNORDERED);
         for (String topic : topics) {
             pc.string(topic)
                     .retryLimit(0)
@@ -197,7 +197,7 @@ class ParkedViewOnTheInstanceTest extends AbstractFluentEngineTest {
      */
     @Test
     void revokingAPartitionEmptiesItsParkedViewWithNothingHavingToClearIt() {
-        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props()).withDefaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))

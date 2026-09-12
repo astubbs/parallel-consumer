@@ -50,13 +50,14 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * poll flow with no producer (R4, KTD2).
  *
  * <h2>Instance-wide settings and per-route defaults are spelled apart</h2>
- * An instance-wide setting is plain - {@link #commitMode} - because the engine has one consumer, one commit and one
- * transaction, so those are properties of the clients rather than of the work. So are {@link #closePath}, which is
- * how this instance shuts down whoever asked it to, and {@link #meterRegistry}, which is where its meters go.
- * Everything else is a per-route value
- * with an instance default, and those carry a {@code default} prefix: {@link #defaultRetryLimit},
- * {@link #defaultConcurrency}, {@link #defaultAfterRetries}. A route that declares its own overrides its copy and
- * nobody else's (KD11, R6).
+ * Every setting on this class carries a {@code with} prefix, so the settings read as one family (KD16). An
+ * instance-wide setting stops there - {@link #withCommitMode} - because the engine has one consumer, one commit
+ * and one transaction, so those are properties of the clients rather than of the work. So are
+ * {@link #withClosePath}, which is how this instance shuts down whoever asked it to, and {@link #withMetrics},
+ * which is where its meters go. Everything else is a per-route value with an instance default, and those keep
+ * {@code default} inside the name, after the prefix: {@link #withDefaultRetryLimit},
+ * {@link #withDefaultConcurrency}, {@link #withDefaultAfterRetries}. A route that declares its own overrides its
+ * copy and nobody else's (KD11, R6).
  *
  * <h2>What this class is, and what it delegates</h2>
  * It is the fluent surface and the assembly: the setters, the route helpers, {@link #start} and the
@@ -188,9 +189,20 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * Instance-wide, because the engine has one consumer: one offset commit per group, and under the transactional
      * mode one producer's transaction around it (KD11).
      */
-    public ParallelConsumerDefinition commitMode(CommitMode commitMode) {
+    public ParallelConsumerDefinition withCommitMode(CommitMode commitMode) {
         this.commitMode = Objects.requireNonNull(commitMode, "A commit mode must be supplied");
         return this;
+    }
+
+    /**
+     * Superseded by {@link #withCommitMode}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withCommitMode(CommitMode)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition commitMode(CommitMode commitMode) {
+        return withCommitMode(commitMode);
     }
 
     /**
@@ -200,9 +212,20 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * pass an argument - and because an instance having two answers to "what happens to the backlog", one for its
      * caller and one for itself, is a difference nobody would predict correctly (KTD6).
      */
-    public ParallelConsumerDefinition whenClosing(ClosePath path) {
+    public ParallelConsumerDefinition withClosePath(ClosePath path) {
         this.closePath = Objects.requireNonNull(path, "A close path must be supplied");
         return this;
+    }
+
+    /**
+     * Superseded by {@link #withClosePath}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16), and this one names the {@link ClosePath} it takes rather than the sentence it completed. This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withClosePath(ClosePath)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition whenClosing(ClosePath path) {
+        return withClosePath(path);
     }
 
     /**
@@ -217,9 +240,20 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * half-started - which is not a state this API has. A route that may legitimately be absent is a definition
      * that declares {@link MissingTopic#IGNORE} and reads its route's parked view, not a per-route flag.
      */
-    public ParallelConsumerDefinition whenTopicMissing(MissingTopic policy) {
+    public ParallelConsumerDefinition withMissingTopicPolicy(MissingTopic policy) {
         this.whenTopicMissing = Objects.requireNonNull(policy, "A missing-topic policy must be supplied");
         return this;
+    }
+
+    /**
+     * Superseded by {@link #withMissingTopicPolicy}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16), and this one names the {@link MissingTopic} policy it takes rather than the sentence it completed. This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withMissingTopicPolicy(MissingTopic)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition whenTopicMissing(MissingTopic policy) {
+        return withMissingTopicPolicy(policy);
     }
 
     /**
@@ -230,10 +264,21 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * meter, under the {@code routes} subsystem, and are removed when the instance closes. The live parked figures
      * are the engine's, gauged per partition under the {@code partitions} subsystem.
      */
-    public ParallelConsumerDefinition meterRegistry(MeterRegistry registry) {
+    public ParallelConsumerDefinition withMetrics(MeterRegistry registry) {
         Objects.requireNonNull(registry, "A meter registry must be supplied");
         options.meterRegistry(registry);
         return this;
+    }
+
+    /**
+     * Superseded by {@link #withMetrics}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16), and this one names what it turns on rather than the type it happens to take (R19). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withMetrics(MeterRegistry)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition meterRegistry(MeterRegistry registry) {
+        return withMetrics(registry);
     }
 
     // ---------------------------------------------------------------- per-route defaults
@@ -242,18 +287,29 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * The ordering guarantee every route copies. Per-route ordering needs a change at the engine's shard-key seam
      * and is a later milestone, so in this version it is the instance default and nothing else (R6).
      */
-    public ParallelConsumerDefinition defaultOrdering(ProcessingOrder ordering) {
+    public ParallelConsumerDefinition withDefaultOrdering(ProcessingOrder ordering) {
         defaults.ordering(Objects.requireNonNull(ordering, "An ordering must be supplied"));
         return this;
+    }
+
+    /**
+     * Superseded by {@link #withDefaultOrdering}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withDefaultOrdering(ProcessingOrder)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition defaultOrdering(ProcessingOrder ordering) {
+        return withDefaultOrdering(ordering);
     }
 
     /**
      * The admission target every route copies: how many of its records may be in flight at once. Routes do not
      * compete for one shared limit, so the engine's total admission is the sum of the routes' targets (R23, KD6).
      */
-    public ParallelConsumerDefinition defaultConcurrency(int limit) {
+    public ParallelConsumerDefinition withDefaultConcurrency(int limit) {
         if (limit < 1) {
-            throw new IllegalArgumentException(msg("defaultConcurrency ({}) must be at least one - it is each "
+            throw new IllegalArgumentException(msg("withDefaultConcurrency ({}) must be at least one - it is each "
                     + "route's admission target", limit));
         }
         defaults.concurrency(limit);
@@ -261,43 +317,98 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
+     * Superseded by {@link #withDefaultConcurrency}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withDefaultConcurrency(int)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition defaultConcurrency(int limit) {
+        return withDefaultConcurrency(limit);
+    }
+
+    /**
      * How many attempts after the first every route allows before its records park (R10).
      */
-    public ParallelConsumerDefinition defaultRetryLimit(int attempts) {
+    public ParallelConsumerDefinition withDefaultRetryLimit(int attempts) {
         if (attempts < 0) {
-            throw new IllegalArgumentException(msg("defaultRetryLimit ({}) cannot be negative - it counts the "
-                    + "attempts after the first; use defaultRetryForever() to ask for unbounded retries", attempts));
+            throw new IllegalArgumentException(msg("withDefaultRetryLimit ({}) cannot be negative - it counts the "
+                    + "attempts after the first; use withDefaultRetryForever() to ask for unbounded retries", attempts));
         }
         defaults.retryLimit(OptionalInt.of(attempts));
         return this;
     }
 
     /**
+     * Superseded by {@link #withDefaultRetryLimit}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withDefaultRetryLimit(int)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition defaultRetryLimit(int attempts) {
+        return withDefaultRetryLimit(attempts);
+    }
+
+    /**
      * Retry forever, as the classic API always has. Opt-in on purpose (R10).
      */
-    public ParallelConsumerDefinition defaultRetryForever() {
+    public ParallelConsumerDefinition withDefaultRetryForever() {
         defaults.retryLimit(OptionalInt.empty());
         return this;
     }
 
     /**
+     * Superseded by {@link #withDefaultRetryForever}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withDefaultRetryForever()}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition defaultRetryForever() {
+        return withDefaultRetryForever();
+    }
+
+    /**
      * How long a failed record waits before its next attempt, on every route that declares no delay of its own.
      */
-    public ParallelConsumerDefinition defaultRetryDelay(Duration delay) {
+    public ParallelConsumerDefinition withDefaultRetryDelay(Duration delay) {
         Objects.requireNonNull(delay, "A retry delay must be supplied");
         if (delay.isNegative()) {
-            throw new IllegalArgumentException(msg("defaultRetryDelay ({}) cannot be negative", delay));
+            throw new IllegalArgumentException(msg("withDefaultRetryDelay ({}) cannot be negative", delay));
         }
         defaults.retryDelay(delay);
         return this;
     }
 
     /**
+     * Superseded by {@link #withDefaultRetryDelay}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withDefaultRetryDelay(Duration)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition defaultRetryDelay(Duration delay) {
+        return withDefaultRetryDelay(delay);
+    }
+
+    /**
      * What happens to a record that runs out of attempts, on every route that declares nothing of its own (R27).
      */
-    public ParallelConsumerDefinition defaultAfterRetries(AfterRetries policy) {
+    public ParallelConsumerDefinition withDefaultAfterRetries(AfterRetries policy) {
         defaults.afterRetries(Objects.requireNonNull(policy, "An after-retries policy must be supplied"));
         return this;
+    }
+
+    /**
+     * Superseded by {@link #withDefaultAfterRetries}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withDefaultAfterRetries(AfterRetries)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition defaultAfterRetries(AfterRetries policy) {
+        return withDefaultAfterRetries(policy);
     }
 
     /**
@@ -307,9 +418,20 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * instance default cannot know them. Declare it on a route with {@link Route#onParked} to see that route's own
      * types.
      */
-    public ParallelConsumerDefinition defaultOnParked(ParkObserver<Object, Object> observer) {
+    public ParallelConsumerDefinition withDefaultOnParked(ParkObserver<Object, Object> observer) {
         defaults.parkObserver(Objects.requireNonNull(observer, "A park observer must be supplied"));
         return this;
+    }
+
+    /**
+     * Superseded by {@link #withDefaultOnParked}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withDefaultOnParked(ParkObserver)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition defaultOnParked(ParkObserver<Object, Object> observer) {
+        return withDefaultOnParked(observer);
     }
 
     // ---------------------------------------------------------------- pre-built clients (Java binding only)
@@ -325,7 +447,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * rather than retrying (KTD3, R1). It must also be unsubscribed: the engine manages the subscription and refuses
      * a consumer that is not clean.
      */
-    public ParallelConsumerDefinition consumer(Consumer<byte[], byte[]> consumer) {
+    public ParallelConsumerDefinition withConsumer(Consumer<byte[], byte[]> consumer) {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
         this.preBuiltConsumerDescription = RawBytesConsumerFaultException.describe(consumer);
         this.preBuiltConsumerSupplied = true;
@@ -334,17 +456,39 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * Run against a producer you built yourself. Sugar for the Java binding, as {@link #consumer} is.
+     * Superseded by {@link #withConsumer}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withConsumer(Consumer)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition consumer(Consumer<byte[], byte[]> consumer) {
+        return withConsumer(consumer);
+    }
+
+    /**
+     * Run against a producer you built yourself. Sugar for the Java binding, as {@link #withConsumer} is.
      * <p>
      * <b>A supplied producer forgoes producer recovery</b> (astubbs#410): recovery rebuilds the producer from its
      * configuration, and an instance handed a finished producer has no configuration to rebuild from. Leave this out
      * and the definition's properties build one that can recover (R1).
      */
-    public ParallelConsumerDefinition producer(Producer<byte[], byte[]> producer) {
+    public ParallelConsumerDefinition withProducer(Producer<byte[], byte[]> producer) {
         Objects.requireNonNull(producer, "A producer must be supplied");
         this.preBuiltProducerSupplied = true;
         options.producer(producer);
         return this;
+    }
+
+    /**
+     * Superseded by {@link #withProducer}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withProducer(Producer)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition producer(Producer<byte[], byte[]> producer) {
+        return withProducer(producer);
     }
 
     // ---------------------------------------------------------------- routes
@@ -559,9 +703,20 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * Run this listener on every rebalance (KTD2). It is handed to the engine as the classic API's own listener is,
      * so it sees the same callbacks in the same order and a throw from it propagates exactly as it does there.
      */
-    public ParallelConsumerDefinition rebalanceListener(ConsumerRebalanceListener listener) {
+    public ParallelConsumerDefinition withRebalanceListener(ConsumerRebalanceListener listener) {
         this.usersRebalanceListener = Objects.requireNonNull(listener, "A rebalance listener must be supplied");
         return this;
+    }
+
+    /**
+     * Superseded by {@link #withRebalanceListener}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
+     * already built against the old name breaks (KD15).
+     *
+     * @deprecated use {@link #withRebalanceListener(ConsumerRebalanceListener)}
+     */
+    @Deprecated
+    public ParallelConsumerDefinition rebalanceListener(ConsumerRebalanceListener listener) {
+        return withRebalanceListener(listener);
     }
 
     /**

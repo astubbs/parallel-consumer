@@ -49,7 +49,7 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
 
     @Test
     void aDefinitionWithNothingToProduceOpensNoProducerAndAsksForNone() {
-        var pc = ParallelConsumer.connect(props()).commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS);
+        var pc = ParallelConsumer.connect(props()).withCommitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS);
         pc.string("orders").process(context -> Outcome.succeeded());
 
         assertThat(pc.requiresProducer()).isFalse();
@@ -76,7 +76,7 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
         Properties properties = props();
         properties.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "client-construction-test");
         var pc = new ParallelConsumerDefinition(properties)
-                .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+                .withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
         pc.string("orders").process(context -> Outcome.succeeded());
 
         assertThat(pc.requiresProducer()).isTrue();
@@ -114,7 +114,7 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
      */
     @Test
     void theEnginesAdmissionTargetIsTheSumOfTheRoutesTargets() {
-        var pc = ParallelConsumer.connect(props()).defaultConcurrency(10);
+        var pc = ParallelConsumer.connect(props()).withDefaultConcurrency(10);
         pc.string("orders").process(context -> Outcome.succeeded());
         pc.string("audit").concurrency(100).process(context -> Outcome.succeeded());
 
@@ -124,7 +124,7 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
     @Test
     void aPreBuiltConsumerIsUsedInsteadOfAskingTheRuntime() {
         var pc = ParallelConsumer.connect(props())
-                .consumer(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST));
+                .withConsumer(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST));
         pc.string("orders").process(context -> Outcome.succeeded());
 
         ParallelConsumerOptions<byte[], byte[]> options = pc.buildOptions(runtime);
@@ -151,7 +151,7 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
         // The engine checks the group id first, so without this the test would prove that check instead.
         Mockito.when(subscribed.groupMetadata())
                 .thenReturn(new ConsumerGroupMetadata("client-construction-test"));
-        var pc = ParallelConsumer.connect(props()).consumer(subscribed);
+        var pc = ParallelConsumer.connect(props()).withConsumer(subscribed);
         pc.string("orders").process(context -> Outcome.succeeded());
 
         var thrown = assertThrows(IllegalStateException.class, () -> pc.start(runtime));

@@ -78,7 +78,7 @@ public class FluentQuickstartApp {
         kafkaProperties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
 
         ParallelConsumerDefinition pc = ParallelConsumer.connect(kafkaProperties) // <2>
-                .defaultOrdering(KEY);
+                .withDefaultOrdering(KEY);
 
         pc.json("orders", Order.class) // <3>
                 .process(context -> {

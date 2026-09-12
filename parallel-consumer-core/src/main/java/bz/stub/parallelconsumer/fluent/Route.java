@@ -169,7 +169,7 @@ public final class Route<K, V, PK, PV> {
     @SuppressWarnings("DoNotCallSuggester")
     public Route<K, V, PK, PV> ordering(ProcessingOrder ordering) {
         throw new IllegalArgumentException(msg("ordering ({}) cannot be declared on topic {} in this version - "
-                        + "ordering is the instance default, declared with defaultOrdering(...) on the definition. "
+                        + "ordering is the instance default, declared as withDefaultOrdering(...) on the definition. "
                         + "Per-route ordering needs a change at the engine's shard-key seam and is a later "
                         + "milestone (R6).",
                 ordering, state.describeTopics()));
@@ -191,7 +191,7 @@ public final class Route<K, V, PK, PV> {
     @SuppressWarnings("DoNotCallSuggester")
     public Route<K, V, PK, PV> commitMode(CommitMode commitMode) {
         throw new IllegalArgumentException(msg("commitMode ({}) cannot be declared on topic {} - it is instance-wide, "
-                        + "declared with commitMode(...) on the definition: the engine has one consumer and one "
+                        + "declared as withCommitMode(...) on the definition: the engine has one consumer and one "
                         + "commit, so a per-route commit mode would be a second instance (KD11, R6)",
                 commitMode, state.describeTopics()));
     }

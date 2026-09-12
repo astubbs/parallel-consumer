@@ -239,9 +239,9 @@ class ParkedViewAndObserverTest extends AbstractFluentEngineTest {
         var toTheDefault = new CopyOnWriteArrayList<String>();
         var toTheRoute = new CopyOnWriteArrayList<String>();
         var pc = ParallelConsumer.connect(props())
-                .defaultRetryLimit(0)
-                .defaultRetryDelay(Duration.ofMillis(10))
-                .defaultOnParked((record, failure, attempts) -> toTheDefault.add(record.topic()));
+                .withDefaultRetryLimit(0)
+                .withDefaultRetryDelay(Duration.ofMillis(10))
+                .withDefaultOnParked((record, failure, attempts) -> toTheDefault.add(record.topic()));
         pc.string(TOPIC)
                 .onParked((record, failure, attempts) -> toTheRoute.add(record.topic()))
                 .process(context -> {

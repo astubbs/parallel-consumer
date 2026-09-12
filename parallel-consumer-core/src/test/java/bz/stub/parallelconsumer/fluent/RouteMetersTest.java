@@ -86,8 +86,8 @@ class RouteMetersTest extends AbstractFluentEngineTest {
     @Test
     void outcomeCountersCarryTheTopicAndTheOutcome() {
         var pc = ParallelConsumer.connect(props())
-                .meterRegistry(registry)
-                .defaultOrdering(ProcessingOrder.UNORDERED);
+                .withMetrics(registry)
+                .withDefaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))
@@ -128,8 +128,8 @@ class RouteMetersTest extends AbstractFluentEngineTest {
     @Test
     void everyRouteMeterIsGoneAfterTheInstanceCloses() {
         var pc = ParallelConsumer.connect(props())
-                .meterRegistry(registry)
-                .defaultOrdering(ProcessingOrder.UNORDERED);
+                .withMetrics(registry)
+                .withDefaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC)
                 .retryLimit(0)
                 .retryDelay(Duration.ofMillis(10))
@@ -183,7 +183,7 @@ class RouteMetersTest extends AbstractFluentEngineTest {
     @Test
     void aRouteWithNoAssignmentIsLoggedOnce() {
         var processed = new AtomicInteger();
-        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props()).withDefaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(TOPIC).process(context -> {
             processed.incrementAndGet();
             return Outcome.succeeded();
@@ -227,7 +227,7 @@ class RouteMetersTest extends AbstractFluentEngineTest {
      */
     @Test
     void theOnlyRouteIsReportedWhenTheInstanceIsAssignedNothingAtAll() {
-        var pc = ParallelConsumer.connect(props()).defaultOrdering(ProcessingOrder.UNORDERED);
+        var pc = ParallelConsumer.connect(props()).withDefaultOrdering(ProcessingOrder.UNORDERED);
         pc.string(UNASSIGNED_ONLY_TOPIC).process(context -> Outcome.succeeded());
 
         try (LogCapture logs = LogCapture.of(ParallelConsumerInstance.class, Level.WARN)) {

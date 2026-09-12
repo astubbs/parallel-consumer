@@ -183,7 +183,7 @@ final class DefinitionRules {
         if (idDeclared && !transactional) {
             throw new IllegalArgumentException(msg("{} is in the connection properties but the commit mode is {} - a "
                             + "transactional producer under a non-transactional commit mode never opens a "
-                            + "transaction. Declare commitMode({}) or remove the setting.",
+                            + "transaction. Declare withCommitMode({}) or remove the setting.",
                     ProducerConfig.TRANSACTIONAL_ID_CONFIG, commitMode,
                     CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER));
         }
@@ -220,7 +220,8 @@ final class DefinitionRules {
      * <p>
      * Checked per route and against what was actually <em>declared</em>, because either half may be declared at
      * either scope and all four pairings are the same mistake: retryForever() on the route or
-     * defaultRetryForever() on the instance, beside an afterRetries(...) on the route or a defaultAfterRetries(...)
+     * withDefaultRetryForever() on the instance, beside an afterRetries(...) on the route or a
+     * withDefaultAfterRetries(...)
      * on the instance. The refusal names the scope each half came from, so the author is pointed at the two calls
      * they wrote rather than at the route where the two happened to meet.
      * <p>
@@ -246,14 +247,14 @@ final class DefinitionRules {
                     route.describeTopics(),
                     route.declaresOwnRetryLimit()
                             ? "declares retryForever()"
-                            : "retries forever, from the instance's defaultRetryForever()",
+                            : "retries forever, from the instance's withDefaultRetryForever()",
                     ownPolicy
                             ? "declares an after-retries policy of its own"
-                            : "takes the instance's defaultAfterRetries(...)",
+                            : "takes the instance's withDefaultAfterRetries(...)",
                     route.declaresOwnRetryLimit()
                             ? "retryLimit(...) on this route instead"
-                            : "a retryLimit(...) on this route, or replace defaultRetryForever() with "
-                                    + "defaultRetryLimit(...)"));
+                            : "a retryLimit(...) on this route, or replace withDefaultRetryForever() with "
+                                    + "withDefaultRetryLimit(...)"));
         }
     }
 

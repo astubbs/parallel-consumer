@@ -53,7 +53,7 @@ class RawBytesConsumerFaultDispatchTest extends AbstractFluentEngineTest {
     @Test
     void theFirstRecordStopsTheInstanceAndTheHandlesAwaitSurfacesTheFault() {
         var ran = new AtomicInteger();
-        var pc = ParallelConsumer.connect(props()).consumer(asIfItWereRawBytes());
+        var pc = ParallelConsumer.connect(props()).withConsumer(asIfItWereRawBytes());
         pc.string(TOPIC)
                 .retryDelay(Duration.ofMillis(10))
                 .process(context -> {

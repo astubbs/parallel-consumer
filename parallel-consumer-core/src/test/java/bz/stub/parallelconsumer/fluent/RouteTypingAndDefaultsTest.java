@@ -120,10 +120,10 @@ class RouteTypingAndDefaultsTest {
     void everyPerRouteSettingIsACopyOfTheInstanceDefault() {
         var afterRetries = AfterRetries.park();
         var pc = define()
-                .defaultRetryLimit(7)
-                .defaultRetryDelay(Duration.ofSeconds(3))
-                .defaultConcurrency(9)
-                .defaultAfterRetries(afterRetries);
+                .withDefaultRetryLimit(7)
+                .withDefaultRetryDelay(Duration.ofSeconds(3))
+                .withDefaultConcurrency(9)
+                .withDefaultAfterRetries(afterRetries);
         pc.string("orders").process(context -> Outcome.succeeded());
         pc.string("audit").process(context -> Outcome.succeeded());
 
@@ -145,7 +145,7 @@ class RouteTypingAndDefaultsTest {
      */
     @Test
     void theStopReactionCopiesIntoEveryRouteAndARouteMayOverrideIt() {
-        var pc = define().defaultAfterRetries(AfterRetries.stop());
+        var pc = define().withDefaultAfterRetries(AfterRetries.stop());
         pc.string("orders").process(context -> Outcome.succeeded());
         pc.string("audit").afterRetries(AfterRetries.park()).process(context -> Outcome.succeeded());
 
@@ -155,7 +155,7 @@ class RouteTypingAndDefaultsTest {
 
     @Test
     void aRoutesOwnSettingOverridesOnlyItsOwnCopy() {
-        var pc = define().defaultRetryLimit(7).defaultConcurrency(9);
+        var pc = define().withDefaultRetryLimit(7).withDefaultConcurrency(9);
         pc.string("orders").retryLimit(2).concurrency(4).process(context -> Outcome.succeeded());
         pc.string("audit").process(context -> Outcome.succeeded());
 
@@ -171,7 +171,7 @@ class RouteTypingAndDefaultsTest {
      */
     @Test
     void unboundedRetriesAreOptInOnTheInstanceAndOnARoute() {
-        var pc = define().defaultRetryForever();
+        var pc = define().withDefaultRetryForever();
         pc.string("orders").process(context -> Outcome.succeeded());
         pc.string("audit").retryLimit(3).process(context -> Outcome.succeeded());
 
