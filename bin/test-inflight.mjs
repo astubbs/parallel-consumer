@@ -2613,9 +2613,15 @@ const CHECKS = [
         why: 'a typo is not a failure to run; the valid names, each as the command that would have worked, are the answer',
         run: async (binDir) => {
             const dir = docsFixture()
+            const repo = await import(pathToFileURL(join(binDir, 'lib', 'repo.mjs')).href)
             const area = invoke(binDir, ['docs', 'list', 'nowhere'], { cwd: dir })
             if (area.code !== 0 || !area.out.includes("no area named 'nowhere'")) return false
-            if (!['inflight', 'solutions', 'plans'].every((a) => area.out.includes(`bin/inflight.mjs docs list ${a}`))) return false
+            // DERIVED FROM THE AREA TABLE, never a list written here: an area missing from the
+            // refusal is a name an agent is told does not exist, and a hand-written list of three
+            // reddened for nothing when a fourth arrived.
+            const keys = repo.DOC_AREAS.map((a) => a.dir.split('/').pop())
+            if (keys.length < 2) return false // a list that cannot be incomplete proves nothing
+            if (!keys.every((a) => area.out.includes(`bin/inflight.mjs docs list ${a}`))) return false
             const group = invoke(binDir, ['docs', 'list', 'inflight', 'nowhere'], { cwd: dir })
             if (group.code !== 0 || !group.out.includes("no group named 'nowhere' in inflight")) return false
             if (!group.out.includes('bin/inflight.mjs docs list inflight crash')) return false
@@ -2807,6 +2813,37 @@ const CHECKS = [
         // The membership filter, restored: an area absent from the hand-kept order vanishes.
         mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
             "    ...shape.areas.filter((a) => !INDEX_AREA_ORDER.includes(a.key)),", ''),
+    },
+    {
+        id: 'a-record-missing-its-category-or-its-availability-block-is-reported-not-guessed',
+        why: 'every fixture record supplied both cleanly, so the fallbacks were unreached - and a schema that has moved on, or a record written to the wrong shape, is exactly when they run and exactly when a guess would be read as a fact',
+        run: async (binDir) => {
+            const sh = await docsShapeLib(binDir)
+            const F = 'docs/features'
+            const rec = (body) => `# Copyright (C) 2026 Antony Stubbs and contributors\n\nschema_version: 1\nkind: feature\n${body}`
+            // No `category:` at all, and no `availability:` at all: both report emptiness, which the
+            // shape renders as `uncategorised` and as no tail. Never a thrown error, and never a
+            // borrowed value - the rule classifyNote follows for a marker it does not recognise.
+            const bare = sh.classifyFeature(rec('title: x\n'), `${F}/x.yaml`, F)
+            if (bare.category !== '' || bare.status !== '' || bare.staged !== false) return false
+            // `availability:` present but a SCALAR, so there is no block to read a status out of.
+            const scalar = sh.classifyFeature(rec('category: processing\navailability: published\n'), `${F}/x.yaml`, F)
+            if (scalar.category !== 'processing' || scalar.status !== '') return false
+            // A nested `category:` must not answer for the record - the key is column-0 anchored.
+            const nested = sh.classifyFeature(rec('references:\n  - category: a link\n'), `${F}/x.yaml`, F)
+            if (nested.category !== '') return false
+            // Nor a `status:` outside the availability block, which is a word any block may use.
+            const stray = sh.classifyFeature(rec('milestones:\n  status: done\n'), `${F}/x.yaml`, F)
+            if (stray.status !== '') return false
+            // CRLF is a record like any other: the block regex has to tolerate the line ending.
+            const crlf = sh.classifyFeature(rec('category: processing\r\navailability:\r\n  status: planned\r\n'), `${F}/x.yaml`, F)
+            return crlf.category === 'processing' && crlf.status === 'planned'
+        },
+        // The fallbacks removed: a missing value becomes `undefined` rather than the empty string the
+        // shape is specified against, and `uncategorised` silently becomes the word "undefined".
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-shape.mjs'),
+            "    const status = /^[ \\t]+status:[ \\t]*(.*)$/m.exec(block)?.[1]?.trim() ?? ''",
+            "    const status = /^[ \\t]*status:[ \\t]*(.*)$/m.exec(text)?.[1]?.trim() ?? ''"),
     },
     {
         id: 'a-staged-record-is-not-tailed-with-the-status-it-declares',
