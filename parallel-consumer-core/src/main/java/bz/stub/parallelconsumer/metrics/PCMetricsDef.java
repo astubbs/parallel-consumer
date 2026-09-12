@@ -61,7 +61,10 @@ public enum PCMetricsDef {
     OFFSETS_ENCODING_TIME("offsets.encoding.time", "Time spend encoding offsets", PCMetricsSubsystem.OFFSET_ENCODER, TIMER),
     OFFSETS_ENCODING_USAGE("offsets.encoding.usage", "Offset encoding usage per encoding type", PCMetricsSubsystem.OFFSET_ENCODER, COUNTER, tag("codec", "BitSet|BitSetCompressed|BitSetV2Compressed|RunLength")),
     METADATA_SPACE_USED("metadata.space.used", "Ratio between offset metadata payload size and available space", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY),
-    PAYLOAD_RATIO_USED("payload.ratio.used", "Ratio between offset metadata payload size and offsets encoded", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY);
+    PAYLOAD_RATIO_USED("payload.ratio.used", "Ratio between offset metadata payload size and offsets encoded", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY),
+
+    PRODUCER_RECOVERIES("producer.recoveries", "Total number of times the transactional producer was replaced after the broker reported it invalid (fenced, stale epoch, expired producer id, lost generation), tagged by the condition that triggered it. Distinct from ordinary commit failures, which are retried on the same producer", PCMetricsSubsystem.PRODUCER_MANAGER, COUNTER, tag("condition", "exceptionSimpleName")),
+    PRODUCER_CONSECUTIVE_RECOVERIES("producer.consecutive.recoveries", "Producer recoveries since the last successful commit - non-zero for a moment after any recovery, rising while the instance is alive but not progressing", PCMetricsSubsystem.PRODUCER_MANAGER, GAUGE);
 
     public static final String PC_INSTANCE_TAG = "pcinstance";
 
@@ -187,7 +190,8 @@ public enum PCMetricsDef {
         SHARD_MANAGER("shardmanager"),
         WORK_MANAGER("workmanager"),
         BROKER_POLLER("poller"),
-        OFFSET_ENCODER("offsetencoder");
+        OFFSET_ENCODER("offsetencoder"),
+        PRODUCER_MANAGER("producer");
 
         private final String subsystemTag;
 
