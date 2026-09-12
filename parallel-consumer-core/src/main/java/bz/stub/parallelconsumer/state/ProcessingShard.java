@@ -257,6 +257,14 @@ public class ProcessingShard<K, V> {
         includeInSelection(failedWork);
     }
 
+    /**
+     * A delivery that never started - see {@link ShardManager#onAbandonedBeforeStarting}. The same re-inclusion a
+     * failure gets, without the retry queue, because nothing failed.
+     */
+    public void onAbandonedBeforeStarting(WorkContainer<?, ?> abandonedWork) {
+        includeInSelection(abandonedWork);
+    }
+
 
     public boolean isEmpty() {
         return workMap.isEmpty();
@@ -560,9 +568,15 @@ public class ProcessingShard<K, V> {
 
         logSlowWork(slowWork);
 
-        // Remove from retry queue as picked for submission to work pool - filter to only remove work containers that have
-        // previously failed - as retry queue won't have any that didn't previously fail.
-        retryQueue.removeAll(workTaken.stream().filter(WorkContainer::hasPreviouslyFailed).collect(Collectors.toList()));
+        // Remove from the retry queue as picked for submission to the work pool. The filter asks whether a
+        // hand-back has ever written the container a deadline, which is exactly what ShardManager.onFailure adds
+        // to the queue on.
+        //
+        // It used to ask hasPreviouslyFailed(), and that stopped being the same question when a hand-back gained
+        // notAnAttempt(): onFailure queues EVERY container it is handed, whether or not the hand-back counted as
+        // an attempt, so a zero-attempt container is in the queue and was not filtered out when it was re-taken -
+        // leaving it in the queue and in flight at once until purgeDepartedRetryEntries() collected it.
+        retryQueue.removeAll(workTaken.stream().filter(WorkContainer::hasRetryDeadline).collect(Collectors.toList()));
 
         return workTaken;
     }
@@ -579,7 +593,19 @@ public class ProcessingShard<K, V> {
         }
     }
 
+    /**
+     * A container the scan could not take, considered for the slow-work warning and counter.
+     * <p>
+     * <b>A parked record is skipped</b>, and that is not a cosmetic exclusion. "Slow" means work that should have
+     * moved and has not; a parked record is work the definition deliberately stopped, so counting it says an
+     * instance is struggling when it is doing exactly what it was told (R27, KTD14). Every parked record on a
+     * partition would otherwise be re-counted on every shard scan, which is a warning per pass for a set nobody is
+     * waiting on.
+     */
     private void addToSlowWorkMaybe(Set<WorkContainer<?, ?>> slowWork, WorkContainer<?, ?> workContainer) {
+        if (workContainer.isParked()) {
+            return;
+        }
         Duration timeInFlight = workContainer.getTimeInFlight();
         Duration slowThreshold = options.getThresholdForTimeSpendInQueueWarning();
         if (isGreaterThan(timeInFlight, slowThreshold)) {

@@ -487,7 +487,34 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         return dirties;
     }
 
-    private Map<TopicPartition, PartitionState<K, V>> getAssignedPartitions() {
+    /**
+     * The partitions this instance currently holds - every one it has state for, minus the ones a revocation
+     * removed.
+     * <p>
+     * Public so a caller that needs to know what is assigned reads it here rather than keeping its own copy in a
+     * rebalance listener, which is a second answer to a question this class already answers.
+     * <p>
+     * <b>Readable from any thread, and what that rests on.</b> The claim here used to be "read it from the control
+     * thread, as everything else that reads partition state does", and this file disproves it: {@code initMetrics()}
+     * calls this from two Micrometer gauge lambdas, so the {@code MeterRegistry}'s scrape thread has always read it.
+     * What makes that safe is the map, not a convention - {@code partitionStates} is a {@link ConcurrentHashMap}, its
+     * iteration never throws {@link java.util.ConcurrentModificationException}, and a revoked partition is
+     * <em>replaced</em> by {@link RemovedPartitionState} rather than removed, so the filter below has no null to
+     * dereference. The snapshot is weakly consistent: a rebalance concurrent with the walk may or may not be
+     * reflected, which is the honest guarantee for a question whose answer the broker can change at any moment.
+     * <p>
+     * <b>The values are LIVE {@link PartitionState} objects, not a read-only view</b>, and they carry public mutators
+     * - {@link PartitionState#fenceForRevocation()} among them, which would make the engine treat all of that
+     * partition's work as stale. Widening this to public widened an exposure rather than opening one: the same
+     * objects were already reachable through the pre-existing public {@link #getPartitionState(TopicPartition)} on
+     * this same public class. Whether this fork's public surface hands out live engine objects or projections of them
+     * is one question for the whole surface, tracked in
+     * {@code docs/inflight/core-public-surface-hands-out-live-engine-objects.md}; a caller outside the engine reads
+     * these and does not call them.
+     *
+     * @return an unmodifiable map of live partition state - unmodifiable in its entries, not in its values
+     */
+    public Map<TopicPartition, PartitionState<K, V>> getAssignedPartitions() {
         return Collections.unmodifiableMap(this.partitionStates.entrySet().stream()
                 .filter(e -> !e.getValue().isRemoved())
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));

@@ -303,22 +303,39 @@ export function numbersByValue({ cache = true, network = true } = {}) {
 }
 
 /**
- * The first `# ` heading of a blob - a note's own title, read without checking anything out.
+ * The first `# ` heading of a blob - a note's own title, read without checking anything out - or,
+ * for a YAML record, its `title:` key.
+ *
+ * THE PATH IS WHAT SAYS WHICH, and a caller that has one must pass it: a record's only `# ` line is
+ * its copyright comment, so the heading rule answered "Copyright (C) 2026 Antony Stubbs and
+ * contributors" for every version of every file in `docs/features/` - one wrong title, repeated,
+ * that reads as the real one. Null still means "this blob has no title", which is a finding the
+ * views print rather than an error.
  *
  * Memoised for the process, which is always safe: a blob SHA names its content, so the answer cannot
  * change. Without it the same title was re-forked once per branch that happened to carry the same
- * note - `note drift` on a busy note spent 361ms of 527ms in `sys`, almost all of it forking.
+ * note - `note drift` on a busy note spent 361ms of 527ms in `sys`, almost all of it forking. Keyed
+ * on the path as well, because the same content read as prose and as a record has two answers.
  */
 const titleCache = new Map()
-const titleOf = (content) => {
+const titleKey = (blob, path) => `${path ?? ''}\u0000${blob}`
+const titleOf = (content, path) => {
+    if (path && /\.ya?ml$/.test(path)) {
+        for (const l of lines(content)) {
+            const m = /^title:[ \t]*(.*)$/.exec(l)
+            if (m) return m[1].trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1') || null
+        }
+        return null
+    }
     for (const l of lines(content)) if (l.startsWith('# ')) return l.slice(2).trim()
     return null
 }
-export function blobTitle(blob) {
-    if (titleCache.has(blob)) return titleCache.get(blob)
+export function blobTitle(blob, path = null) {
+    const key = titleKey(blob, path)
+    if (titleCache.has(key)) return titleCache.get(key)
     const res = exec('git', ['cat-file', '-p', blob])
-    const title = res.ok ? titleOf(res.out) : null
-    titleCache.set(blob, title)
+    const title = res.ok ? titleOf(res.out, path) : null
+    titleCache.set(key, title)
     return title
 }
 
@@ -335,18 +352,23 @@ export function blobTitle(blob) {
  * cat-file failure into "these documents have no title" for the rest of the process; the map still
  * answers null for them, but the next call asks git again.
  *
- * @returns {Map<string, string|null>} blob -> title, null when the blob has no `# ` heading
+ * @param {{blob: string, path: string|null}[]} entries the blobs and the paths they were read at -
+ *   the path decides whether the title is a heading or a key, exactly as in `blobTitle`.
+ * @returns {Map<string, string|null>} blob -> title, null when the blob has no title of its kind
  */
-export function blobTitles(blobs) {
-    const wanted = [...new Set(blobs)]
-    const uncached = wanted.filter((b) => !titleCache.has(b))
+export function blobTitles(entries) {
+    const wanted = [...new Map(entries.map((e) => [titleKey(e.blob, e.path ?? null), e])).values()]
+    const uncached = wanted.filter((e) => !titleCache.has(titleKey(e.blob, e.path ?? null)))
     if (uncached.length > 0) {
-        const batch = blobContents(uncached)
+        const batch = blobContents(uncached.map((e) => e.blob))
         if (batch.ok) {
-            for (const b of uncached) titleCache.set(b, batch.contents.has(b) ? titleOf(batch.contents.get(b)) : null)
+            for (const e of uncached) {
+                const has = batch.contents.has(e.blob)
+                titleCache.set(titleKey(e.blob, e.path ?? null), has ? titleOf(batch.contents.get(e.blob), e.path ?? null) : null)
+            }
         }
     }
-    return new Map(wanted.map((b) => [b, titleCache.get(b) ?? null]))
+    return new Map(wanted.map((e) => [e.blob, titleCache.get(titleKey(e.blob, e.path ?? null)) ?? null]))
 }
 
 /**
@@ -416,16 +438,25 @@ export function addedSinceMergeBase(base, ref, path, blob) {
  * line. The header shows this instead of calling a version "newer", because content the baseline
  * never held is proof of knowledge and not of recency - the plan's "Divergence is the only claim".
  *
+ * A DATA RECORD HAS KEYS WHERE A DOCUMENT HAS HEADINGS, and reading one as the other produced the
+ * same wrong answer for every record in `docs/features/`: a YAML file's only `#` line is its
+ * copyright comment, so every version of every record reported `adds: "# Copyright (C) 2026 ..."` -
+ * a preview that cannot distinguish two versions is worse than none, because it looks like evidence.
+ * Top-level keys are the record's own table of contents, which is what a heading is; comment lines
+ * are excluded from the fallback line for the same reason the copyright header is not a title.
+ *
  * Null when there is nothing to say for a reason worth not hiding: the size lookup failed, or
  * there was no merge-base to diff against. Both render as absent, never as "adds nothing".
  */
-function previewOf(stat, blob) {
+function previewOf(stat, blob, path) {
     if (!stat || stat.diffFailed) return null
     const diff = blobDiffAddedLines(stat.newFile ? null : stat.against, blob)
     if (!diff.ok) return null
-    const added = diff.lines
+    const record = /\.ya?ml$/.test(path)
+    const added = record ? diff.lines.filter((l) => !/^\s*#/.test(l)) : diff.lines
     return {
-        headings: added.filter((l) => /^#{1,6}\s/.test(l)),
+        kind: record ? 'record' : 'document',
+        headings: added.filter((l) => (record ? /^[A-Za-z_][\w.-]*:/ : /^#{1,6}\s/).test(l)),
         firstLine: added.find((l) => l.trim().length > 0) ?? null,
     }
 }
@@ -475,7 +506,7 @@ export function branchFacts(ref, prs, base) {
         .filter((e) => !onBase.has(e.path))
         .sort((a, b) => a.path.localeCompare(b.path))
     for (const o of own) {
-        const title = blobTitle(o.blob)
+        const title = blobTitle(o.blob, o.path)
         if (title) return { ref, pr: null, theme: title, themeFrom: `note:${o.path}`, ownNotes: own.length }
     }
     return { ref, pr: null, theme: ref, themeFrom: 'branch-name' }
@@ -628,7 +659,8 @@ export function drift(path, {
 
     // ONE BATCH for every title the full tier will show (KTD16); the summary tier shows none.
     const titles = summary ? new Map()
-        : blobTitles([...(baseBlob ? [baseBlob] : []), ...divergent.map(([b]) => b), ...(all ? behind.map((b) => b.blob) : [])])
+        : blobTitles([...(baseBlob ? [baseBlob] : []), ...divergent.map(([b]) => b), ...(all ? behind.map((b) => b.blob) : [])]
+            .map((blob) => ({ blob, path })))
 
     const build = ([blob, refs]) => {
         const sorted = [...refs].sort()
@@ -650,7 +682,7 @@ export function drift(path, {
     const detailed = (cluster) => {
         if (summary) return cluster
         cluster.branches = cluster.refs.slice(0, maxBranchesPerCluster).map((r) => branchFacts(r, prs, base))
-        cluster.preview = cluster.isBaseline ? null : previewOf(cluster.added, cluster.blob)
+        cluster.preview = cluster.isBaseline ? null : previewOf(cluster.added, cluster.blob, path)
         return cluster
     }
 
