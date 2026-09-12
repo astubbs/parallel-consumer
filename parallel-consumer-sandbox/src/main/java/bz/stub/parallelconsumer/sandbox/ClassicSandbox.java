@@ -191,6 +191,94 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     }
 
     /**
+     * Assign the partitions, and nothing else - the caller-published half of this class, and the classic
+     * counterpart of {@code Sandbox.builder().handPublished()}.
+     * <p>
+     * The instance must already have subscribed, or there is no rebalance listener to assign to. After this,
+     * {@link #publish(String, Object, Object)} and {@link #awaitSettled()} are the whole shape: publish what the
+     * test knows, wait for the instance to account for it, assert, then close the instance yourself - on this API
+     * the caller built it, so the caller closes it.
+     * <p>
+     * There is no builder switch here, unlike the fluent path, because this API has no seam that starts anything
+     * on its own: {@link #startGenerating} is already an explicit call, so <em>not</em> making it is the opt-out.
+     */
+    public void assignAfterSeeding() {
+        consumer.assignAfterSeeding();
+    }
+
+    /**
+     * Publishes one record from the calling thread. Nothing is encoded on this path - a mock consumer holds
+     * records of the instance's own types - so what the function receives is the very object handed over here.
+     * <p>
+     * The partition is chosen by the key's value hash, the same way a driven record's is, so one key sticks to one
+     * partition and a key-ordered classic instance shards in the sandbox the way it would against a broker.
+     *
+     * @param topic one of this sandbox's topics
+     * @return the offset it was published at
+     * @throws IllegalStateException    if this sandbox's partitions have not been assigned, or the consumer has
+     *                                  closed
+     * @throws IllegalArgumentException naming this sandbox's topics, if it does not hold the one named
+     */
+    public long publish(String topic, K key, V value) {
+        Objects.requireNonNull(topic, "A topic must be supplied");
+        if (!topics.contains(topic)) {
+            throw new IllegalArgumentException("This classic sandbox does not hold topic " + topic + " - it holds "
+                    + topics + ". A record for a topic the instance is not subscribed to would never be "
+                    + "delivered.");
+        }
+        int partition = Math.floorMod(valueHashOf(key), partitionsPerTopic);
+        long offset = consumer.publish(topic, partition, key, value);
+        if (offset < 0) {
+            throw new IllegalStateException("This classic sandbox's consumer has closed, so " + topic + " can take "
+                    + "no more records - the instance is no longer running.");
+        }
+        return offset;
+    }
+
+    /**
+     * Blocks until the instance has accounted for every record published so far, each one committed - so that what
+     * a test asserts next is the end of the work rather than the middle of it.
+     * <p>
+     * No park is counted, because this API has none: a classic record either completes or is retried for ever. The
+     * arithmetic is otherwise the fluent path's, and {@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}
+     * owns it, including why a committed offset rather than a delivery count is what "completed" reads off.
+     * <p>
+     * It refuses when the budget runs out with records outstanding, and also when the instance shut down under the
+     * wait leaving records outstanding - which the underlying wait returns quietly for, that being how an
+     * unbounded driven run ordinarily ends. There is no instance failure to surface here: the classic API has no
+     * handle to record one on.
+     *
+     * @throws IllegalStateException naming the partitions that never got there and what each published, completed
+     *                               and parked
+     */
+    public void awaitSettled() {
+        consumer.awaitEveryPublishedRecordCommitted();
+        refuseIfAnythingIsOutstanding();
+    }
+
+    /**
+     * @param budget how long to wait before refusing, for a test whose subject is the refusal
+     * @see #awaitSettled()
+     */
+    public void awaitSettled(Duration budget) {
+        Objects.requireNonNull(budget, "A budget must be supplied");
+        consumer.awaitEveryPublishedRecordCommitted(budget);
+        refuseIfAnythingIsOutstanding();
+    }
+
+    /**
+     * Catches the wait's quiet ending: it returns rather than refusing when the consumer closes under it, so a run
+     * that was closed mid-flight would otherwise let a test assert on a half-finished one.
+     */
+    private void refuseIfAnythingIsOutstanding() {
+        consumer.whatIsNotAccountedFor().ifPresent(outstanding -> {
+            throw new IllegalStateException("The sandbox stopped waiting before the instance accounted for what "
+                    + "was published, and these partitions never got there: " + outstanding
+                    + ". The instance was closed while records were still in flight.");
+        });
+    }
+
+    /**
      * Assign the partitions - the instance must already have subscribed - and start generating. When the bound is
      * reached the generator stops, waits until every record it published has been accounted for
      * ({@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}), and only then closes {@code instance} drain

@@ -388,7 +388,7 @@ without operational burden or harming the cluster's performance
 ** <<park-in-place,Park in place>> - a record that runs out of attempts stays where it is, holding no worker, while the partition commits past it, so a dead-letter topic is a relief valve rather than a requirement
 ** Terminal outcomes counted apart: succeeded, filtered, parked, stopped
 ** A queryable parked set per route, with metrics beside it
-* A <<sandbox,sandbox>> that runs any definition - fluent or classic - with no broker, no Docker and no test environment, against generated records of the definition's own types
+* A <<sandbox,sandbox>> that runs any definition - fluent or classic - with no broker, no Docker and no test environment: publish your own records, settle, and assert, or let it make up records of the definition's own types
 * Per `key` concurrent processing, per partition and unordered message processing
 * Offsets committed correctly, in order, of only processed messages, regardless of concurrency level or retries
 * Batch support in all versions of the API to process batches of messages in parallel instead of single messages.
@@ -819,11 +819,36 @@ An existing user with hand-built clients reaches the fluent API without changing
 [[sandbox]]
 === Running with no broker: the sandbox
 
-`parallel-consumer-sandbox` runs *any* definition with no broker, no Docker and no test environment, against records it generates itself: each route's declared value type filled with realistic random data, encoded with that route's own serialiser, paced at a rate you declare, with an optional bound after which the run closes itself.
+`parallel-consumer-sandbox` runs *any* definition with no broker, no Docker and no test environment.
 
 The definition does not change. The `start` call does -- which is the whole claim, and the second example at the top of this page is it.
 
-Two things follow from that. It is the *demo*: a new reader can run a real definition against real records without provisioning anything. And it is the *broker-free test kit*: a test drives the same sandbox with its own records and asserts on outcomes and the parked set, which is how this project's own primary build signal works. It serves the classic API too, so an existing options-builder application runs broker-free with its start call changed and nothing else.
+There are two ways to get records into it, and the first is the one to reach for.
+
+*Publish, settle, assert* -- for a test, which knows its own data:
+
+[source,java,indent=0]
+----
+Sandbox sandbox = Sandbox.builder().handPublished().build();
+
+try (ConsumerHandle handle = pc.start(sandbox)) {
+    sandbox.publish("orders", "cust-1", new Order("o-1"));     // <1>
+    sandbox.publish("orders", "cust-1", new Order("o-2"));
+
+    sandbox.awaitSettled();                                    // <2>
+
+    assertThat(inventory.reserved()).hasSize(2);
+    assertThat(handle.parkedAllTopics().count()).isEqualTo(0);
+}
+----
+<1> Encoded with the route's own serialiser -- you do not supply one, because the route already declared both halves of its format. Published from your thread, and placed by the key, so key ordering means here what it means against a broker.
+<2> Blocks until every record published so far is *accounted for*: completed, or parked. It refuses rather than returning quietly if the run ended before it got there -- the budget ran out, the instance failed, or a route stopped it.
+
+*Why there is a settle at all*, when the broker-free drivers of the stream-processing libraries you may be comparing us with need none: those engines are single-threaded, so a piped record is processed on the caller's thread and an assertion on the next line is already safe. This is the real engine -- polled on one thread, dispatched on a worker, committed on the control thread -- so a publish that returned would tell you nothing about whether your function had run. `awaitSettled()` is what makes the next line mean something.
+
+*A driver that publishes for you* -- for a soak or a demo, where the point is volume rather than particular records: it fills each route's declared value type with realistic random data, encodes it with that route's own serialiser, paces it at a rate you declare, and takes an optional bound after which it settles and closes the run itself. That is what a sandbox does unless `handPublished()` says otherwise.
+
+Two things follow. It is the *demo*: a new reader can run a real definition against real records without provisioning anything. And it is the *broker-free test kit*, which is how this project's own primary build signal works. It serves the classic API too, so an existing options-builder application runs broker-free with its start call changed and nothing else -- and it has both shapes as well.
 
 [[fluent-migration]]
 === Replacing the three workarounds

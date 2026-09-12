@@ -26,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -394,6 +395,23 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
         }
         log.debug("Every one of the {} published record(s) is accounted for - completed, or parked",
                 publishedRecords.get());
+    }
+
+    /**
+     * Asks the same question {@link #awaitEveryPublishedRecordCommitted(Duration)} loops on, once, without
+     * waiting: is every record this sandbox published accounted for - completed, or parked - right now?
+     * <p>
+     * It exists because that wait <b>returns quietly when the consumer closes under it</b>, which is the right
+     * answer for a run whose ordinary end is a close and the wrong one for a caller that published records and is
+     * about to assert on them. So the caller-driven settle ({@code Sandbox#awaitSettled()}) asks this afterwards
+     * and refuses rather than letting a half-finished run read as a finished one. The wait itself is unchanged.
+     *
+     * @return empty when the instance has accounted for everything, otherwise the partitions that have not, each
+     * rendered with what was published, completed and parked - the same rendering the wait's own refusal carries
+     */
+    public Optional<String> whatIsNotAccountedFor() {
+        Map<TopicPartition, PartitionAccount> outstanding = unaccountedByPartition();
+        return outstanding.isEmpty() ? Optional.empty() : Optional.of(outstanding.toString());
     }
 
     // Synchronized to match the method it overrides: MockConsumer guards addRecord, poll, commitSync and close

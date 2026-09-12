@@ -4,7 +4,40 @@
 
 /**
  * The sandbox: run any Parallel Consumer definition with no broker, no Docker and no test environment, against
- * records it generates itself.
+ * records you publish or records it makes up.
+ *
+ * <h2>The two shapes, and which one to reach for</h2>
+ * <b>Publish, settle, assert</b> - for a test that knows its own data, which is most of them:
+ *
+ * <pre>{@code
+ * Sandbox sandbox = Sandbox.builder().handPublished().build();
+ * try (ConsumerHandle handle = pc.start(sandbox)) {
+ *     sandbox.publish("orders", "cust-1", new Order("o-1"));
+ *     sandbox.awaitSettled();
+ *     assertThat(inventory.reserved()).containsExactly("o-1");
+ * }
+ * }</pre>
+ *
+ * {@link bz.stub.parallelconsumer.sandbox.Sandbox#publish(java.lang.String, java.lang.Object, java.lang.Object)}
+ * encodes with the route's own serialiser and publishes from the caller's thread;
+ * {@link bz.stub.parallelconsumer.sandbox.Sandbox#awaitSettled()} blocks until every record published so far is
+ * accounted for - completed, or parked - and refuses if the run ended before it got there. The classic API has
+ * the same pair on {@link bz.stub.parallelconsumer.sandbox.ClassicSandbox}.
+ *
+ * <p><b>The driver</b> - for a soak or a demo, where the point is volume rather than particular records: it
+ * publishes on a thread of its own at a declared rate until a {@link bz.stub.parallelconsumer.sandbox.Bound} is
+ * reached, then settles and closes the instance. It is what a sandbox does unless
+ * {@code Sandbox.builder().handPublished()} says otherwise.
+ *
+ * <p><b>Why a settle exists at all</b>, when the broker-free drivers of the stream-processing libraries users
+ * compare us with need none: those engines are single-threaded, so a piped record is processed on the caller's
+ * thread and an assertion on the next line is already safe. This one is the real engine - polled on one thread,
+ * dispatched on a worker, committed on the control thread - so a publish that returned would say nothing about
+ * whether the function had run.
+ *
+ * <p>The close differs between the two for the same reason: a close cannot be run from inside the engine it
+ * closes (KTD6), so the driven path hands it to the driver's own thread, and the caller-published path has the
+ * caller's thread, which was never inside the engine.
  *
  * <h2>How a definition starts in the sandbox</h2>
  * A definition is written once. What changes between a broker and the sandbox is the argument to {@code start},
@@ -30,14 +63,14 @@
  *   <li><b>Assigns the partitions after the engine has subscribed.</b> A mock consumer assigns nothing on
  *       subscribe, so somebody has to; and it has to happen once a rebalance listener exists to be told. That is
  *       what {@code ClientRuntime#started} is for.</li>
- *   <li><b>Closes the instance when the generator reaches its bound</b> - after waiting for every published
+ *   <li><b>Closes the instance when the driver reaches its bound</b> - after waiting for every published
  *       record to be accounted for, either by a commit or by being parked, because draining is not the same as
  *       finishing ({@link bz.stub.parallelconsumer.sandbox.SandboxConsumer#awaitEveryPublishedRecordCommitted()})
  *       - so the final state of a bounded run is readable after the close rather than being whatever the middle of
  *       it looked like. A definition that parks by design is an ordinary bounded run here.</li>
  * </ol>
  *
- * <h2>The generator</h2>
+ * <h2>The hydration</h2>
  * {@link bz.stub.parallelconsumer.sandbox.RandomObjects} fills each route's declared value type with realistic
  * random data - Instancio for the object graph, Datafaker for leaf values chosen by field <em>name</em>, so an
  * {@code email} field holds an email address and a {@code totalAmount} holds money - and Avro's own
@@ -52,14 +85,9 @@
  * encode with, and a record the route cannot read back is worse than a refusal.
  *
  * <h2>The classic API</h2>
- * {@link bz.stub.parallelconsumer.sandbox.ClassicSandbox} hands the same clients and generator to an options
+ * {@link bz.stub.parallelconsumer.sandbox.ClassicSandbox} hands the same clients and driver to an options
  * builder, so an existing classic-API application or example runs broker-free too (AE26). Core never depends on
  * this module; this module depends on core.
- *
- * <h2>The broker-free test kit</h2>
- * A test drives the same sandbox with its own records - {@code sandbox.consumer().publish(...)} - and asserts on
- * what the instance did with them, which is the same seam the generator uses. The generator is a convenience on
- * top, not a requirement.
  *
  * <p><b>Incubating.</b> Every public type here carries
  * {@link org.apache.kafka.common.annotation.InterfaceStability.Unstable}, like the fluent package it serves.
