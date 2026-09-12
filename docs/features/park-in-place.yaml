@@ -31,7 +31,8 @@ setup:
   declare:
     - Nothing. Ten attempts followed by park is the default on every fluent-API route.
     - afterRetries(park()) states it explicitly; afterRetries(park().thenRetryAfter(d).forCycles(n)) is scheduled retry.
-    - retryLimit(n) and retryDelay(d) per route, or defaultRetryLimit and defaultRetryDelay for the instance.
+    - retryLimit(n) and retryDelay(d) per route, or withDefaultRetryLimit and withDefaultRetryDelay for the
+      instance.
   observe:
     - instance.topic(name).parked() for one route, instance.parkedAllTopics() for the instance-wide roll-up. Each
       parked record carries its offset, key, attempt count, last failure, the reason it parked and how long it has

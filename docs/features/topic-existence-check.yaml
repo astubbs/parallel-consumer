@@ -33,10 +33,11 @@ use_this_when:
 setup:
   declare:
     - Nothing. Refusing the start is the default on every fluent-API definition.
-    - whenTopicMissing(MissingTopic.CREATE) to create what is missing instead, with the broker's own num.partitions
+    - withMissingTopicPolicy(MissingTopic.CREATE) to create what is missing instead, with the broker's own
+      num.partitions
       and default.replication.factor, because a partition count is a capacity decision about a topic this
       definition merely reads.
-    - whenTopicMissing(MissingTopic.IGNORE) to start anyway with the missing topics named in a warning.
+    - withMissingTopicPolicy(MissingTopic.IGNORE) to start anyway with the missing topics named in a warning.
   observe:
     - >-
       MissingTopicsException from start() under the default policy. It carries missingTopics() as well as the
