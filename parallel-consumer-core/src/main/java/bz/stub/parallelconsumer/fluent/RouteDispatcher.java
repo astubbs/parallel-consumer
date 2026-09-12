@@ -136,6 +136,12 @@ class RouteDispatcher {
      * all (R8). Driving it from there needs the facade to remember each record's reported outcome until the engine
      * completes it, which is per-record facade state this package deliberately does not keep (KTD14). Left as the
      * count of reported successes until that is decided; the produced-record total beside it is exact.
+     * <p>
+     * <b>Tracked outside this file, because a comment on a field is invisible from anywhere else.</b> The meter this
+     * feeds is published into the user's own registry, so the over-report is on a dashboard rather than only in a
+     * test, and what closes it is an owner's call between three options.
+     * {@code docs/inflight/bug-fluent-succeeded-counter-counts-a-send-that-failed.md} owns that tracking and states
+     * the options; it also narrows the fault to the produce arm below, the plain success arm having no send to fail.
      */
     private final LongAdder succeeded = new LongAdder();
 
