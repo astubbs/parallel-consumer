@@ -279,6 +279,42 @@ const areaBlock = (area, { allGroups = false } = {}) => {
 }
 
 /**
+ * MAX-MIN FAIR SHARES of `total` lines over areas wanting `needs[i]` each: every area that wants no
+ * more than an equal share gets all of it, and what it leaves is re-divided among the rest, until
+ * either everyone is satisfied or the remainder splits evenly between those who are not.
+ *
+ * AN EQUAL SPLIT WAS WRONG IN A WAY THAT ONLY SHOWED WHEN AN AREA WAS ADDED. Each area took
+ * `maxLines / areas.length` and rolled what it did not spend to the NEXT area, so a surplus could
+ * only ever flow forwards - and the area that reliably has one is the newest, which is appended and
+ * therefore last. Adding the capability area narrowed every share and then wasted its own on nobody,
+ * which is how a pre-existing area that had always listed every one of its branch-only documents
+ * began omitting some. Fair shares are order-independent, so no area's position decides whether its
+ * documents are printed.
+ *
+ * @param {number[]} needs lines each area would print, in order
+ * @param {number} total the cap
+ * @returns {number[]} lines allocated to each, summing to at most `total`
+ */
+export function fairShares(needs, total) {
+    const out = needs.map(() => 0)
+    let open = needs.map((_, i) => i)
+    let remaining = total
+    while (open.length > 0 && remaining > 0) {
+        const share = Math.floor(remaining / open.length)
+        if (share <= 0) break
+        const satisfiable = open.filter((i) => needs[i] <= share)
+        if (satisfiable.length === 0) {
+            // Nobody fits: the remainder splits evenly, which is where an equal split started.
+            for (const i of open) out[i] = share
+            break
+        }
+        for (const i of satisfiable) { out[i] = needs[i]; remaining -= needs[i] }
+        open = open.filter((i) => needs[i] > share)
+    }
+    return out
+}
+
+/**
  * @param {object} shape from `docsShape()`
  * @param {{warnings?: object[], failures?: Record<string, {reason: string, time: string}>,
  *          commands?: {path: string, summary: string, when: string}[]}} opts
@@ -611,46 +647,53 @@ export function formatDocsIndex(shape, { clusters, maxLines = 400, currentBranch
         + 'a document this checkout has edited is shown as the baseline holds it. What this cannot show is a version '
         + `preserved only in an archival ref (a tag, refs/backup) - \`${TOOL} stranded\` names those.`, '')
 
-    // EACH AREA GETS AN EQUAL SHARE OF THE CAP, and what it does not spend rolls to the next. One
-    // shared budget in area order let the in-flight area, which holds most of the off-baseline
-    // corpus, spend the whole cap and collapse every branch-only plan to one count line - the
-    // smallest area paying for the largest.
+    // THE CAP IS ALLOCATED OVER REAL DEMAND, which needs both halves of every area before any of it
+    // is printed - so this renders in two passes. One shared budget walked in area order let the
+    // in-flight area, which holds most of the off-baseline corpus, spend the whole cap and collapse
+    // every branch-only plan to one count line; an equal split fixed that and left a subtler
+    // version, which `fairShares` above explains.
     const areas = indexAreas(shape)
-    const share = Math.floor(maxLines / Math.max(1, areas.length))
-    let carry = maxLines - share * areas.length
-    for (const area of areas) {
+    const planned = areas.map((area) => {
         const allDocs = area.groups.flatMap((g) => g.docs)
-        out.push(...(ON_BASELINE[area.key] ?? GENERIC_ON_BASELINE)(area, allDocs.filter((d) => !d.offBaseline)))
-
-        let budget = share + carry
-        carry = 0
+        const line = INDEX_LINE[area.key] ?? GENERIC_LINE
         const groups = branchSetGroups(allDocs.filter((d) => d.offBaseline), clusters, currentBranch)
-        if (groups.length === 0) { carry = budget; continue }
-        out.push(OFF_BASELINE_HEADING[area.key]
-            ?? `# ${area.name} only on branches - grouped by the branch set carrying them, largest first`, '')
+            .map((g) => {
+                const heading = `## only on ${branchSetLabel(g.names)}${g.pinned ? ' - YOUR BRANCH' : ''}`
+                return { ...g, lines: area.key === 'plans' ? [heading, stemsLine(g.docs), ''] : [heading, ...g.docs.map(line), ''] }
+            })
+        return {
+            area,
+            onBaseline: (ON_BASELINE[area.key] ?? GENERIC_ON_BASELINE)(area, allDocs.filter((d) => !d.offBaseline)),
+            groups,
+            need: groups.reduce((n, g) => n + g.lines.length, 0),
+        }
+    })
+    const budgets = fairShares(planned.map((p) => p.need), maxLines)
+
+    planned.forEach((p, i) => {
+        out.push(...p.onBaseline)
+        if (p.groups.length === 0) return
+        out.push(OFF_BASELINE_HEADING[p.area.key]
+            ?? `# ${p.area.name} only on branches - grouped by the branch set carrying them, largest first`, '')
+        let budget = budgets[i]
         let omitted = 0
         let omittedDocs = 0
-        for (const g of groups) {
-            const heading = `## only on ${branchSetLabel(g.names)}${g.pinned ? ' - YOUR BRANCH' : ''}`
-            const lines = area.key === 'plans'
-                ? [heading, stemsLine(g.docs), '']
-                : [heading, ...g.docs.map(INDEX_LINE[area.key] ?? GENERIC_LINE), '']
+        for (const g of p.groups) {
             // A group that does not fit is omitted with everything after it in this area: the
             // groups are largest first, so the cap lands on the smallest and the tail stays a tail.
             // The pinned group is never the one omitted, and it spends the budget it uses.
-            if (!g.pinned && (omitted > 0 || lines.length > budget)) {
+            if (!g.pinned && (omitted > 0 || g.lines.length > budget)) {
                 omitted++
                 omittedDocs += g.docs.length
                 continue
             }
-            budget = Math.max(0, budget - lines.length)
-            out.push(...lines)
+            budget = Math.max(0, budget - g.lines.length)
+            out.push(...g.lines)
         }
         if (omitted > 0) {
             out.push(`... ${plural(omitted, 'more branch set')} holding ${plural(omittedDocs, 'document')}, past the ${maxLines}-line cap `
-                + `(\`docs index --max-lines <n>\` raises it): ${TOOL} docs list ${area.key}`, '')
+                + `(\`docs index --max-lines <n>\` raises it): ${TOOL} docs list ${p.area.key}`, '')
         }
-        carry = budget
-    }
+    })
     return sourceFrame('index', null, out.join('\n'), INDEX_TOOL_MORE)
 }

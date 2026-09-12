@@ -2739,6 +2739,43 @@ const CHECKS = [
             "        const key = d.feature?.category || 'uncategorised'"),
     },
     {
+        id: 'the-line-cap-is-allocated-over-demand-so-a-new-area-cannot-starve-an-existing-one',
+        why: 'an equal split per area let the surplus flow FORWARDS only, and the area that reliably has one is the newest - appended, therefore last - so adding an area narrowed every share and then wasted its own on nobody, and a pre-existing area that had always listed all of its branch-only documents began omitting some',
+        run: async (binDir) => {
+            const dv = await docsViews(binDir)
+            const cmds = await import(pathToFileURL(join(binDir, 'lib', 'docs-commands.mjs')).href)
+            // The allocation itself, where the property is stateable exactly: one area wanting less
+            // than an equal share releases the rest to one wanting more, whatever their order, and
+            // nothing is handed out that nobody asked for.
+            const fair = dv.fairShares([120, 40], 200)
+            if (fair[0] !== 120 || fair[1] !== 40) return false
+            if (dv.fairShares([40, 120], 200).join() !== '40,120') return false // order-independent
+            // A last-placed area wanting nothing releases its whole share rather than wasting it.
+            if (dv.fairShares([300, 0], 200).join() !== '200,0') return false
+            // Nobody fits: the remainder splits evenly, which is where the equal split started.
+            if (dv.fairShares([300, 300], 200).join() !== '100,100') return false
+            // And never more than the cap, which is the one thing the caller is promised.
+            if (dv.fairShares([10, 10, 10], 400).reduce((a, b) => a + b) !== 30) return false
+            return inDir(docsIndexFixture(), () => {
+                const built = cmds.corpusShape()
+                if (!built.ok) return false
+                // A cap the equal split cannot serve: the in-flight area wants most of it, and the
+                // other three want less than a quarter each. Fair shares fit the workstream group;
+                // an equal quarter is too small for it and drops all three of its groups.
+                const page = dv.formatDocsIndex(built.shape, { clusters: built.stranded, maxLines: 12 })
+                if (!page.includes('## only on feats/workstream')) return false
+                // The smaller areas keep theirs, and the truncation lands on the one area that
+                // genuinely wants more than the cap can give - with its command, as designed.
+                if (page.includes('docs list plans') || page.includes('docs list solutions')) return false
+                return page.includes('docs list inflight')
+            })
+        },
+        // The equal split, restored - the whole reason the two-pass render exists.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
+            '    const out = needs.map(() => 0)',
+            '    return needs.map(() => Math.floor(total / Math.max(1, needs.length)))\n    const out = needs.map(() => 0)'),
+    },
+    {
         id: 'every-area-of-the-corpus-reaches-the-session-index',
         why: 'the index held a SECOND hand-kept copy of the area list and used it to decide membership, so an area present in the table but absent from that copy exited 0, was counted in the preamble total, had its directory named in the same sentence, and was listed nowhere - and no reader can notice a section that was never printed',
         run: async (binDir) => {
