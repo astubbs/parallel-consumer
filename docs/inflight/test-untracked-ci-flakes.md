@@ -30,6 +30,8 @@ whose failures were its own **setup guard** timing out, not the confluentinc#909
 to make - the test's own saturation had closed the record-intake gate, so the pause-point records were
 never fetched. The annotation and this row went together, per rule 3 -
 [`the-setup-guard-was-waiting-on-records-back-pressure-had-stopped-fetching-2026-09-07.md`](../solutions/test-flakiness/the-setup-guard-was-waiting-on-records-back-pressure-had-stopped-fetching-2026-09-07.md).
+**It has since failed again** - the *Seen again after being called fixed* section below carries
+the sightings. This paragraph is left standing as the record of what was true when the fix landed.
 Also fixed and out, 2026-09-09, in one pass - four rows, plus one test that never had a row of its
 own and was caught by the campaign that retired them:
 
@@ -74,7 +76,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | Test | Rate | Why it is worth attention |
 |---|---|---|
 | `Mutation Tests (PIT, PR-scoped)` lane | 1 seen (2026-09-02, astubbs#207, [run 33610711974](https://github.com/astubbs/parallel-consumer/actions/runs/33610711974)) | Not a test - the LANE hit its `timeout-minutes: 30` cap and was cancelled, on a **markdown-only** delta from a head where it had scored in 19m18s with the same class set. The cap had about a third headroom over a normal run, so it flapped on a slow runner. Addressed 2026-09-07: the bound is now `timeout-minutes: 20` on the PIT **step**, so a hit ends that step and the job still reports, where a hit on the old job cap cancelled the whole row. It arrived with the fold into `scan: repo` and outlived it - astubbs#463 un-folded PIT into its own `mutation` job again and the step bound moved with the step ([`ci-fewer-jobs-ruleset-edits.md`](ci-fewer-jobs-ruleset-edits.md)). Still `continue-on-error: true`, so it never gates a merge <!-- post-merge: checked --> |
-| `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 4 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225); 2026-09-07, astubbs#428, [job 101592337448](https://github.com/astubbs/parallel-consumer/actions/runs/34072492940/job/101592337448); 2026-09-07, astubbs#452, [job 101607850077](https://github.com/astubbs/parallel-consumer/actions/runs/34078008311/job/101607850077); 2026-09-09, astubbs#493, [job 102294781198](https://github.com/astubbs/parallel-consumer/actions/runs/34296644467/job/102294781198)) - the first two the first run of a branch that had just taken a change to how this lane runs; the third a re-run after a merge from master, with no `.github/` change in the merged range; the fourth a branch whose whole diff is markdown plus one advisory-id element in the ossindex plugin config, with no `.github/` change at all | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
+| `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | Sighted (`node bin/inflight.mjs codecov test ManagedPCInstanceLifecycleTest` for the recorded outcome per commit, which is the rate rather than any total written here) on 2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225); 2026-09-07, astubbs#428, [job 101592337448](https://github.com/astubbs/parallel-consumer/actions/runs/34072492940/job/101592337448); 2026-09-07, astubbs#452, [job 101607850077](https://github.com/astubbs/parallel-consumer/actions/runs/34078008311/job/101607850077); 2026-09-09, astubbs#493, [job 102294781198](https://github.com/astubbs/parallel-consumer/actions/runs/34296644467/job/102294781198); 2026-09-12, astubbs#511, [job 103491459892](https://github.com/astubbs/parallel-consumer/actions/runs/34670709498/job/103491459892)) - the first two the first run of a branch that had just taken a change to how this lane runs; the third a re-run after a merge from master, with no `.github/` change in the merged range; the fourth a branch whose whole diff is markdown plus one advisory-id element in the ossindex plugin config, with no `.github/` change at all; the last a branch touching no file of this class and no `.github/` lane configuration | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
 | `ReactorPCTest.concurrencyTest` | Local only, 2026-09-07: 2 of 3 full unit-suite runs and 1 of 3 reactor-module runs on the astubbs/parallel-consumer#469 tree; 0 of 6 module runs and 0 of 1 full-suite run on a worktree detached at that branch's own base commit, built and run the same way | **The test hugs its ceiling in EVERY run on BOTH trees, passing ones included** - `grep -c 'More records submitted'` on a *green* control run returns 59-76, because the fail-fast log fires whenever in-flight exceeds `MAX_CONCURRENCY` while the assertion tolerates `MAX_CONCURRENCY * MAX_CONCURRENCY_OVERFLOW_ALLOWANCE`. So a failure is the peak crossing a tolerance the run is already sitting against, not a new behaviour appearing. Passes 4/4 in isolation, so it is load-sensitive. The asymmetry against the control is real and unexplained, and **the direction-of-effect argument that used to stand against it does not hold - it was withdrawn on astubbs/parallel-consumer#469 after a Codex review, and is recorded here so nobody re-derives it.** It claimed the only work-admission field the PR touched, `PartitionState.allowedMoreRecords` made `volatile`, could only publish back-pressure's `false` sooner and so admit **fewer** records. That is one-way reasoning about a two-way field: `tryToEncodeOffsets()` also calls `setAllowedMoreRecords(true)` - on the `incompleteOffsets.isEmpty()` path, and in `updateBlockFromEncodingResult` when the payload comes back under the pressure threshold - so the fence publishes the **un**blocking transition sooner as well, which admits **more** records sooner. The two directions are not obviously equal in size, and nothing here has measured which dominates. **So this change is not ruled out as a contributor, and classification needs a measured control rather than an argument**: contention, tolerance, or a real submission-path defect this ceiling has been masking | <!-- post-merge: checked -->
 | `CommitResponseTimeoutSymptomTest.aRebalanceStormUnderAHighFailureRateNeitherStallsNorKillsTheConsumer` | Local only, 2026-09-07: 1 of 3 full unit-suite runs on the astubbs/parallel-consumer#469 tree; 3/3 pass in isolation; 0 of 1 full-suite run on the same-base control worktree. `bin/inflight.mjs codecov test aRebalanceStormUnderAHighFailureRateNeitherStallsNorKillsTheConsumer` had no recorded failure before this, so CI had never seen it - ask the command rather than trusting a total written here | Failed its `commitsRejected >= MIN_REJECTIONS` await (3 vs 4) - **a count of commit ATTEMPTS, which only accrues while the backlog is draining**; once drained nothing is dirty, no further commit is attempted, and the 30s await can only time out. So the assertion is a race between wall-clock commit ticks and drain speed, and a loaded machine drains before enough ticks land. Not a stall assertion; do not read the failure as PC stopping | <!-- post-merge: checked -->
 | `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` and `.closeAfterSingleMessageShouldBeEventBasedFast` | 1 local sighting each, 2026-09-09, during the matched-pair campaign that retired the four rows above - a deliberately oversubscribed 12-core box running two full core suites at once. Neither reproduced again in that campaign; **that is one sighting each, not a rate** | Recorded rather than diagnosed, because a local run keeps nothing once its output is gone. Both are shutdown-path tests in the class this pass was already working in, and the class's own defect history is cycle-counts standing in for events - so read them against that first. `queuedMessages...` is the harder one to place, because astubbs#101 *already* replaced its cycle count with `awaitUntilTrue(gotK0::get)` plus `awaitForCommit(1)`; if its mechanism is the same class, it is a second instance in a test that was supposed to be immune, and that is worth knowing. Nothing here establishes it is master-state: both arms of the pair carry `master`'s code for these two tests, so a sighting on either arm says nothing about a branch, but one sighting says nothing about a rate either |
@@ -193,6 +195,65 @@ load defect above as the explanation carrying all four.
 Not quarantined: still no rate, and the fix named above - wait on the consume rather than on a clock,
 and assert on a CME actually observed - remains the right one rather than a quarantine.
 <!-- post-merge: checked-end -->
+**Sighting of 2026-09-12, on astubbs#511 (`feat/504-dead-letter`) at `52e2d010c`,
+[job 103491459892](https://github.com/astubbs/parallel-consumer/actions/runs/34670709498/job/103491459892).**
+Same signature as the ones above: repetition 1 of 5, `consumeCount` 0, the same `[Should have consumed
+messages - if 0, the PC died from CME during rapid toggles]` message, `forkCount=4`, and the ambient
+probe clean - which the first sighting already established is worth little here while its `detector
+reach: UNKNOWN` stands.
+
+**The recorded outcome corroborates every part of it, and it is the durable form of this evidence** -
+a job log expires. `node bin/inflight.mjs codecov test ManagedPCInstanceLifecycleTest` puts the
+failure at `52e2d01` on `feat/504-dead-letter`, shows repetitions 2 through 5 passing at that same
+commit, and shows repetition 1 passing at every other head recorded in the surrounding hours -
+including the branch's own previous head `f5e4674` and the other `feat/504-*` heads of the same stack.
+It also warns that it has hit a page bound, so an absence in it establishes nothing.
+
+**Cleared on mechanism, not on timing**, the way the ones above were: the branch's diff touches no
+file of this class and no `.github/` lane configuration, and the symptom is zero records consumed
+after toggling an instance - reachable without it. What it adds is a sighting that is neither a first
+run under a freshly changed lane nor a markdown-only delta, which leaves the fixed-sleep-under-load
+defect named above carrying this one too.
+
+Still not quarantined, and for the same reason: the fix named above - wait on the consume rather than
+on a clock, and assert on a CME actually observed - is the right move, not a quarantine.
+
+### Seen again after being called fixed: the registration-race one, 2026-09-12
+
+`RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` is
+listed in this note's header as fixed and out, and in [`docs/quarantined-tests.md`](../quarantined-tests.md)
+as its worked example of the **flake diagnosed and fixed** exit. It has failed again. **Recorded
+because it is a recurrence of something declared fixed, which is the one case where a single sighting
+is worth writing down** - this heading and that sentence are the ledger's own convention for the case,
+recovered from versions of this file carried on other refs, because `origin/master`'s copy has never
+held it ([`process-flake-ledger-fragments-per-branch.md`](process-flake-ledger-fragments-per-branch.md)
+is about why that is so).
+
+**What the recorded outcome says, which is more than the report that prompted this.**
+`node bin/inflight.mjs codecov test RegistrationRaceStaleResidentIT` shows the failure at `f5e4674` on
+astubbs#511 (`feat/504-dead-letter`), asserting *"control thread must reach the mid-loop pause point
+(offset 25)"* with the intake state at expiry recorded beside it, and the branch green again at its
+next head `52e2d01`. But it also shows a **later** failure on a different branch - `7175576` on
+astubbs#508 (`docs/367-followup`), same assertion - and that is the newest run of this test the
+command has recorded. Scoped with `--branch docs/367-followup`, that branch is green at every earlier
+head it holds. So *"it passes on every later commit"* holds only for the branch it was first seen on;
+the most recent recorded run of this test is red.
+
+**What that does not establish.** Neither sighting is diagnosed here, and two on two branches in one
+day is not a rate - the command reports candidates and never a verdict, and both pages read carried
+the page-bound warning. What earns it a section rather than a line is the claim it contradicts: the
+mechanism settled in
+[`the-setup-guard-was-waiting-on-records-back-pressure-had-stopped-fetching-2026-09-07.md`](../solutions/test-flakiness/the-setup-guard-was-waiting-on-records-back-pressure-had-stopped-fetching-2026-09-07.md)
+was this test's own **setup guard** timing out because its saturation had closed the record-intake
+gate - and the assertion failing here is that same setup guard, on the same pause point, reporting the
+same intake state at expiry. So the first question for whoever picks it up is whether the
+buffer-derived stage-1 size that fix installed still holds under this load, not whether something new
+has appeared.
+
+**Do not re-retire it from the header.** That paragraph records what was true when the fix landed, and
+rewriting it would destroy the fact that this test was fixed once already - which is the part that
+makes a second failure worth knowing.
+
 ### Controls for these flakes - the void one, and the one that works
 
 Method for the rows still open, not a diagnosis of any one of them. It is written from a
