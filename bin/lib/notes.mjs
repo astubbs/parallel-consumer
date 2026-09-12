@@ -49,6 +49,7 @@
 
 
 import { cacheRead, cacheWrite } from './cache.mjs'
+import { RECORD_COMMENT_RE, headingRe, isRecord } from './doc-kind.mjs'
 import { DOC_AREAS, NOTES_DIR, REPO } from './repo.mjs'
 import {
     baseline, blobContents, blobDiffAddedLines, blobDiffStat, blobsForPath, exec, lines, mergeBaseBlobs, mergeBases,
@@ -320,7 +321,7 @@ export function numbersByValue({ cache = true, network = true } = {}) {
 const titleCache = new Map()
 const titleKey = (blob, path) => `${path ?? ''}\u0000${blob}`
 const titleOf = (content, path) => {
-    if (path && /\.ya?ml$/.test(path)) {
+    if (isRecord(path)) {
         for (const l of lines(content)) {
             const m = /^title:[ \t]*(.*)$/.exec(l)
             if (m) return m[1].trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1') || null
@@ -452,11 +453,14 @@ function previewOf(stat, blob, path) {
     if (!stat || stat.diffFailed) return null
     const diff = blobDiffAddedLines(stat.newFile ? null : stat.against, blob)
     if (!diff.ok) return null
-    const record = /\.ya?ml$/.test(path)
-    const added = record ? diff.lines.filter((l) => !/^\s*#/.test(l)) : diff.lines
+    const record = isRecord(path)
+    // A `#` line in a record is a comment, never a heading - bin/lib/doc-kind.mjs owns that rule
+    // now, and owns it for every reader, because this was the third place to re-derive it.
+    const added = record ? diff.lines.filter((l) => !RECORD_COMMENT_RE.test(l)) : diff.lines
+    const isHeading = headingRe(path)
     return {
         kind: record ? 'record' : 'document',
-        headings: added.filter((l) => (record ? /^[A-Za-z_][\w.-]*:/ : /^#{1,6}\s/).test(l)),
+        headings: added.filter((l) => isHeading.test(l)),
         firstLine: added.find((l) => l.trim().length > 0) ?? null,
     }
 }

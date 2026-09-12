@@ -14,6 +14,8 @@
 // the dead file as live. A copied constant is correct until exactly one copy changes, and nothing
 // goes red at that moment.
 
+import { RECORD_CLAIM_ERE, RECORD_FILE_RE } from './doc-kind.mjs'
+
 /** Owner/name as `gh` wants it. NEVER omit it from a `gh` call - see the note in notes.mjs. */
 export const REPO = 'astubbs/parallel-consumer'
 
@@ -41,6 +43,14 @@ export const FEATURES_DIR = 'docs/features'
  * one of them while reporting the area as empty. Omitted means the corpus default, `DOCUMENT_RE` in
  * bin/lib/docs-shape.mjs.
  *
+ * `headings` is the same idea for `prior-art --headings`: the ERE for a line that carries what this
+ * area's documents are ABOUT, as opposed to a line a word merely appears on. The markdown-heading
+ * rule matched no record on any ref, so this area reported `nothing, across 604 refs` - in the mode
+ * AGENTS.md tells agents to reach for first, phrased as the sentence it tells them to read as a
+ * completed check. Omitted means the prose default; `null` means the area has no such distinction to
+ * draw, and `prior-art` then SAYS SO for that section rather than printing an emptiness it never
+ * searched for. bin/lib/doc-kind.mjs owns both patterns and states why a record's is not its keys.
+ *
  * FEATURES IS APPENDED, NEVER INSERTED. The numbering `prior-art` prints is this table's index, and
  * a reader has learned that 1 to 3 are plans, solutions and notes; adding a row in the middle would
  * renumber all of them to say nothing new. Appending also puts the area last in the shape and the
@@ -51,5 +61,5 @@ export const DOC_AREAS = [
     { dir: 'docs/plans', name: 'Prior investigations' },
     { dir: 'docs/solutions', name: 'Solved problems' },
     { dir: NOTES_DIR, name: 'In-flight state' },
-    { dir: FEATURES_DIR, name: 'Shipped and planned capability', documents: /\.ya?ml$/ },
+    { dir: FEATURES_DIR, name: 'Shipped and planned capability', documents: RECORD_FILE_RE, headings: RECORD_CLAIM_ERE },
 ]

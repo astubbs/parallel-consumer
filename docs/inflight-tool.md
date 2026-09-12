@@ -34,6 +34,14 @@ tool exists for, caught on its own pull request.
 **`--headings` is why this is readable.** The same term unscoped returns thousands of body-text hits;
 scoped to headings it returns what documents are *about*. Reach for it first on a broad term.
 
+**What "a heading" means is the AREA's answer, not one pattern for the whole corpus.** For a prose
+area it is the markdown headings. For `docs/features/`, whose records are data, it is every line the
+record declares - a record has no prose body for the flag to strip, and its only non-declaration is
+the copyright comment. The area table in `bin/lib/repo.mjs` carries the rule and
+`bin/lib/doc-kind.mjs` owns the patterns. **An area that declares no such distinction is named as
+NOT SEARCHED rather than reported as empty** - the two must never read alike, which is the whole
+point of the tool.
+
 ## Before editing a note several branches share
 
 ```

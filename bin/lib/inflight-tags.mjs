@@ -33,6 +33,7 @@
 import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
+import { isRecord } from './doc-kind.mjs'
 import { NOTES_DIR } from './repo.mjs'
 
 // A REGISTER is consulted, never completed - a ranked backlog, a collision list. It has no done
@@ -192,7 +193,7 @@ function dataRecordTitle(text, path) {
  * bin/test-check-agent-hooks.sh caught it as the only title the old hook listed and this did not.
  */
 export function titleOf(text, path) {
-    if (/\.ya?ml$/.test(path)) return dataRecordTitle(text, path)
+    if (isRecord(path)) return dataRecordTitle(text, path)
     const fm = path.startsWith(`${NOTES_DIR}/`) ? null : /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
     if (fm) {
         const t = /^title:[ \t]*(.*)$/m.exec(fm[1])

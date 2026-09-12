@@ -820,8 +820,8 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
-            "            'docs/', ...DOC_AREAS.map((a) => `:(exclude)${a.dir}/`)]],",
-            "            'docs/*.md']],"),
+            "            pathspec: ['docs/', ...areas.map((a) => `:(exclude)${a.dir}/`)],",
+            "            pathspec: ['docs/*.md'],"),
     },
     {
         id: 'ref-clusters-are-deduplicated',
@@ -1199,8 +1199,8 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
-            'const grepPattern = opts.headings ? `^#{1,6}[[:space:]].*(${pattern})` : pattern',
-            'const grepPattern = pattern'),
+            'const grepFor = (headings) => (opts.headings ? `${headings}.*(${pattern})` : pattern)',
+            'const grepFor = (headings) => pattern'),
     },
     {
         id: 'relatedness-is-containment-not-a-guess',
@@ -1871,8 +1871,7 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
-            '        headings: added.filter((l) => (record ? /^[A-Za-z_][\\w.-]*:/ : /^#{1,6}\\s/).test(l)),',
-            '        headings: [],'),
+            '        headings: added.filter((l) => isHeading.test(l)),', '        headings: [],'),
     },
     {
         id: 'a-tag-only-version-is-preserved-not-divergent',
@@ -2517,7 +2516,7 @@ const CHECKS = [
                 && listed.out.includes('(off baseline - on only-here)')
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'repo.mjs'),
-            "    { dir: FEATURES_DIR, name: 'Shipped and planned capability', documents: /\\.ya?ml$/ },\n", ''),
+            "    { dir: FEATURES_DIR, name: 'Shipped and planned capability', documents: RECORD_FILE_RE, headings: RECORD_CLAIM_ERE },\n", ''),
     },
     {
         id: 'a-feature-record-is-titled-by-its-title-key-never-by-its-copyright-comment',
@@ -2531,7 +2530,7 @@ const CHECKS = [
             return t.titleOf(rec('references:\n  - title: a link\n'), 'docs/features/x.yaml').startsWith('NO title: KEY')
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'inflight-tags.mjs'),
-            "    if (/\\.ya?ml$/.test(path)) return dataRecordTitle(text, path)\n", ''),
+            '    if (isRecord(path)) return dataRecordTitle(text, path)\n', ''),
     },
     {
         id: 'a-feature-record-with-no-title-key-says-so-rather-than-showing-its-filename',
@@ -2594,8 +2593,93 @@ const CHECKS = [
         },
         // The sections stop one area short - the shape the hard-coded list had before it was derived.
         mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
-            '        ...DOC_AREAS.map((a, i) => [String(i + 1), `${a.name} - ${a.dir}/`, [`${a.dir}/`]]),',
-            '        ...DOC_AREAS.slice(0, 3).map((a, i) => [String(i + 1), `${a.name} - ${a.dir}/`, [`${a.dir}/`]]),'),
+            '        ...areas.map((a, i) => ({', '        ...areas.slice(0, 3).map((a, i) => ({'),
+    },
+    {
+        id: 'headings-mode-reaches-a-record-area-by-what-the-record-declares',
+        why: 'a markdown-heading pattern cannot match a YAML record, so the records area answered "nothing, across every ref" in the mode AGENTS.md tells agents to reach for FIRST - which is also the sentence it tells them to read as a completed check',
+        run: async (binDir) => {
+            const p = await lib(binDir)
+            return inDir(docsFixture(), () => {
+                const own = (r) => r.sections.find((x) => x.heading === 'Shipped and planned capability - docs/features/')
+                // PARITY IS THE CLAIM, and `published` is what settles it: every fixture record
+                // declares it as `  status: published`, INDENTED under `availability:`. A rule
+                // keyed on top-level keys alone matches none of them, so the mode would keep
+                // reporting a confident emptiness over records that carry the term.
+                const heads = p.priorArt(['published'], { github: false, headings: true })
+                const plain = p.priorArt(['published'], { github: false })
+                if (!heads.ok || !plain.ok) return false
+                const found = (r) => own(r).hits.map((h) => h.path).sort().join(' ')
+                if (own(plain).hits.length === 0 || found(heads) !== found(plain)) return false
+                // The matched TEXT is the record's own declaration, and the copyright comment -
+                // the line every earlier reader mistook for the heading - is never it.
+                const titled = p.priorArt(['only this branch records'], { github: false, headings: true })
+                const hit = own(titled).hits.find((h) => h.path === 'docs/features/branch-only-capability.yaml')
+                if (!hit || !hit.headings.some((t) => t.startsWith('title:'))) return false
+                if (own(titled).hits.some((h) => h.headings.some((t) => /Copyright/.test(t)))) return false
+                // And a term that appears ONLY in that comment finds nothing here, which is what
+                // makes the rule a rule rather than "every line".
+                const comment = p.priorArt(['Antony Stubbs and contributors'], { github: false, headings: true })
+                return own(comment).hits.length === 0
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'repo.mjs'),
+            'documents: RECORD_FILE_RE, headings: RECORD_CLAIM_ERE },', 'documents: RECORD_FILE_RE },'),
+    },
+    {
+        id: 'an-area-this-mode-cannot-search-is-reported-not-reported-empty',
+        why: 'printing "nothing, across N refs" over a corpus the mode never looked at is the false negative wearing a completed check\'s clothes - the failure this whole file exists to remove, reintroduced by the flag',
+        run: async (binDir) => {
+            const p = await lib(binDir)
+            return inDir(docsFixture(), () => {
+                // `headings: null` is an area DECLARING it draws no such distinction. Injected
+                // rather than added to the real table, so the branch is exercised without asking
+                // a shipped area to be unsearchable.
+                const areas = [
+                    { dir: 'docs/inflight', name: 'In-flight state' },
+                    { dir: 'docs/features', name: 'Shipped and planned capability', headings: null },
+                ]
+                const r = p.priorArt(['note'], { github: false, headings: true, areas })
+                if (!r.ok) return false
+                const own = r.sections.find((x) => x.heading === 'Shipped and planned capability - docs/features/')
+                if (!own || own.unsearchable === undefined || own.hits.length !== 0) return false
+                const text = p.formatSection(own, r)
+                // The words a reader takes the answer from, and the word they must NOT find.
+                if (!text.includes('NOT SEARCHED') || text.includes('nothing, across')) return false
+                // The area that CAN be searched still is, so this is a per-area decision and not a bail-out.
+                const notes = r.sections.find((x) => x.heading === 'In-flight state - docs/inflight/')
+                if (notes.unsearchable !== undefined || notes.hits.length === 0) return false
+                // And the tail is numbered off the sections this run built - two areas plus the
+                // sweep - rather than off the default table, which `areas` has just replaced.
+                return r.sections.length === 3 && p.formatTail(r).includes('=== 4. Commits')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
+            '        if (opts.headings && headings === null) {', '        if (false) {'),
+    },
+    {
+        id: 'the-prose-heading-rule-means-the-same-in-both-of-its-spellings',
+        why: 'one rule written as a JavaScript regex and as a POSIX ERE has no compiler keeping the two together, and the failure is silent in the worst direction: a pattern that matches nothing renders here as a finding',
+        run: async (binDir) => {
+            const k = await import(pathToFileURL(join(binDir, 'lib', 'doc-kind.mjs')).href)
+            // The edge cases the two spellings could disagree on: every level, one past the last
+            // level, no separator, an indented hash, a tab separator, a bare hash, and prose.
+            const CASES = ['# one', '## two', '###### six', '####### seven', '#no-space', ' # indented',
+                '#\ttab', '#', 'plain prose']
+            const { dir, commit } = windowRepo()
+            writeFileSync(join(dir, 'cases.md'), `${CASES.join('\n')}\n`)
+            commit('every line a heading rule has to decide about')
+            const grep = spawnSync('git', ['grep', '-h', '-E', k.PROSE_HEADING_ERE, 'master', '--', 'cases.md'],
+                { cwd: dir, encoding: 'utf8' })
+            if (grep.status > 1) return false
+            const byEre = new Set(grep.stdout.split('\n').filter(Boolean))
+            const byJs = new Set(CASES.filter((l) => k.PROSE_HEADING_RE.test(l)))
+            // A pin that selects nothing pins nothing - and selecting everything is the other way to fake it.
+            if (byJs.size === 0 || byJs.size === CASES.length) return false
+            return byJs.size === byEre.size && [...byJs].every((l) => byEre.has(l))
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'doc-kind.mjs'),
+            "export const PROSE_HEADING_ERE = '^#{1,6}[[:space:]]'", "export const PROSE_HEADING_ERE = '^#[[:space:]]'"),
     },
     {
         id: 'docs-header-answers-for-a-feature-record-and-the-refusal-names-every-area',
@@ -2663,7 +2747,7 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
-            "    if (path && /\\.ya?ml$/.test(path)) {", '    if (false) {'),
+            '    if (isRecord(path)) {', '    if (false) {'),
     },
     {
         id: 'help-lists-docs-list-with-its-when-line',
