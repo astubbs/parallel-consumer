@@ -515,39 +515,52 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         options = newOptions;
         this.shutdownTimeout = options.getShutdownTimeout();
         this.drainTimeout = options.getDrainTimeout();
-        this.consumerManager = module.consumerManager();
+        // Everything from here on is inside the guard: past this line a client may EXIST that nobody but this
+        // half-built processor can close. Ownership of a PC-built client passes to this instance's close(), and a
+        // constructor that throws never returns an instance to call it on - so the clients built for the attempt
+        // are closed here instead. See PCModule.closeClientsBuiltByPc.
+        try {
+            this.consumerManager = module.consumerManager();
 
-        validateConfiguration();
+            validateConfiguration();
 
-        module.setParallelEoSStreamProcessor(this);
+            module.setParallelEoSStreamProcessor(this);
 
-        log.info("Confluent Parallel Consumer initialise... groupId: {}, Options: {}",
-                consumerManager.groupMetadata().groupId(),
-                newOptions);
-        //Initialize global metrics - should be initialized before any of the module objects are created so that meters can be bound in them.
-        pcMetrics = module.pcMetrics();
+            log.info("Confluent Parallel Consumer initialise... groupId: {}, Options: {}",
+                    consumerManager.groupMetadata().groupId(),
+                    newOptions);
+            //Initialize global metrics - should be initialized before any of the module objects are created so that meters can be bound in them.
+            pcMetrics = module.pcMetrics();
 
-        this.dynamicExtraLoadFactor = module.dynamicExtraLoadFactor();
+            this.dynamicExtraLoadFactor = module.dynamicExtraLoadFactor();
 
-        workerThreadPool = SupplierUtils.memoize(() -> requireRejectionIsVisible(setupWorkerPool(newOptions.getMaxConcurrency())));
-        forceWorkerPoolConstruction();
+            workerThreadPool = SupplierUtils.memoize(() -> requireRejectionIsVisible(setupWorkerPool(newOptions.getMaxConcurrency())));
+            forceWorkerPoolConstruction();
 
-        this.wm = module.workManager();
+            this.wm = module.workManager();
 
-        this.brokerPollSubsystem = module.brokerPoller(this);
+            this.brokerPollSubsystem = module.brokerPoller(this);
 
-        if (options.isProducerSupplied()) {
-            this.producerManager = Optional.of(module.producerManager());
-            if (options.isUsingTransactionalProducer())
-                this.committer = this.producerManager.get();
-            else
+            if (options.isProducerSupplied()) {
+                this.producerManager = Optional.of(module.producerManager());
+                if (options.isUsingTransactionalProducer())
+                    this.committer = this.producerManager.get();
+                else
+                    this.committer = this.brokerPollSubsystem;
+            } else {
+                this.producerManager = Optional.empty();
                 this.committer = this.brokerPollSubsystem;
-        } else {
-            this.producerManager = Optional.empty();
-            this.committer = this.brokerPollSubsystem;
+            }
+            //Initialize metrics for this class once all the objects are created
+            initMetrics();
+        } catch (Throwable constructionFailed) {
+            // Not only validateConfiguration(): every line above can throw, and the window is the same for all of
+            // them. Narrowing the guard to the checks that are known to throw today would mean being right about
+            // every line added above it later - the same argument onUserFunctionFailure's finally makes.
+            // Best effort, so a client that fails to close as well cannot hide the failure the caller has to act on.
+            module.closeClientsBuiltByPc("a client built for a processor that failed to construct");
+            throw constructionFailed;
         }
-        //Initialize metrics for this class once all the objects are created
-        initMetrics();
     }
 
     private void initMetrics() {

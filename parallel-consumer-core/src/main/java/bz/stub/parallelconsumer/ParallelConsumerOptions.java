@@ -561,11 +561,13 @@ public class ParallelConsumerOptions<K, V> {
      * Exactly one way of supplying a consumer may be used, and one of them is required: two consumers cannot be
      * resolved to one silently, and PC has nothing to poll with if neither arrives.
      * <p>
-     * The two configuration-path refusals are here, rather than left to {@code new KafkaConsumer<>(config)}, because
-     * this is the point that can name the option the caller set. A missing deserializer surfaces from the client
-     * constructor as a {@code ConfigException} about a key the caller never typed themselves, and an
-     * {@code enable.auto.commit} of true would be accepted by that constructor and only rejected later, by a check
-     * whose message talks about a consumer instance the caller never built.
+     * The configuration-path refusals are here, rather than left to {@code new KafkaConsumer<>(config)} or to the
+     * engine's own start-up checks, because this is the point that can name the option the caller set <b>and it is
+     * before any client exists</b>. A missing deserializer surfaces from the client constructor as a
+     * {@code ConfigException} about a key the caller never typed themselves; an {@code enable.auto.commit} of true
+     * and a missing {@code group.id} would both be accepted by that constructor and only rejected later, by checks
+     * whose messages talk about a consumer instance the caller never built - having first built one, connected it
+     * and started its network thread for a configuration that was never going to work.
      */
     private void consumerSourceValidation() {
         if (consumer != null && consumerConfig != null) {
@@ -579,6 +581,7 @@ public class ParallelConsumerOptions<K, V> {
         if (consumerConfig != null) {
             requireDeserialiser(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG);
             requireDeserialiser(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG);
+            requireGroupId();
             refuseAutoCommit();
         }
     }
@@ -594,6 +597,26 @@ public class ParallelConsumerOptions<K, V> {
                             + "so it cannot choose a deserializer for you; set it as you would when building the "
                             + "consumer yourself, or supply a finished {} instance instead",
                     Fields.consumerConfig, key, Fields.consumer));
+        }
+    }
+
+    /**
+     * PC commits offsets <em>for a consumer group</em> - that is the whole mechanism by which a record is marked
+     * done - so a configuration with no {@code group.id} describes a consumer PC cannot use. Refused here, beside
+     * the other configuration-path refusals, rather than left to the start-up check that asks the finished client
+     * for its group metadata: that check runs after the client exists, and a client that exists has already opened
+     * a broker connection and started a network thread for a configuration that was never going to work.
+     * <p>
+     * Blank counts as missing. An empty group id is the spelling a template or an unresolved placeholder produces,
+     * and PC has no more of a group to commit to with one than without.
+     */
+    private void requireGroupId() {
+        Object groupId = consumerConfig.get(ConsumerConfig.GROUP_ID_CONFIG);
+        if (groupId == null || groupId.toString().trim().isEmpty()) {
+            throw new IllegalArgumentException(msg("{} must carry {} - PC commits offsets for a consumer group, so "
+                            + "there is no group for it to commit to without one; set it as you would when building "
+                            + "the consumer yourself, or supply a finished {} instance instead",
+                    Fields.consumerConfig, ConsumerConfig.GROUP_ID_CONFIG, Fields.consumer));
         }
     }
 

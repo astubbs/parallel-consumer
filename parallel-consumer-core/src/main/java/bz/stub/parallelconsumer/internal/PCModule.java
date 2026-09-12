@@ -102,6 +102,44 @@ public class PCModule<K, V> {
         }
     }
 
+    private void closeQuietly(Consumer<K, V> consumer, String what) {
+        try {
+            consumer.close(Duration.ZERO);
+        } catch (RuntimeException closeFailed) {
+            log.debug("Closing {} also failed", what, closeFailed);
+        }
+    }
+
+    /**
+     * Closes whichever clients <b>PC itself built</b>, for a construction that did not complete.
+     * <p>
+     * <b>Who owns a client, at each point.</b> On the instance path the caller owns theirs throughout - they may
+     * still hold it, they never handed PC its lifecycle, and PC never closes it here. On the configuration path PC
+     * owns what it built from the moment {@code new KafkaConsumer<>}/{@code new KafkaProducer<>} returns, and hands
+     * that ownership on to the constructed {@link AbstractParallelEoSStreamProcessor}, which closes both in its own
+     * {@code close()}. Between those two moments is the window this method exists for: the processor is never
+     * returned to a caller who could close it, so anything built and not handed on is referenced by nobody, and a
+     * caller retrying its start-up leaks one client per attempt.
+     * <p>
+     * Idempotent, and deliberately so: {@link #producerManager()} guards its own construction with a narrower
+     * version of this, so a producer that fails there is closed twice. A Kafka client treats a second close as a
+     * no-op, and a guard that had to reason about whether an earlier one already fired is a guard that gets the
+     * reasoning wrong.
+     * <p>
+     * Called on the thread constructing the module, which is the same thread that wrote these two fields, so the
+     * reads need no further publication argument than the one the construction already provides.
+     *
+     * @param what what failed, for the debug line a failing close writes
+     */
+    public void closeClientsBuiltByPc(String what) {
+        if (producerWrapper != null && !options().isProducerInstanceSupplied()) {
+            closeQuietly(producerWrapper, what);
+        }
+        if (resolvedConsumer != null && !options().isConsumerInstanceSupplied()) {
+            closeQuietly(resolvedConsumer, what);
+        }
+    }
+
     /**
      * Constructs the producer on the configuration path: {@code new KafkaProducer<>(config)}, serializers and all,
      * exactly as the caller would have. The substitution seam for a test that needs the producer PC builds to be a
@@ -143,6 +181,13 @@ public class PCModule<K, V> {
      * The consumer PC uses: the caller's instance, or the one PC builds from
      * {@link ParallelConsumerOptions#getConsumerConfig()}. Memoised, so every collaborator that asks - the
      * {@link ConsumerManager} that wraps it, the start-up checks, the offset codec - polls the same client.
+     * <p>
+     * <b>Ownership.</b> A consumer PC builds here is PC's from the moment {@code new KafkaConsumer<>} returns until
+     * the constructed {@link AbstractParallelEoSStreamProcessor} takes it over and closes it in {@code close()}.
+     * Nothing in between holds it, so a start-up that throws anywhere between the two has to close it: that
+     * processor's constructor wraps everything from its {@link #consumerManager()} call onwards and calls
+     * {@link #closeClientsBuiltByPc(String)}, which is why a failed start-up does not leak a client per attempt. A
+     * consumer the caller supplied is the caller's throughout and is never closed here.
      */
     public Consumer<K, V> consumer() {
         if (this.resolvedConsumer == null) {

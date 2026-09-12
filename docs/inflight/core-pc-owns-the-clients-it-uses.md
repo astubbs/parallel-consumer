@@ -60,6 +60,16 @@ the configuration path only - a supplied instance is untouched by all of it - PC
 requires `key.deserializer` and `value.deserializer` because the engine is generic over `<K, V>` and
 has no pair it could default to that would not be silently wrong. The reasoning is in astubbs#506's
 commit for the feature; the contract is in `ParallelConsumerOptions.validate()`.
+
+**`group.id` joined that list, and ownership is why.** PC commits offsets for a consumer group, so a
+configuration without one describes a client PC cannot use. Until the review of astubbs#506 the only
+refusal was the engine's own `checkGroupIdConfigured()`, which asks the *finished* client - so the map
+was accepted, a real `KafkaConsumer` was built, connected and given a network thread, and only then
+was the start-up refused, with nobody but the half-built processor holding the client. Refusing in
+`consumerSourceValidation()` means no client is built for a configuration that was never going to
+work; the processor's constructor closes what PC built for any *other* failure, which is the second
+half of the same ownership argument. On the instance path there is nothing to refuse before the
+client exists, so `checkGroupIdConfigured()` stays the refusal there.
 <!-- post-merge: checked-end -->
 
 ## Not owned
