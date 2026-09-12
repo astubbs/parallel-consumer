@@ -1,0 +1,68 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Fluent API - typed routes, outcomes and a handle
+category: processing
+module: parallel-consumer-core
+maturity: alpha
+availability:
+  status: planned
+  target_release: 0.6.0.0
+release_assumptions:
+  - The package ships in 0.6.0.0 and is incubating; the record here is conditional until that release is cut.
+  - Dead-lettering is not on the surface in this release - no destination is accepted anywhere - so no claim here may say a record can be copied to another topic.
+summary: >-
+  Define a consumer from connection properties alone: one typed route per topic, each with its own processing
+  function and its own retry and failure policy, and a handle out that says how the instance ended and what is
+  parked.
+use_this_when:
+  - Several topics with different value types are consumed by one instance and a single handler switching on the topic name has become the awkward part.
+  - A record that keeps failing has to stop being retried at some point, and the retry-counting map in the processing function should not be yours to maintain.
+  - Records that are skipped need to be counted apart from records that succeeded.
+  - Deserialisation failures must not be able to end the poll thread.
+setup:
+  entry_point:
+    type: bz.stub.parallelconsumer.ParallelConsumer
+    factory: connect(java.util.Properties) returns a definition and opens nothing; declare routes on it, then start() builds the clients and returns a handle.
+  routes:
+    - topic(name) or topics(names) with Consumed.with / Produced.with for the general form.
+    - json, avro, protobuf, bytes and string helpers, which resolve to the deserialiser already on the classpath.
+  policy:
+    - Instance-wide - withCommitMode, and withDefaultOrdering until per-route ordering lands.
+    - Per route with an instance default - retryLimit, retryDelay, afterRetries, onParked.
+    - Instance-wide in this release, declared as a default against the per-route form arriving - ordering and concurrency.
+    - A deserialiser or serialiser handed in as an instance is shared across worker threads and must be thread-safe;
+      Consumed.perWorker and Produced.perWorker take a supplier instead and give each worker its own instance.
+  observe:
+    - pc.route.records
+    - pc.partition.parked.records
+    - pc.partition.parked.oldest.age
+opt_in:
+  mechanism: Call ParallelConsumer.connect(properties) instead of building ParallelConsumerOptions. Both APIs ship in the same artifact and neither is deprecated.
+  isolated_from_stable_modules: false
+  explanation: It is a package in the core artifact rather than a module of its own, so a classic-API application carries it without using it; nothing it does changes the classic API's behaviour.
+boundaries:
+  - Incubating. Every public type carries Kafka's InterfaceStability.Unstable and the package is excluded from the
+    API-compatibility gate, so a name or shape may change between releases with no deprecation cycle. The classic
+    API's guarantee is unchanged and unaffected.
+  - Jackson is an optional dependency, so a module that calls the JSON helpers declares it itself. The Avro and
+    Protobuf helpers resolve reflectively and are refused at definition time, naming the library, when it is absent.
+  - Ordering is accepted as an instance default only. Per-route ordering needs a change at the engine's shard-key
+    seam and is not in this release.
+  - There is no dead-letter setting in this release. A record that runs out of attempts parks in place or stops
+    the instance; copying it out to another topic is specified and is not offered here, so it cannot be declared
+    and then quietly not happen.
+  - A supplied producer instance forgoes producer recovery, which runs only when the library builds the producer
+    from configuration. A supplied consumer must be unsubscribed and configured for raw bytes; the second cannot be
+    checked before the first record, so it stops the instance rather than retrying.
+  - Every definition-time refusal happens before a connection is opened and names the offending topic or setting.
+validation:
+  - Run the quickstart against a broker and confirm both routes reached their own topic's records decoded into their own type.
+  - Confirm the outcome counters distinguish succeeded from filtered from parked for your own routes.
+references:
+  - label: README section
+    path: README.adoc#fluent-api
+  - label: Quickstart, compiled and run on every build
+    path: parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/FluentQuickstartApp.java
+readme_anchor: fluent-api

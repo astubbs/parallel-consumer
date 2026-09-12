@@ -18,6 +18,7 @@
     <name>Parallel Consumer - Core</name>
 
     <properties>
+        <jackson.fluent.version>2.18.10</jackson.fluent.version>
         <!-- Root of the per-fork test log silos; see the surefire argLine below and docs/logging.md. -->
         <pc.log.dir>target/pc-logs</pc.log.dir>
         <!-- JUnit 5 thread-parallelism for THIS module's tests. Declared once here because surefire and
@@ -55,6 +56,28 @@
             <artifactId>kafka-clients</artifactId>
             <version>${kafka.version}</version>
         </dependency>
+        <!-- Optional: the fluent API's JSON helpers (bz.stub.parallelconsumer.fluent) resolve to Jackson
+             when the user's classpath carries it, and nothing else in core touches it. Optional so a
+             classic-API user gains no transitive dependency. Kept at the same line the examples pin
+             (jackson.examples.version in the examples parent) and deliberately not in the root
+             dependencyManagement: a global pin is transitive to wiremock-jre8 and broke VertxTest
+             (HTTP 500) when tried, which the example-metrics pom records. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.fluent.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <!-- Optional, and for the same helpers: Jackson refuses java.time types out of the box, so an Instant or
+             an OffsetDateTime on a JSON-typed record fails to write with an error telling the user to add this.
+             JacksonFormats calls findAndRegisterModules(), which picks this up through the ServiceLoader when it
+             is present and adds nothing when it is not. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+            <version>${jackson.fluent.version}</version>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>com.github.luben</groupId>
             <artifactId>zstd-jni</artifactId>
@@ -74,6 +97,19 @@
         </dependency>
 
         <!-- Testing -->
+        <!-- MockAdminClient, for the start-time topic-existence check (bz.stub.parallelconsumer.fluent).
+             Kafka ships it in the test classifier of the artifact this module already depends on, at the same
+             ${kafka.version}, so the double and the interface it doubles can never be different versions.
+             Written by hand instead it would be some sixty stubbed methods returning result types whose
+             constructors are package-private in Kafka - a fake of the AdminClient contract rather than a use
+             of it. Test scope: nothing in main/ sees it, and it is not published. -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>${kafka.version}</version>
+            <classifier>test</classifier>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>

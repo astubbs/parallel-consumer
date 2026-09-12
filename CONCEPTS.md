@@ -43,6 +43,51 @@ mechanism governs the thread-pool and async engines alike.
 Records handed to the worker pool and not yet resolved as succeeded or failed. Distinct from records
 merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain.
 
+**Definition**
+The complete description of one consumer, assembled by the user and then fixed: which broker to connect
+to, every route declared on it, the policy each route carries, and the defaults a route falls back to
+when it declares none of its own. A definition describes; it does not run. Starting one produces an
+instance, and the same definition may start more than one.
+
+**Instance**
+One running consumer, started from one definition: a single Kafka consumer that is one member of a
+consumer group, with its own control loop, its own worker pool, and whatever share of the group's
+partitions the group gives it. The unit that starts, fails and closes as a whole — a fatal failure ends
+an instance, not one record and not the group. Several instances started from the same definition may
+run side by side, in one process or across machines, and the group divides the partitions between them.
+
+**Route**
+One topic bound to one processing function with its own consumed and produced key and value types.
+A route is the unit a user defines, and it carries its own policy: retry limit, retry delay, what
+happens when a record runs out of attempts, dead-letter destination and concurrency limit are each
+a copy of the instance default unless the route declares its own. What stays instance-wide is what
+belongs to the clients rather than to the work — the commit mode, because there is one consumer and
+one commit — and ordering, until the engine can key a shard by route. A topic has at most one route.
+
+**Record outcome**
+The terminal disposition of one record: succeeded, filtered (the processing function chose to drop
+it, and it commits like a success), parked, or exported (copied to the declared dead-letter
+destination). Retry is not an outcome but a step towards one, and a stop request is not an
+outcome either: the record stays incomplete and the instance closes.
+
+**Parked**
+A record that has exhausted its attempts and stays where it is: incomplete in the offset map, holding
+no worker, not re-attempted until told to. The partition commits past it under key and unordered
+processing, so the source topic is the store and the map is the index. Parking is bounded by the
+commit-metadata cap; near it, parked records are exported oldest-first to the dead-letter
+destination when one is declared. Today's retry queue is the same state with the re-attempt
+scheduled; park is that state with the re-attempt withheld. The vocabulary is
+shared by the user-facing definition and the engine, so a behaviour first implemented above the
+engine can later be implemented inside it without changing what the user sees.
+
+**Sandbox**
+A run of a definition with no broker: the same processing engine and the same definition, with the
+Kafka clients replaced by fakes and records generated into the definition's own topics at a declared
+rate, hydrated with realistic random data of each route's declared type. What differs between a
+sandbox run and a real one is the start call and nothing else, which is what makes it both the demo
+and the broker-free test kit. A bound — a duration or a record count — ends the run by draining and
+closing, so what is readable afterwards is the end of the run rather than the middle of it.
+
 **Commit frontier**
 The offset a partition would resume from if consumption restarted — the highest offset committed for
 it. It is *exclusive*: it names the next record expected to be polled, not the last one completed.

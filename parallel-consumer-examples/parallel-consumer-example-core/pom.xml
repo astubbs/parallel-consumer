@@ -36,5 +36,13 @@
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
         </dependency>
+        <!-- The fluent API's json(...) format helper resolves Jackson reflectively, and core declares it
+             optional, so it is not transitive: a module that calls json(...) declares it itself. Version from
+             jackson.examples.version in the examples parent, which explains why the number lives there. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.examples.version}</version>
+        </dependency>
     </dependencies>
 </project>

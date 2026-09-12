@@ -1,0 +1,250 @@
+package bz.stub.parallelconsumer.fluent;
+
+/*-
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import bz.stub.parallelconsumer.FakeRuntimeException;
+import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.internal.utils.LogCapture;
+import bz.stub.parallelconsumer.metrics.PCMetrics;
+import ch.qos.logback.classic.Level;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.search.Search;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.TopicPartition;
+import org.awaitility.Awaitility;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+
+import java.time.Duration;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
+
+/**
+ * The fluent API's meters (R19, KTD8): what each route did with its records.
+ * <p>
+ * They register through the {@code PCModule} the definition builds, which is what puts them in the user's own
+ * registry beside every engine meter and has them swept by the same close - so what is asserted here is both that
+ * they arrive with the right tags and that they leave.
+ */
+@Timeout(180)
+class RouteMetersTest extends AbstractFluentEngineTest {
+
+    /**
+     * Unique to {@link #aRouteWithNoAssignmentIsLoggedOnce()}, and the reason there are two of these rather than
+     * one constant shared by the two tests that look for this warning.
+     * <p>
+     * {@link LogCapture} reads a logger shared with every other test in this module, and this module runs its tests
+     * on several threads - so a topic name two tests can both produce makes each of them able to read the other's
+     * warning. The shared name was doing exactly that: the first of these two tests warns about its dark route
+     * while the second is inside the window where it asserts that <em>nothing</em> has been said yet, and the
+     * second failed on a message it did not cause. Seen on 2026-09-11; it is a collision between the two tests and
+     * not a fault in the warning, which is why the fix is a name apiece rather than a looser assertion.
+     */
+    private static final String UNASSIGNED_TOPIC = "audit-nobody-assigns-beside-an-assigned-route";
+
+    /**
+     * Unique to {@link #theOnlyRouteIsReportedWhenTheInstanceIsAssignedNothingAtAll()}, for the reason above.
+     */
+    private static final String UNASSIGNED_ONLY_TOPIC = "audit-nobody-assigns-and-it-is-the-only-route";
+
+    private static final String OUTCOME_COUNTER = "pc.route.records";
+
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+    /**
+     * The counter's value, having first asserted that the counter is <b>there</b>.
+     * <p>
+     * The two claims are different and this suite makes both: "registered at start and reading zero" is the point
+     * of pre-registering them, and a counter that was never registered would otherwise surface as a
+     * NullPointerException out of the search rather than as the missing meter it is.
+     */
+    private double counter(String topic, OutcomeTag outcome) {
+        Counter counter = Search.in(registry).name(OUTCOME_COUNTER)
+                .tag("topic", topic).tag("outcome", outcome.tagValue()).counter();
+        assertWithMessage("counter %s with topic=%s outcome=%s", OUTCOME_COUNTER, topic, outcome.tagValue())
+                .that(counter).isNotNull();
+        return counter.count();
+    }
+
+    /**
+     * One counter per topic per outcome, from the first record - a meter that appears only once something has gone
+     * wrong is a meter nobody has a dashboard for.
+     */
+    @Test
+    void outcomeCountersCarryTheTopicAndTheOutcome() {
+        var pc = ParallelConsumer.connect(props())
+                .withMetrics(registry)
+                .withDefaultOrdering(ProcessingOrder.UNORDERED);
+        pc.string(TOPIC)
+                .retryLimit(0)
+                .retryDelay(Duration.ofMillis(10))
+                .process(context -> {
+                    switch (context.value()) {
+                        case "succeed":
+                            return Outcome.succeeded();
+                        case "filter":
+                            return Outcome.filtered();
+                        default:
+                            throw new FakeRuntimeException("this record parks");
+                    }
+                });
+
+        handle = runtime.startAndAssign(pc, 1);
+        // Registered at start, before any record: all four outcomes are there reading zero.
+        assertThat(counter(TOPIC, OutcomeTag.SUCCEEDED)).isEqualTo(0d);
+        assertThat(counter(TOPIC, OutcomeTag.FILTERED)).isEqualTo(0d);
+        assertThat(counter(TOPIC, OutcomeTag.PARKED)).isEqualTo(0d);
+        assertThat(counter(TOPIC, OutcomeTag.STOPPED)).isEqualTo(0d);
+
+        runtime.publish(TOPIC, 0, 0, "key-0", "succeed");
+        runtime.publish(TOPIC, 0, 1, "key-1", "filter");
+        runtime.publish(TOPIC, 0, 2, "key-2", "park");
+
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() -> {
+            assertThat(counter(TOPIC, OutcomeTag.SUCCEEDED)).isEqualTo(1d);
+            assertThat(counter(TOPIC, OutcomeTag.FILTERED)).isEqualTo(1d);
+            assertThat(counter(TOPIC, OutcomeTag.PARKED)).isEqualTo(1d);
+        });
+        assertThat(counter(TOPIC, OutcomeTag.STOPPED)).isEqualTo(0d);
+    }
+
+    /**
+     * Closing takes every meter this instance registered back out of the user's registry - the registry outlives
+     * the instance, so anything left behind is a leak reported for ever at its last value.
+     */
+    @Test
+    void everyRouteMeterIsGoneAfterTheInstanceCloses() {
+        var pc = ParallelConsumer.connect(props())
+                .withMetrics(registry)
+                .withDefaultOrdering(ProcessingOrder.UNORDERED);
+        pc.string(TOPIC)
+                .retryLimit(0)
+                .retryDelay(Duration.ofMillis(10))
+                .process(context -> {
+                    throw new FakeRuntimeException("this record parks");
+                });
+
+        ParallelConsumerInstance started = runtime.startAndAssign(pc, 1);
+        handle = started;
+        runtime.publish(TOPIC, 0, 0, "key-0", "an order");
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
+                assertThat(counter(TOPIC, OutcomeTag.PARKED)).isEqualTo(1d));
+
+        // Not the handle's drain: a parked record never completes, so a drain would wait out the drain timeout.
+        RecordingClientRuntime.closeWithoutDraining(started);
+        started.close();
+        handle = null;
+
+        assertThat(Search.in(registry).name(OUTCOME_COUNTER).meters()).isEmpty();
+    }
+
+    /**
+     * Deregistration on its own, over a registry nothing else is touching.
+     * <p>
+     * <b>The instance-level test above cannot see this method work</b>, because the engine's own close sweeps every
+     * meter registered through its {@code PCMetrics} - including these - so it passes whether or not this runs.
+     * Measured: making {@code deregister()} a no-op leaves that test green. What this method buys is a removal at a
+     * moment the handle chooses rather than one that depends on the engine's shutdown reaching its metrics step, and
+     * this is the test that holds it to it.
+     */
+    @Test
+    void deregisteringRemovesEveryMeterItRegistered() {
+        PCMetrics metrics = new PCMetrics(registry, Collections.emptyList(), "route-meters-unit-test");
+        FluentMeters meters = FluentMeters.registerFor(metrics, Collections.singletonList(TOPIC));
+
+        assertThat(Search.in(registry).name(OUTCOME_COUNTER).meters()).hasSize(4);
+
+        meters.deregister();
+
+        assertThat(Search.in(registry).name(OUTCOME_COUNTER).meters()).isEmpty();
+        // A handle that closes twice deregisters twice, and the second sweep must neither throw nor put anything
+        // back: removing an already-removed meter is a no-op in the registry, which is why this needs no flag.
+        meters.deregister();
+        assertThat(Search.in(registry).name(OUTCOME_COUNTER).meters()).isEmpty();
+    }
+
+    /**
+     * A route whose topic was assigned no partition processes nothing and says nothing, which reads as a broken
+     * function rather than as a subscription that matched nothing. It is said once, after the first assignment.
+     */
+    @Test
+    void aRouteWithNoAssignmentIsLoggedOnce() {
+        var processed = new AtomicInteger();
+        var pc = ParallelConsumer.connect(props()).withDefaultOrdering(ProcessingOrder.UNORDERED);
+        pc.string(TOPIC).process(context -> {
+            processed.incrementAndGet();
+            return Outcome.succeeded();
+        });
+        pc.string(UNASSIGNED_TOPIC).process(context -> Outcome.succeeded());
+
+        List<String> warnings;
+        try (LogCapture logs = LogCapture.of(ParallelConsumerInstance.class, Level.WARN)) {
+            Map<TopicPartition, Long> beginning = new HashMap<>();
+            beginning.put(new TopicPartition(TOPIC, 0), 0L);
+            runtime.mockConsumer().updateBeginningOffsets(beginning);
+            handle = pc.start(runtime);
+            // Only one of the two routed topics is assigned anything - the other's route is dark.
+            runtime.mockConsumer().subscribeWithRebalanceAndAssignment(Collections.singletonList(TOPIC), 1);
+
+            Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
+                    assertThat(logs.messagesAt(Level.WARN, "assigned no partition", UNASSIGNED_TOPIC)).isNotEmpty());
+            // Several more control-loop passes, each of which runs the hook again: processing a record takes a
+            // poll, a dispatch and a completion, so waiting for one is a wait for the loop rather than for a clock.
+            runtime.publish(TOPIC, 0, 0, "key-0", "an order");
+            Awaitility.await().atMost(defaultTimeout).until(() -> processed.get() == 1);
+            warnings = logs.messagesAt(Level.WARN, "assigned no partition", UNASSIGNED_TOPIC);
+        }
+
+        assertThat(warnings).hasSize(1);
+    }
+
+    /**
+     * The case the guard used to swallow whole: one route, its only topic assigned nothing, so the whole instance
+     * holds no partitions - and the silence that must precede it.
+     * <p>
+     * This is the commonest instance of the very problem the warning exists for - a misspelled topic name in a
+     * single-route definition - and until the assignment-landed flag replaced the {@code assigned.isEmpty()} early
+     * return it produced total silence, because the warning only ever fired when some OTHER route had been given
+     * something. Kafka hands a member that was assigned nothing an empty assignment, which is not the same thing
+     * as a member whose first rebalance has not happened.
+     * <p>
+     * <b>Both halves are asserted here on purpose.</b> "Warn whenever the assignment is empty" would pass the
+     * second half of this test and fire on every healthy start, so the first half - a real window of control-loop
+     * passes before any rebalance, with nothing said - is what pins the fix to the right discriminator.
+     */
+    @Test
+    void theOnlyRouteIsReportedWhenTheInstanceIsAssignedNothingAtAll() {
+        var pc = ParallelConsumer.connect(props()).withDefaultOrdering(ProcessingOrder.UNORDERED);
+        pc.string(UNASSIGNED_ONLY_TOPIC).process(context -> Outcome.succeeded());
+
+        try (LogCapture logs = LogCapture.of(ParallelConsumerInstance.class, Level.WARN)) {
+            handle = pc.start(runtime);
+
+            // Before any rebalance: an empty assignment is an instance that has not joined yet, and saying
+            // anything here would fire on every healthy start. Half a second is many control-loop passes.
+            Awaitility.await().pollDelay(Duration.ofMillis(500)).atMost(defaultTimeout).until(() ->
+                    logs.messagesAt(Level.WARN, "assigned no partition", UNASSIGNED_ONLY_TOPIC).isEmpty());
+
+            // The rebalance that gives this member nothing at all - no partition of the one routed topic, and so
+            // an empty assignment for the whole instance. Kafka delivers it; the facade's listener records it.
+            runtime.mockConsumer().rebalance(Collections.emptyList());
+
+            Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
+                    assertThat(logs.messagesAt(Level.WARN, "assigned no partition", UNASSIGNED_ONLY_TOPIC))
+                            .isNotEmpty());
+        }
+    }
+}

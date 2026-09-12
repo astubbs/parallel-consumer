@@ -23,7 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * can WAIT for that instead of asking repeatedly whether it has happened yet.
  * <p>
  * The completion already existed as the control task's submitted {@link java.util.concurrent.Future}, private with
- * no accessor, which is the only reason a caller had to poll: the fluent API's {@code ConsumerHandle.awaitShutdown}
+ * no accessor, which is the only reason a caller had to poll: the fluent API's
+ * {@code ParallelConsumerInstance.awaitShutdown}
  * looped at 200ms on a latch and asked {@link AbstractParallelEoSStreamProcessor#isClosedOrFailed()} on each pass,
  * because an engine that ended without going through that handle counts no latch down. A composable future answers
  * both halves at once.

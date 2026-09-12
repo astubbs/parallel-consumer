@@ -564,7 +564,8 @@ public class ShardManager<K, V> {
      * container here is stale and an unconditional filter would answer empty for the rest of the process. A
      * closed instance's parked set is a report of the run that was, and the run's own report is what the
      * quickstart and its README section show an operator reading; a running instance's is a list of what it can
-     * still be asked to act on, and a revoked record is not on it. {@code ConsumerHandle.parkedContainers()} is
+     * still be asked to act on, and a revoked record is not on it.
+     * {@code ParallelConsumerInstance.parkedContainers()} is
      * the one production caller and picks by the instance's state.
      *
      * @param excludingRevoked leave out containers whose partition this instance no longer holds. True while the
