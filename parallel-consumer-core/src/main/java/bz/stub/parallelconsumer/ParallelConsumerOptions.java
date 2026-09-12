@@ -23,7 +23,6 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Duration;
 import java.util.Map;
-import java.util.Objects;
 import java.util.function.Function;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
@@ -40,9 +39,9 @@ import static java.time.Duration.ofMillis;
  * If you want to go deeper, look at {@link #defaultMessageRetryDelay}, {@link #retryDelayProvider} and
  * {@link #commitMode}.
  * <p>
- * Note: The only required option is the {@link #consumer} (a producer - {@link #producerConfig} for PC to build one
- * from, or a {@link #producer} instance - is only needed if you use the Produce flows). All other options have
- * sensible defaults.
+ * Note: The only required option is the consumer - a {@link #consumer} instance, or {@link #consumerConfig} for PC
+ * to build one from. A producer - {@link #producerConfig} for PC to build one from, or a {@link #producer} instance -
+ * is only needed if you use the Produce flows. All other options have sensible defaults.
  *
  * @author Antony Stubbs
  * @see #builder()
@@ -56,9 +55,29 @@ import static java.time.Duration.ofMillis;
 public class ParallelConsumerOptions<K, V> {
 
     /**
-     * Required parameter for all use.
+     * A finished consumer instance. Required for all use, unless {@link #consumerConfig} is supplied instead, from
+     * which PC builds the consumer itself.
+     * <p>
+     * Whichever way it arrives, {@code enable.auto.commit} must be off: PC commits offsets itself.
      */
     private final Consumer<K, V> consumer;
+
+    /**
+     * Consumer configuration, from which PC builds its own consumer with {@code new KafkaConsumer<>(config)}: any
+     * {@code ConsumerConfig} key, deserializers included, exactly as it would be passed to that constructor.
+     * {@code key.deserializer} and {@code value.deserializer} are required here - PC is generic over
+     * {@code <K, V>}, so it has no basis for choosing them for you - and {@code enable.auto.commit} is forced off,
+     * because PC commits offsets itself; setting it to true is refused rather than silently overridden.
+     * <p>
+     * The alternative to {@link #consumer}; supplying both fails validation, as does supplying neither. It exists so
+     * that a caller with only connection properties in hand need not construct a client just to hand it straight
+     * back - the engine builds its own clients, symmetrically with {@link #producerConfig}. What it costs is the
+     * consumer's lifecycle: one PC builds is PC's to close, and a caller who wants to keep the instance, configure
+     * it programmatically, or share it with anything else must supply {@link #consumer} instead. Excluded from
+     * {@link #toString()}, as the map may carry credentials.
+     */
+    @ToString.Exclude
+    private final Map<String, Object> consumerConfig;
 
     /**
      * A finished producer instance for the produce flows. Supplying a producer is only needed if using the produce
@@ -530,13 +549,106 @@ public class ParallelConsumerOptions<K, V> {
         return getMaxConcurrency() * getBatchSize();
     }
 
+    /**
+     * Refuses a configuration that cannot work, at construction, naming the option the caller set.
+     * <p>
+     * <b>Every refusal here is an {@link IllegalArgumentException}, including a missing consumer.</b> That one used to
+     * be an {@link NullPointerException} from a bare {@code Objects.requireNonNull(consumer, ...)}; it became an
+     * {@code IllegalArgumentException} when there stopped being one way to supply a consumer, because the refusal now
+     * has to name two options and "this argument was null" is no longer what is wrong. Recorded because it is
+     * externally visible on a published library and a caller could be catching the old type - though catching an
+     * unchecked exception from a builder's own validation to do anything but fail is hard to construct a reason for,
+     * which is why it is stated rather than re-litigated. It rode in with the {@code consumerConfig} option and was
+     * named in no commit body at the time - found by the review of astubbs/parallel-consumer#506, and recorded here
+     * because a javadoc is where a user looks and a commit body is not.
+     *
+     * @throws IllegalArgumentException for any invalid or self-contradictory configuration
+     */
     public void validate() {
-        Objects.requireNonNull(consumer, "A consumer must be supplied");
-
+        consumerSourceValidation();
         producerSourceValidation();
         transactionsValidation();
         loadFactorValidation();
         batchSizeValidation();
+    }
+
+    /**
+     * Exactly one way of supplying a consumer may be used, and one of them is required: two consumers cannot be
+     * resolved to one silently, and PC has nothing to poll with if neither arrives.
+     * <p>
+     * The configuration-path refusals are here, rather than left to {@code new KafkaConsumer<>(config)} or to the
+     * engine's own start-up checks, because this is the point that can name the option the caller set <b>and it is
+     * before any client exists</b>. A missing deserializer surfaces from the client constructor as a
+     * {@code ConfigException} about a key the caller never typed themselves; an {@code enable.auto.commit} of true
+     * and a missing {@code group.id} would both be accepted by that constructor and only rejected later, by checks
+     * whose messages talk about a consumer instance the caller never built - having first built one, connected it
+     * and started its network thread for a configuration that was never going to work.
+     */
+    private void consumerSourceValidation() {
+        if (consumer != null && consumerConfig != null) {
+            throw new IllegalArgumentException(msg("Supply either a {} instance or {} for PC to build one from, not both",
+                    Fields.consumer, Fields.consumerConfig));
+        }
+        if (consumer == null && consumerConfig == null) {
+            throw new IllegalArgumentException(msg("A consumer must be supplied - either a {} instance or {} for PC to build one from",
+                    Fields.consumer, Fields.consumerConfig));
+        }
+        if (consumerConfig != null) {
+            requireDeserialiser(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG);
+            requireDeserialiser(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG);
+            requireGroupId();
+            refuseAutoCommit();
+        }
+    }
+
+    /**
+     * PC is generic over {@code <K, V>} and never decodes a record itself, so there is no deserializer it could
+     * default to - a byte-array pair would be right only for a caller whose {@code <K, V>} are byte arrays, and
+     * silently wrong for everyone else.
+     */
+    private void requireDeserialiser(String key) {
+        if (consumerConfig.get(key) == null) {
+            throw new IllegalArgumentException(msg("{} must carry {} - PC is generic over its key and value types, "
+                            + "so it cannot choose a deserializer for you; set it as you would when building the "
+                            + "consumer yourself, or supply a finished {} instance instead",
+                    Fields.consumerConfig, key, Fields.consumer));
+        }
+    }
+
+    /**
+     * PC commits offsets <em>for a consumer group</em> - that is the whole mechanism by which a record is marked
+     * done - so a configuration with no {@code group.id} describes a consumer PC cannot use. Refused here, beside
+     * the other configuration-path refusals, rather than left to the start-up check that asks the finished client
+     * for its group metadata: that check runs after the client exists, and a client that exists has already opened
+     * a broker connection and started a network thread for a configuration that was never going to work.
+     * <p>
+     * Blank counts as missing. An empty group id is the spelling a template or an unresolved placeholder produces,
+     * and PC has no more of a group to commit to with one than without.
+     */
+    private void requireGroupId() {
+        Object groupId = consumerConfig.get(ConsumerConfig.GROUP_ID_CONFIG);
+        if (groupId == null || groupId.toString().trim().isEmpty()) {
+            throw new IllegalArgumentException(msg("{} must carry {} - PC commits offsets for a consumer group, so "
+                            + "there is no group for it to commit to without one; set it as you would when building "
+                            + "the consumer yourself, or supply a finished {} instance instead",
+                    Fields.consumerConfig, ConsumerConfig.GROUP_ID_CONFIG, Fields.consumer));
+        }
+    }
+
+    /**
+     * Refused rather than overridden: PC commits offsets itself, so a caller who asked for auto-commit asked for
+     * something incompatible, and quietly doing the opposite of what the map says is how a misconfiguration
+     * survives to the day somebody reads the map and believes it. Absent is the ordinary case, and PC sets it false
+     * itself when it builds the consumer.
+     */
+    private void refuseAutoCommit() {
+        Object autoCommit = consumerConfig.get(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG);
+        if (autoCommit != null && Boolean.parseBoolean(autoCommit.toString())) {
+            throw new IllegalArgumentException(msg("Cannot set {} to true in {} - PC commits offsets itself, so the "
+                            + "two would double-commit. Remove the key (PC sets it false when it builds the "
+                            + "consumer) or set it to false",
+                    ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, Fields.consumerConfig));
+        }
     }
 
     /**
@@ -662,6 +774,13 @@ public class ParallelConsumerOptions<K, V> {
      */
     public boolean isProducerInstanceSupplied() {
         return producer != null;
+    }
+
+    /**
+     * @return true when the {@link #consumer} instance was supplied, rather than {@link #consumerConfig}
+     */
+    public boolean isConsumerInstanceSupplied() {
+        return consumer != null;
     }
 
     /**
