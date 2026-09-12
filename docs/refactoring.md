@@ -625,6 +625,11 @@ cosmetic - see the last bullet.*
   enforces the pair. Widening it to public collapses them; the owner's call, because the chaos suite
   otherwise declines to widen main-code visibility for a probe. Raised by the automated review on
   astubbs#491.
+- **The two parked gauges each walk the whole retry queue per scrape**, so one scrape of an instance
+  costs `2 x assigned partitions` walks of it - `countParkedNow` / `oldestParkedAgeSeconds`, marked
+  `TODO(refactor)` on `parkedContainersOfThisInstance`. An index of parked containers by partition
+  would make it one walk; the shape was carried over unchanged from the facade meters it replaced, so
+  the move neither introduced nor fixed it.
 
 ### state/PartitionStateManager.java
 - `incrementPartitionAssignmentEpoch` defaults a missing **epoch** from

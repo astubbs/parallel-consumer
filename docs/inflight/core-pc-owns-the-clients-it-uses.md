@@ -1,40 +1,78 @@
-# PC builds the clients it uses, rather than being handed them - the consumer half
+# PC builds the clients it uses - configuration is now a path on both sides, but not the only one
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: reliability -->
-<!-- inflight-vetted: 2026-09-07 - the consumer half is still untaken: `ParallelConsumerOptions` still takes a `consumer` instance with no supplier or factory, while `ThreadConfinedConsumer` and `ConsumerOwnership` still enforce ownership at runtime only, which is the asymmetry the note argues from. `origin/client-factory` still exists as the 2022 draft, and astubbs#420 (the producer half) is still OPEN, so the pair is still unanswered -->
+<!-- post-merge: checked - the vet is attributed to astubbs#506, not to the branch that carried it -->
+<!-- inflight-vetted: 2026-09-11 - rewritten against astubbs#506: `ParallelConsumerOptions` now carries `consumerConfig` beside `producerConfig` and `PCModule.buildConsumer` beside `buildProducer`, so the consumer half this note asked for exists - additively. Both instance fields, `consumer` and `producer`, are still there and still take the path they always took, so the structural-ownership argument below is untouched and is what remains open -->
 
-astubbs/parallel-consumer#420 makes PC build its **producer** from configuration through a factory it
-enforces, instead of taking a finished instance. The same argument applies to the **consumer**, it was
-drafted in 2022, and nothing tracks it.
+<!-- post-merge: checked-begin - written in the past tense about a PR, which stays correct once it lands -->
+**The consumer half of this note has landed, and the argument it was making has not.**
+astubbs#506 (for astubbs#504) gave `ParallelConsumerOptions` a `consumerConfig` mirroring
+`producerConfig`, with `PCModule.buildConsumer(Map)` as the protected substitution seam beside
+`buildProducer(Map)`. A caller holding nothing but connection properties no longer has to construct a
+client purely to hand it straight back.
+<!-- post-merge: checked-end -->
 
-## The consumer half already has a draft
+That change is **additive**, deliberately: a supplied `consumer` takes exactly the path it took
+before. So PC can still be handed a client that somebody else built, holds, and may close - which is
+the thing this note exists to argue against.
 
-`origin/client-factory` takes a supplier rather than an instance. It is catalogued in
-`branch_accounting` (`src/docs/development/upstream-map.yaml`); `bin/inflight.mjs branch client-factory`
-answers from any checkout.
+## What is still open
 
-**It is more relevant now than when it was written, not less.** Master already enforces exclusive
-consumer ownership at *runtime* - `ThreadConfinedConsumer` refuses a call from a thread that does not
-own it, and `ConsumerOwnership` makes that a lifecycle. A factory would make structural what is
-currently a runtime guard: PC cannot be handed a consumer somebody else still holds, because nobody
-hands it one.
+**The instance path.** `consumer` and `producer` are both still fields on
+`ParallelConsumerOptions`, and while they are, exclusive ownership stays a *runtime* guard -
+`ThreadConfinedConsumer` refusing a call from a thread that does not own the client, and
+`ConsumerOwnership` making that a lifecycle. The note's original claim was that building the client
+would make structural what those two enforce at runtime: PC cannot be handed a consumer somebody else
+still holds, because nobody hands it one. Nothing about the configuration path achieves that on its
+own. Removing the instance path, or deprecating it into a documented legacy route, is what would.
 
-## Why it is worth doing as a pair
+**Breaking, so it is release-gated.** `docs/refactoring.md`'s *Breaking changes queued for next major
+version* is where this belongs once somebody commits to it, not this note - that has not changed, and
+nobody has committed to it. What has changed is that the replacement now exists, so the queued entry
+would be a removal rather than a design.
 
-The two halves answer the same question - *who owns the client PC uses* - and answering it for the
-producer alone leaves the API asymmetric: configuration in for one, instance in for the other.
-astubbs#420's own reasoning (a producer PC built belongs to PC, and is closed rather than leaked when
-construction fails) transfers directly.
+**The producer half's own PR.** astubbs#420 is the rung that makes the producer side a factory PC
+enforces rather than a map it happens to accept; `gh pr view 420 -R astubbs/parallel-consumer`
+answers its current state. Until it lands, the two sides are enforced differently even though both
+now accept configuration.
 
-## What it costs
+## The 2022 draft was answered in a different shape - read this before reviving it
 
-**Breaking**, so it is release-gated: `docs/refactoring.md`'s *Breaking changes queued for next major
-version* is where it belongs once someone commits to it, not this note. Taking an instance would have
-to go, or become the deprecated path. The 2022 branch is a design reference rather than a diff to
-apply - it predates the ownership lifecycle it would now be built on.
+`origin/client-factory` takes a **supplier**. The landed consumer half takes a **configuration map**
+plus a protected `buildConsumer` the tests override, which is a different design answering the same
+question, and it is the one in the tree. The branch is catalogued in `branch_accounting`
+(`src/docs/development/upstream-map.yaml`); `bin/inflight.mjs branch client-factory` answers from any
+checkout.
 
-## Not started
+**So the open question about that branch is no longer "should somebody do this" but "does the
+supplier shape still buy anything the config path does not".** A supplier defers construction and can
+be re-invoked; a map is resolved once, memoised in `PCModule.consumer()`. Whether that difference
+matters is unmeasured and undecided. Nobody should apply the 2022 branch as a diff either way - it
+predates the ownership lifecycle it would now be built on.
 
-Unowned. Recorded 2026-09-03 while reading every pre-fork branch, because the idea had no tracker at
-all: astubbs#420 reaches it only through a line in `docs/refactoring.md`'s idea bank.
+## What the configuration path settled, and does not need re-litigating
+
+<!-- post-merge: checked-begin - cites a merged PR's commit and its landed contract, both permanent -->
+Recorded here because it is the kind of decision a later reader re-opens from first principles. On
+the configuration path only - a supplied instance is untouched by all of it - PC refuses an explicit
+`enable.auto.commit=true` rather than quietly inverting it, forces an absent one to false, and
+requires `key.deserializer` and `value.deserializer` because the engine is generic over `<K, V>` and
+has no pair it could default to that would not be silently wrong. The reasoning is in astubbs#506's
+commit for the feature; the contract is in `ParallelConsumerOptions.validate()`.
+
+**`group.id` joined that list, and ownership is why.** PC commits offsets for a consumer group, so a
+configuration without one describes a client PC cannot use. Until the review of astubbs#506 the only
+refusal was the engine's own `checkGroupIdConfigured()`, which asks the *finished* client - so the map
+was accepted, a real `KafkaConsumer` was built, connected and given a network thread, and only then
+was the start-up refused, with nobody but the half-built processor holding the client. Refusing in
+`consumerSourceValidation()` means no client is built for a configuration that was never going to
+work; the processor's constructor closes what PC built for any *other* failure, which is the second
+half of the same ownership argument. On the instance path there is nothing to refuse before the
+client exists, so `checkGroupIdConfigured()` stays the refusal there.
+<!-- post-merge: checked-end -->
+
+## Not owned
+
+Unowned, as before. The consumer half was taken up as part of other work rather than because anybody
+picked this note up, so the remaining breaking change still has nobody on it.

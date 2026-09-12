@@ -68,11 +68,11 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         var holdCompleted = new AtomicInteger();
 
         var pc = ParallelConsumer.connect(props())
-                .closePath(ClosePath.DONT_DRAIN_FIRST)
-                .defaultOrdering(ProcessingOrder.UNORDERED)
+                .withClosePath(ClosePath.DONT_DRAIN_FIRST)
+                .withDefaultOrdering(ProcessingOrder.UNORDERED)
                 // Two workers: one holds a record in flight while the other reaches the stopping record, which is
                 // the situation AE14 describes - in-flight work and a stop at the same moment.
-                .defaultConcurrency(concurrency);
+                .withDefaultConcurrency(concurrency);
         pc.string(TOPIC).process(context -> {
             String value = context.value();
             if ("hold".equals(value)) {
@@ -136,7 +136,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
     @Test
     void afterARestartTheStoppingRecordIsDeliveredAgain() {
         var firstRunSaw = new AtomicInteger();
-        var pc = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var pc = ParallelConsumer.connect(props()).withClosePath(ClosePath.DONT_DRAIN_FIRST);
         pc.string(TOPIC).process(context -> {
             firstRunSaw.incrementAndGet();
             return Outcome.stop("the schema is not supported");
@@ -152,12 +152,12 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
 
         var restartRuntime = new RecordingClientRuntime();
         var restartSaw = new AtomicInteger();
-        var restarted = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var restarted = ParallelConsumer.connect(props()).withClosePath(ClosePath.DONT_DRAIN_FIRST);
         restarted.string(TOPIC).process(context -> {
             restartSaw.incrementAndGet();
             return Outcome.stop("the schema is not supported");
         });
-        ConsumerHandle restartHandle = restartRuntime.startAndAssign(restarted, 1);
+        ParallelConsumerInstance restartHandle = restartRuntime.startAndAssign(restarted, 1);
         restartRuntime.publish(TOPIC, 0, 0, "key-0", "an order");
         assertThat(restartHandle.awaitShutdown(Duration.ofSeconds(30))).isTrue();
 
@@ -183,9 +183,9 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         var invokedOffsets = ConcurrentHashMap.<Long>newKeySet();
 
         var pc = ParallelConsumer.connect(props())
-                .closePath(ClosePath.DONT_DRAIN_FIRST)
-                .defaultOrdering(ProcessingOrder.UNORDERED)
-                .defaultConcurrency(concurrency);
+                .withClosePath(ClosePath.DONT_DRAIN_FIRST)
+                .withDefaultOrdering(ProcessingOrder.UNORDERED)
+                .withDefaultConcurrency(concurrency);
         var invokedWhenTheStopWasReported = new AtomicInteger(-1);
         pc.string(TOPIC).process(context -> {
             invokedOffsets.add(context.offset());
@@ -218,7 +218,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() ->
                 assertThat(handle.stopRequest().isPresent()).isTrue());
         assertThat(handle.awaitShutdown(Duration.ofSeconds(60))).isTrue();
-        ConsumerHandle stopped = handle;
+        ParallelConsumerInstance stopped = handle;
         handle = null;
 
         int invoked = invokedOffsets.size();
@@ -248,7 +248,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
     @Test
     void aRouteMayStopTheInstanceWhenARecordRunsOutOfAttempts() {
         var attempts = new AtomicInteger();
-        var pc = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var pc = ParallelConsumer.connect(props()).withClosePath(ClosePath.DONT_DRAIN_FIRST);
         pc.string(TOPIC)
                 .retryLimit(2)
                 .retryDelay(Duration.ofMillis(10))
@@ -262,7 +262,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
 
         assertThat(handle.awaitShutdown(Duration.ofSeconds(30))).isTrue();
-        ConsumerHandle stopped = handle;
+        ParallelConsumerInstance stopped = handle;
         handle = null;
 
         // A limit of two allows three runs, and the third is the one that stops the instance.
@@ -290,7 +290,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
      */
     @Test
     void theExhaustionReactionIsPerRoute() {
-        var pc = ParallelConsumer.connect(props()).closePath(ClosePath.DONT_DRAIN_FIRST);
+        var pc = ParallelConsumer.connect(props()).withClosePath(ClosePath.DONT_DRAIN_FIRST);
         pc.string(TOPIC)
                 .retryLimit(2)
                 .retryDelay(Duration.ofMillis(10))
@@ -323,7 +323,7 @@ class StopTheInstanceTest extends AbstractFluentEngineTest {
 
         runtime.publish(TOPIC, 0, 0, "key-0", "an order");
         assertThat(handle.awaitShutdown(Duration.ofSeconds(30))).isTrue();
-        ConsumerHandle stopped = handle;
+        ParallelConsumerInstance stopped = handle;
         handle = null;
 
         assertThat(stopped.stopRequest().get().topic()).isEqualTo(TOPIC);

@@ -127,6 +127,10 @@ public final class Format<T> implements Serde<T> {
     }
 
     /**
+     * How this format reads bytes into its type. Handed to the dispatch path rather than used here, so that
+     * decoding runs inside the record's own attempt and a bad payload is a record outcome, never a poll-thread
+     * failure.
+     *
      * @return the deserialiser, or null when this format can only write - test with {@link #hasDeserializer()} first
      */
     @Override
@@ -142,6 +146,9 @@ public final class Format<T> implements Serde<T> {
     }
 
     /**
+     * How this format writes its type back to bytes, for the produce path and for anything that must generate
+     * records a route would accept.
+     *
      * @return the serialiser, or null when this format can only read - test with {@link #hasSerializer()} first
      */
     @Override

@@ -11,7 +11,7 @@ availability:
   target_release: 0.6.0.0
 release_assumptions:
   - The package ships in 0.6.0.0 and is incubating; the record here is conditional until that release is cut.
-  - Dead-lettering is declared on the surface and refused at start in this release, so no claim here may say a record can be copied to another topic.
+  - Dead-lettering is not on the surface in this release - no destination is accepted anywhere - so no claim here may say a record can be copied to another topic.
 summary: >-
   Define a consumer from connection properties alone: one typed route per topic, each with its own processing
   function and its own retry and failure policy, and a handle out that says how the instance ended and what is
@@ -29,12 +29,12 @@ setup:
     - topic(name) or topics(names) with Consumed.with / Produced.with for the general form.
     - json, avro, protobuf, bytes and string helpers, which resolve to the deserialiser already on the classpath.
   policy:
-    - Instance-wide - commitMode, and ordering until per-route ordering lands.
+    - Instance-wide - withCommitMode, and withDefaultOrdering until per-route ordering lands.
     - Per route with an instance default - retryLimit, retryDelay, concurrency, afterRetries, onParked.
   observe:
     - pc.route.records
-    - pc.route.parked.records
-    - pc.route.parked.oldest.age
+    - pc.partition.parked.records
+    - pc.partition.parked.oldest.age
 opt_in:
   mechanism: Call ParallelConsumer.connect(properties) instead of building ParallelConsumerOptions. Both APIs ship in the same artifact and neither is deprecated.
   isolated_from_stable_modules: false
@@ -47,8 +47,9 @@ boundaries:
     Protobuf helpers resolve reflectively and are refused at definition time, naming the library, when it is absent.
   - Ordering is accepted as an instance default only. Per-route ordering needs a change at the engine's shard-key
     seam and is not in this release.
-  - A dead-letter destination is refused at start in this release, naming the topic, rather than accepted and
-    silently doing nothing. Records park in place instead.
+  - There is no dead-letter setting in this release. A record that runs out of attempts parks in place or stops
+    the instance; copying it out to another topic is specified and is not offered here, so it cannot be declared
+    and then quietly not happen.
   - A supplied producer instance forgoes producer recovery, which runs only when the library builds the producer
     from configuration. A supplied consumer must be unsubscribed and configured for raw bytes; the second cannot be
     checked before the first record, so it stops the instance rather than retrying.

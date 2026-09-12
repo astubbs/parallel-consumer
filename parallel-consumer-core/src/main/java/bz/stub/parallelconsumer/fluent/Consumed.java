@@ -16,6 +16,21 @@ import org.apache.kafka.common.serialization.Serde;
  * {@link org.apache.kafka.common.serialization.Serdes Serde}, a bare {@link Deserializer}, or a {@link Formats}
  * helper.
  *
+ * <h2>What it deliberately does not carry</h2>
+ * The borrowed shape has five fields; this has two, and the three that are missing are missing structurally rather
+ * than by oversight. A <b>timestamp extractor</b> has nothing to feed: this library has no stream-time or
+ * event-time model, so nothing would ever read one. A <b>per-source offset reset policy</b> cannot exist here,
+ * because the facade subscribes one consumer to the union of every route's topics - so {@code auto.offset.reset} is
+ * necessarily a connection property on
+ * {@link bz.stub.parallelconsumer.ParallelConsumer#connect(java.util.Properties) connect}, and a per-route value
+ * would be a promise one consumer cannot keep. A <b>source name</b> would be redundant by construction: a topic
+ * carries exactly one route (KD11) and a route's parked set is asked for as {@code instance.topic("orders")}, so the
+ * topic already is the route's name.
+ * <p>
+ * <b>Both halves are required and there is no configuration-level default.</b> The original accepts a null half and
+ * falls back to a default serde declared in configuration; this has no such fallback, so a null here throws rather
+ * than quietly reading with something the route never named.
+ *
  * @param <K> the consumed key type
  * @param <V> the consumed value type
  */

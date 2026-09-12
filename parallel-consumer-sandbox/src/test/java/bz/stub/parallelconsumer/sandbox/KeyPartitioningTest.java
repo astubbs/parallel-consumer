@@ -6,7 +6,7 @@ package bz.stub.parallelconsumer.sandbox;
 
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.fluent.Consumed;
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.Formats;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
@@ -181,10 +181,10 @@ class KeyPartitioningTest {
                 .feeding(TOPIC, index -> TOPIC + "-" + index)
                 .build();
 
-        try (ConsumerHandle handle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance instance = definition.start(sandbox)) {
             assertWithMessage("the record bound should have been reached and the instance closed")
                     .that(sandbox.awaitBound(Duration.ofSeconds(60))).isTrue();
-            handle.awaitShutdown();
+            instance.awaitShutdown();
         }
 
         assertThat(sandbox.generatedRecords()).isEqualTo(RECORD_BOUND);

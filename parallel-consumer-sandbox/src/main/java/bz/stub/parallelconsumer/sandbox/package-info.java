@@ -11,7 +11,7 @@
  *
  * <pre>{@code
  * Sandbox sandbox = Sandbox.builder().handPublished().build();
- * try (ConsumerHandle handle = pc.start(sandbox)) {
+ * try (ParallelConsumerInstance instance = pc.start(sandbox)) {
  *     sandbox.publish("orders", "cust-1", new Order("o-1"));
  *     sandbox.awaitSettled();
  *     assertThat(inventory.reserved()).containsExactly("o-1");
@@ -50,8 +50,8 @@
  * pc.json("dispatches", Dispatch.class)
  *         .process(ctx -> { routing.plan(ctx.value()); return Outcome.succeeded(); });
  *
- * try (ConsumerHandle handle = pc.start()) { ... }                     // a broker
- * try (ConsumerHandle handle = pc.start(sandbox)) { ... }              // no broker
+ * try (ParallelConsumerInstance instance = pc.start()) { ... }                     // a broker
+ * try (ParallelConsumerInstance instance = pc.start(sandbox)) { ... }              // no broker
  * }</pre>
  *
  * {@link bz.stub.parallelconsumer.sandbox.Sandbox} is an implementation of the fluent API's one runtime seam,

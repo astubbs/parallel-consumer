@@ -43,6 +43,19 @@ mechanism governs the thread-pool and async engines alike.
 Records handed to the worker pool and not yet resolved as succeeded or failed. Distinct from records
 merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain.
 
+**Definition**
+The complete description of one consumer, assembled by the user and then fixed: which broker to connect
+to, every route declared on it, the policy each route carries, and the defaults a route falls back to
+when it declares none of its own. A definition describes; it does not run. Starting one produces an
+instance, and the same definition may start more than one.
+
+**Instance**
+One running consumer, started from one definition: a single Kafka consumer that is one member of a
+consumer group, with its own control loop, its own worker pool, and whatever share of the group's
+partitions the group gives it. The unit that starts, fails and closes as a whole — a fatal failure ends
+an instance, not one record and not the group. Several instances started from the same definition may
+run side by side, in one process or across machines, and the group divides the partitions between them.
+
 **Route**
 One topic bound to one processing function with its own consumed and produced key and value types.
 A route is the unit a user defines, and it carries its own policy: retry limit, retry delay, what

@@ -25,7 +25,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * inside the bound's own sequence instead - wait for the instance to account for every published record, then
  * close it - and an interrupt there makes
  * {@code SandboxConsumer#awaitEveryPublishedRecordCommitted} return as though it had succeeded and hands
- * {@code handle.close()} a thread carrying an interrupt, which is the state Parallel Consumer's own close path
+ * {@code instance.close()} a thread carrying an interrupt, which is the state Parallel Consumer's own close path
  * warns about. The final commit can then be skipped and the run reads as a flake.
  * <p>
  * Driven at the driver rather than through a run, and with latches rather than a clock: the interesting

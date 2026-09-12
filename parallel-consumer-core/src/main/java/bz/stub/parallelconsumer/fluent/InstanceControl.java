@@ -13,7 +13,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
  * inside itself would wait for itself - which is why both of these are a request to somebody else's thread rather
  * than a call the wrapper makes directly (KTD6).
  *
- * @see ConsumerHandle the implementation the definition wires in at start
+ * @see ParallelConsumerInstance the implementation the definition wires in at start
  */
 interface InstanceControl {
 

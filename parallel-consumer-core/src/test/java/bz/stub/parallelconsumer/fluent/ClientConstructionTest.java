@@ -21,7 +21,6 @@ import org.mockito.Mockito;
 import java.util.Collections;
 import java.util.Properties;
 
-import static bz.stub.parallelconsumer.fluent.AfterRetries.dlqImmediately;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -50,7 +49,7 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
 
     @Test
     void aDefinitionWithNothingToProduceOpensNoProducerAndAsksForNone() {
-        var pc = ParallelConsumer.connect(props()).commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS);
+        var pc = ParallelConsumer.connect(props()).withCommitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS);
         pc.string("orders").process(context -> Outcome.succeeded());
 
         assertThat(pc.requiresProducer()).isFalse();
@@ -60,44 +59,6 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
         assertThat(runtime.producerCalls).isEqualTo(0);
         assertThat(options.getProducer()).isNull();
         assertThat(options.getProducerConfig()).isNull();
-    }
-
-    @Test
-    void aDeadLetterDestinationIsEnoughToNeedAProducer() {
-        var pc = ParallelConsumer.connect(props());
-        pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
-
-        assertThat(pc.requiresProducer()).isTrue();
-        ParallelConsumerOptions<byte[], byte[]> options = pc.buildOptions(runtime);
-
-        assertThat(runtime.producerCalls).isEqualTo(1);
-        assertThat(options.getProducer()).isNotNull();
-    }
-
-    /**
-     * ...and yet starting is refused, because export does not run in this release.
-     * <p>
-     * The two claims sit together on purpose. What a destination <em>means</em> for the clients is settled - it
-     * needs a producer, and the test above says so at the level that answers it. What is not yet built is the
-     * thing that would use it: a record that runs out of attempts parks in place, and nothing copies it on. So the
-     * refusal lives at start rather than at validation, and it goes away with the unit that adds export - leaving
-     * the producer decision above untouched.
-     * <p>
-     * A definition-time refusal is this project's answer to any setting it cannot honour, and the alternative here
-     * is the one thing worse than a refusal: {@code dlqTo} accepted and silently doing nothing.
-     */
-    @Test
-    void aDeadLetterDestinationIsRefusedAtStartUntilExportLands() {
-        var pc = ParallelConsumer.connect(props());
-        pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
-
-        var thrown = assertThrows(IllegalArgumentException.class, () -> pc.start(runtime));
-
-        assertThat(thrown).hasMessageThat().contains("orders.dlq");
-        assertThat(thrown).hasMessageThat().contains("does not run in this release");
-        assertThat(thrown).hasMessageThat().contains("parks in place");
-        // Refused before anything was built, like every other refusal this definition makes.
-        assertThat(runtime.builtNothing()).isTrue();
     }
 
     @Test
@@ -115,7 +76,7 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
         Properties properties = props();
         properties.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "client-construction-test");
         var pc = new ParallelConsumerDefinition(properties)
-                .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+                .withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
         pc.string("orders").process(context -> Outcome.succeeded());
 
         assertThat(pc.requiresProducer()).isTrue();
@@ -130,7 +91,11 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
     void aRuntimeThatSuppliesNoProducerGetsTheConfigurationInsteadWithRawByteSerialisers() {
         var declining = RecordingClientRuntime.decliningToSupplyAProducer();
         var pc = ParallelConsumer.connect(props());
-        pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
+        // Produced types are what makes this definition need a producer; any of the triggers in requiresProducer()
+        // would do, and this is the one that needs no properties of its own.
+        pc.string("orders")
+                .produced(Produced.with(Serdes.String(), Serdes.String()))
+                .process(context -> Outcome.succeeded());
 
         ParallelConsumerOptions<byte[], byte[]> options = pc.buildOptions(declining);
 
@@ -149,7 +114,7 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
      */
     @Test
     void theEnginesAdmissionTargetIsTheSumOfTheRoutesTargets() {
-        var pc = ParallelConsumer.connect(props()).defaultConcurrency(10);
+        var pc = ParallelConsumer.connect(props()).withDefaultConcurrency(10);
         pc.string("orders").process(context -> Outcome.succeeded());
         pc.string("audit").concurrency(100).process(context -> Outcome.succeeded());
 
@@ -159,7 +124,7 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
     @Test
     void aPreBuiltConsumerIsUsedInsteadOfAskingTheRuntime() {
         var pc = ParallelConsumer.connect(props())
-                .consumer(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST));
+                .withConsumer(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST));
         pc.string("orders").process(context -> Outcome.succeeded());
 
         ParallelConsumerOptions<byte[], byte[]> options = pc.buildOptions(runtime);
@@ -186,7 +151,7 @@ class ClientConstructionTest extends AbstractFluentEngineTest {
         // The engine checks the group id first, so without this the test would prove that check instead.
         Mockito.when(subscribed.groupMetadata())
                 .thenReturn(new ConsumerGroupMetadata("client-construction-test"));
-        var pc = ParallelConsumer.connect(props()).consumer(subscribed);
+        var pc = ParallelConsumer.connect(props()).withConsumer(subscribed);
         pc.string("orders").process(context -> Outcome.succeeded());
 
         var thrown = assertThrows(IllegalStateException.class, () -> pc.start(runtime));

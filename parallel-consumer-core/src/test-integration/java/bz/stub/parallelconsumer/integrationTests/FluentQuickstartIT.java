@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.integrationTests;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.fluent.ParkedRecord;
@@ -105,7 +105,7 @@ class FluentQuickstartIT extends BrokerIntegrationTest<String, String> {
         var ordersSeen = new ConcurrentLinkedQueue<String>();
         var scansSeen = new ConcurrentLinkedQueue<String>();
 
-        ConsumerHandle handle = quickstartShaped(group, ordersSeen, scansSeen).start();
+        ParallelConsumerInstance handle = quickstartShaped(group, ordersSeen, scansSeen).start();
         try {
             // Every order, and every scan except the poison one. Both routes ran, each over its own topic's
             // records decoded into its own type, which is the typed-routes half of the quickstart.
@@ -168,7 +168,7 @@ class FluentQuickstartIT extends BrokerIntegrationTest<String, String> {
      * The parked set over real records: the offset it names is the one that was produced poison, and its attempt
      * count is what the route's retry limit allows and no more.
      */
-    private void assertParkedRecord(ConsumerHandle handle) {
+    private void assertParkedRecord(ParallelConsumerInstance handle) {
         ParkedView parked = handle.topic(scansTopic).parked();
         assertThat(parked.count()).isEqualTo(1);
         ParkedRecord record = parked.records().get(0);
@@ -202,7 +202,7 @@ class FluentQuickstartIT extends BrokerIntegrationTest<String, String> {
         second.json(ordersTopic).process(context -> Outcome.succeeded());
 
         // The handle is named rather than anonymous only so that the close is visibly the try's, not a leak.
-        try (ConsumerHandle secondInstance = second.start()) {
+        try (ParallelConsumerInstance secondInstance = second.start()) {
             log.info("Second instance of group started: {}", secondInstance);
             await().alias("the parked record to be delivered again to a new member of the same group")
                     .atMost(Duration.ofMinutes(1))

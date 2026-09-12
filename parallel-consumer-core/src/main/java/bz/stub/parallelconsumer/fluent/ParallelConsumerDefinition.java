@@ -10,17 +10,12 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.PCModule;
-import bz.stub.parallelconsumer.state.PartitionStateManager;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.producer.Producer;
-import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.annotation.InterfaceStability;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
-import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -42,7 +37,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
  * A Parallel Consumer being defined: connection properties in, one typed route per topic, policy as data, and a
- * handle out. Start it from {@link ParallelConsumer#connect(Properties)}.
+ * running instance out. Start it from {@link ParallelConsumer#connect(Properties)}.
  *
  * <h2>What happens when</h2>
  * <b>Defining opens nothing.</b> Every check this class makes runs before a client exists, in a fixed order - routes,
@@ -51,20 +46,34 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * no consumer and no producer at all.
  * <p>
  * <b>Starting builds exactly what the definition needs.</b> A producer is opened only when something asks for one: a
- * route that declares produced types, a dead-letter destination, or the transactional commit mode. Every other
- * definition runs on the plain poll flow with no producer (R4, KTD2).
+ * route that declares produced types, or the transactional commit mode. Every other definition runs on the plain
+ * poll flow with no producer (R4, KTD2).
  *
  * <h2>Instance-wide settings and per-route defaults are spelled apart</h2>
- * An instance-wide setting is plain - {@link #commitMode} - because the engine has one consumer, one commit and one
- * transaction, so those are properties of the clients rather than of the work. So are {@link #closePath}, which is
- * how this instance shuts down whoever asked it to, and {@link #meterRegistry}, which is where its meters go.
- * Everything else is a per-route value
- * with an instance default, and those carry a {@code default} prefix: {@link #defaultRetryLimit},
- * {@link #defaultConcurrency}, {@link #defaultAfterRetries}. A route that declares its own overrides its copy and
- * nobody else's (KD11, R6).
+ * Every setting on this class carries a {@code with} prefix, so the settings read as one family (KD16). An
+ * instance-wide setting stops there - {@link #withCommitMode} - because the engine has one consumer, one commit
+ * and one transaction, so those are properties of the clients rather than of the work. So are
+ * {@link #withClosePath}, which is how this instance shuts down whoever asked it to, and {@link #withMetrics},
+ * which is where its meters go. Everything else is a per-route value with an instance default, and those keep
+ * {@code default} inside the name, after the prefix: {@link #withDefaultRetryLimit},
+ * {@link #withDefaultConcurrency}, {@link #withDefaultAfterRetries}. A route that declares its own overrides its
+ * copy and nobody else's (KD11, R6).
+ * <p>
+ * <b>The spellings those names replaced are gone, not deprecated</b> (KD15): this package has never been released,
+ * so there is no caller outside this repository to keep compiling, and a deprecated alias would have claimed a
+ * compatibility that was never at stake. The day the fluent API ships, that reverses - a replaced name then keeps
+ * its old spelling as a deprecated delegate, and removing it becomes a release-gated decision.
  *
- * <h2>It is closeable, and so is the handle</h2>
- * {@link #start()} hands back a {@link ConsumerHandle}, which is what the README holds in try-with-resources. This
+ * <h2>What this class is, and what it delegates</h2>
+ * It is the fluent surface and the assembly: the setters, the route helpers, {@link #start} and the
+ * {@link DefinitionView} answers. Three bodies of work that had grown inside it are now their own owners, each
+ * reached only from here - {@link ConnectionProperties} cuts the one property bag three ways, {@link InstanceDefaults}
+ * holds the per-route defaults a route resolves against, and {@link DefinitionRules} holds every refusal
+ * {@link #validate()} makes. Nothing about the public surface moved: this class still answers every call it did.
+ *
+ * <h2>It is closeable, and so is the instance</h2>
+ * {@link #start()} hands back a {@link ParallelConsumerInstance}, which is what the README holds in
+ * try-with-resources. This
  * definition is {@link AutoCloseable} too, for a caller who would rather hold one thing than two: closing it closes
  * the instance it started, and closes nothing at all if it never started one.
  *
@@ -75,32 +84,11 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable {
 
     /**
-     * Connection properties the facade owns, so they are not passed on to a route's deserialisers: the two that
-     * address the cluster, and the client serialisers, which the facade sets to raw bytes itself (KTD7).
+     * The connection properties, copied at construction rather than held, and cut three ways by their own owner:
+     * what this definition validates, what a route's formats are configured with, and what a producer is built
+     * from. See {@link ConnectionProperties}, which holds the two lists that decide those cuts.
      */
-    private static final Set<String> FACADE_OWNED_PROPERTIES = UniSets.of(
-            ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
-            ConsumerConfig.GROUP_ID_CONFIG,
-            ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
-            ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG);
-
-    /**
-     * Producer-side keys that mean nothing to a producer and would only log an unknown-configuration warning.
-     */
-    private static final Set<String> CONSUMER_ONLY_PROPERTIES = UniSets.of(
-            ConsumerConfig.GROUP_ID_CONFIG,
-            ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,
-            ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
-            ConsumerConfig.ISOLATION_LEVEL_CONFIG,
-            ConsumerConfig.MAX_POLL_RECORDS_CONFIG,
-            ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG);
-
-    /**
-     * The connection properties, copied at construction rather than held: a caller who goes on editing the
-     * {@link Properties} it passed in must not be able to change what this definition validates, or what its
-     * clients are built from, after the fact.
-     */
-    private final Map<String, Object> properties;
+    private final ConnectionProperties connection;
 
     /**
      * The options under construction. A pre-built client goes into this the moment it is supplied and is never held
@@ -129,49 +117,11 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     private CommitMode commitMode = CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 
     /**
-     * The ordering guarantee every route resolves to. Key ordering by default: it keeps a key's records in order
-     * while letting unrelated keys run at once, which is the guarantee this library exists to give.
+     * The per-route settings' instance-wide defaults - the {@code default}-prefixed ones, and the only settings a
+     * route resolves against. One object with one reader, {@link RouteState#resolveDefaults()}, rather than six
+     * fields reached through six accessors (KD11, R6).
      */
-    private ProcessingOrder defaultOrdering = ProcessingOrder.KEY;
-
-    /**
-     * The admission target a route copies when it declares none. The engine is given the sum over the routes, not
-     * this value, because routes do not compete for one shared limit (R23).
-     */
-    private int defaultConcurrency = ParallelConsumerOptions.DEFAULT_MAX_CONCURRENCY;
-
-    /**
-     * Ten attempts after the first, then park - the default that at last gives the engine's inert failure-history
-     * setting of ten a meaning (R10).
-     */
-    private OptionalInt defaultRetryLimit = OptionalInt.of(10);
-
-    /**
-     * How long a failed record waits before its next attempt, on every route that declares no delay. It is also
-     * what the dispatch wrapper answers for a topic no route claims, which the engine can ask about while a
-     * partition is being revoked.
-     */
-    private Duration defaultRetryDelay = Duration.ofSeconds(1);
-
-    /**
-     * What a route copies when it declares no after-retries policy of its own (R27). Null until something declares
-     * one, and a route that resolves against null parks in place - the default that holds the record and commits
-     * nothing past it, rather than one that discards work.
-     */
-    private AfterRetries defaultAfterRetries;
-
-    /**
-     * The park observer a route copies when it declares none (R16). Wildcard-typed because one instance-wide
-     * observer spans routes whose consumed types differ, so there are no types it could be declared over.
-     */
-    private ParkObserver<?, ?> defaultParkObserver;
-
-    /**
-     * The instance-wide export percentage as declared, held only so validation can refuse it by name: the trigger
-     * it would drive reads an engine accessor that does not exist yet (KTD5). Boxed so that null means nothing was
-     * declared - a zero would be a value somebody typed.
-     */
-    private Integer instancePayloadPercentage;
+    private final InstanceDefaults defaults = new InstanceDefaults();
 
     /**
      * Whether the caller supplied a finished consumer, so that start does not ask the runtime for one. A flag
@@ -201,15 +151,21 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
 
     /**
      * How this instance shuts down, whoever asked it to (R17, R24). Draining by default, which is what makes the
-     * handle a graceful shutdown.
+     * instance a graceful shutdown.
      */
     private ClosePath closePath = ClosePath.DRAIN_FIRST;
 
     /**
-     * The handle {@link #start} produced, so that a definition held in try-with-resources closes the instance it
+     * What a start does about a route naming a topic the cluster does not have (owner decision, 2026-09-11).
+     * Refusing by default - see {@link MissingTopic#FAIL} for the silence it replaces.
+     */
+    private MissingTopic whenTopicMissing = MissingTopic.FAIL;
+
+    /**
+     * The instance {@link #start} produced, so that a definition held in try-with-resources closes the instance it
      * started. Null until it starts one.
      */
-    private volatile ConsumerHandle startedHandle;
+    private volatile ParallelConsumerInstance startedInstance;
 
     /**
      * The user's own rebalance listener, chained after the facade's (KTD2). Null when none was declared.
@@ -229,22 +185,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * the cluster later, where a constructor reads as an object being built.
      */
     public ParallelConsumerDefinition(Properties connectionProperties) {
-        Objects.requireNonNull(connectionProperties, "Connection properties must be supplied");
-        Map<String, Object> copy = new LinkedHashMap<>();
-        // getProperty, not get: stringPropertyNames() includes keys inherited from a parent Properties' defaults,
-        // and Properties.get is Hashtable.get, which does not consult them - so a defaulted key was copied in
-        // with a NULL value, and the entrySet pass below cannot repair it because entrySet does not see defaults
-        // either. Those nulls reached the deserialisers' configure() and the producer's properties.
-        for (String name : connectionProperties.stringPropertyNames()) {
-            copy.put(name, connectionProperties.getProperty(name));
-        }
-        // Properties may carry non-String values when built programmatically; stringPropertyNames misses those.
-        for (Map.Entry<Object, Object> entry : connectionProperties.entrySet()) {
-            if (entry.getKey() instanceof String) {
-                copy.put((String) entry.getKey(), entry.getValue());
-            }
-        }
-        this.properties = copy;
+        this.connection = ConnectionProperties.copyOf(connectionProperties);
     }
 
     // ---------------------------------------------------------------- instance-wide settings
@@ -253,26 +194,9 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * Instance-wide, because the engine has one consumer: one offset commit per group, and under the transactional
      * mode one producer's transaction around it (KD11).
      */
-    public ParallelConsumerDefinition commitMode(CommitMode commitMode) {
+    public ParallelConsumerDefinition withCommitMode(CommitMode commitMode) {
         this.commitMode = Objects.requireNonNull(commitMode, "A commit mode must be supplied");
         return this;
-    }
-
-    /**
-     * Refused: the seam this needs has not landed.
-     * <p>
-     * Shutting down or carrying on when a commit exhausts its budget is the one other instance-wide setting, by the
-     * same line as {@link #commitMode} - it is a property of the one commit. It sits here once the commit-failure
-     * seam (astubbs#352) lands. Until then this refuses rather than storing a value that would do nothing: an
-     * accepted setting that is silently inert is worse than one that says so.
-     *
-     * @throws IllegalArgumentException always, until astubbs#352 lands
-     */
-    public ParallelConsumerDefinition commitFailure(CommitFailurePolicy policy) {
-        throw new IllegalArgumentException(msg("commitFailure ({}) cannot be declared yet - the commit-failure seam "
-                + "it needs (astubbs#352) has not landed, and a setting that is accepted and then does nothing is "
-                + "worse than one that says so. Today a commit that exhausts its budget shuts the instance down.",
-                policy));
     }
 
     /**
@@ -282,8 +206,25 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * pass an argument - and because an instance having two answers to "what happens to the backlog", one for its
      * caller and one for itself, is a difference nobody would predict correctly (KTD6).
      */
-    public ParallelConsumerDefinition closePath(ClosePath path) {
+    public ParallelConsumerDefinition withClosePath(ClosePath path) {
         this.closePath = Objects.requireNonNull(path, "A close path must be supplied");
+        return this;
+    }
+
+    /**
+     * What the start does about a route naming a topic the cluster does not have: refuse it, create it, or say so
+     * and carry on. {@link MissingTopic#FAIL} unless the definition says otherwise, and
+     * {@link MissingTopic} carries why.
+     * <p>
+     * <b>Instance-wide rather than per route with an instance default</b>, which is where KD11 would have put it
+     * and where {@code docs/refactoring.md} said it would go. Directed by the owner on 2026-09-11, and the reason
+     * it is the better shape: this is one question asked once of one cluster, before any route is running, and two
+     * routes of one definition disagreeing about whether a missing topic is fatal describes an instance that is
+     * half-started - which is not a state this API has. A route that may legitimately be absent is a definition
+     * that declares {@link MissingTopic#IGNORE} and reads its route's parked view, not a per-route flag.
+     */
+    public ParallelConsumerDefinition withMissingTopicPolicy(MissingTopic policy) {
+        this.whenTopicMissing = Objects.requireNonNull(policy, "A missing-topic policy must be supplied");
         return this;
     }
 
@@ -291,11 +232,11 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * Where this instance's meters go (R19). Without one, Parallel Consumer registers into a no-op registry and
      * nothing is published.
      * <p>
-     * The fluent API's own meters - what each route did with its records, and what is parked right now - register
-     * here alongside every engine meter, under the {@code routes} subsystem, and are removed when the instance
-     * closes.
+     * The fluent API's own meters - what each route did with its records - register here alongside every engine
+     * meter, under the {@code routes} subsystem, and are removed when the instance closes. The live parked figures
+     * are the engine's, gauged per partition under the {@code partitions} subsystem.
      */
-    public ParallelConsumerDefinition meterRegistry(MeterRegistry registry) {
+    public ParallelConsumerDefinition withMetrics(MeterRegistry registry) {
         Objects.requireNonNull(registry, "A meter registry must be supplied");
         options.meterRegistry(registry);
         return this;
@@ -307,8 +248,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * The ordering guarantee every route copies. Per-route ordering needs a change at the engine's shard-key seam
      * and is a later milestone, so in this version it is the instance default and nothing else (R6).
      */
-    public ParallelConsumerDefinition defaultOrdering(ProcessingOrder ordering) {
-        this.defaultOrdering = Objects.requireNonNull(ordering, "An ordering must be supplied");
+    public ParallelConsumerDefinition withDefaultOrdering(ProcessingOrder ordering) {
+        defaults.ordering(Objects.requireNonNull(ordering, "An ordering must be supplied"));
         return this;
     }
 
@@ -316,52 +257,52 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * The admission target every route copies: how many of its records may be in flight at once. Routes do not
      * compete for one shared limit, so the engine's total admission is the sum of the routes' targets (R23, KD6).
      */
-    public ParallelConsumerDefinition defaultConcurrency(int limit) {
+    public ParallelConsumerDefinition withDefaultConcurrency(int limit) {
         if (limit < 1) {
-            throw new IllegalArgumentException(msg("defaultConcurrency ({}) must be at least one - it is each "
+            throw new IllegalArgumentException(msg("withDefaultConcurrency ({}) must be at least one - it is each "
                     + "route's admission target", limit));
         }
-        this.defaultConcurrency = limit;
+        defaults.concurrency(limit);
         return this;
     }
 
     /**
      * How many attempts after the first every route allows before its records park (R10).
      */
-    public ParallelConsumerDefinition defaultRetryLimit(int attempts) {
+    public ParallelConsumerDefinition withDefaultRetryLimit(int attempts) {
         if (attempts < 0) {
-            throw new IllegalArgumentException(msg("defaultRetryLimit ({}) cannot be negative - it counts the "
-                    + "attempts after the first; use defaultRetryForever() to ask for unbounded retries", attempts));
+            throw new IllegalArgumentException(msg("withDefaultRetryLimit ({}) cannot be negative - it counts the "
+                    + "attempts after the first; use withDefaultRetryForever() to ask for unbounded retries", attempts));
         }
-        this.defaultRetryLimit = OptionalInt.of(attempts);
+        defaults.retryLimit(OptionalInt.of(attempts));
         return this;
     }
 
     /**
      * Retry forever, as the classic API always has. Opt-in on purpose (R10).
      */
-    public ParallelConsumerDefinition defaultRetryForever() {
-        this.defaultRetryLimit = OptionalInt.empty();
+    public ParallelConsumerDefinition withDefaultRetryForever() {
+        defaults.retryLimit(OptionalInt.empty());
         return this;
     }
 
     /**
      * How long a failed record waits before its next attempt, on every route that declares no delay of its own.
      */
-    public ParallelConsumerDefinition defaultRetryDelay(Duration delay) {
+    public ParallelConsumerDefinition withDefaultRetryDelay(Duration delay) {
         Objects.requireNonNull(delay, "A retry delay must be supplied");
         if (delay.isNegative()) {
-            throw new IllegalArgumentException(msg("defaultRetryDelay ({}) cannot be negative", delay));
+            throw new IllegalArgumentException(msg("withDefaultRetryDelay ({}) cannot be negative", delay));
         }
-        this.defaultRetryDelay = delay;
+        defaults.retryDelay(delay);
         return this;
     }
 
     /**
      * What happens to a record that runs out of attempts, on every route that declares nothing of its own (R27).
      */
-    public ParallelConsumerDefinition defaultAfterRetries(AfterRetries policy) {
-        this.defaultAfterRetries = Objects.requireNonNull(policy, "An after-retries policy must be supplied");
+    public ParallelConsumerDefinition withDefaultAfterRetries(AfterRetries policy) {
+        defaults.afterRetries(Objects.requireNonNull(policy, "An after-retries policy must be supplied"));
         return this;
     }
 
@@ -372,21 +313,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * instance default cannot know them. Declare it on a route with {@link Route#onParked} to see that route's own
      * types.
      */
-    public ParallelConsumerDefinition defaultOnParked(ParkObserver<Object, Object> observer) {
-        this.defaultParkObserver = Objects.requireNonNull(observer, "A park observer must be supplied");
-        return this;
-    }
-
-    /**
-     * The instance default for the export percentage a route's park policy may override (R6, R27).
-     * <p>
-     * <b>Refused in this version</b>, at validation, along with a percentage on any route: the accessor it reads -
-     * a partition's encoded payload length - does not exist in the engine yet, so an explicit percentage would be a
-     * setting that never fires (KTD5). The default of {@link AfterRetries#MAX_PAYLOAD_PERCENTAGE} applies once that
-     * accessor lands.
-     */
-    public ParallelConsumerDefinition dlqWhenOffsetPayloadReaches(int percentage) {
-        this.instancePayloadPercentage = percentage;
+    public ParallelConsumerDefinition withDefaultOnParked(ParkObserver<Object, Object> observer) {
+        defaults.parkObserver(Objects.requireNonNull(observer, "A park observer must be supplied"));
         return this;
     }
 
@@ -403,7 +331,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * rather than retrying (KTD3, R1). It must also be unsubscribed: the engine manages the subscription and refuses
      * a consumer that is not clean.
      */
-    public ParallelConsumerDefinition consumer(Consumer<byte[], byte[]> consumer) {
+    public ParallelConsumerDefinition withConsumer(Consumer<byte[], byte[]> consumer) {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
         this.preBuiltConsumerDescription = RawBytesConsumerFaultException.describe(consumer);
         this.preBuiltConsumerSupplied = true;
@@ -412,14 +340,13 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * Run against a producer you built yourself. Sugar for the Java binding, as {@link #consumer} is.
+     * Run against a producer you built yourself. Sugar for the Java binding, as {@link #withConsumer} is.
      * <p>
      * <b>A supplied producer forgoes producer recovery</b> (astubbs#410): recovery rebuilds the producer from its
      * configuration, and an instance handed a finished producer has no configuration to rebuild from. Leave this out
-     * and the definition's properties build one that can recover. Under the transactional commit mode this also
-     * forgoes export (R1, R14).
+     * and the definition's properties build one that can recover (R1).
      */
-    public ParallelConsumerDefinition producer(Producer<byte[], byte[]> producer) {
+    public ParallelConsumerDefinition withProducer(Producer<byte[], byte[]> producer) {
         Objects.requireNonNull(producer, "A producer must be supplied");
         this.preBuiltProducerSupplied = true;
         options.producer(producer);
@@ -539,230 +466,18 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     // ---------------------------------------------------------------- validation
 
     /**
-     * Every check this definition makes, in a fixed order - routes, then properties, then policy - and no client is
-     * built by any of them (AE7). Run automatically by {@link #start}; call it directly to fail early.
+     * Every refusal this definition makes, before anything is built (AE7). Run automatically by {@link #start};
+     * call it directly to fail early.
+     * <p>
+     * The rules themselves live in {@link DefinitionRules}, built fresh here over the definition as it stands
+     * right now - a definition is mutable until it starts, so a snapshot taken any earlier would check a
+     * definition nobody wrote.
      *
      * @throws IllegalArgumentException naming the offending topic or setting
      */
     public void validate() {
-        validateRoutes();
-        validateProperties();
-        validatePolicy();
-    }
-
-    /**
-     * Routes first, because a definition with no route, or a topic with no function, is a mistake about the shape
-     * of the definition rather than about one setting - and saying so before the property and policy checks run
-     * stops those reporting on a definition that was never going to start (AE7).
-     * <p>
-     * Resolving each route's defaults here is what lets everything below read the values a route will actually run
-     * with, rather than the nulls that mean "take the instance's".
-     */
-    private void validateRoutes() {
-        if (routes.isEmpty()) {
-            throw new IllegalArgumentException("This definition declares no routes - declare at least one topic with "
-                    + "a processing function before starting");
-        }
-        for (RouteState route : routes) {
-            if (!route.hasFunction()) {
-                throw new IllegalArgumentException(msg("Topic {} has no processing function - a route is a statement "
-                        + "that ends in process(...)", route.describeTopics()));
-            }
-            route.resolveDefaults();
-        }
-    }
-
-    /**
-     * The facade reads raw bytes and each route decodes its own records, so a deserialiser named in the connection
-     * properties would be silently superseded. It is refused, naming the setting and the routes that supersede it
-     * (R4); everything else the facade does not own is passed to each route's deserialisers.
-     */
-    private void validateProperties() {
-        refuseDeserialiserSetting(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG);
-        refuseDeserialiserSetting(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG);
-        refuseConsumerAutoCommit();
-        validateTransactionalId();
-
-        Map<String, Object> passThrough = passThroughProperties();
-        for (RouteState route : routes) {
-            route.consumedKey().configure(passThrough, true);
-            route.consumedValue().configure(passThrough, false);
-            if (route.producesRecords()) {
-                route.producedKey().configure(passThrough, true);
-                route.producedValue().configure(passThrough, false);
-            }
-        }
-    }
-
-    /**
-     * Parallel Consumer commits offsets itself, and refuses to run a consumer that auto-commits - so a definition
-     * that asked for both would fail at start, from inside a client the user never built.
-     * <p>
-     * Kafka's own default is {@code true}, which is why {@link KafkaClientRuntime} sets it to {@code false} on the
-     * consumer it constructs rather than leaving the default to fail every properties-only definition (R1). What is
-     * refused here is only the explicit {@code true}: silently overriding a setting somebody typed would be the one
-     * outcome worse than either.
-     */
-    private void refuseConsumerAutoCommit() {
-        Object declared = properties.get(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG);
-        if (declared != null && Boolean.parseBoolean(String.valueOf(declared))) {
-            throw new IllegalArgumentException(msg("{} is {} in the connection properties, and Parallel Consumer "
-                            + "commits offsets for you - a consumer that also commits on its own would commit "
-                            + "records this instance has not finished. Remove the setting; the fluent API disables "
-                            + "it on the consumer it builds.",
-                    ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, declared));
-        }
-    }
-
-    /**
-     * One wording for both deserialiser settings, so the key and the value halves of the same mistake cannot be
-     * answered in two different sentences. It names the routes that supersede the setting, because "it would never
-     * be used" is only actionable once the reader can see what is using its own types instead.
-     *
-     * @param setting the connection-properties key being refused
-     */
-    private void refuseDeserialiserSetting(String setting) {
-        if (properties.containsKey(setting)) {
-            throw new IllegalArgumentException(msg("{} was supplied in the connection properties, and the routes for "
-                            + "{} supersede it: the fluent API consumes raw bytes and each route applies its own "
-                            + "deserialisers, so a deserialiser named here would never be used. Remove it and "
-                            + "declare the types on the route (R4).",
-                    setting, routedTopics()));
-        }
-    }
-
-    /**
-     * The transactional id and the commit mode have to agree: Parallel Consumer builds its producer from these
-     * properties, and Kafka's producer needs the id in that map to be transactional at all.
-     */
-    private void validateTransactionalId() {
-        boolean idDeclared = properties.containsKey(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
-        boolean transactional = commitMode == CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
-        if (idDeclared && !transactional) {
-            throw new IllegalArgumentException(msg("{} is in the connection properties but the commit mode is {} - a "
-                            + "transactional producer under a non-transactional commit mode never opens a "
-                            + "transaction. Declare commitMode({}) or remove the setting.",
-                    ProducerConfig.TRANSACTIONAL_ID_CONFIG, commitMode,
-                    CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER));
-        }
-        if (transactional && !idDeclared && !preBuiltProducerSupplied) {
-            throw new IllegalArgumentException(msg("The commit mode is {} but there is no {} in the connection "
-                            + "properties - Parallel Consumer builds the producer from these properties and Kafka "
-                            + "needs the id there to make it transactional. Add it, or supply a transactional "
-                            + "producer with producer(...).",
-                    commitMode, ProducerConfig.TRANSACTIONAL_ID_CONFIG));
-        }
-    }
-
-    /**
-     * Policy last, once every route has resolved its defaults, so each check reads the policy the route will
-     * actually run with rather than the one it declared.
-     * <p>
-     * Everything refused here is a setting that could not be honoured - a trigger with no destination, a
-     * destination with no trigger, a destination this instance reads itself, or one under a commit mode that
-     * cannot recover from a failed export. Each refusal names its topic, because a policy mistake is a mistake
-     * about one route (R27, AE7).
-     */
-    private void validatePolicy() {
-        if (instancePayloadPercentage != null) {
-            throw refusedPercentage(instancePayloadPercentage, null);
-        }
-        for (RouteState route : routes) {
-            AfterRetries policy = route.afterRetries();
-            String topic = route.describeTopics();
-            refuseHalfAParkCycle(policy, topic);
-            if (policy.payloadPercentage().isPresent()) {
-                throw refusedPercentage(policy.payloadPercentage().getAsInt(), topic);
-            }
-            if (policy.destination() == null) {
-                if (policy.isDlqImmediately()) {
-                    throw noDestination("dlqImmediately", topic);
-                }
-                if (policy.ageBound() != null) {
-                    throw noDestination("dlqOlderThan", topic);
-                }
-                continue;
-            }
-            if (!policy.hasExportTrigger()) {
-                throw new IllegalArgumentException(msg("Topic {} declares the dead-letter destination {} with no "
-                        + "trigger, so nothing would ever be exported to it. The payload-fraction trigger needs an "
-                        + "engine accessor that does not exist yet (KTD5), so declare dlqImmediately() or "
-                        + "dlqOlderThan(...), or drop the destination and let records park in place.",
-                        topic, policy.destination()));
-            }
-            if (routesByTopic.containsKey(policy.destination())) {
-                throw new IllegalArgumentException(msg("Topic {} names {} as its dead-letter destination, and this "
-                        + "instance routes {} itself - it would consume its own exports. Send them to a topic this "
-                        + "definition does not read (R13).",
-                        topic, policy.destination(), policy.destination()));
-            }
-            if (commitMode == CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER) {
-                throw new IllegalArgumentException(msg("Topic {} declares the dead-letter destination {} under the "
-                        + "{} commit mode, which is refused until producer recovery lands (astubbs#410, closing "
-                        + "astubbs#225): an export send that fails inside the transaction aborts it, the instance "
-                        + "terminates, and on restart the attempt counts reset - a persistently failing export would "
-                        + "loop. Park in place under this commit mode, or use a consumer commit mode (R14).",
-                        topic, policy.destination(), commitMode));
-            }
-        }
-    }
-
-    /**
-     * A park delay and a cycle count mean nothing apart: a delay with no cycles grants no attempt, and cycles with
-     * no delay is scheduled retry with no schedule. Either would be a setting that silently does nothing, which is
-     * the one thing this definition refuses to produce (R27, AE7).
-     */
-    private void refuseHalfAParkCycle(AfterRetries policy, String topic) {
-        if (!policy.declaresAnyParkCycle()) {
-            return;
-        }
-        if (policy.parkDelay() == null) {
-            throw new IllegalArgumentException(msg("Topic {} declares forCycles({}) with no park delay - a cycle is "
-                            + "a wait followed by one more attempt, so declare thenRetryAfter(...) beside it, or "
-                            + "drop it and let the record park as soon as its retries run out (R27).",
-                    topic, policy.parkCycles()));
-        }
-        if (policy.parkCycles() == 0) {
-            throw new IllegalArgumentException(msg("Topic {} declares thenRetryAfter({}) with no cycle count - "
-                            + "nothing would ever wait that long, because no attempt has been granted. Declare "
-                            + "forCycles(...) beside it, or drop it (R27).",
-                    topic, policy.parkDelay()));
-        }
-    }
-
-    /**
-     * The shared wording for an export trigger declared with nothing to send to: two settings, one sentence, so
-     * the two cannot drift into answering the same mistake differently (R27).
-     *
-     * @param setting the trigger that was declared without a destination
-     * @param topic   the route's topics, named so the reader knows which route to fix
-     * @return the exception to throw, so the call site reads as {@code throw noDestination(...)}
-     */
-    private IllegalArgumentException noDestination(String setting, String topic) {
-        return new IllegalArgumentException(msg("Topic {} declares {} with no dead-letter destination - declare "
-                + "dlqTo(...) beside it, or drop it and let records park in place (R27)", topic, setting));
-    }
-
-    /**
-     * One refusal covering both halves of R27's rule: no explicit percentage is accepted in this version at all, and
-     * a value above the ceiling would never be reached even when they are.
-     */
-    private IllegalArgumentException refusedPercentage(int percentage, String topic) {
-        // Named once rather than passed in: both call sites are this one setting, and the message has to keep
-        // matching the method a user actually wrote.
-        String setting = "dlqWhenOffsetPayloadReaches";
-        String where = topic == null ? "the definition" : "topic " + topic;
-        String ceiling = percentage > AfterRetries.MAX_PAYLOAD_PERCENTAGE
-                ? msg(" It is also above the ceiling of {}: the engine stops a partition taking work at {}% of the "
-                        + "commit-metadata cap, so a percentage at or near that is never reached.",
-                AfterRetries.MAX_PAYLOAD_PERCENTAGE,
-                (int) (PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT * 100))
-                : "";
-        return new IllegalArgumentException(msg("{} ({}) on {} is not supported in this version: the trigger reads a "
-                        + "partition's encoded payload length, and the engine has no accessor for it yet, so an "
-                        + "explicit percentage would be a setting that never fires (KTD5). Records park in place "
-                        + "until it lands; declare dlqImmediately() or dlqOlderThan(...) for an export today.{}",
-                setting, percentage, where, ceiling));
+        new DefinitionRules(routes, routesByTopic, connection, commitMode, defaults,
+                preBuiltProducerSupplied).validate();
     }
 
     // ---------------------------------------------------------------- start
@@ -770,7 +485,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     /**
      * Validate, build the clients this definition needs, and run (F1).
      */
-    public ConsumerHandle start() {
+    public ParallelConsumerInstance start() {
         return start(ClientRuntime.kafka());
     }
 
@@ -778,8 +493,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * Validate and run against clients from the given runtime - which is how the sandbox runs a definition with no
      * broker, changing nothing else about it (R33, KTD9).
      */
-    public ConsumerHandle start(ClientRuntime runtime) {
-        refuseExportUntilItLands();
+    public ParallelConsumerInstance start(ClientRuntime runtime) {
         ParallelConsumerOptions<byte[], byte[]> built = buildOptions(runtime);
         // The module, not the static factory: it is what owns this instance's PCMetrics, and registering the
         // route meters through it is what puts them in the user's own registry beside every engine meter and has
@@ -787,39 +501,38 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         PCModule<byte[], byte[]> module = new PCModule<>(built);
         ParallelEoSStreamProcessor<byte[], byte[]> processor = new ParallelEoSStreamProcessor<>(built, module);
 
-        // The gauges read the same parked set the parked view answers from, through the same wrapper - the engine's
-        // retry queue, once the handle has wired the dispatcher to it below (KTD8, KTD14).
-        FluentMeters meters = FluentMeters.registerFor(module.pcMetrics(), topics(),
-                dispatcher::parkedContainersNow);
+        // Outcome counters only, one per routed topic per outcome: the live parked figures are the engine's, gauged
+        // by the partition that owns the records (KTD8).
+        FluentMeters meters = FluentMeters.registerFor(module.pcMetrics(), topics());
         dispatcher.meters(meters);
-        ConsumerHandle handle = new ConsumerHandle(processor, dispatcher, routeTopicsByTopic(), closePath, meters);
-        // The wrapper's two callbacks into this handle are wired by startObserving() below, with the parked view
-        // and the loop-end hook - before anything polls, and so the handle need not publish them itself.
-        this.startedHandle = handle;
+        ParallelConsumerInstance instance = new ParallelConsumerInstance(processor, dispatcher,
+                routeTopicsByTopic(), closePath, meters);
+        // The wrapper's two callbacks into this instance are wired by startObserving() below, with the parked view
+        // and the loop-end hook - before anything polls, and so the instance need not publish them itself.
+        this.startedInstance = instance;
 
-        // The user's own rebalance listener, if the definition declared one (KTD2). The facade keeps no
-        // per-assignment state of its own to clear here any more: the attempt count and the parked set are both the
-        // engine's, and the engine already drops a revoked partition's records from both (KTD14).
-        if (usersRebalanceListener == null) {
-            processor.subscribe(subscriptionTopics());
-        } else {
-            processor.subscribe(subscriptionTopics(), usersRebalanceListener);
-        }
+        // The facade's own listener, with the user's chained behind it when the definition declared one (KTD2).
+        // The facade still keeps no per-assignment state to clear on a revocation - the attempt count and the
+        // parked set are both the engine's, and the engine already drops a revoked partition's records from both
+        // (KTD14). What it does need is to know that a rebalance has LANDED, because an assignment that is empty
+        // because nothing was given to this member and one that is empty because nothing has happened yet are the
+        // same set, and only the first is worth warning about.
+        processor.subscribe(subscriptionTopics(), instance.rebalanceListener(usersRebalanceListener));
         // Before the poll, so the first control loop already carries the hook rather than the second.
-        handle.startObserving();
+        instance.startObserving();
         if (requiresProducer()) {
             processor.pollAndProduceMany(dispatcher::dispatch);
         } else {
             processor.poll(dispatcher::dispatchWithoutProducing);
         }
         // After the subscription, so a fake consumer's partitions can be assigned to a listener that now exists,
-        // and with the handle, so a generator with a bound can close the instance when it reaches one (KTD9).
-        runtime.started(handle);
-        return handle;
+        // and with the instance, so a generator with a bound can close it when it reaches one (KTD9).
+        runtime.started(instance);
+        return instance;
     }
 
     /**
-     * Every routed topic mapped to the whole route's topics, so that asking the handle about any one topic of a
+     * Every routed topic mapped to the whole route's topics, so that asking the instance about any one topic of a
      * set-declared route answers for the route rather than for that topic alone (R5, R28).
      */
     private Map<String, Set<String>> routeTopicsByTopic() {
@@ -840,42 +553,19 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      */
     @Override
     public void close() {
-        ConsumerHandle handle = this.startedHandle;
-        if (handle == null) {
+        ParallelConsumerInstance instance = this.startedInstance;
+        if (instance == null) {
             log.debug("Nothing to close: this definition was never started");
             return;
         }
-        handle.close();
-    }
-
-    /**
-     * Refused <b>at start</b>, not at validation: a definition with a destination is still a definition that needs
-     * a producer, which is what {@link #requiresProducer()} answers and what the client-construction tests read.
-     * <p>
-     * The wrapper parks a record that runs out of attempts and nothing sends it on yet - export is a re-dispatch on
-     * a later pass, and that unit has not landed (KTD5). Starting anyway would make {@code dlqTo} a silent no-op,
-     * which is the one outcome this definition refuses to produce: every other setting it cannot honour is refused
-     * at definition time for the same reason. The refusal goes away with the export unit.
-     */
-    private void refuseExportUntilItLands() {
-        for (RouteState route : routes) {
-            String destination = route.afterRetries().destination();
-            if (destination != null) {
-                throw new IllegalArgumentException(msg("Topic {} declares the dead-letter destination {}, and export "
-                                + "does not run in this release: a record that runs out of attempts parks in place, "
-                                + "and nothing copies it on yet. Starting would make dlqTo a silent no-op. Drop the "
-                                + "destination and let records park - they stay incomplete in the offset map, hold "
-                                + "no worker, and offsets past them still commit (R11, R27).",
-                        route.describeTopics(), destination));
-            }
-        }
+        instance.close();
     }
 
     /**
      * Run this listener on every rebalance (KTD2). It is handed to the engine as the classic API's own listener is,
      * so it sees the same callbacks in the same order and a throw from it propagates exactly as it does there.
      */
-    public ParallelConsumerDefinition rebalanceListener(ConsumerRebalanceListener listener) {
+    public ParallelConsumerDefinition withRebalanceListener(ConsumerRebalanceListener listener) {
         this.usersRebalanceListener = Objects.requireNonNull(listener, "A rebalance listener must be supplied");
         return this;
     }
@@ -893,10 +583,15 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         }
         started = true;
 
-        this.dispatcher = new RouteDispatcher(routesByTopic, defaultRetryDelay, preBuiltConsumerDescription);
+        // Before any client of the instance exists, and after the definition has been refused for its own faults:
+        // a topic that is not there is a fault of the definition too, and the start that carries on regardless is
+        // the one this replaces (owner decision, 2026-09-11).
+        TopicExistenceCheck.enforce(whenTopicMissing, topics(), runtime, this);
+
+        this.dispatcher = new RouteDispatcher(routesByTopic, defaults.retryDelay(), preBuiltConsumerDescription);
 
         options.commitMode(commitMode)
-                .ordering(defaultOrdering)
+                .ordering(defaults.ordering())
                 .maxConcurrency(totalAdmissionTarget())
                 // One delay per route, answered from the topic and the record's attempt count (R6). What a throw
                 // MEANT - a park, a hand-back that is not an attempt - rides on the exception instead, so this
@@ -917,7 +612,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             if (supplied.isPresent()) {
                 options.producer(supplied.get());
             } else {
-                options.producerConfig(producerProperties());
+                options.producerConfig(connection.forProducer());
             }
         }
         return options.build();
@@ -953,27 +648,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         return new ArrayList<>(topics());
     }
 
-    /**
-     * The producer's own configuration: the connection properties, minus the keys that mean nothing to a producer,
-     * plus the raw-bytes serialisers the facade requires. Handing this to Parallel Consumer rather than a finished
-     * producer is what keeps producer recovery available (R1, astubbs#410).
-     */
-    private Map<String, Object> producerProperties() {
-        Map<String, Object> config = new LinkedHashMap<>(properties);
-        config.keySet().removeAll(CONSUMER_ONLY_PROPERTIES);
-        config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
-        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
-        return config;
-    }
-
-    /**
-     * The routed topics as one string for a refusal message. Naming them is the part that makes a refusal
-     * actionable: it is what shows the reader which routes are superseding the setting they typed.
-     */
-    private String routedTopics() {
-        return routesByTopic.keySet().toString();
-    }
-
     // ---------------------------------------------------------------- DefinitionView
 
     /**
@@ -997,7 +671,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
 
     /**
      * Null for an unrouted topic, as the view's contract says: a reader asks this to find out <em>whether</em> a
-     * topic is routed, so a refusal would make the ordinary answer an exception. The handle and the dispatch
+     * topic is routed, so a refusal would make the ordinary answer an exception. The instance and the dispatch
      * wrapper are the ones that refuse, because there the question is about a topic the caller believes it owns.
      */
     @Override
@@ -1019,13 +693,13 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      */
     @Override
     public ProcessingOrder ordering() {
-        return defaultOrdering;
+        return defaults.ordering();
     }
 
     /**
      * Derived from the routes each time rather than tracked as a flag, so it stays true however late a route that
-     * produces or exports is declared. It is also read at start to choose the produce-many arm over the plain poll
-     * one, so the two decisions cannot disagree (R4, KTD2).
+     * produces is declared. It is also read at start to choose the produce-many arm over the plain poll one, so the
+     * two decisions cannot disagree (R4, KTD2).
      */
     @Override
     public boolean requiresProducer() {
@@ -1033,7 +707,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             return true;
         }
         for (RouteState route : routes) {
-            if (route.producesRecords() || route.afterRetries().destination() != null) {
+            if (route.producesRecords()) {
                 return true;
             }
         }
@@ -1046,19 +720,17 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      */
     @Override
     public Map<String, Object> connectionProperties() {
-        return Collections.unmodifiableMap(properties);
+        return connection.all();
     }
 
     /**
-     * Built fresh each call from {@link #FACADE_OWNED_PROPERTIES}, so the one list of what the facade owns decides
-     * both what a deserialiser is configured with and what it is not - a schema-registry URL reaches a route's
-     * deserialisers, the bootstrap servers and the client serialisers do not (KTD7).
+     * Answered by {@link ConnectionProperties#forFormats()}, which holds the one list of what the facade owns - so
+     * the same list decides both what a route's formats are configured with and what they are not: a
+     * schema-registry URL reaches them, the bootstrap servers and the client serialisers do not (KTD7).
      */
     @Override
-    public Map<String, Object> passThroughProperties() {
-        Map<String, Object> passThrough = new LinkedHashMap<>(properties);
-        passThrough.keySet().removeAll(FACADE_OWNED_PROPERTIES);
-        return Collections.unmodifiableMap(passThrough);
+    public Map<String, Object> formatProperties() {
+        return connection.forFormats();
     }
 
     /**
@@ -1073,50 +745,11 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     // ---------------------------------------------------------------- defaults, read by a route resolving its own
 
     /**
-     * Empty means retry forever, which is a declared setting rather than a missing one - so a route copying this
-     * inherits "no limit" as deliberately as it inherits a number (R10).
+     * The instance-wide defaults a route falls back to, handed out whole rather than one accessor per setting -
+     * {@link RouteState#resolveDefaults()} is the only reader, and it wants all of them.
      */
-    OptionalInt defaultRetryLimitValue() {
-        return defaultRetryLimit;
-    }
-
-    /**
-     * Never null: a route resolving against this always ends up with a delay, so no route has to answer what to
-     * wait when nothing declared one.
-     */
-    Duration defaultRetryDelayValue() {
-        return defaultRetryDelay;
-    }
-
-    /**
-     * Each route's own target, not a budget shared between them - the engine's limit is the sum (R23).
-     */
-    int defaultConcurrencyValue() {
-        return defaultConcurrency;
-    }
-
-    /**
-     * Read by a route resolving its own, even though per-route ordering cannot yet differ from it: the route asks
-     * the same question as every other setting, so the seam is already where a later milestone needs it (R6).
-     */
-    ProcessingOrder defaultOrderingValue() {
-        return defaultOrdering;
-    }
-
-    /**
-     * Null when the definition declared none, which a route resolves to parking in place rather than to nothing -
-     * the default that holds a record and commits nothing past it (R27).
-     */
-    AfterRetries defaultAfterRetriesValue() {
-        return defaultAfterRetries;
-    }
-
-    /**
-     * Null when nothing declared one, in which case a route with no observer of its own tells nobody it parked -
-     * the parked view is still the record of it (R16, R28).
-     */
-    ParkObserver<?, ?> defaultParkObserverValue() {
-        return defaultParkObserver;
+    InstanceDefaults defaults() {
+        return defaults;
     }
 
     /**
@@ -1127,6 +760,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     @Override
     public String toString() {
         return "ParallelConsumerDefinition(topics=" + topics() + ", commitMode=" + commitMode + ", ordering="
-                + defaultOrdering + ")";
+                + defaults.ordering() + ")";
     }
 }

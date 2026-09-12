@@ -4,7 +4,7 @@ package bz.stub.parallelconsumer.sandbox;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
@@ -49,13 +49,13 @@ class RecordCountBoundTest {
                 .feeding("orders", SandboxFixtures.countedValues("orders"))
                 .build();
 
-        ConsumerHandle handle = definition.start(sandbox);
+        ParallelConsumerInstance instance = definition.start(sandbox);
         // The bound does all three things on the driver's own thread - stop publishing, wait for every
-        // published record's offset to commit, close the handle - and awaitBound covers all three, so this
+        // published record's offset to commit, close the instance - and awaitBound covers all three, so this
         // returning true is already the end of the run.
         assertThat(sandbox.awaitBound(Duration.ofSeconds(30))).isTrue();
         // Idempotent, and here to say that nothing more is pending rather than to make anything happen.
-        handle.awaitShutdown();
+        instance.awaitShutdown();
 
         assertWithMessage("a count bound counts records, not ticks, so it must stop exactly on the number")
                 .that(sandbox.generatedRecords()).isEqualTo(RECORDS);
@@ -69,7 +69,7 @@ class RecordCountBoundTest {
                 .that(SandboxFixtures.highestCommittedOffset(sandbox, new TopicPartition("orders", 0)))
                 .isEqualTo(RECORDS);
 
-        handle.close();
+        instance.close();
     }
 
     @Test
@@ -81,11 +81,11 @@ class RecordCountBoundTest {
                 .perSecond(100)
                 .feeding("orders", SandboxFixtures.countedValues("orders"))
                 .build();
-        try (ConsumerHandle handle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance instance = definition.start(sandbox)) {
             IllegalStateException refusal = assertThrows(IllegalStateException.class,
                     () -> sandbox.awaitBound(Duration.ofSeconds(1)));
             assertThat(refusal).hasMessageThat().contains("unbounded");
-            handle.close();
+            instance.close();
         }
     }
 }

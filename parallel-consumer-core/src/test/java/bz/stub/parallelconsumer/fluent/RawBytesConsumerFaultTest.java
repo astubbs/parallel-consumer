@@ -49,7 +49,7 @@ class RawBytesConsumerFaultTest extends AbstractFluentEngineTest {
     @Test
     void theDescriptionIsKeptOnTheDefinitionForTheMessageTheWrapperWillThrow() {
         var pc = ParallelConsumer.connect(props())
-                .consumer(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST));
+                .withConsumer(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST));
         pc.string("orders").process(context -> Outcome.succeeded());
 
         // A mock consumer's deserialisers may not be readable at all, and a probe that guessed would be worse than
