@@ -313,14 +313,23 @@ public final class AfterRetries {
      * for it to qualify - and silently keeping the setting would leave one that can never fire. The two other
      * reactions turn it away for different reasons, so the refusal says which one it is looking at rather than
      * naming stop() for both.
+     * <p>
+     * <b>The refusal names no scope, deliberately.</b> A policy is built before it is handed anywhere, so at this
+     * throw nothing knows whether it is bound for {@code afterRetries(...)} on a route or
+     * {@code withDefaultAfterRetries(...)} on the definition - the two spellings a per-route setting has (KD16). It
+     * used to name {@code afterRetries(stop())}, which is the route spelling, so an author declaring an instance
+     * default was told to look at a call they had not written and could not write there. The calls this message does
+     * name - {@code stop()}, {@code dlq(...)} and {@code park()} - are the ones that actually made the policy, and
+     * they are the same words at either scope.
      */
     private void requireParking(String setting) {
         if (reaction == Reaction.STOP) {
-            throw new IllegalArgumentException(msg("{} cannot be declared on afterRetries(stop()) - stopping the "
-                    + "instance and exporting the record are alternatives; declare park() to export", setting));
+            throw new IllegalArgumentException(msg("{}(...) cannot be declared on a stop() policy - stopping the "
+                    + "instance and exporting the record are alternatives, so there is no park for this setting to "
+                    + "qualify. Declare park() instead to export.", setting));
         }
         if (reaction == Reaction.DLQ) {
-            throw new IllegalArgumentException(msg("{} cannot be declared on afterRetries(dlq(...)) - that reaction "
+            throw new IllegalArgumentException(msg("{}(...) cannot be declared on a dlq(...) policy - that reaction "
                     + "already copies the record out on the dispatch that exhausts it, so there is no park for this "
                     + "setting to qualify. Declare park() beside it to park first and export on a trigger.",
                     setting));

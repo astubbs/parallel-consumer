@@ -33,8 +33,12 @@ final class InstanceDefaults {
     private ProcessingOrder ordering = ProcessingOrder.KEY;
 
     /**
-     * The admission target a route copies when it declares none. The engine is given the sum over the routes, not
-     * this value, because routes do not compete for one shared limit (R23).
+     * How many records the instance may have in flight at once - handed to the engine as its own limit.
+     * <p>
+     * It was the target a route copied, and the engine was given the sum over the routes (R23). Per-route
+     * concurrency is withdrawn from this milestone (owner-directed, 2026-09-12), so nothing copies this and the
+     * engine is given it directly; it stays in this class, beside ordering, because it is still declared as a
+     * per-route default and expected to become one again.
      */
     private int concurrency = ParallelConsumerOptions.DEFAULT_MAX_CONCURRENCY;
 
@@ -77,7 +81,8 @@ final class InstanceDefaults {
     }
 
     /**
-     * Each route's own target, not a budget shared between them - the engine's limit is the sum (R23).
+     * The instance's limit, read straight into the engine's {@code maxConcurrency} - see the field for what this
+     * used to mean.
      */
     int concurrency() {
         return concurrency;

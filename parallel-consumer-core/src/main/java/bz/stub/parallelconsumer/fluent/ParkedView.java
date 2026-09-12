@@ -4,15 +4,18 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.OptionalInt;
@@ -66,8 +69,13 @@ public final class ParkedView {
 
     /**
      * Which partition this view is scoped to, or null for the whole route - the default.
+     * <p>
+     * <b>A {@link TopicPartition}, never a bare partition number.</b> A route may be declared over a topic set
+     * (R5) and the instance-wide roll-up spans every route, so a number alone does not name a partition: keyed on
+     * the integer, parked records in {@code orders-0} and {@code audit-0} merged into one view whose count and
+     * oldest age read as one partition's, and narrowing could not select either of them.
      */
-    private final Integer partition;
+    private final TopicPartition partition;
 
     /**
      * The records this view is over, already filtered to its topics and partition when it was built. Every figure
@@ -86,7 +94,8 @@ public final class ParkedView {
      * The filtering form, used by the handle: it is handed everything parked and works out which of it is this
      * view's. Package-private because a view is only ever taken from an instance, never built by a user.
      */
-    ParkedView(String name, Set<String> topics, Integer partition, List<ParkedRecord> allParked, Instant takenAt) {
+    ParkedView(String name, Set<String> topics, TopicPartition partition, List<ParkedRecord> allParked,
+               Instant takenAt) {
         this(name, Collections.unmodifiableSet(new LinkedHashSet<>(topics)), partition, takenAt,
                 filter(allParked, topics, partition));
     }
@@ -97,7 +106,7 @@ public final class ParkedView {
      * constructors differ by the order of their last two arguments, which is what lets the filtering one delegate
      * here.
      */
-    private ParkedView(String name, Set<String> topics, Integer partition, Instant takenAt,
+    private ParkedView(String name, Set<String> topics, TopicPartition partition, Instant takenAt,
                        List<ParkedRecord> mine) {
         this.name = name;
         this.topics = topics;
@@ -113,14 +122,23 @@ public final class ParkedView {
      *                  somebody narrowed it
      * @return an unmodifiable list, so the view a caller holds cannot be changed under them by whoever built it
      */
-    private static List<ParkedRecord> filter(List<ParkedRecord> allParked, Set<String> topics, Integer partition) {
+    private static List<ParkedRecord> filter(List<ParkedRecord> allParked, Set<String> topics,
+                                             TopicPartition partition) {
         List<ParkedRecord> matching = new ArrayList<>();
         for (ParkedRecord parked : allParked) {
-            if (topics.contains(parked.topic()) && (partition == null || partition == parked.partition())) {
+            if (topics.contains(parked.topic()) && (partition == null || partition.equals(topicPartitionOf(parked)))) {
                 matching.add(parked);
             }
         }
         return Collections.unmodifiableList(matching);
+    }
+
+    /**
+     * The partition a parked record is on, named once so that filtering and grouping cannot come to build it two
+     * different ways.
+     */
+    private static TopicPartition topicPartitionOf(ParkedRecord parked) {
+        return new TopicPartition(parked.topic(), parked.partition());
     }
 
     /**
@@ -145,12 +163,15 @@ public final class ParkedView {
     /**
      * Whether this view was narrowed to one partition, which is what tells a reader whether its figures describe a
      * partition or the whole route. Empty is a real answer - the unnarrowed view - not a missing one.
+     * <p>
+     * It answers a {@link TopicPartition} rather than a number because a view may span several topics, and a
+     * number would not say which of their partition zeroes this is.
      *
      * @return the partition this view was narrowed to, or empty when it spans every partition - which is the
      * default
      */
-    public OptionalInt partition() {
-        return partition == null ? OptionalInt.empty() : OptionalInt.of(partition);
+    public Optional<TopicPartition> partition() {
+        return Optional.ofNullable(partition);
     }
 
     /**
@@ -164,7 +185,13 @@ public final class ParkedView {
     }
 
     /**
-     * How long the oldest parked record here has been parked, or empty when nothing is parked.
+     * How long the oldest parked record here had been parked <b>when this view was taken</b>, or empty when
+     * nothing is parked.
+     * <p>
+     * Measured against {@link #takenAt}, not against the clock at the moment of asking, because a view is a value
+     * describing one instant: reading the wall clock here left a held view whose count and record list were frozen
+     * while its reported age went on climbing, so the figures on it stopped describing a single observation. Take
+     * a fresh view to find out how old the oldest park is now.
      */
     public Optional<Duration> oldestAge() {
         Instant oldest = null;
@@ -173,7 +200,7 @@ public final class ParkedView {
                 oldest = parked.parkedSince();
             }
         }
-        return oldest == null ? Optional.empty() : Optional.of(Duration.between(oldest, Instant.now()));
+        return oldest == null ? Optional.empty() : Optional.of(Duration.between(oldest, takenAt));
     }
 
     /**
@@ -193,30 +220,58 @@ public final class ParkedView {
     }
 
     /**
-     * Narrow to one partition - the rare case; the default view already spans them all.
+     * Narrow to one partition of this view's single topic - the rare case; the default view already spans them all.
+     * <p>
+     * <b>Refused on a view that spans several topics</b>, because the number does not say which topic's partition
+     * is meant and answering for all of them at once is the merge this narrowing exists to prevent. A route
+     * declared over a topic set, and the instance-wide roll-up, are both such views - use
+     * {@link #partition(TopicPartition)} there.
      */
     public ParkedView partition(int partition) {
-        if (this.partition != null && this.partition != partition) {
-            throw new IllegalArgumentException(msg("This view is already narrowed to partition {}, so it cannot be "
-                    + "narrowed to {} - take a fresh view from the instance", this.partition, partition));
+        if (topics.size() != 1) {
+            throw new IllegalArgumentException(msg("This view spans {}, so partition {} does not name one partition "
+                            + "- narrow it with partition(new TopicPartition(topic, {})) instead, or ask a "
+                            + "single-topic route for its own view",
+                    topics, partition, partition));
+        }
+        return partition(new TopicPartition(topics.iterator().next(), partition));
+    }
+
+    /**
+     * Narrow to one partition, named in full - the form that works however many topics this view spans.
+     */
+    public ParkedView partition(TopicPartition partition) {
+        Objects.requireNonNull(partition, "A partition must be supplied");
+        if (this.partition != null && !this.partition.equals(partition)) {
+            throw new IllegalArgumentException(msg("This view is already narrowed to {}, so it cannot be narrowed "
+                    + "to {} - take a fresh view from the instance", this.partition, partition));
+        }
+        if (!topics.contains(partition.topic())) {
+            throw new IllegalArgumentException(msg("This view is of {}, so it holds nothing from {} - ask the "
+                    + "instance for that topic's own view", topics, partition.topic()));
         }
         return new ParkedView(name, topics, partition, records, takenAt);
     }
 
     /**
-     * One view per partition that currently holds a parked record, in partition order. A partition with nothing
-     * parked is not listed: this rolls out what is parked, it does not enumerate the assignment.
+     * One view per partition that currently holds a parked record, in topic-then-partition order. A partition with
+     * nothing parked is not listed: this rolls out what is parked, it does not enumerate the assignment.
+     * <p>
+     * <b>Keyed on the topic and the partition together.</b> Keyed on the number alone, a route spanning several
+     * topics - and the instance-wide roll-up over every route - reported {@code orders-0} and {@code audit-0} as
+     * one view, whose count summed two partitions and whose oldest age was the older of two unrelated parks.
      */
     public List<ParkedView> byPartition() {
         // Grouped in one pass. Handing each new view the whole list and letting it filter made this quadratic -
         // one predicate evaluation per record per partition - on exactly the large parked sets an operator rolls
-        // out per partition in order to read. A TreeMap keeps the partition order the TreeSet used to give.
-        Map<Integer, List<ParkedRecord>> byPartition = new TreeMap<>();
+        // out per partition in order to read. A TreeMap keeps a stable order, now over both halves of the key.
+        Map<TopicPartition, List<ParkedRecord>> byPartition = new TreeMap<>(
+                Comparator.comparing(TopicPartition::topic).thenComparingInt(TopicPartition::partition));
         for (ParkedRecord parked : records) {
-            byPartition.computeIfAbsent(parked.partition(), partition -> new ArrayList<>()).add(parked);
+            byPartition.computeIfAbsent(topicPartitionOf(parked), partition -> new ArrayList<>()).add(parked);
         }
         List<ParkedView> views = new ArrayList<>(byPartition.size());
-        for (Map.Entry<Integer, List<ParkedRecord>> each : byPartition.entrySet()) {
+        for (Map.Entry<TopicPartition, List<ParkedRecord>> each : byPartition.entrySet()) {
             views.add(new ParkedView(name, topics, each.getKey(), takenAt,
                     Collections.unmodifiableList(each.getValue())));
         }

@@ -20,6 +20,7 @@ import org.apache.kafka.common.serialization.Serializer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
@@ -87,6 +88,17 @@ class RouteDispatcher {
     private final String preBuiltConsumerDescription;
 
     /**
+     * Whether the definition was handed a finished consumer at all - the condition without which the raw-bytes
+     * fault is not merely unlikely but impossible, because a consumer this facade built itself is a byte-array
+     * consumer by construction.
+     * <p>
+     * Separate from {@link #preBuiltConsumerDescription}, which is null both when no consumer was supplied and when
+     * one was supplied that the probe could not read: a best-effort diagnostic cannot also be the flag that decides
+     * whether an instance is stopped.
+     */
+    private final boolean preBuiltConsumerSupplied;
+
+    /**
      * Replaced at start with the instance. Until then, and in a test that drives the wrapper directly, a fault has
      * nowhere to go but the log.
      */
@@ -110,7 +122,26 @@ class RouteDispatcher {
     // they are what the wrapper's own tests read.
 
     /**
-     * Records the engine completed because their function reported success, a produce outcome included (R7).
+     * Records whose function reported success, a produce outcome included (R7) - counted where the outcome is
+     * mapped, which for a produce outcome is before the engine has sent anything.
+     * <p>
+     * <b>A known over-report, and what closing it needs.</b> On a producing route a send that fails after
+     * serialisation succeeded leaves the source record incomplete and retried, while this has already counted it -
+     * so repeated send failures count one record several times. The cross-model review on
+     * astubbs/parallel-consumer#502 asked for this to be driven from the engine's successful-work callback instead,
+     * and the seams that exist do not carry it: the produce callback ({@link #produceAcknowledged}) is per produced
+     * record with the batch context attached, never per source record, and
+     * {@code WorkManager.addSuccessfulWorkListener} is per record but cannot tell a success from a filtered record,
+     * because the engine completes both identically - which is the whole reason this facade counts them apart at
+     * all (R8). Driving it from there needs the facade to remember each record's reported outcome until the engine
+     * completes it, which is per-record facade state this package deliberately does not keep (KTD14). Left as the
+     * count of reported successes until that is decided; the produced-record total beside it is exact.
+     * <p>
+     * <b>Tracked outside this file, because a comment on a field is invisible from anywhere else.</b> The meter this
+     * feeds is published into the user's own registry, so the over-report is on a dashboard rather than only in a
+     * test, and what closes it is an owner's call between three options.
+     * {@code docs/inflight/bug-fluent-succeeded-counter-counts-a-send-that-failed.md} owns that tracking and states
+     * the options; it also narrows the fault to the produce arm below, the plain success arm having no send to fail.
      */
     private final LongAdder succeeded = new LongAdder();
 
@@ -127,8 +158,12 @@ class RouteDispatcher {
     private final LongAdder parked = new LongAdder();
 
     /**
-     * Records handed back for the engine to send, summed over every produce outcome - records, not outcomes, since
-     * one outcome may carry several.
+     * Produced records the broker has acknowledged, counted one at a time as the engine's produce callback reports
+     * each send - records, not outcomes, since one outcome may carry several.
+     * <p>
+     * It used to be summed at dispatch, off the list handed back, which counted records the engine had not sent yet
+     * and would go on counting them again on every retry of a record whose send kept failing. The engine's callback
+     * runs after the send's own future has returned its metadata, so what this counts now is acknowledged sends.
      */
     private final LongAdder producedRecords = new LongAdder();
 
@@ -139,13 +174,16 @@ class RouteDispatcher {
      * @param routesByTopic               the definition's route table, read here and never written
      * @param fallbackRetryDelay          what {@link #retryDelayFor} answers for a topic no route claims
      * @param preBuiltConsumerDescription the deserialisers read off a supplied consumer, or null when the
-     *                                    definition built its own - in which case the raw-bytes fault cannot arise
+     *                                    definition built its own or the probe could not read them
+     * @param preBuiltConsumerSupplied    whether a finished consumer was supplied - what makes the raw-bytes fault
+     *                                    possible at all
      */
     RouteDispatcher(Map<String, RouteState> routesByTopic, Duration fallbackRetryDelay,
-                    String preBuiltConsumerDescription) {
+                    String preBuiltConsumerDescription, boolean preBuiltConsumerSupplied) {
         this.routesByTopic = routesByTopic;
         this.fallbackRetryDelay = fallbackRetryDelay;
         this.preBuiltConsumerDescription = preBuiltConsumerDescription;
+        this.preBuiltConsumerSupplied = preBuiltConsumerSupplied;
     }
 
     /**
@@ -278,7 +316,7 @@ class RouteDispatcher {
      * every rebalance.
      */
     private static int cyclesUsed(RouteState route, int attempts) {
-        int cycles = route.afterRetries().parkCycles();
+        int cycles = route.resolvedAfterRetries().parkCycles();
         OptionalInt limit = route.retryLimit();
         if (cycles == 0 || !limit.isPresent() || attempts <= limit.getAsInt()) {
             return 0;
@@ -333,6 +371,67 @@ class RouteDispatcher {
         return producedRecords.sum();
     }
 
+    /**
+     * One produced record the broker has acknowledged, from the engine's produce callback - the seam that fires
+     * after the send's future has returned its metadata, and not at all when the send failed (R7).
+     * <p>
+     * <b>Only the produced-record total is driven from here, not the success count.</b> This callback fires once per
+     * produced RECORD and carries the whole poll context rather than the one source record that produced it, so it
+     * cannot say "this source record completed": a function returning three records fires it three times, and one
+     * returning none never fires it at all. What the succeeded counter still cannot see is recorded on
+     * {@link #succeeded}.
+     */
+    void produceAcknowledged() {
+        producedRecords.increment();
+    }
+
+    /**
+     * Close every format any route holds, once each, after the engine has stopped.
+     * <p>
+     * <b>The facade owns these.</b> A route's formats are built and {@code configure}d by this package, and the
+     * reflective Avro and Protobuf wrappers delegate {@code close()} precisely because their serialisers may hold an
+     * HTTP client and a schema cache - so an instance that shut down without closing them leaked those, once per
+     * definition started. Nothing else was going to: the engine closes the clients it built and knows nothing about
+     * a route's typing.
+     * <p>
+     * <b>Once each, by identity</b>, because the route table holds a route under every topic it was declared over
+     * (R5) and because two routes may legitimately share one format object - a schema-registry serde built once and
+     * handed to both. A second {@code close()} on a serde is not contracted to be harmless, so being asked twice is
+     * not something to rely on.
+     * <p>
+     * <b>Every failure is contained.</b> This runs during shutdown, where a format that throws on the way out must
+     * not stop the formats after it from closing, and must not replace whatever the caller was already being told
+     * about the shutdown.
+     */
+    void closeRouteFormats() {
+        Set<Format<?>> alreadyClosed = Collections.newSetFromMap(new IdentityHashMap<Format<?>, Boolean>());
+        for (RouteState route : routesByTopic.values()) {
+            closeOnce(route.consumedKey(), alreadyClosed);
+            closeOnce(route.consumedValue(), alreadyClosed);
+            closeOnce(route.producedKey(), alreadyClosed);
+            closeOnce(route.producedValue(), alreadyClosed);
+        }
+    }
+
+    /**
+     * One format, if it is there and has not been closed already by this pass.
+     *
+     * @param format        null on the produced side of a route that declares no produced types
+     * @param alreadyClosed identity-keyed, because two distinct formats may compare equal and closing one of them
+     *                      twice while never closing the other is the failure that would be invisible
+     */
+    private static void closeOnce(Format<?> format, Set<Format<?>> alreadyClosed) {
+        if (format == null || !alreadyClosed.add(format)) {
+            return;
+        }
+        try {
+            format.close();
+        } catch (RuntimeException closeFailed) {
+            log.warn("The format {} threw while closing during shutdown; the remaining formats are closed anyway",
+                    format, closeFailed);
+        }
+    }
+
     // ---------------------------------------------------------------- the engine function
 
     /**
@@ -361,8 +460,10 @@ class RouteDispatcher {
         }
         if (produced != 0) {
             throw new IllegalStateException(msg("A route returned {} records to produce on an instance that opened "
-                    + "no producer. A route that declares produced types is what makes a definition need one, so "
-                    + "this is a bug in the fluent API rather than in the definition.", produced));
+                    + "no producer. A route that declares produced types is what makes a definition need one, and a "
+                    + "route with none that returns records is refused by name in the outcome mapping - see "
+                    + "producedWithoutProducedTypes - so reaching this is a bug in the fluent API rather than in "
+                    + "the definition.", produced));
         }
     }
 
@@ -404,7 +505,7 @@ class RouteDispatcher {
             throw park(new TypedRecordContext<>(recordContext, key, value), route, permanent, alreadyFailed,
                     "its payload can never be decoded", false);
         } catch (ClassCastException castFailed) {
-            if (RawBytesConsumerFaultException.isRawBytesCastFailure(castFailed)) {
+            if (preBuiltConsumerSupplied && RawBytesConsumerFaultException.isRawBytesCastFailure(castFailed)) {
                 throw rawBytesFault(castFailed);
             }
             throw afterAttempt(new TypedRecordContext<>(recordContext, key, value), route, castFailed, attempts);
@@ -421,12 +522,43 @@ class RouteDispatcher {
         } catch (Exception userFunctionThrew) {
             throw afterAttempt(context, route, userFunctionThrew, attempts);
         }
-        if (outcome == null) {
-            throw new IllegalStateException(msg("The processing function for topic {} returned null. Return "
-                    + "Outcome.succeeded() for a record that was processed, or throw to retry it.",
-                    route.describeTopics()));
+        return applyWithinTheRetryLimit(outcome, context, route, attempts);
+    }
+
+    /**
+     * Everything after the user's function returns, held inside the same retry limit as the function itself (R10).
+     *
+     * <h2>Why this exists</h2>
+     * Mapping an outcome can fail, and those failures used to escape straight to the engine - which retries
+     * forever, because the route's finite limit is applied here and nowhere else. A serialiser that consistently
+     * rejects a produced value, a null record inside a producing outcome, or a function returning null therefore
+     * retried without end: the route's after-retries reaction was never reached, so nothing ever parked and,
+     * under key ordering, the key stayed blocked behind a record that would never finish. The limit now covers the
+     * whole of what this wrapper does with a record, not just the part the user wrote.
+     *
+     * <h2>What is deliberately let through</h2>
+     * A park and a stop leave {@link #apply} by a throw because a throw is the only way to hand a record back
+     * (R8, R24) - they are what the mapping DID, not a failure of it. Both are recognised by type and rethrown
+     * untouched, so a park still spends the attempt it declared and a stop still stops the instance. Sending either
+     * through the exhaustion path would re-park an already-parked record and count it twice.
+     */
+    private List<ProducerRecord<byte[], byte[]>> applyWithinTheRetryLimit(Outcome<Object, Object> outcome,
+                                                                         TypedRecordContext<Object, Object> context,
+                                                                         RouteState route,
+                                                                         int attempts) {
+        try {
+            if (outcome == null) {
+                throw new IllegalStateException(msg("The processing function for topic {} returned null. Return "
+                        + "Outcome.succeeded() for a record that was processed, or throw to retry it.",
+                        route.describeTopics()));
+            }
+            return apply(outcome, context, route, attempts);
+        } catch (RecordParkedException | StopRequestedException whatTheMappingDid) {
+            // The park and the stop arms of apply(), which report an outcome rather than failing to map one.
+            throw whatTheMappingDid;
+        } catch (RuntimeException mappingTheOutcomeFailed) {
+            throw afterAttempt(context, route, mappingTheOutcomeFailed, attempts);
         }
-        return apply(outcome, context, route, attempts);
     }
 
     /**
@@ -456,10 +588,14 @@ class RouteDispatcher {
                 meters.recordOutcome(record.topic(), OutcomeTag.FILTERED);
                 return emptyProduce();
             case PRODUCE:
+                if (!route.producesRecords()) {
+                    throw producedWithoutProducedTypes(route, record);
+                }
                 List<ProducerRecord<byte[], byte[]>> serialised = serialise(route, outcome.records());
                 succeeded.increment();
                 meters.recordOutcome(record.topic(), OutcomeTag.SUCCEEDED);
-                producedRecords.add(serialised.size());
+                // Not counted here: the engine has not sent these yet, and produceAcknowledged() is told when it
+                // has.
                 return serialised;
             case PARK:
                 // The function already knows this record is hopeless, so its remaining attempts are skipped - and
@@ -497,7 +633,7 @@ class RouteDispatcher {
                                           Throwable failure, int attempts) {
         ConsumerRecord<byte[], byte[]> record = context.raw();
         if (isExhausted(route, attempts)) {
-            AfterRetries policy = route.afterRetries();
+            AfterRetries policy = route.resolvedAfterRetries();
             int cycles = cyclesUsed(route, attempts);
             if (policy.parkCycles() > cycles) {
                 return parkCycle(record, policy, failure, attempts, cycles + 1);
@@ -691,7 +827,38 @@ class RouteDispatcher {
     }
 
     /**
+     * A route with no produced types returned records to produce: a definition fault, never a retry - the same
+     * shape as the raw-bytes consumer fault below, and raised the same way.
+     * <p>
+     * R3 makes producing from such a route a compile error by declaring its produced types as {@code Void}, and
+     * that closes every case but one: {@code null} inhabits every reference type, so
+     * {@code Outcome.produce(new ProducerRecord<>("out", null, null))} infers {@code ProducerRecord<Void, Void>}
+     * and compiles. Kafka permits null keys and values, so that is a real record shape rather than an impossible
+     * generic value, and no choice of type parameter can exclude it. What reached the route then was a
+     * {@code NullPointerException} out of the produced formats that are not there; this says what actually
+     * happened instead, and says it once rather than per record, because retrying it would fail identically for
+     * every record on the topic forever.
+     */
+    private RuntimeException producedWithoutProducedTypes(RouteState route,
+                                                          ConsumerRecord<byte[], byte[]> record) {
+        IllegalStateException fault = new IllegalStateException(msg("The route for {} returned records to produce, "
+                        + "and declares no produced types - so there is nothing to serialise them with. Declare "
+                        + "them on the route with produced(...) to produce from it, or return "
+                        + "Outcome.succeeded() instead (R3, R4). Raised at {}-{}@{}; this is a fault of the "
+                        + "definition, so retrying it would fail identically for every record on this topic.",
+                route.describeTopics(), record.topic(), record.partition(), record.offset()));
+        instance.fatal(fault);
+        return fault;
+    }
+
+    /**
      * A pre-built consumer that is not configured for raw bytes: a definition fault, never a retry (KTD3, R1).
+     * <p>
+     * <b>Only reachable when a consumer was actually supplied.</b> A consumer this facade built is a byte-array
+     * consumer by construction, so a cast failure on a definition that built its own is somebody else's - and
+     * classifying it here would stop the instance instead of taking R12's transient decode-failure retry path. The
+     * other half of that narrowing is {@link RawBytesConsumerFaultException#isRawBytesCastFailure}, which requires
+     * the throw to have come from this class's own cast.
      * <p>
      * {@link InstanceControl#fatal} is what makes it fatal; the instance closes itself and surfaces this
      * exception to whoever is awaiting shutdown. The throw itself matters either way: the record must not complete,
@@ -742,7 +909,7 @@ class RouteDispatcher {
             return fallbackRetryDelay;
         }
         if (spendsAParkCycle(route, attempts)) {
-            return route.afterRetries().parkDelay();
+            return route.resolvedAfterRetries().parkDelay();
         }
         return route.retryDelay();
     }
@@ -752,7 +919,8 @@ class RouteDispatcher {
      * same two conditions, in the same order, read from the same two functions.
      */
     private static boolean spendsAParkCycle(RouteState route, int attempts) {
-        return isExhausted(route, attempts) && route.afterRetries().parkCycles() > cyclesUsed(route, attempts);
+        return isExhausted(route, attempts)
+                && route.resolvedAfterRetries().parkCycles() > cyclesUsed(route, attempts);
     }
 
     // ---------------------------------------------------------------- decoding, running and serialising

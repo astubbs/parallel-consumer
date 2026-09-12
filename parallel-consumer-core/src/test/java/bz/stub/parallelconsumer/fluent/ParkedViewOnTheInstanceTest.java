@@ -20,6 +20,7 @@ import java.util.List;
 
 import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -166,13 +167,83 @@ class ParkedViewOnTheInstanceTest extends AbstractFluentEngineTest {
         // One partition on request - the rare case.
         assertThat(handle.topic(TOPIC).parked().partition(0).count()).isEqualTo(1);
         assertThat(handle.topic(TOPIC).parked().partition(1).count()).isEqualTo(1);
-        assertThat(handle.topic(TOPIC).parked().partition(0).partition().getAsInt()).isEqualTo(0);
+        assertThat(handle.topic(TOPIC).parked().partition(0).partition().get())
+                .isEqualTo(new TopicPartition(TOPIC, 0));
 
         List<ParkedView> byPartition = handle.topic(TOPIC).parked().byPartition();
         assertThat(byPartition).hasSize(2);
-        assertThat(byPartition.get(0).partition().getAsInt()).isEqualTo(0);
-        assertThat(byPartition.get(1).partition().getAsInt()).isEqualTo(1);
+        assertThat(byPartition.get(0).partition().get()).isEqualTo(new TopicPartition(TOPIC, 0));
+        assertThat(byPartition.get(1).partition().get()).isEqualTo(new TopicPartition(TOPIC, 1));
         assertThat(byPartition.get(0).count()).isEqualTo(1);
+    }
+
+    /**
+     * R28's per-partition answers are keyed by topic <em>and</em> partition, which the instance-wide roll-up is
+     * where it matters: {@code orders-0} and {@code audit-0} are two partitions, and grouping on the number alone
+     * reported them as one - a count that summed both and an oldest age that was the older of two unrelated parks,
+     * with no way to select either.
+     * <p>
+     * Recorded as a known wrong path in {@code docs/plans/2026-09-11-001-handoff-ux-modernisation-milestone-a.md}
+     * and found again by the cross-model review, so this is the test that keeps it fixed.
+     */
+    @Test
+    void theRollUpKeepsTopicIdentityWhenGroupingByPartition() {
+        var pc = definitionThatParksEverything(TOPIC, OTHER_TOPIC);
+        handle = runtime.startAndAssign(pc, 1);
+        runtime.publish(TOPIC, 0, 0, "key-0", "a hopeless order");
+        runtime.publish(OTHER_TOPIC, 0, 0, "key-1", "a hopeless audit record");
+
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
+                assertThat(handle.parkedAllTopics().count()).isEqualTo(2));
+
+        List<ParkedView> byPartition = handle.parkedAllTopics().byPartition();
+        assertWithMessage("partition zero of two topics is two partitions, not one")
+                .that(byPartition).hasSize(2);
+        // Topic then partition, so the order is stable whichever parked first.
+        assertThat(byPartition.get(0).partition().get()).isEqualTo(new TopicPartition(OTHER_TOPIC, 0));
+        assertThat(byPartition.get(1).partition().get()).isEqualTo(new TopicPartition(TOPIC, 0));
+        assertThat(byPartition.get(0).count()).isEqualTo(1);
+        assertThat(byPartition.get(1).count()).isEqualTo(1);
+
+        // And narrowing selects one of them rather than both.
+        assertThat(handle.parkedAllTopics().partition(new TopicPartition(TOPIC, 0)).count()).isEqualTo(1);
+        assertThat(handle.parkedAllTopics().partition(new TopicPartition(TOPIC, 0)).records().get(0).topic())
+                .isEqualTo(TOPIC);
+    }
+
+    /**
+     * A number cannot name a partition of a view that spans several topics, so it is refused rather than answered
+     * for all of them - the merge the topic-keyed grouping above exists to prevent, reached by the other door.
+     */
+    @Test
+    void narrowingAMultiTopicViewByNumberAloneIsRefused() {
+        var pc = definitionThatParksEverything(TOPIC, OTHER_TOPIC);
+        handle = runtime.startAndAssign(pc, 1);
+
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                () -> handle.parkedAllTopics().partition(0));
+
+        assertThat(refused).hasMessageThat().contains("does not name one partition");
+        assertThat(refused).hasMessageThat().contains("TopicPartition");
+    }
+
+    /**
+     * A view is a value describing the instant it was taken, so its age figure is measured against that instant.
+     * Reading the wall clock on every call left a held view whose count and record list were frozen while its
+     * reported age went on climbing, so its figures stopped describing one observation.
+     */
+    @Test
+    void theOldestAgeIsMeasuredAtTheSnapshotNotAtTheMomentOfAsking() throws Exception {
+        ParkedView parked = oneParkedRecordOn(TOPIC);
+
+        Duration first = parked.oldestAge().get();
+        Thread.sleep(50);
+        Duration second = parked.oldestAge().get();
+
+        assertWithMessage("the same view read twice describes the same instant")
+                .that(second).isEqualTo(first);
+        assertWithMessage("and it is the age at takenAt, so it cannot exceed the view's own age")
+                .that(first).isAtMost(Duration.between(parked.records().get(0).parkedSince(), parked.takenAt()));
     }
 
     /**

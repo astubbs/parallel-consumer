@@ -9,7 +9,11 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.Percent;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.MockProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -47,6 +51,87 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
                 () -> definition.buildOptions(runtime));
         assertThat(runtime.builtNothing()).isTrue();
         return thrown;
+    }
+
+    /**
+     * U2: a supplied producer and the commit mode must agree at definition time, in both directions - and the
+     * producer's mere presence is not evidence that they do.
+     * <p>
+     * Supplying one used to excuse the transactional definition from every check, on the reasoning that the id is
+     * already on the client the caller built. Nothing verified that, so a non-transactional producer under the
+     * transactional commit mode passed validation and was refused later from inside the engine's producer manager.
+     */
+    @Test
+    void aNonTransactionalSuppliedProducerIsRefusedUnderTheTransactionalCommitMode() {
+        try (Producer<byte[], byte[]> plain = realProducer(null)) {
+            var pc = define().withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER).withProducer(plain);
+            pc.string("orders").process(context -> Outcome.succeeded());
+
+            var thrown = refusal(pc);
+            assertThat(thrown).hasMessageThat().contains("can never open a transaction");
+            assertThat(thrown).hasMessageThat().contains("withProducer(...)");
+        }
+    }
+
+    /**
+     * The other direction, which is the half nothing caught at definition time either: a transactional producer under
+     * a commit mode that never opens a transaction, so the guarantee the caller built it for silently does not apply.
+     */
+    @Test
+    void aTransactionalSuppliedProducerIsRefusedUnderAConsumerCommitMode() {
+        try (Producer<byte[], byte[]> transactional = realProducer("refusal-test-transactional")) {
+            var pc = define()
+                    .withCommitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)
+                    .withProducer(transactional);
+            pc.string("orders").process(context -> Outcome.succeeded());
+
+            var thrown = refusal(pc);
+            assertThat(thrown).hasMessageThat().contains("would silently not apply");
+            assertThat(thrown).hasMessageThat().contains("withProducer(...)");
+        }
+    }
+
+    /**
+     * The agreeing case is accepted, so the refusals above are about disagreement and not about supplying a producer.
+     */
+    @Test
+    void aTransactionalSuppliedProducerIsAcceptedUnderTheTransactionalCommitMode() {
+        try (Producer<byte[], byte[]> transactional = realProducer("refusal-test-agreeing")) {
+            var pc = define().withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER).withProducer(transactional);
+            pc.string("orders").process(context -> Outcome.succeeded());
+
+            pc.validate();
+        }
+    }
+
+    /**
+     * A producer whose configuration cannot be read refuses nothing: the probe reads client internals and can
+     * decline, and "could not tell" is not "not transactional" - refusing on it would fail a well formed definition
+     * for a fact nobody established. A {@code MockProducer} can act as either, which is exactly that case.
+     */
+    @Test
+    void aProducerWhoseConfigurationCannotBeReadIsNotRefused() {
+        var pc = define()
+                .withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
+                .withProducer(new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer()));
+        pc.string("orders").process(context -> Outcome.succeeded());
+
+        pc.validate();
+    }
+
+    /**
+     * A real producer, built offline - a {@code KafkaProducer} connects on its first send, not in its constructor -
+     * so the probe meets the client internals it will actually meet rather than a mock's.
+     *
+     * @param transactionalId the id to build it with, or null for a plain producer
+     */
+    private Producer<byte[], byte[]> realProducer(String transactionalId) {
+        Properties producerProperties = new Properties();
+        producerProperties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        if (transactionalId != null) {
+            producerProperties.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId);
+        }
+        return new KafkaProducer<>(producerProperties, new ByteArraySerializer(), new ByteArraySerializer());
     }
 
     @Test
@@ -304,12 +389,21 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
         assertThat(thrown).hasMessageThat().contains(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS.name());
     }
 
+    /**
+     * Names the setting, and names the remedy by a method that exists. Every instance-wide setting took a
+     * {@code with} prefix (KD16), and this refusal kept the pre-rename spelling {@code producer(...)} - a call that
+     * is on no class in the API, so the one reader who tried to act on it had nothing to find and nothing to grep
+     * for. It is the failure mode a wrong-scope spelling has, with the scope missing altogether.
+     */
     @Test
-    void theTransactionalCommitModeWithNoTransactionalIdNamesTheSetting() {
+    void theTransactionalCommitModeWithNoTransactionalIdNamesTheSettingAndASpellingThatExists() {
         var pc = define().withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
         pc.string("orders").process(context -> Outcome.succeeded());
 
-        assertThat(refusal(pc)).hasMessageThat().contains(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+        var thrown = refusal(pc);
+
+        assertThat(thrown).hasMessageThat().contains(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+        assertThat(thrown).hasMessageThat().contains("withProducer(...)");
     }
 
     @Test
@@ -343,13 +437,39 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
     /**
      * The three reactions are alternatives, so a stopping policy refuses an export setting where it is written
      * rather than carrying one that could never fire.
+     * <p>
+     * It names the calls that made the policy and no hand-in call, for the reason the park-setting test beside it
+     * records: at this throw the policy has not been handed anywhere (KD16).
      */
     @Test
-    void anExportSettingOnAStoppingPolicyNamesTheSetting() {
+    void anExportSettingOnAStoppingPolicyNamesTheSettingAndNeitherScope() {
         var thrown = assertThrows(IllegalArgumentException.class, () -> AfterRetries.stop().dlqTo("orders.dlq"));
 
         assertThat(thrown).hasMessageThat().contains("dlqTo");
         assertThat(thrown).hasMessageThat().contains("stop()");
+        assertThat(thrown).hasMessageThat().contains("park()");
+        assertThat(thrown).hasMessageThat().doesNotContain("afterRetries(");
+        assertThat(thrown).hasMessageThat().doesNotContain("withDefaultAfterRetries");
+    }
+
+    /**
+     * The two reactions are alternatives, so a stopping policy refuses a park setting where it is written rather
+     * than carrying one that could never fire.
+     * <p>
+     * It names the calls that made the policy and no hand-in call, because at this throw the policy has not been
+     * handed anywhere: it used to name {@code afterRetries(stop())}, the route spelling, which an author declaring
+     * an instance default never wrote and could not write (KD16).
+     */
+    @Test
+    void aParkSettingOnAStoppingPolicyNamesTheSettingAndNeitherScope() {
+        var thrown = assertThrows(IllegalArgumentException.class,
+                () -> AfterRetries.stop().thenRetryAfter(Duration.ofSeconds(1)));
+
+        assertThat(thrown).hasMessageThat().contains("thenRetryAfter");
+        assertThat(thrown).hasMessageThat().contains("stop()");
+        assertThat(thrown).hasMessageThat().contains("park()");
+        assertThat(thrown).hasMessageThat().doesNotContain("afterRetries(");
+        assertThat(thrown).hasMessageThat().doesNotContain("withDefaultAfterRetries");
     }
 
     /**
@@ -391,6 +511,8 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
         assertThat(thrown).hasMessageThat().contains("forCycles(3)");
         assertThat(thrown).hasMessageThat().contains("thenRetryAfter");
         assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("its own afterRetries(...)");
+        assertThat(thrown).hasMessageThat().doesNotContain("withDefaultAfterRetries");
     }
 
     @Test
@@ -405,14 +527,22 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
         assertThat(thrown).hasMessageThat().contains("thenRetryAfter");
         assertThat(thrown).hasMessageThat().contains("forCycles");
         assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("its own afterRetries(...)");
+        assertThat(thrown).hasMessageThat().doesNotContain("withDefaultAfterRetries");
     }
 
     /**
-     * The same pair declared as the instance default is refused just the same, because every route took a copy of
-     * it (R6) - the refusal names the route that carries it.
+     * The same pair declared as the instance default is refused just the same, because every route took a copy of it
+     * (R6) - and the refusal names <em>both</em> the call that declared it and the topic that takes it.
+     * <p>
+     * Naming only the topic is what this used to do, and it sent the author to the wrong place: the message read
+     * "Topic orders declares forCycles(2)" when {@code orders} declares nothing at all, so the author opened that
+     * route, found no park cycle on it, and the refusal had nothing further to say. The {@code doesNotContain} is the
+     * half that keeps this honest - a message naming both spellings would pass the positive assertion here and in
+     * the route-scoped tests above while telling neither author which call was theirs.
      */
     @Test
-    void theInstanceDefaultParkCycleIsRefusedThroughTheRouteThatCopiedIt() {
+    void theInstanceDefaultParkCycleNamesTheCallThatDeclaredItAndTheTopicThatTakesIt() {
         var definition = define().withDefaultAfterRetries(park().forCycles(2));
         definition.string("orders").process(context -> Outcome.succeeded());
 
@@ -420,15 +550,37 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
 
         assertThat(thrown).hasMessageThat().contains("forCycles(2)");
         assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("withDefaultAfterRetries(...)");
+        assertThat(thrown).hasMessageThat().doesNotContain("its own afterRetries(...)");
+    }
+
+    /**
+     * The other half of the pair, at the instance scope, because the two arms are separate refusals and only one of
+     * them was covered here.
+     */
+    @Test
+    void theInstanceDefaultParkDelayWithNoCycleCountNamesTheCallThatDeclaredIt() {
+        var definition = define().withDefaultAfterRetries(park().thenRetryAfter(Duration.ofMinutes(5)));
+        definition.string("orders").process(context -> Outcome.succeeded());
+
+        var thrown = refusal(definition);
+
+        assertThat(thrown).hasMessageThat().contains("thenRetryAfter");
+        assertThat(thrown).hasMessageThat().contains("forCycles(...)");
+        assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("withDefaultAfterRetries(...)");
+        assertThat(thrown).hasMessageThat().doesNotContain("its own afterRetries(...)");
     }
 
     @Test
-    void aParkCycleSettingOnAStoppingPolicyNamesTheSetting() {
+    void aParkCycleCountOnAStoppingPolicyNamesTheSettingAndNeitherScope() {
         var thrown = assertThrows(IllegalArgumentException.class,
-                () -> AfterRetries.stop().thenRetryAfter(Duration.ofMinutes(1)));
+                () -> AfterRetries.stop().forCycles(2));
 
-        assertThat(thrown).hasMessageThat().contains("thenRetryAfter");
+        assertThat(thrown).hasMessageThat().contains("forCycles");
         assertThat(thrown).hasMessageThat().contains("stop()");
+        assertThat(thrown).hasMessageThat().contains("park()");
+        assertThat(thrown).hasMessageThat().doesNotContain("afterRetries(");
     }
 
     @Test
@@ -497,7 +649,8 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
 
         assertThat(thrown).hasMessageThat().contains("orders");
         assertThat(thrown).hasMessageThat().contains("retryForever()");
-        assertThat(thrown).hasMessageThat().contains("after-retries policy of its own");
+        assertThat(thrown).hasMessageThat().contains("its own afterRetries(...)");
+        assertThat(thrown).hasMessageThat().doesNotContain("withDefaultAfterRetries");
         assertThat(thrown).hasMessageThat().contains("retryLimit(...) on this route instead");
     }
 
@@ -540,7 +693,7 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
 
         assertThat(thrown).hasMessageThat().contains("orders");
         assertThat(thrown).hasMessageThat().contains("withDefaultRetryForever()");
-        assertThat(thrown).hasMessageThat().contains("after-retries policy of its own");
+        assertThat(thrown).hasMessageThat().contains("its own afterRetries(...)");
         assertThat(thrown).hasMessageThat().contains("withDefaultRetryLimit(...)");
     }
 

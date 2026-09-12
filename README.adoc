@@ -748,6 +748,8 @@ For anything the helpers do not cover -- a key that is not a string, a deseriali
 <3> A produced record, typed by the route's produced types, with no casts.
 <4> A set of topics that share one function and one type pair is one route.
 
+*A deserialiser handed in as an instance is shared by every worker thread, so it must be thread-safe.* Kafka's own stock serdes are, which is why `Consumed.with(...)` reads as it does above. Kafka's `Deserializer` interface promises no more than safety on the single thread a consumer polls on, though, and here a route is decoded by whichever worker picked the record up -- so a deserialiser of your own that holds state needs one instance per worker. Declare that with `Consumed.perWorker(...)`, which takes a supplier for each side and calls it once per worker thread, reusing that instance for every record the thread decodes. `Produced.perWorker(...)` is the same for serialisers. Every instance is configured with the definition's properties and closed when the instance shuts down.
+
 [[fluent-settings]]
 ==== Instance settings and per-route defaults
 
@@ -764,14 +766,13 @@ For anything the helpers do not cover -- a key that is not a string, a deseriali
 
         pc.json("payments", Order.class)
                 .retryLimit(3)                                          // <3>
-                .concurrency(8)
                 .process(context -> Outcome.succeeded());
 ----
 <1> Instance-wide, because the engine has one commit.
 <2> Per-route defaults: every route takes a copy.
 <3> This route only, overriding its copy of the default.
 
-Ordering is the exception among the per-route settings: it needs a change at the engine's shard-key seam, so in this release it is accepted as the instance default and nothing else.
+Two of the per-route settings are exceptions in this release, and both are accepted as the instance default and nothing else. Ordering needs a change at the engine's shard-key seam. Concurrency is bounded for the instance rather than per route, because a per-route limit has to be applied where work is selected -- inside the engine -- and applying it in the facade would hold a worker on one route's limit and starve the others instead of bounding that route. Both keep `default` in their names against the per-route form arriving.
 
 [[fluent-own-clients]]
 ==== Bringing your own clients

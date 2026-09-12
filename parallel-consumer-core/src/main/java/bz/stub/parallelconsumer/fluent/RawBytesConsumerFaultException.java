@@ -83,12 +83,43 @@ public class RawBytesConsumerFaultException extends ParallelConsumerException {
      * <p>
      * Matched on the message rather than on a type, because the cast is a synthetic checkcast the compiler inserted
      * in the facade's own generic code, so there is nothing else to look at. A false negative here costs the clear
-     * message and leaves the ordinary retry path; a false positive would stop an instance, so the test is narrow: a
-     * byte array must be named as the expected type.
+     * message and leaves the ordinary retry path; a false positive stops an instance, so the test is two
+     * conditions and both are necessary:
+     * <ol>
+     *     <li><b>A byte array is named as the expected type</b>, which is what the facade's own cast asks for.</li>
+     *     <li><b>The throw came from the facade's raw-record cast</b>, and not from inside somebody else's code.
+     *     The message test alone caught a cast the facade never made: a route's own deserialiser casting a
+     *     {@code String} to {@code byte[]} internally names a byte array in exactly the same words, and was
+     *     classified as a bad pre-built consumer - stopping the whole instance for what R12 calls a transient
+     *     decode failure with a retry path. The throw site tells the two apart, because the facade's cast is in
+     *     {@link RouteDispatcher}'s own frame and a deserialiser's is in the deserialiser's.</li>
+     * </ol>
+     * The caller adds the third condition, which this method cannot see: a pre-built consumer must actually have
+     * been supplied - see {@code RouteDispatcher#rawBytesFault}.
      */
     public static boolean isRawBytesCastFailure(ClassCastException cause) {
         String message = cause.getMessage();
-        return message != null && (message.contains("[B") || message.contains("byte[]"));
+        if (message == null || !(message.contains("[B") || message.contains("byte[]"))) {
+            return false;
+        }
+        return threwAtTheRawRecordBoundary(cause);
+    }
+
+    /**
+     * Whether the cast that failed is the facade's own, read from the throw site rather than from the message.
+     * <p>
+     * The frame is compared against {@link RouteDispatcher} by class literal rather than by name, so renaming that
+     * class moves this with it - a string here would leave the classifier silently matching nothing, which reads
+     * as "this fault never happens" rather than as a break.
+     *
+     * @return true when the exception was thrown by the facade's erased cast of a record's key or value
+     */
+    private static boolean threwAtTheRawRecordBoundary(ClassCastException cause) {
+        StackTraceElement[] frames = cause.getStackTrace();
+        // The top frame, not any frame: a deserialiser's own bad cast has the facade further DOWN its stack, since
+        // the facade is what called it, so "the facade appears somewhere" would accept exactly the case this
+        // rejects.
+        return frames.length > 0 && RouteDispatcher.class.getName().equals(frames[0].getClassName());
     }
 
     /**

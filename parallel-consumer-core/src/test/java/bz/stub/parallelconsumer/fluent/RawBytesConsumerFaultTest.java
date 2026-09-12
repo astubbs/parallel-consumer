@@ -76,13 +76,41 @@ class RawBytesConsumerFaultTest extends AbstractFluentEngineTest {
     /**
      * The classification the dispatch wrapper will apply. It is narrow on purpose: a false negative costs the clear
      * message and leaves the ordinary retry path, while a false positive would stop a running instance.
+     * <p>
+     * Two conditions, and the second is here because the first alone was not enough - see
+     * {@link #aDeserialiserMakingItsOwnByteArrayCastIsNotThisFault()} for the case it accepted wrongly.
      */
     @Test
-    void onlyACastFailureNamingAByteArrayCountsAsThisFault() {
+    void onlyACastFailureNamingAByteArrayFromTheWrappersOwnCastCountsAsThisFault() {
         assertThat(RawBytesConsumerFaultException.isRawBytesCastFailure(
-                new ClassCastException("class java.lang.String cannot be cast to class [B"))).isTrue();
+                thrownBy(RouteDispatcher.class, "class java.lang.String cannot be cast to class [B"))).isTrue();
         assertThat(RawBytesConsumerFaultException.isRawBytesCastFailure(
-                new ClassCastException("class Order cannot be cast to class Parcel"))).isFalse();
-        assertThat(RawBytesConsumerFaultException.isRawBytesCastFailure(new ClassCastException())).isFalse();
+                thrownBy(RouteDispatcher.class, "class Order cannot be cast to class Parcel"))).isFalse();
+        assertThat(RawBytesConsumerFaultException.isRawBytesCastFailure(
+                thrownBy(RouteDispatcher.class, null))).isFalse();
+    }
+
+    /**
+     * The throw-site half on its own: the same message, from somebody else's frame, is not this fault. A route's
+     * deserialiser casting a {@code String} to {@code byte[]} internally words its failure identically, and being
+     * classified as a bad pre-built consumer stopped the whole instance instead of retrying a decode failure (R12).
+     */
+    @Test
+    void aDeserialiserMakingItsOwnByteArrayCastIsNotThisFault() {
+        assertThat(RawBytesConsumerFaultException.isRawBytesCastFailure(
+                thrownBy(RawBytesConsumerFaultTest.class, "class java.lang.String cannot be cast to class [B")))
+                .isFalse();
+    }
+
+    /**
+     * A cast failure stamped with the frame it would have been thrown from, which is what the classifier reads.
+     * Building it rather than provoking it keeps the two conditions separable: a real throw could only ever carry
+     * one frame at a time.
+     */
+    private static ClassCastException thrownBy(Class<?> thrower, String message) {
+        ClassCastException castFailed = new ClassCastException(message);
+        castFailed.setStackTrace(new StackTraceElement[]{
+                new StackTraceElement(thrower.getName(), "someMethod", thrower.getSimpleName() + ".java", 1)});
+        return castFailed;
     }
 }

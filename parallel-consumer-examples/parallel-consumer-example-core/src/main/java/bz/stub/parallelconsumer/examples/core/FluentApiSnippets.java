@@ -91,7 +91,6 @@ public class FluentApiSnippets {
 
         pc.json("payments", Order.class)
                 .retryLimit(3)                                          // <3>
-                .concurrency(8)
                 .process(context -> Outcome.succeeded());
         // end::fluentSettings[]
     }

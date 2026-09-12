@@ -152,6 +152,13 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     private boolean preBuiltProducerSupplied;
 
     /**
+     * Whether that producer can open a transaction, read off it at the moment it was supplied and kept as a fact
+     * rather than as a reference (KTD3) - see {@link SuppliedProducer}. Empty until one is supplied, and still empty
+     * afterwards whenever the probe could not tell.
+     */
+    private Optional<Boolean> preBuiltProducerIsTransactional = Optional.empty();
+
+    /**
      * One definition starts one instance. Set by {@link #buildOptions} so a second start is refused before any
      * client is built - rather than after a second consumer has already joined the group.
      */
@@ -257,20 +264,27 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * and is a later milestone, so in this version it is the instance default and nothing else (R6).
      */
     public ParallelConsumerDefinition withDefaultOrdering(ProcessingOrder ordering) {
-        defaults.ordering(Objects.requireNonNull(ordering, "An ordering must be supplied"));
+        changingDefaults().ordering(Objects.requireNonNull(ordering, "An ordering must be supplied"));
         return this;
     }
 
     /**
-     * The admission target every route copies: how many of its records may be in flight at once. Routes do not
-     * compete for one shared limit, so the engine's total admission is the sum of the routes' targets (R23, KD6).
+     * How many records may be in flight at once across the whole instance.
+     * <p>
+     * <b>Concurrency is the second exception among the per-route settings, beside ordering</b>: in this milestone it
+     * is accepted as the instance default and nothing else, so this is the only way to bound concurrency and it
+     * bounds the instance rather than any one route (owner-directed, 2026-09-12). A route's own target and the
+     * per-route guarantee R23 and AE17 describe are withdrawn from this milestone, because holding a worker on a
+     * route's limit starves the other routes instead of bounding that one - the limit has to be applied where work
+     * is selected, which is inside the engine. It keeps the {@code default} in its name against that setting
+     * returning, exactly as {@link #withDefaultOrdering} does for the same reason.
      */
     public ParallelConsumerDefinition withDefaultConcurrency(int limit) {
         if (limit < 1) {
-            throw new IllegalArgumentException(msg("withDefaultConcurrency ({}) must be at least one - it is each "
-                    + "route's admission target", limit));
+            throw new IllegalArgumentException(msg("withDefaultConcurrency ({}) must be at least one - it is how "
+                    + "many records this instance may have in flight at once", limit));
         }
-        defaults.concurrency(limit);
+        changingDefaults().concurrency(limit);
         return this;
     }
 
@@ -282,7 +296,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             throw new IllegalArgumentException(msg("withDefaultRetryLimit ({}) cannot be negative - it counts the "
                     + "attempts after the first; use withDefaultRetryForever() to ask for unbounded retries", attempts));
         }
-        defaults.retryLimit(OptionalInt.of(attempts));
+        changingDefaults().retryLimit(OptionalInt.of(attempts));
         return this;
     }
 
@@ -290,7 +304,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * Retry forever, as the classic API always has. Opt-in on purpose (R10).
      */
     public ParallelConsumerDefinition withDefaultRetryForever() {
-        defaults.retryLimit(OptionalInt.empty());
+        changingDefaults().retryLimit(OptionalInt.empty());
         return this;
     }
 
@@ -302,7 +316,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         if (delay.isNegative()) {
             throw new IllegalArgumentException(msg("withDefaultRetryDelay ({}) cannot be negative", delay));
         }
-        defaults.retryDelay(delay);
+        changingDefaults().retryDelay(delay);
         return this;
     }
 
@@ -310,7 +324,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * What happens to a record that runs out of attempts, on every route that declares nothing of its own (R27).
      */
     public ParallelConsumerDefinition withDefaultAfterRetries(AfterRetries policy) {
-        defaults.afterRetries(Objects.requireNonNull(policy, "An after-retries policy must be supplied"));
+        changingDefaults().afterRetries(Objects.requireNonNull(policy, "An after-retries policy must be supplied"));
         return this;
     }
 
@@ -322,7 +336,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * types.
      */
     public ParallelConsumerDefinition withDefaultOnParked(ParkObserver<Object, Object> observer) {
-        defaults.parkObserver(Objects.requireNonNull(observer, "A park observer must be supplied"));
+        changingDefaults().parkObserver(Objects.requireNonNull(observer, "A park observer must be supplied"));
         return this;
     }
 
@@ -371,6 +385,28 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         return withDlqAtOffsetPayload(Percent.percentOf(percentage));
     }
 
+    /**
+     * The defaults, handed out for writing - and every route that has already resolved against them invalidated on
+     * the way past.
+     * <p>
+     * <b>This is the only way a {@code withDefault} setter touches them</b>, because a route caches what it
+     * resolved and the cache is what made a later default invisible. A route resolves on the first read of its
+     * policy, and two ordinary sequences do that read before the definition is finished: {@code validate()},
+     * documented as failing early while the definition stays mutable, and reading a route through
+     * {@link DefinitionView}. Either one made {@code pc.validate(); pc.withDefaultRetryLimit(0); pc.start()} run
+     * with the limit of ten it had already resolved, with nothing to say so. Invalidating here rather than
+     * re-resolving keeps the resolution lazy and keeps its publication edge intact - see
+     * {@link RouteState#invalidateResolution()}.
+     *
+     * @return the defaults to write to
+     */
+    private InstanceDefaults changingDefaults() {
+        for (RouteState route : routes) {
+            route.invalidateResolution();
+        }
+        return defaults;
+    }
+
     // ---------------------------------------------------------------- pre-built clients (Java binding only)
 
     /**
@@ -399,10 +435,17 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * configuration, and an instance handed a finished producer has no configuration to rebuild from. Leave this out
      * and the definition's properties build one that can recover. Under the transactional commit mode this also
      * forgoes export (R1, R14).
+     * <p>
+     * <b>Whether it is transactional is read off it here</b>, because this is the only moment the facade holds it
+     * (KTD3), and the commit mode has to agree with the answer: a non-transactional producer under the transactional
+     * commit mode, or a transactional one under a consumer commit mode, is refused by {@link #validate()} instead of
+     * failing later from inside the engine's producer manager. Where the probe cannot tell, nothing is refused -
+     * {@link SuppliedProducer} says why that is the only safe reading.
      */
     public ParallelConsumerDefinition withProducer(Producer<byte[], byte[]> producer) {
         Objects.requireNonNull(producer, "A producer must be supplied");
         this.preBuiltProducerSupplied = true;
+        this.preBuiltProducerIsTransactional = SuppliedProducer.isTransactional(producer);
         options.producer(producer);
         return this;
     }
@@ -531,7 +574,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      */
     public void validate() {
         new DefinitionRules(routes, routesByTopic, connection, commitMode, defaults, instancePayloadPercentage,
-                preBuiltProducerSupplied).validate();
+                preBuiltProducerSupplied, preBuiltProducerIsTransactional).validate();
     }
 
     // ---------------------------------------------------------------- start
@@ -550,6 +593,21 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     public ParallelConsumerInstance start(ClientRuntime runtime) {
         refuseExportUntilItLands();
         ParallelConsumerOptions<byte[], byte[]> built = buildOptions(runtime);
+        try {
+            return startOn(built, runtime);
+        } catch (RuntimeException startFailed) {
+            // Past buildOptions the definition is spent, so nothing will start these routes again and whatever this
+            // start opened is nobody else's to release.
+            releaseWhatThisStartOpened(startFailed);
+            throw startFailed;
+        }
+    }
+
+    /**
+     * The start itself, separated only so that {@link #start(ClientRuntime)} can put a single cleanup path around
+     * the whole of it rather than around each step.
+     */
+    private ParallelConsumerInstance startOn(ParallelConsumerOptions<byte[], byte[]> built, ClientRuntime runtime) {
         // The module, not the static factory: it is what owns this instance's PCMetrics, and registering the
         // route meters through it is what puts them in the user's own registry beside every engine meter and has
         // them swept by the same close (KTD8, and core's rule that collaborators are wired through the module).
@@ -576,7 +634,10 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         // Before the poll, so the first control loop already carries the hook rather than the second.
         instance.startObserving();
         if (requiresProducer()) {
-            processor.pollAndProduceMany(dispatcher::dispatch);
+            // The callback overload, not the bare one: it is the engine's own report that a produced record's send
+            // was acknowledged, and it is what the produced-record total is counted from rather than the list the
+            // wrapper handed over a moment earlier (R7).
+            processor.pollAndProduceMany(dispatcher::dispatch, acknowledged -> dispatcher.produceAcknowledged());
         } else {
             processor.poll(dispatcher::dispatchWithoutProducing);
         }
@@ -596,6 +657,32 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             byTopic.put(entry.getKey(), entry.getValue().topics());
         }
         return Collections.unmodifiableMap(byTopic);
+    }
+
+    /**
+     * Give back what a failed start had already taken, without losing the reason it failed.
+     * <p>
+     * <b>Which path depends on how far the start got</b>, and the difference is not cosmetic. Once the instance
+     * exists the engine may already be polling, so its own close is the only safe route: that stops the workers
+     * first and closes the route formats after, and a deserialiser closed while a worker is still decoding with it
+     * is exactly the hazard that ordering exists to prevent. Before that, nothing is running and the formats
+     * validation configured are all there is to release.
+     *
+     * @param startFailed the failure on its way to the caller, which a failure in here is added to rather than
+     *                    replacing - the caller needs to know why the start failed, and this is a second and lesser
+     *                    fact about the same event
+     */
+    private void releaseWhatThisStartOpened(RuntimeException startFailed) {
+        ParallelConsumerInstance partiallyStarted = this.startedInstance;
+        try {
+            if (partiallyStarted != null) {
+                partiallyStarted.close();
+            } else {
+                dispatcher.closeRouteFormats();
+            }
+        } catch (RuntimeException cleanUpAlsoFailed) {
+            startFailed.addSuppressed(cleanUpAlsoFailed);
+        }
     }
 
     /**
@@ -631,7 +718,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      */
     private void refuseExportUntilItLands() {
         for (RouteState route : routes) {
-            String destination = route.afterRetries().destination();
+            String destination = route.resolvedAfterRetries().destination();
             if (destination != null) {
                 throw new IllegalArgumentException(msg("Topic {} declares the dead-letter destination {}, and export "
                                 + "does not run in this release: a record that runs out of attempts parks in place, "
@@ -663,18 +750,27 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             throw new IllegalStateException("This definition has already been started - define a second one to run a "
                     + "second instance");
         }
-        started = true;
 
         // Before any client of the instance exists, and after the definition has been refused for its own faults:
         // a topic that is not there is a fault of the definition too, and the start that carries on regardless is
         // the one this replaces (owner decision, 2026-09-11).
         TopicExistenceCheck.enforce(whenTopicMissing, topics(), runtime, this);
 
-        this.dispatcher = new RouteDispatcher(routesByTopic, defaults.retryDelay(), preBuiltConsumerDescription);
+        // The definition is spent only once every pre-start refusal has passed, and the check above is why: the
+        // exception it throws documents a recovery path - catch it, create the topics it names, start the same
+        // definition again - which a flag set before the check silently withdrew, because the second start then
+        // failed with "already been started" instead. Nothing above this line has built anything, so a refusal
+        // there leaves the definition exactly as the user wrote it; from here on each step either constructs a
+        // client or hands one to the engine, so a failure past this point is not a start that can be retried and
+        // the flag stays set for it.
+        started = true;
+
+        this.dispatcher = new RouteDispatcher(routesByTopic, defaults.retryDelay(), preBuiltConsumerDescription,
+                preBuiltConsumerSupplied);
 
         options.commitMode(commitMode)
                 .ordering(defaults.ordering())
-                .maxConcurrency(totalAdmissionTarget())
+                .maxConcurrency(defaults.concurrency())
                 // One delay per route, answered from the topic and the record's attempt count (R6). What a throw
                 // MEANT - a park, a hand-back that is not an attempt - rides on the exception instead, so this
                 // stays a pure function and there is no note for it to find (KTD14). A park CYCLE's own delay is
@@ -698,19 +794,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             }
         }
         return options.build();
-    }
-
-    /**
-     * The engine's total admission is the sum of the routes' targets, because routes do not compete for one shared
-     * limit (R23). On virtual threads that costs nothing; a platform-thread user sets a lower per-route target so
-     * the sum fits the pool (KD6).
-     */
-    private int totalAdmissionTarget() {
-        int total = 0;
-        for (RouteState route : routes) {
-            total += route.concurrency();
-        }
-        return total;
     }
 
     /**
@@ -789,7 +872,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             return true;
         }
         for (RouteState route : routes) {
-            if (route.producesRecords() || route.afterRetries().destination() != null) {
+            if (route.producesRecords() || route.resolvedAfterRetries().destination() != null) {
                 return true;
             }
         }
