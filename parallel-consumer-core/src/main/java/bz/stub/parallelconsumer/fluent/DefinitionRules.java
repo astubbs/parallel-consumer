@@ -10,6 +10,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
@@ -64,18 +65,26 @@ final class DefinitionRules {
      */
     private final boolean preBuiltProducerSupplied;
 
+    /**
+     * What was established about that producer when it was handed over - whether it can open a transaction. Read at
+     * supply time because the facade does not keep the client (KTD3); see {@link SuppliedProducer}.
+     */
+    private final Optional<Boolean> preBuiltProducerIsTransactional;
+
     DefinitionRules(List<RouteState> routes,
                     Map<String, RouteState> routesByTopic,
                     ConnectionProperties connection,
                     CommitMode commitMode,
                     InstanceDefaults defaults,
-                    boolean preBuiltProducerSupplied) {
+                    boolean preBuiltProducerSupplied,
+                    Optional<Boolean> preBuiltProducerIsTransactional) {
         this.routes = routes;
         this.routesByTopic = routesByTopic;
         this.connection = connection;
         this.commitMode = commitMode;
         this.defaults = defaults;
         this.preBuiltProducerSupplied = preBuiltProducerSupplied;
+        this.preBuiltProducerIsTransactional = preBuiltProducerIsTransactional;
     }
 
     /**
@@ -191,8 +200,49 @@ final class DefinitionRules {
             throw new IllegalArgumentException(msg("The commit mode is {} but there is no {} in the connection "
                             + "properties - Parallel Consumer builds the producer from these properties and Kafka "
                             + "needs the id there to make it transactional. Add it, or supply a transactional "
-                            + "producer with producer(...).",
+                            + "producer with withProducer(...).",
                     commitMode, ProducerConfig.TRANSACTIONAL_ID_CONFIG));
+        }
+        refuseASuppliedProducerThatDisagreesWithTheCommitMode(transactional);
+    }
+
+    /**
+     * A supplied producer and the commit mode have to agree, and <b>its presence is not evidence that they do</b>.
+     * <p>
+     * Supplying a producer used to excuse the transactional definition from every check, on the reasoning that the
+     * id is already on the client the caller built. That reasoning does not verify anything: a non-transactional
+     * producer under {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} passed validation and was refused later by
+     * the engine's producer manager at start, and a transactional producer under a consumer commit mode did the
+     * same in the other direction. Putting a {@code transactional.id} in the connection properties could even make
+     * the first of those look deliberately valid, when those properties are not what built the supplied client and
+     * nothing reads them. U2 asks for a definition-time refusal in both directions, and the answer is read off the
+     * client itself rather than inferred from what is beside it.
+     * <p>
+     * <b>An unknown answer refuses nothing.</b> The probe reads client internals and can decline - see
+     * {@link SuppliedProducer} - and "could not tell" is not "not transactional". Refusing on it would fail a well
+     * formed definition for a fact nobody established; standing aside leaves the engine's start-time check exactly
+     * where it already was.
+     */
+    private void refuseASuppliedProducerThatDisagreesWithTheCommitMode(boolean transactional) {
+        if (!preBuiltProducerSupplied) {
+            return;
+        }
+        boolean knownTransactional = preBuiltProducerIsTransactional.orElse(false);
+        boolean knownNotTransactional = preBuiltProducerIsTransactional.isPresent() && !knownTransactional;
+        if (transactional && knownNotTransactional) {
+            throw new IllegalArgumentException(msg("The commit mode is {} and the producer supplied with "
+                            + "withProducer(...) was not built with a {}, so it can never open a transaction. Build it "
+                            + "with one, or declare a consumer commit mode.",
+                    commitMode, ProducerConfig.TRANSACTIONAL_ID_CONFIG));
+        }
+        if (!transactional && knownTransactional) {
+            throw new IllegalArgumentException(msg("The producer supplied with withProducer(...) was built with a {}, so "
+                            + "it is transactional, but the commit mode is {} - which commits offsets through the "
+                            + "consumer and never opens a transaction, so that producer's transactional guarantee "
+                            + "would silently not apply. Declare withCommitMode({}), or supply a producer built "
+                            + "without a transactional id.",
+                    ProducerConfig.TRANSACTIONAL_ID_CONFIG, commitMode,
+                    CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER));
         }
     }
 
@@ -207,7 +257,7 @@ final class DefinitionRules {
     private void validatePolicy() {
         refuseAPolicyNothingCanTrigger();
         for (RouteState route : routes) {
-            refuseHalfAParkCycle(route.afterRetries(), route.describeTopics());
+            refuseHalfAParkCycle(route);
         }
     }
 
@@ -239,7 +289,8 @@ final class DefinitionRules {
                 // Retrying forever with nothing declared to react: the resolved park default is not a setting.
                 continue;
             }
-            throw new IllegalArgumentException(msg("Topic {} {}, and {} - so the policy can never fire. Running out "
+            throw new IllegalArgumentException(msg("Topic {} {}, and its after-retries policy comes from {} - so "
+                            + "the policy can never fire. Running out "
                             + "of attempts is the only thing that consults an after-retries policy, and a record "
                             + "that retries forever never runs out, so retrying forever leaves the policy nothing "
                             + "to react to: the reaction and the park cycles are both inert. "
@@ -248,9 +299,7 @@ final class DefinitionRules {
                     route.declaresOwnRetryLimit()
                             ? "declares retryForever()"
                             : "retries forever, from the instance's withDefaultRetryForever()",
-                    ownPolicy
-                            ? "declares an after-retries policy of its own"
-                            : "takes the instance's withDefaultAfterRetries(...)",
+                    policyDeclaredBy(route),
                     route.declaresOwnRetryLimit()
                             ? "retryLimit(...) on this route instead"
                             : "a retryLimit(...) on this route, or replace withDefaultRetryForever() with "
@@ -262,23 +311,52 @@ final class DefinitionRules {
      * A park delay and a cycle count mean nothing apart: a delay with no cycles grants no attempt, and cycles with
      * no delay is scheduled retry with no schedule. Either would be a setting that silently does nothing, which is
      * the one thing this definition refuses to produce (R27, AE7).
+     * <p>
+     * Takes the route rather than its resolved policy, because the refusal has to say <em>where the policy was
+     * written</em> as well as which topic it lands on, and only the route knows which of the two calls declared it -
+     * see {@link #policyDeclaredBy}. Read off the resolved policy, a park cycle the instance declared is
+     * indistinguishable from one the route declared, and that is what these two refusals used to report it as.
      */
-    private void refuseHalfAParkCycle(AfterRetries policy, String topic) {
+    private void refuseHalfAParkCycle(RouteState route) {
+        AfterRetries policy = route.resolvedAfterRetries();
         if (!policy.declaresAnyParkCycle()) {
             return;
         }
         if (policy.parkDelay() == null) {
-            throw new IllegalArgumentException(msg("Topic {} declares forCycles({}) with no park delay - a cycle is "
-                            + "a wait followed by one more attempt, so declare thenRetryAfter(...) beside it, or "
-                            + "drop it and let the record park as soon as its retries run out (R27).",
-                    topic, policy.parkCycles()));
+            throw new IllegalArgumentException(msg("The after-retries policy on topic {} comes from {} and declares "
+                            + "forCycles({}) with no park delay - a cycle is a wait followed by one more attempt, "
+                            + "so declare thenRetryAfter(...) beside it, or drop it and let the record park as soon "
+                            + "as its retries run out (R27).",
+                    route.describeTopics(), policyDeclaredBy(route), policy.parkCycles()));
         }
         if (policy.parkCycles() == 0) {
-            throw new IllegalArgumentException(msg("Topic {} declares thenRetryAfter({}) with no cycle count - "
-                            + "nothing would ever wait that long, because no attempt has been granted. Declare "
-                            + "forCycles(...) beside it, or drop it (R27).",
-                    topic, policy.parkDelay()));
+            throw new IllegalArgumentException(msg("The after-retries policy on topic {} comes from {} and declares "
+                            + "thenRetryAfter({}) with no cycle count - nothing would ever wait that long, because "
+                            + "no attempt has been granted. Declare forCycles(...) beside it, or drop it (R27).",
+                    route.describeTopics(), policyDeclaredBy(route), policy.parkDelay()));
         }
+    }
+
+    /**
+     * A route's after-retries policy named as the call that declared it, in the spelling valid <em>where that call
+     * was written</em>: {@code afterRetries(...)} on the route, {@code withDefaultAfterRetries(...)} on the
+     * definition, since every instance-wide setting carries the {@code with} prefix and its per-route twin keeps the
+     * bare name (KD16).
+     * <p>
+     * <b>Every refusal about a policy goes through here, and that is the point.</b> A policy reaches a route by one
+     * of two calls spelled differently, so a refusal that names the other one sends the author to a call they did
+     * not write - and, when they declared it on the definition, to one they could not have written there at all.
+     * {@link #refuseHalfAParkCycle} said "Topic X declares forCycles(3)" for a cycle count
+     * {@code withDefaultAfterRetries(...)} had declared: the author went to that route, found nothing of the kind on
+     * it, and the message had nothing else to offer them.
+     * <p>
+     * A method rather than another copy of the same ternary at each site, because choosing between two literals per
+     * refusal is exactly what let a refusal drift into naming the scope its author was not on.
+     */
+    private static String policyDeclaredBy(RouteState route) {
+        return route.declaresOwnAfterRetries()
+                ? "its own afterRetries(...)"
+                : "the instance's withDefaultAfterRetries(...)";
     }
 
     /**

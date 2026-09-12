@@ -59,6 +59,31 @@ distinguishable from the check's tick.
   have no memory, so partially extracting a duplicate looks identical to removing it. Nothing here
   will tell you the difference.
 
+## The same class of failure, a different cause, on the other engine (2026-09-12)
+
+<!-- post-merge: checked-begin -->
+`dups: similarity` hit this on the fluent-API PR, astubbs/parallel-consumer#502, and it was **not**
+the line-resolution rejection above. That engine posts one whole-PR comment rather than inline annotations, so there is no
+line to resolve; GitHub refused the comment with a 422 because the **body exceeded the maximum comment
+length**. The report ends with a `Full similarity report` details block listing every pair above
+`ignore_below` for every Java file in the tree, so it grows with the corpus - on a tree this size it
+is already several times over the limit, and only moves further over. Measure it with the local
+recipe in
+[`ci-dup-similarity-cannot-accept-known-duplication.md`](ci-dup-similarity-cannot-accept-known-duplication.md).
+
+So that check stayed red for days with a correct finding nobody could read, reaching the same dead
+end as astubbs#267 by a different route - which is the argument for fixing the delivery rather than
+either cause.
+<!-- post-merge: checked-end -->
+
+**The fix is the same shape and just as small.** `run_action.py` already inspects the POST status
+code, already prints the rejection, and already writes the whole report to `message.md`; it simply
+treats a comment that was refused as reported and carries on. It needs to drop or truncate the
+full-report block when the body will not fit - and say in the posted comment that it did - and the
+workflow should upload `message.md` as an artifact so the finding survives whatever GitHub does with
+the comment. Both are changes to `astubbs/duplicate-code-detection-tool` and `maven.yml`, not to any
+PR that trips the check.
+
 ## The shape worth remembering
 
 <!-- post-merge: checked-begin -->

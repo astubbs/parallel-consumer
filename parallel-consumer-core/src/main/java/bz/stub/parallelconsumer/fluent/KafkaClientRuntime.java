@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.fluent;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -26,6 +27,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * It holds no client: it builds one and hands it back, and the caller puts it straight into the options builder
  * (KTD3).
  */
+@Slf4j
 class KafkaClientRuntime implements ClientRuntime {
 
     /**
@@ -66,11 +68,27 @@ class KafkaClientRuntime implements ClientRuntime {
      * definition that has none. Everything an admin client needs to reach a secured broker is a known config and
      * survives the filter; what does not is a schema-registry URL and the consumer's own settings, neither of
      * which it would have used.
+     * <p>
+     * <b>No broker address means there is nothing to ask, which is the empty answer {@link ClientRuntime#admin}
+     * documents</b> - not a refusal. A definition may supply finished clients <em>in place of</em> connection
+     * properties (R1), and one that does has no address here for this client to reach: refusing it would fail a
+     * start that R1 allows, under every policy including {@link MissingTopic#IGNORE}, for a question about a
+     * cluster only the user's own clients know how to find. The consumer and producer this class builds still
+     * refuse a definition that named no broker - see {@link #requireConnection} - so the address is only optional
+     * for the definition that is not asking this class to build anything.
+     * <p>
+     * The group id is deliberately <b>not</b> required either: an admin client has no use for one, and the filter
+     * above drops it before the client is constructed.
      */
     @Override
     public Optional<Admin> admin(DefinitionView definition) {
         Map<String, Object> config = definition.connectionProperties();
-        requireConnection(config);
+        if (!config.containsKey(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG)) {
+            log.debug("No {} in the connection properties, so this definition's clients are its connection source "
+                            + "and there is no cluster for the topic-existence check to ask",
+                    ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG);
+            return Optional.empty();
+        }
         Map<String, Object> adminConfig = new LinkedHashMap<>();
         for (Map.Entry<String, Object> property : config.entrySet()) {
             if (AdminClientConfig.configNames().contains(property.getKey())) {

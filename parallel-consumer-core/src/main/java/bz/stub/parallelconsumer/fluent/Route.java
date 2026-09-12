@@ -120,19 +120,6 @@ public final class Route<K, V, PK, PV> {
     }
 
     /**
-     * This route's admission target: how many of its records may be in flight at once. Routes do not compete for one
-     * shared limit (R23, KD6).
-     */
-    public Route<K, V, PK, PV> concurrency(int limit) {
-        if (limit < 1) {
-            throw new IllegalArgumentException(msg("concurrency ({}) on topic {} must be at least one - it is this "
-                    + "route's admission target", limit, state.describeTopics()));
-        }
-        state.ownConcurrency(limit);
-        return this;
-    }
-
-    /**
      * What happens once this route's records run out of attempts (R27).
      */
     public Route<K, V, PK, PV> afterRetries(AfterRetries policy) {
