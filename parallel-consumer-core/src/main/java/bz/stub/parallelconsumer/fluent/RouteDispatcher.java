@@ -20,6 +20,7 @@ import org.apache.kafka.common.serialization.Serializer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
@@ -376,6 +377,53 @@ class RouteDispatcher {
      */
     void produceAcknowledged() {
         producedRecords.increment();
+    }
+
+    /**
+     * Close every format any route holds, once each, after the engine has stopped.
+     * <p>
+     * <b>The facade owns these.</b> A route's formats are built and {@code configure}d by this package, and the
+     * reflective Avro and Protobuf wrappers delegate {@code close()} precisely because their serialisers may hold an
+     * HTTP client and a schema cache - so an instance that shut down without closing them leaked those, once per
+     * definition started. Nothing else was going to: the engine closes the clients it built and knows nothing about
+     * a route's typing.
+     * <p>
+     * <b>Once each, by identity</b>, because the route table holds a route under every topic it was declared over
+     * (R5) and because two routes may legitimately share one format object - a schema-registry serde built once and
+     * handed to both. A second {@code close()} on a serde is not contracted to be harmless, so being asked twice is
+     * not something to rely on.
+     * <p>
+     * <b>Every failure is contained.</b> This runs during shutdown, where a format that throws on the way out must
+     * not stop the formats after it from closing, and must not replace whatever the caller was already being told
+     * about the shutdown.
+     */
+    void closeRouteFormats() {
+        Set<Format<?>> alreadyClosed = Collections.newSetFromMap(new IdentityHashMap<Format<?>, Boolean>());
+        for (RouteState route : routesByTopic.values()) {
+            closeOnce(route.consumedKey(), alreadyClosed);
+            closeOnce(route.consumedValue(), alreadyClosed);
+            closeOnce(route.producedKey(), alreadyClosed);
+            closeOnce(route.producedValue(), alreadyClosed);
+        }
+    }
+
+    /**
+     * One format, if it is there and has not been closed already by this pass.
+     *
+     * @param format        null on the produced side of a route that declares no produced types
+     * @param alreadyClosed identity-keyed, because two distinct formats may compare equal and closing one of them
+     *                      twice while never closing the other is the failure that would be invisible
+     */
+    private static void closeOnce(Format<?> format, Set<Format<?>> alreadyClosed) {
+        if (format == null || !alreadyClosed.add(format)) {
+            return;
+        }
+        try {
+            format.close();
+        } catch (RuntimeException closeFailed) {
+            log.warn("The format {} threw while closing during shutdown; the remaining formats are closed anyway",
+                    format, closeFailed);
+        }
     }
 
     // ---------------------------------------------------------------- the engine function

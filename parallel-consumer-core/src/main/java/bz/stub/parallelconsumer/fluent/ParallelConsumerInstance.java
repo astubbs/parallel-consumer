@@ -324,10 +324,17 @@ public class ParallelConsumerInstance implements AutoCloseable {
      * <p>
      * The meters go before the engine's close, so they are gone at a moment this instance chooses rather than only if
      * the engine's shutdown reaches its own metrics step.
+     * <p>
+     * <b>The route formats go last, after the engine's close has returned</b>, and the order is the point: a
+     * deserialiser is in use by every worker until the engine has stopped them, so closing one first would pull a
+     * schema cache or an HTTP client out from under work still running. The engine closes the clients it built and
+     * knows nothing about a route's typing, so the formats this facade configured are the facade's to close - see
+     * {@link RouteDispatcher#closeRouteFormats()} for what was leaking.
      */
     private void shutTheEngineDown(ClosePath path) {
         meters.deregister();
         processor.close(path.drainingMode());
+        dispatcher.closeRouteFormats();
     }
 
     /**

@@ -41,6 +41,80 @@ class InstanceLifecycleTest extends AbstractFluentEngineTest {
 
 
     /**
+     * The formats a route was declared with are built and configured by this facade, and the reflective Avro and
+     * Protobuf wrappers delegate {@code close()} because their serialisers may hold an HTTP client and a schema
+     * cache - so an instance that shut down without closing them leaked those once per definition started. The
+     * engine closes the clients it built and knows nothing about a route's typing.
+     */
+    @Test
+    void closingTheInstanceClosesEveryRouteFormatOnce() {
+        CountingClose consumedKey = new CountingClose();
+        CountingClose consumedValue = new CountingClose();
+        // DONT_DRAIN_FIRST so the close is the instance's own - the suite's closeWithoutDraining helper reaches
+        // past the facade into the engine, which is exactly the path that does not close formats.
+        var pc = ParallelConsumer.connect(props()).withClosePath(ClosePath.DONT_DRAIN_FIRST);
+        pc.topic(TOPIC)
+                .consumed(Consumed.with(Format.reading(consumedKey), Format.reading(consumedValue)))
+                .process(context -> Outcome.succeeded());
+
+        ParallelConsumerInstance started = runtime.startAndAssign(pc, 1);
+        assertWithMessage("a running instance has not closed its formats")
+                .that(consumedValue.closes.get()).isEqualTo(0);
+        started.close();
+
+        assertThat(consumedKey.closes.get()).isEqualTo(1);
+        assertThat(consumedValue.closes.get()).isEqualTo(1);
+    }
+
+    /**
+     * The same formats, when the start fails after the definition has been spent. Nothing will start these routes
+     * again, so what the start opened is nobody else's to release - and because the instance already exists by the
+     * time this runtime throws, the release goes through the instance's own close, which stops the workers before
+     * any deserialiser they were using is closed.
+     */
+    @Test
+    void aStartThatFailsLateStillClosesTheRouteFormats() {
+        CountingClose consumedValue = new CountingClose();
+        var pc = ParallelConsumer.connect(props()).withClosePath(ClosePath.DONT_DRAIN_FIRST);
+        pc.topic(TOPIC)
+                .consumed(Consumed.with(Format.reading(new CountingClose()), Format.reading(consumedValue)))
+                .process(context -> Outcome.succeeded());
+        ClientRuntime failingAfterTheEngineIsUp = new RecordingClientRuntime() {
+
+            @Override
+            public void started(ParallelConsumerInstance instance) {
+                throw new FakeRuntimeException("this runtime refuses the instance it was handed");
+            }
+        };
+
+        var thrown = assertThrows(FakeRuntimeException.class, () -> pc.start(failingAfterTheEngineIsUp));
+
+        assertThat(thrown).hasMessageThat().contains("refuses the instance");
+        assertWithMessage("the failed start gave back the formats it had opened")
+                .that(consumedValue.closes.get()).isEqualTo(1);
+    }
+
+    /**
+     * A deserialiser that counts how many times it is closed. Counting rather than flagging is the point: a format
+     * held by a route under several topics, or shared between two routes, must be closed once and not once per
+     * mention.
+     */
+    private static final class CountingClose implements org.apache.kafka.common.serialization.Deserializer<String> {
+
+        private final AtomicInteger closes = new AtomicInteger();
+
+        @Override
+        public String deserialize(String topic, byte[] data) {
+            return data == null ? null : new String(data, java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+        @Override
+        public void close() {
+            closes.incrementAndGet();
+        }
+    }
+
+    /**
      * AE9. The block exits with work in flight and a backlog already fetched behind it; the close drains, and the
      * offsets of everything it drained commit.
      * <p>

@@ -517,6 +517,21 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      */
     public ParallelConsumerInstance start(ClientRuntime runtime) {
         ParallelConsumerOptions<byte[], byte[]> built = buildOptions(runtime);
+        try {
+            return startOn(built, runtime);
+        } catch (RuntimeException startFailed) {
+            // Past buildOptions the definition is spent, so nothing will start these routes again and whatever this
+            // start opened is nobody else's to release.
+            releaseWhatThisStartOpened(startFailed);
+            throw startFailed;
+        }
+    }
+
+    /**
+     * The start itself, separated only so that {@link #start(ClientRuntime)} can put a single cleanup path around
+     * the whole of it rather than around each step.
+     */
+    private ParallelConsumerInstance startOn(ParallelConsumerOptions<byte[], byte[]> built, ClientRuntime runtime) {
         // The module, not the static factory: it is what owns this instance's PCMetrics, and registering the
         // route meters through it is what puts them in the user's own registry beside every engine meter and has
         // them swept by the same close (KTD8, and core's rule that collaborators are wired through the module).
@@ -566,6 +581,32 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             byTopic.put(entry.getKey(), entry.getValue().topics());
         }
         return Collections.unmodifiableMap(byTopic);
+    }
+
+    /**
+     * Give back what a failed start had already taken, without losing the reason it failed.
+     * <p>
+     * <b>Which path depends on how far the start got</b>, and the difference is not cosmetic. Once the instance
+     * exists the engine may already be polling, so its own close is the only safe route: that stops the workers
+     * first and closes the route formats after, and a deserialiser closed while a worker is still decoding with it
+     * is exactly the hazard that ordering exists to prevent. Before that, nothing is running and the formats
+     * validation configured are all there is to release.
+     *
+     * @param startFailed the failure on its way to the caller, which a failure in here is added to rather than
+     *                    replacing - the caller needs to know why the start failed, and this is a second and lesser
+     *                    fact about the same event
+     */
+    private void releaseWhatThisStartOpened(RuntimeException startFailed) {
+        ParallelConsumerInstance partiallyStarted = this.startedInstance;
+        try {
+            if (partiallyStarted != null) {
+                partiallyStarted.close();
+            } else {
+                dispatcher.closeRouteFormats();
+            }
+        } catch (RuntimeException cleanUpAlsoFailed) {
+            startFailed.addSuppressed(cleanUpAlsoFailed);
+        }
     }
 
     /**
