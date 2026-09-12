@@ -2598,8 +2598,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * outcome is the behaviour that predates this method rather than a new fault, so it is recorded rather than
      * closed; the same note sits on the clear itself.
      *
+     * <b>Per container, because the batch is already gone from the queue.</b> {@code queue.remove} has run by the
+     * time the hand-backs do, irreversibly, so one hand-back throwing must not take the containers behind it with
+     * it - they would stay in flight forever, which is the stall this method exists to prevent. The failure is
+     * collected and surfaced after the loop instead: it is PC's own bookkeeping, so it leaves that record
+     * unaccounted for, and the control loop's guard then shuts the instance down deliberately rather than
+     * continuing. Raised by the review of astubbs/parallel-consumer#506.
+     *
      * @return how many records were taken back on this pass
      */
+    @SneakyThrows
     protected int purgeQueuedWorkNotAllowedToStart() {
         State observed = state;
         boolean closingWithoutDraining = (observed == CLOSING || observed == CLOSED)
@@ -2609,6 +2617,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
         BlockingQueue<Runnable> queue = workerThreadPool.get().getQueue();
         int purged = 0;
+        Throwable bookkeepingFailed = null;
         // A copy, because removing from the live queue while iterating it is not something BlockingQueue promises.
         for (Runnable queued : new ArrayList<>(queue)) {
             if (!(queued instanceof QueuedBatch) || !queue.remove(queued)) {
@@ -2619,14 +2628,37 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             @SuppressWarnings("unchecked")
             QueuedBatch<K, V> batch = (QueuedBatch<K, V>) queued;
             for (WorkContainer<K, V> workContainer : batch.getBatch()) {
-                wm.onAbandonedBeforeStarting(workContainer);
-                purged++;
+                try {
+                    wm.onAbandonedBeforeStarting(workContainer);
+                    // Counted only on the path that finished, so the figure means what its name says - taken back
+                    // AND returned to selection. A container whose hand-back threw is neither.
+                    purged++;
+                } catch (Throwable handbackThrew) {
+                    // Per container, and each independent of the others - the same shape the two user-function
+                    // loops use, and for a sharper reason: by the time this runs, queue.remove() has ALREADY taken
+                    // the batch out of the pool irreversibly. So a throw escaping this loop strands every container
+                    // behind it in flight forever - never returned to selection, never run, one stalling its shard
+                    // under KEY ordering - and that is the stall the purge exists to avoid, reached by a different
+                    // door. Throwable rather than Exception, because an Error would otherwise pass straight through
+                    // the guard written to contain it.
+                    bookkeepingFailed = firstOrSuppress(bookkeepingFailed, handbackThrew);
+                }
             }
         }
         if (purged > 0) {
             log.debug("Took {} record(s) back out of the worker pool's queue: the instance is {}, so they are "
                     + "returned to awaiting selection un-run", purged, observed);
             recordsPurgedWhilePaused.addAndGet(purged);
+        }
+        if (bookkeepingFailed != null) {
+            // Surfaced AFTER the loop, not swallowed. This is PC's own bookkeeping, so a throw here is a bug in PC
+            // and it leaves that one record unaccounted for: out of the pool's queue, still marked in flight,
+            // nothing retrying it. Continuing past an unaccounted record is not permitted - the same operator
+            // ruling failFatallyOnUnmailboxableRecord records - and the control loop's own guard is what acts on
+            // it, arming failureReason and performing a controlled shutdown. Letting it escape mid-loop got that
+            // shutdown as well, and took the rest of the batch with it; this gets the shutdown without the
+            // stranding. Rethrown as itself rather than wrapped, so the cause the operator reads is unchanged.
+            throw bookkeepingFailed;
         }
         return purged;
     }
