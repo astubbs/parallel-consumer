@@ -387,8 +387,29 @@ const INDEX_TOOL_MORE = `${TOOL} docs`
  * what the product does. Features last because it is the only area that is not a record of somebody
  * working - a session reads it to find out whether a capability already exists, which is a question
  * asked less often than "has this been solved" but is the one a wrong answer is most expensive on.
+ *
+ * A PREFERENCE, NOT A GATE - see `indexAreas`. This list is the second hand-kept copy of the area
+ * table, and it used to decide membership as well as order.
  */
 const INDEX_AREA_ORDER = ['solutions', 'inflight', 'plans', 'features']
+
+/**
+ * The areas of the index, in the order above, with anything this file has not heard of APPENDED.
+ *
+ * A MISSING AREA HAS TO BE LOUD, and dropping it was silent in the worst way available: the index
+ * exited 0, counted the area's documents in its own preamble total, named the directory in the same
+ * sentence, and then listed none of it. A reader has no way to notice a section that was never
+ * printed - which is the failure the single area table exists to prevent, reintroduced by the copy
+ * of it that governs rendering rather than commands.
+ *
+ * So an unlisted area appears, at the end, rendered by the generic shapes below rather than by a
+ * hand-written one. Generic reads as unfinished, which is exactly the signal wanted: it says "this
+ * area reached the index and nobody has given it a voice yet", where `.filter(Boolean)` said nothing.
+ */
+const indexAreas = (shape) => [
+    ...INDEX_AREA_ORDER.map((k) => shape.areas.find((a) => a.key === k)).filter(Boolean),
+    ...shape.areas.filter((a) => !INDEX_AREA_ORDER.includes(a.key)),
+]
 
 /**
  * A cluster's branch names: local and remote-tracking copies of one branch are one name, and the
@@ -429,12 +450,31 @@ const featureTail = (d) => {
     return d.feature?.status ? `  _${d.feature.status}_` : ''
 }
 
+/**
+ * One document as a line of the index, in the shape the hook gave that area's lines - and the shape
+ * an area nobody has written a line for takes: its title and its path, which is the least a reader
+ * needs to go and open it.
+ */
+const GENERIC_LINE = (d) => `- ${d.title}  \`${d.path}\``
+
 /** One document as a line of the index, in the shape the hook gave that area's lines. */
 const INDEX_LINE = {
     solutions: (d) => `- ${d.title}  \`${d.path}\``,
     inflight: (d) => `- [${d.note?.type || 'untyped'}] ${d.title}${noteTail(d)}`,
     plans: (d) => `- ${planStem(d.path)}`,
     features: (d) => `- ${d.title}${featureTail(d)}  \`${d.path}\``,
+}
+
+/** The on-baseline half of an area this file has no hand-written shape for: its groups, plainly. */
+const GENERIC_ON_BASELINE = (area, docs) => {
+    const out = [`# ${area.name} - \`${area.dir}/\``, '',
+        'No shape has been written for this area in bin/lib/docs-views.mjs, so it is listed generically.', '']
+    for (const g of area.groups) {
+        const mine = docs.filter((d) => g.docs.includes(d))
+        if (mine.length === 0) continue
+        out.push(`## ${g.label}`, ...mine.map(GENERIC_LINE), '')
+    }
+    return out
 }
 
 /** The on-baseline half of one area, as the hook rendered it. */
@@ -575,25 +615,26 @@ export function formatDocsIndex(shape, { clusters, maxLines = 400, currentBranch
     // shared budget in area order let the in-flight area, which holds most of the off-baseline
     // corpus, spend the whole cap and collapse every branch-only plan to one count line - the
     // smallest area paying for the largest.
-    const areas = INDEX_AREA_ORDER.map((k) => shape.areas.find((a) => a.key === k)).filter(Boolean)
+    const areas = indexAreas(shape)
     const share = Math.floor(maxLines / Math.max(1, areas.length))
     let carry = maxLines - share * areas.length
     for (const area of areas) {
         const allDocs = area.groups.flatMap((g) => g.docs)
-        out.push(...ON_BASELINE[area.key](area, allDocs.filter((d) => !d.offBaseline)))
+        out.push(...(ON_BASELINE[area.key] ?? GENERIC_ON_BASELINE)(area, allDocs.filter((d) => !d.offBaseline)))
 
         let budget = share + carry
         carry = 0
         const groups = branchSetGroups(allDocs.filter((d) => d.offBaseline), clusters, currentBranch)
         if (groups.length === 0) { carry = budget; continue }
-        out.push(OFF_BASELINE_HEADING[area.key], '')
+        out.push(OFF_BASELINE_HEADING[area.key]
+            ?? `# ${area.name} only on branches - grouped by the branch set carrying them, largest first`, '')
         let omitted = 0
         let omittedDocs = 0
         for (const g of groups) {
             const heading = `## only on ${branchSetLabel(g.names)}${g.pinned ? ' - YOUR BRANCH' : ''}`
             const lines = area.key === 'plans'
                 ? [heading, stemsLine(g.docs), '']
-                : [heading, ...g.docs.map(INDEX_LINE[area.key]), '']
+                : [heading, ...g.docs.map(INDEX_LINE[area.key] ?? GENERIC_LINE), '']
             // A group that does not fit is omitted with everything after it in this area: the
             // groups are largest first, so the cap lands on the smallest and the tail stays a tail.
             // The pinned group is never the one omitted, and it spends the budget it uses.

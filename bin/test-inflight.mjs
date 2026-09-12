@@ -2739,6 +2739,39 @@ const CHECKS = [
             "        const key = d.feature?.category || 'uncategorised'"),
     },
     {
+        id: 'every-area-of-the-corpus-reaches-the-session-index',
+        why: 'the index held a SECOND hand-kept copy of the area list and used it to decide membership, so an area present in the table but absent from that copy exited 0, was counted in the preamble total, had its directory named in the same sentence, and was listed nowhere - and no reader can notice a section that was never printed',
+        run: async (binDir) => {
+            const dv = await docsViews(binDir)
+            const cmds = await import(pathToFileURL(join(binDir, 'lib', 'docs-commands.mjs')).href)
+            const repo = await import(pathToFileURL(join(binDir, 'lib', 'repo.mjs')).href)
+            return inDir(docsFixture(), () => {
+                const built = cmds.corpusShape()
+                if (!built.ok) return false
+                const page = dv.formatDocsIndex(built.shape, { clusters: built.stranded })
+                // DERIVED FROM THE TABLE, never a list of names: a fifth area is covered the day it
+                // is added. Each area must have a DOCUMENT listed, not merely its directory named -
+                // the preamble names the directory whether or not anything below it was rendered.
+                for (const key of repo.DOC_AREAS.map((a) => a.dir.split('/').pop())) {
+                    const area = built.shape.areas.find((a) => a.key === key)
+                    if (!area) return false
+                    const docs = area.groups.flatMap((g) => g.docs)
+                    if (docs.length === 0) return false // a fixture that cannot see the area proves nothing
+                    if (!docs.some((d) => page.includes(d.title) || page.includes(d.path)
+                        || page.includes(d.path.replace(/^docs\/plans\//, '').replace(/\.(md|html)$/, '')))) return false
+                }
+                // And an area the renderers have never heard of is APPENDED rather than dropped.
+                const invented = { ...built.shape.areas[0], key: 'inventions', dir: 'docs/inventions', name: 'Inventions' }
+                const widened = dv.formatDocsIndex({ ...built.shape, areas: [...built.shape.areas, invented] },
+                    { clusters: built.stranded })
+                return widened.includes('Inventions') && widened.includes('docs/inventions/')
+            })
+        },
+        // The membership filter, restored: an area absent from the hand-kept order vanishes.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
+            "    ...shape.areas.filter((a) => !INDEX_AREA_ORDER.includes(a.key)),", ''),
+    },
+    {
         id: 'a-staged-record-is-not-tailed-with-the-status-it-declares',
         why: 'the group said staged and the tail on the same line said published, in the one listing a session reads to find out what the product already does - a reader who takes the tail proposes work against a capability the tree does not have',
         run: async (binDir) => {
@@ -2896,9 +2929,12 @@ const CHECKS = [
             return r.out.includes('# Capabilities recorded only on branches')
                 && r.out.includes('A capability only this branch records')
         },
+        // NOT by dropping `features` from INDEX_AREA_ORDER any more: that list is a preference
+        // rather than a gate now, so removing a name reorders the index and loses nothing - which is
+        // the whole of `every-area-of-the-corpus-reaches-the-session-index`. The sabotage that still
+        // proves THIS check is the area's own rendering going quiet.
         mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
-            "const INDEX_AREA_ORDER = ['solutions', 'inflight', 'plans', 'features']",
-            "const INDEX_AREA_ORDER = ['solutions', 'inflight', 'plans']"),
+            "            out.push('', `## ${g.label}`, ...mine.map(INDEX_LINE.features))", "            out.push('')"),
     },
     {
         id: 'an-area-whose-records-are-not-markdown-declares-which-files-are-its-documents',
