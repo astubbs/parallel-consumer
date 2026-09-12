@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.sandbox;
  */
 
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
-import bz.stub.parallelconsumer.fluent.ConsumerHandle;
+import bz.stub.parallelconsumer.fluent.ParallelConsumerInstance;
 import bz.stub.parallelconsumer.fluent.Outcome;
 import bz.stub.parallelconsumer.fluent.ParallelConsumerDefinition;
 import bz.stub.parallelconsumer.sandbox.demo.Order;
@@ -56,9 +56,9 @@ class HydratedRunTest {
                 .seed(7)
                 .build();
 
-        try (ConsumerHandle handle = definition.start(sandbox)) {
+        try (ParallelConsumerInstance instance = definition.start(sandbox)) {
             assertThat(sandbox.awaitBound(Duration.ofSeconds(30))).isTrue();
-            handle.awaitShutdown();
+            instance.awaitShutdown();
         }
 
         assertThat(seen).hasSize(RECORDS);

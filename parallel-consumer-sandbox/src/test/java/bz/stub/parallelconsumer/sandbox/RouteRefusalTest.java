@@ -118,9 +118,9 @@ class RouteRefusalTest {
                 .bound(Bound.afterRecords(3))
                 .generating("legacy", String.class)
                 .build();
-        try (ConsumerHandle handle = untypedRoute().start(told)) {
+        try (ParallelConsumerInstance instance = untypedRoute().start(told)) {
             assertThat(told.awaitBound(Duration.ofSeconds(30))).isTrue();
-            handle.awaitShutdown();
+            instance.awaitShutdown();
         }
         assertThat(told.generatedRecords()).isEqualTo(3);
     }
