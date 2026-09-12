@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class HydrationTest {
 
     /**
-     * The hydration's own fixed "now" - {@code FieldValues.SANDBOX_NOW}. Timestamps are generated behind it, and
+     * The hydration's own fixed "now" - {@code FieldValues.SANDBOX_NOW}. Timestamps are filled behind it, and
      * fixed rather than read from the clock so that a seed reproduces them.
      */
     private static final Instant SANDBOX_NOW = Instant.parse("2026-01-01T00:00:00Z");

@@ -799,7 +799,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
                             + "the hydration has to fill an instance of one. Declare the route with a format "
                             + "helper (json/avro/protobuf/string/bytes), with Format.of(deserializer, "
                             + "serializer, YourType.class), tell the sandbox with "
-                            + "Sandbox.builder().generating(\"" + topic + "\", YourType.class), or say what a "
+                            + "Sandbox.builder().hydrating(\"" + topic + "\", YourType.class), or say what a "
                             + "record contains yourself with Sandbox.builder().feeding(\"" + topic + "\", "
                             + "index -> yourValue(index)).");
                 }
@@ -1052,7 +1052,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
          * rate.
          * <p>
          * {@link #perSecond(double)}, {@link #bound(Bound)}, {@link #keyCardinality(int)}, {@link #seed(long)},
-         * {@link #generating(String, Class)}, {@link #feeding(String, LongFunction)} and
+         * {@link #hydrating(String, Class)}, {@link #feeding(String, LongFunction)} and
          * {@link #feedingKeys(String, LongFunction)} all describe the driver, so they say nothing once this is
          * set; {@link #partitionsPerTopic(int)} still applies, because it shapes the topics rather than who
          * publishes into them.
@@ -1117,7 +1117,7 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
          * carry. Without this, and without {@link #feeding(String, LongFunction)}, such a route is refused at
          * start, naming the topic.
          */
-        public Builder generating(String topic, Class<?> valueType) {
+        public Builder hydrating(String topic, Class<?> valueType) {
             declaredTypes.put(Objects.requireNonNull(topic, "A topic must be supplied"),
                     Objects.requireNonNull(valueType, "A value type must be supplied"));
             return this;

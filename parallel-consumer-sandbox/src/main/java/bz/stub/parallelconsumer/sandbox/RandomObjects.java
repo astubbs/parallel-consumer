@@ -208,7 +208,7 @@ public final class RandomObjects {
                 throw new IllegalArgumentException("The hydration cannot fill the Protobuf message type "
                         + type.getName() + ": a generated Protobuf class has no settable fields and only its "
                         + "builder can construct one, so it needs a filler of its own that this version does not "
-                        + "have. Generate this route's records by hand, or declare a plain type for it in the "
+                        + "have. Feed this route's records by hand, or declare a plain type for it in the "
                         + "sandbox.");
             }
         }

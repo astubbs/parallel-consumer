@@ -102,7 +102,7 @@ class RouteRefusalTest {
         assertThat(refusal).hasMessageThat().contains("legacy");
         assertThat(refusal).hasMessageThat().contains("does not name a Java type");
         assertWithMessage("a refusal that does not say what to do about it is only half a message")
-                .that(refusal).hasMessageThat().contains("generating(\"legacy\"");
+                .that(refusal).hasMessageThat().contains("hydrating(\"legacy\"");
         assertWithMessage("and saying what a record contains is the other answer, for a caller who never wanted "
                 + "fake data in the first place")
                 .that(refusal).hasMessageThat().contains("feeding(\"legacy\"");
@@ -116,7 +116,7 @@ class RouteRefusalTest {
         Sandbox told = Sandbox.builder()
                 .perSecond(500)
                 .bound(Bound.afterRecords(3))
-                .generating("legacy", String.class)
+                .hydrating("legacy", String.class)
                 .build();
         try (ParallelConsumerInstance instance = untypedRoute().start(told)) {
             assertThat(told.awaitBound(Duration.ofSeconds(30))).isTrue();

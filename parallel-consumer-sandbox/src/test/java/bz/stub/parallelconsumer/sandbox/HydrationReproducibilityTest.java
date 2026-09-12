@@ -18,7 +18,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
- * A seeded run is reproducible: the same seed generates the same records twice.
+ * A seeded run is reproducible: the same seed hydrates the same records twice.
  * <p>
  * <b>Addressed by index, not by sequence.</b> The seed for record <em>n</em> is derived from the base seed and
  * <em>n</em>, so the record at a given index is the same whatever order the topics were served in and whatever
@@ -57,7 +57,7 @@ class HydrationReproducibilityTest {
     }
 
     @Test
-    void anIndexIsReachableWithoutGeneratingTheOnesBeforeIt() {
+    void anIndexIsReachableWithoutHydratingTheOnesBeforeIt() {
         RandomObjects inOrder = RandomObjects.seededWith(99);
         for (int index = 0; index < 7; index++) {
             Order ignoredWarmUp = inOrder.create(Order.class, index);
@@ -67,7 +67,7 @@ class HydrationReproducibilityTest {
 
         Order seventhOnItsOwn = RandomObjects.seededWith(99).create(Order.class, 7);
 
-        assertWithMessage("record 7 must not depend on records 0 to 6 having been generated first")
+        assertWithMessage("record 7 must not depend on records 0 to 6 having been hydrated first")
                 .that(seventhAfterSix.toString()).isEqualTo(seventhOnItsOwn.toString());
     }
 
@@ -76,11 +76,11 @@ class HydrationReproducibilityTest {
      * "reproducible" means.
      *
      * <ol>
-     *   <li><b>What the hydration produced.</b> A seeded run generates the sequence its seed and indices name,
-     *       and both runs of a seed generate the same one. That is a property of the hydration alone, so it is
+     *   <li><b>What the hydration produced.</b> A seeded run hydrates the sequence its seed and indices name,
+     *       and both runs of a seed hydrate the same one. That is a property of the hydration alone, so it is
      *       asserted against the sequence recomputed from the seed and compared without regard to the order the
      *       engine happened to deliver it in.</li>
-     *   <li><b>What was consumed.</b> Every generated record reached the function exactly once - nothing dropped,
+     *   <li><b>What was consumed.</b> Every hydrated record reached the function exactly once - nothing dropped,
      *       nothing delivered twice.</li>
      * </ol>
      *
@@ -93,7 +93,7 @@ class HydrationReproducibilityTest {
      * guards it.
      */
     @Test
-    void aRunOfASeedGeneratesAndDeliversExactlyTheRecordsThatSeedNames() {
+    void aRunOfASeedHydratesAndDeliversExactlyTheRecordsThatSeedNames() {
         List<String> expected = theSequenceTheSeedNames(SEED, RECORDS);
 
         List<String> firstRun = runAndCollect(SEED);
@@ -106,9 +106,9 @@ class HydrationReproducibilityTest {
                 + "which is the whole of what a seed promises")
                 .that(secondRun).containsExactlyElementsIn(expected);
 
-        assertWithMessage("what was consumed: every generated record reached the function, exactly once")
+        assertWithMessage("what was consumed: every hydrated record reached the function, exactly once")
                 .that(firstRun).hasSize(RECORDS);
-        assertWithMessage("what was consumed: every generated record reached the function, exactly once")
+        assertWithMessage("what was consumed: every hydrated record reached the function, exactly once")
                 .that(secondRun).hasSize(RECORDS);
     }
 

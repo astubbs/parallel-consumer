@@ -15,7 +15,7 @@ import java.time.Instant;
  * the one a reflection filler cannot take: there are no setters to call and no instance to call them on until the
  * constructor has already run. Instancio builds it through the constructor instead.
  * <p>
- * A JSON route over this type would generate and serialise fine and then fail to read back, because Jackson needs
+ * A JSON route over this type would hydrate and serialise fine and then fail to read back, because Jackson needs
  * a creator it can name and this class carries no annotations. That is a property of the type, not of the
  * sandbox: use {@link Order} for a JSON route and this one where the point is the constructor.
  * <p>
@@ -129,7 +129,7 @@ public final class Parcel {
     }
 
     /**
-     * Names the parcel and where it is going, which is what a failing assertion about a generated parcel needs.
+     * Names the parcel and where it is going, which is what a failing assertion about a hydrated parcel needs.
      */
     @Override
     public String toString() {

@@ -45,7 +45,7 @@ public class Order {
 
     /**
      * An actual email address, from the email rule. The field this type exists to demonstrate: rename it and the
-     * value becomes a random string, which is the whole of the point about field-name-aware generation.
+     * value becomes a random string, which is the whole of the point about field-name-aware hydration.
      */
     private String email;
 

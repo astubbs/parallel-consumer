@@ -12,7 +12,7 @@ import org.apache.kafka.common.annotation.InterfaceStability;
  * <b>Nothing in this module references it, and that is not an oversight.</b> These four types are the demo domain
  * a user routes on - a published module's payload vocabulary, not internal scaffolding - and this package's
  * documentation counts two beans and two immutables, of which this is one. It is the type to declare on a route
- * when what you want generated is a person rather than an order.
+ * when what you want hydrated is a person rather than an order.
  * <p>
  * <b>The getters below carry no documentation of their own</b>, for the reason {@link Order} gives.
  */

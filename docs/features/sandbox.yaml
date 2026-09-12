@@ -50,7 +50,7 @@ boundaries:
     has any history to read, and says so rather than reading empty.
   - A route whose value format cannot write, or whose Java type nothing can name, is refused at start naming the
     topic. The sandbox has to encode what it publishes with the same format the route decodes it with.
-  - Protobuf message types are refused when their first record is generated. There is no filler for one in this
+  - Protobuf message types are refused when their first record is hydrated. There is no filler for one in this
     version; supply records by hand for such a route.
   - The hydrated data is realistic in shape, not in meaning. Field values are chosen by field name and type, so a
     definition whose behaviour depends on the relationships between fields needs records of its own.

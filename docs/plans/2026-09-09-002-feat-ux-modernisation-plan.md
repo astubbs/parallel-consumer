@@ -1036,6 +1036,12 @@ the shipped module differs from it, and the vocabulary to read it with.**
   this project does not have, and `readRecordsToList` already carries the key. **This is not the capturing sink**
   the next-milestone subsection below names - that collects what a processing *function* received; this reads what
   the instance *produced*.
+- **Annotated 2026-09-12: the last member that still said generate is the builder's declared-type setting, and it
+  says hydrating.** `Sandbox.builder().generating(topic, Type.class)` becomes **`hydrating(topic, Type.class)`**. It
+  names the type the *hydration* fills for a route whose format cannot name one, so the retired word was doing the
+  same conflating job the first annotation above describes - the setting has nothing to do with the driver. The
+  refusal that points a caller at it, the sibling javadoc that lists it beside `feeding` and `feedingKeys`, and the
+  test asserting on that refusal's text all move with it. Renamed outright, no deprecated delegate, per KD15.
 - **The hydration ships as its own pull request above this one, and the driver takes a function instead.** Point 2's
   first half, point 5, and this unit's Instancio/Datafaker/Avro dependency set - with the bytecode-level pinning the
   Java 8 release target needed, which the Files and Risks entries below describe - move to `feat/504-sandbox-hydration`.

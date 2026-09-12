@@ -325,7 +325,7 @@ final class FieldValues {
     }
 
     /**
-     * The rule names in table order, which is what to print when a generated object has a field nobody expected -
+     * The rule names in table order, which is what to print when a hydrated object has a field nobody expected -
      * it says which rules existed and in which order they were considered.
      */
     @Override
