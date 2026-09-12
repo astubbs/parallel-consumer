@@ -35,7 +35,26 @@ import java.time.Duration;
  *     retry delay: {@code WorkContainer.isParked()} is its own state, so no arithmetic can turn it back into a
  *     hot retry.</li>
  * </ul>
- * They combine: a payload that can never be decoded is {@code park(reason).notAnAttempt()}.
+ * They combine: a payload that can never be decoded is {@code park(reason).notAnAttempt()}. One combination has a
+ * precedence rather than an effect each, and it is on {@link #retryAfter(Duration)}.
+ *
+ * <h2>Throw a FRESH instance every time</h2>
+ * <b>An instance carries mutable state, so it belongs to exactly one throw.</b> A cached or {@code static} exception
+ * is an ordinary thing to do with an exception type that carries nothing, and it is wrong here: the three fields are
+ * plain and unsynchronised, so a shared instance read by whichever record fails next - on whichever thread the engine
+ * happens to fail it from - has no defined value. PC cannot enforce this; a constructor call per throw is the whole
+ * requirement.
+ * <p>
+ * <b>What makes a per-throw instance safe is the publication edge, not a thread.</b> The fields are written at the
+ * throw site, on the thread running the user's function, and read by {@code WorkContainer.updateFailureHistory} on
+ * the thread that handles the failure. Those are the same thread in the classic engine, which catches and calls
+ * {@code onUserFunctionFailure} synchronously - but <b>not</b> in the reactive engines, where
+ * {@code ExternalEngine.recordFailureAndReturnBatchToMailbox} is reached from an async completion callback whose
+ * thread the framework chooses. The edge that holds in both cases is the completion boundary the object crosses:
+ * whatever hands the failure from the user's work to PC's failure path establishes happens-before, because it has to
+ * publish the throwable itself for PC to have anything to read. An earlier version of this javadoc claimed
+ * same-thread confinement instead, which is true of one engine out of four - corrected by the review of
+ * astubbs/parallel-consumer#506, which is also where the single-use requirement was found missing.
  *
  * @author Antony Stubbs
  */
@@ -44,7 +63,8 @@ public class PCRetriableException extends RuntimeException {
 
     /**
      * The delay this throw asks for, or null to leave the choice to the configured provider. Written once at the
-     * throw site, on the thread that throws, and read on that same thread inside the failure path.
+     * throw site and read once inside the failure path; what publishes it across the two is the completion boundary
+     * the throwable crosses, not a shared thread - see the class javadoc, and throw a fresh instance per failure.
      */
     private Duration retryAfter;
 
@@ -69,14 +89,38 @@ public class PCRetriableException extends RuntimeException {
     }
 
     /**
+     * The largest delay PC can do arithmetic with: {@link Duration#toMillis()} is what the control loop's block
+     * calculation reaches for, and it overflows above this - around 292 million years, which is well inside
+     * {@link java.time.Instant}'s range, so nothing else on the way refuses it.
+     */
+    private static final Duration LONGEST_REPRESENTABLE_DELAY = Duration.ofMillis(Long.MAX_VALUE);
+
+    /**
      * Retry this record after {@code delay} rather than after the configured retry delay.
+     * <p>
+     * <b>When this throw also {@link #park(String) parks}, the park wins and the delay is not applied.</b> A park is
+     * "never due again", which no delay can express, so there is nothing for a deadline to mean; the engine logs the
+     * discarded delay at DEBUG rather than failing the throw, because the combination reads as a user who changed
+     * their mind mid-chain rather than as a coding error. Ask for one or the other.
      *
-     * @throws IllegalArgumentException for a null or negative delay - a coding error, refused where it is written
-     *                                  rather than degraded silently at the point it would be applied
+     * @throws IllegalArgumentException for a null or negative delay, or one too large for PC's own arithmetic - each
+     *                                 a coding error, refused where it is written rather than degraded silently at
+     *                                 the point it would be applied
      */
     public PCRetriableException retryAfter(Duration delay) {
         if (delay == null || delay.isNegative()) {
             throw new IllegalArgumentException("retryAfter needs a non-negative delay, but was given " + delay);
+        }
+        if (delay.compareTo(LONGEST_REPRESENTABLE_DELAY) > 0) {
+            // Refused rather than clamped. The band between what Instant.plus accepts and what Duration.toMillis can
+            // represent is reachable - computeRetryDueAt's own fallback only fires once the deadline leaves Instant's
+            // range, so a delay in between produces a valid retryDueAt and then overflows getTimeToBlockFor's
+            // multiplyExact on the control thread. A caller asking for a geological delay means "never", and park is
+            // how "never" is spelled here: it is a state, so no arithmetic can lose it.
+            throw new IllegalArgumentException("retryAfter was given " + delay + ", which is longer than PC can "
+                    + "schedule (" + LONGEST_REPRESENTABLE_DELAY + "). A delay this large means the record should "
+                    + "never come back on its own - park(reason) is how to say that, and unlike a very long delay "
+                    + "it cannot be turned back into a hot retry by arithmetic");
         }
         this.retryAfter = delay;
         return this;
@@ -93,6 +137,11 @@ public class PCRetriableException extends RuntimeException {
     /**
      * Park this record: never due again until something acts on it, with {@code reason} recorded on the record for
      * whoever lists the parked set.
+     * <p>
+     * <b>Parking wins over {@link #retryAfter(Duration)}</b>, in either chaining order - a park is not a very long
+     * delay, so there is no deadline the two could be reconciled into. A hand-back carrying both logs the discarded
+     * delay at DEBUG. Combining with {@link #notAnAttempt()} is different and composes as advertised: it suppresses
+     * the attempt count, which a park has no opinion about.
      *
      * @param reason why it parked, in one phrase; not null - a record an operator cannot be told anything about is
      *               not one they can be asked to act on

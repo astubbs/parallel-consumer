@@ -25,6 +25,7 @@ setup:
   declare:
     - throw new PCRetriableException(message).park(reason) from the processing function. The reason is required; a park with nothing to say is refused at the call site.
     - Combine with notAnAttempt() for a delivery that never ran - a payload that failed to decode before your work started.
+    - Do not also call retryAfter(delay). The park wins, in either chaining order, and the delay is discarded - a park is never due again, which no deadline can express. The engine logs the discarded delay at DEBUG rather than refusing the throw. Ask for one or the other.
   observe:
     - pc.partition.parked.records and pc.partition.parked.oldest.age, tagged by topic and partition. They appear when the partition is assigned and go when it is revoked, so a partition that moves away takes its numbers with it.
     - RecordContext.isParked() and RecordContext.getParkedReason(), for a record that comes back after a rebalance or a restart and is being attempted afresh.
@@ -41,6 +42,7 @@ boundaries:
   - After a revocation, entries for a partition this instance no longer holds are cleared only while it is running or draining. Pause the instance, or close it without draining, and those entries are held until the process ends. The gauges already exclude them, so this is memory, not a wrong number.
   - A close that drains waits for records queued behind a parked key, which is work it can never take, so such a close waits out its drain timeout. A close that does not drain is unaffected.
   - Park is not success. The record is never marked complete, so an offset-map-based view of progress is right to show it as outstanding.
+  - Park is how you say never, and a very large retryAfter is not. A delay longer than PC can schedule is refused at the call site, naming park as the thing you meant - a park is a state, so no arithmetic can turn it back into a hot retry, which a delay expressing never eventually could.
 validation:
   - Park a record and confirm that offsets after it on the same partition commit, and that pc.partition.parked.records for that partition reports it.
   - Revoke the partition and confirm both gauges are gone, and that a fresh assignment of the same partition does not inherit the previous generation's count.

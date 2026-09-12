@@ -2480,8 +2480,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 // at min block for the retry time - retry time is not exact
                 Duration lowestScheduled = lowestScheduledOpt.get();
                 Duration timeBetweenCommits = getTimeBetweenCommits();
-                Duration effectiveRetryDelay = lowestScheduled.toMillis() < retryDelay.toMillis() ? retryDelay : lowestScheduled;
-                Duration result = timeBetweenCommits.toMillis() < effectiveRetryDelay.toMillis() ? timeBetweenCommits : effectiveRetryDelay;
+                Duration effectiveRetryDelay = longerOf(lowestScheduled, retryDelay);
+                Duration result = shorterOf(timeBetweenCommits, effectiveRetryDelay);
                 log.debug("Not enough work in flight, while work is waiting to be retried - so will only sleep until next retry time of {} (lowestScheduled = {})", result, lowestScheduled);
                 return result;
             }
@@ -2807,6 +2807,33 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } finally {
             cleanUpContext(context);
         }
+    }
+
+    /**
+     * Compared with {@link Duration#compareTo}, not by converting both to milliseconds, because the delay being
+     * compared can be one PC did not choose.
+     * <p>
+     * <b>{@code toMillis()} overflows, and this is the call site where that mattered.</b> A retry deadline roughly
+     * 292 million years out is representable as an {@link Instant} - well inside its billion-year range - so nothing
+     * on the way here refuses it, and {@code getLowestRetryTime()} hands it over as an ordinary answer. Multiplying
+     * its seconds by a thousand then throws {@link ArithmeticException} on the CONTROL thread, where the failure has
+     * nothing to say about the record that caused it. {@code compareTo} cannot overflow, and the result these two
+     * return is bounded by the commit interval anyway. Raised by the review of
+     * astubbs/parallel-consumer#506; {@code PCRetriableException.retryAfter} refuses such a delay at the throw site,
+     * and these close the routes a throw site is not on - a {@code retryDelayProvider} above all.
+     * <p>
+     * Package-private statics rather than inline ternaries so the overflow has something to be tested against;
+     * {@code TimeToBlockForDoesNotOverflowTest} is that test.
+     */
+    static Duration longerOf(Duration a, Duration b) {
+        return a.compareTo(b) < 0 ? b : a;
+    }
+
+    /**
+     * @see #longerOf(Duration, Duration)
+     */
+    static Duration shorterOf(Duration a, Duration b) {
+        return a.compareTo(b) < 0 ? a : b;
     }
 
     /**
