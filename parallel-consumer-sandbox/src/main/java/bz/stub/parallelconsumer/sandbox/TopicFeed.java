@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.sandbox;
  */
 
 /**
- * One topic's supply of generated records, as {@link RecordDriver} sees it.
+ * One topic's supply of records, as {@link RecordDriver} sees it.
  * <p>
  * The seam between pacing and content: the driver owns the rate, the bound and the thread and knows nothing
  * about types or encoding; a feed owns exactly one topic's records and knows nothing about when to publish them.

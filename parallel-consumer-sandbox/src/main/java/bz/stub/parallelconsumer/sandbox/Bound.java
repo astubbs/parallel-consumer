@@ -10,7 +10,7 @@ import java.time.Duration;
 import java.util.Objects;
 
 /**
- * When a sandbox run should stop generating and close: after so many records, after so long, or not at all.
+ * When a sandbox run should stop driving and close: after so many records, after so long, or not at all.
  *
  * <h2>Reaching a bound waits for every record to be accounted for, then closes drain first</h2>
  * Either bound - the count or the duration - ends the same way (R33, R17): the driver stops publishing, then
@@ -62,7 +62,7 @@ public final class Bound {
     }
 
     /**
-     * Generate until the instance is closed.
+     * Drive until the instance is closed.
      */
     public static Bound none() {
         return NONE;
@@ -70,12 +70,12 @@ public final class Bound {
 
     /**
      * Stop after this many records <b>in total</b>, across every topic the definition routes - not per topic,
-     * which is how the rate is counted. A bound of one on a two-route definition therefore generates one record,
+     * which is how the rate is counted. A bound of one on a two-route definition therefore drives one record,
      * not two.
      */
     public static Bound afterRecords(long records) {
         if (records < 1) {
-            throw new IllegalArgumentException("A record bound of " + records + " would generate nothing - use "
+            throw new IllegalArgumentException("A record bound of " + records + " would drive nothing - use "
                     + "Bound.none() for an unbounded run");
         }
         return new Bound(records, null);
@@ -87,7 +87,7 @@ public final class Bound {
     public static Bound after(Duration duration) {
         Objects.requireNonNull(duration, "A duration must be supplied");
         if (duration.isNegative() || duration.isZero()) {
-            throw new IllegalArgumentException("A duration bound of " + duration + " would generate nothing - use "
+            throw new IllegalArgumentException("A duration bound of " + duration + " would drive nothing - use "
                     + "Bound.none() for an unbounded run");
         }
         return new Bound(-1, duration);
@@ -105,10 +105,10 @@ public final class Bound {
      * Whether this many records reaches a count bound. Answers false for a duration bound and for none, so the
      * driver can ask both questions of every bound without asking first which kind it holds.
      *
-     * @param generated records generated so far, across every topic
+     * @param driven records driven so far, across every topic
      */
-    boolean reachedByCount(long generated) {
-        return records > 0 && generated >= records;
+    boolean reachedByCount(long driven) {
+        return records > 0 && driven >= records;
     }
 
     /**

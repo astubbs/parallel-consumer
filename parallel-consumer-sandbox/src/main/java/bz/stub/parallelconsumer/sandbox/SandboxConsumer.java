@@ -33,7 +33,7 @@ import java.util.function.Supplier;
 
 /**
  * The broker: a mock consumer with beginning offsets already recorded, partitions it can hand out, and a
- * per-partition offset counter so that generated records arrive at ascending offsets the way real ones do.
+ * per-partition offset counter so that records arrive at ascending offsets the way real ones do.
  *
  * <h2>Seed the offsets, THEN assign - in that order, and it is not a style preference</h2>
  * {@code MockConsumer#rebalance} both assigns the partitions and, since kafka-clients 3.7, fires the registered
@@ -171,7 +171,7 @@ public class SandboxConsumer<K, V> extends LongPollingMockConsumer<K, V> {
             throw new IllegalStateException("Nothing has subscribed to this sandbox consumer yet, so there is no "
                     + "rebalance listener to assign to and MockConsumer#rebalance refuses a dynamic assignment. "
                     + "Assign only after the instance above has subscribed: the fluent API does it in "
-                    + "ClientRuntime#started, and the classic API in ClassicSandbox#startGenerating.");
+                    + "ClientRuntime#started, and the classic API in ClassicSandbox#startDriving.");
         }
         // rebalance, not assign, and exactly once. LongPollingMockConsumer overrides assign() to fire the
         // rebalance listener WITHOUT calling super, so a partition assigned that way is never actually held by

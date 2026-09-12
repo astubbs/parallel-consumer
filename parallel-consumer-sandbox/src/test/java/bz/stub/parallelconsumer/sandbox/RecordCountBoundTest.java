@@ -17,12 +17,12 @@ import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * The bound: a run that ends itself, and ends with every record it generated accounted for.
+ * The bound: a run that ends itself, and ends with every record it drove accounted for.
  * <p>
  * <b>The accounting is the part worth testing.</b> A bound that merely stopped would leave the last records
- * generated but never dispatched and their offsets never committed, and the state a test read afterwards would be
+ * driven but never dispatched and their offsets never committed, and the state a test read afterwards would be
  * the middle of the run rather than its end - which is the difference between a broker-free test kit and a race.
- * The evidence is that <em>every</em> generated offset has committed by the time the bound has finished, with
+ * The evidence is that <em>every</em> driven offset has committed by the time the bound has finished, with
  * nothing awaiting or polling in between. Nothing here parks - the route always succeeds - so a commit is the
  * whole of what the wait can count; {@link ParkedRunBoundTest} is the other half.
  * <p>
@@ -58,13 +58,13 @@ class RecordCountBoundTest {
         instance.awaitShutdown();
 
         assertWithMessage("a count bound counts records, not ticks, so it must stop exactly on the number")
-                .that(sandbox.generatedRecords()).isEqualTo(RECORDS);
+                .that(sandbox.drivenRecords()).isEqualTo(RECORDS);
         assertThat(sandbox.consumer().publishedCounts().get(new TopicPartition("orders", 0))).isEqualTo(RECORDS);
 
         // No awaiting, no polling here: whatever had not committed by the time the bound finished never will.
         // Read from the raw commit history rather than through SandboxConsumer#highestCommittedOffsets, so this
         // is evidence independent of the ledger the bound's own wait consults.
-        assertWithMessage("the bound waits for the offsets, so every record generated before it has committed by "
+        assertWithMessage("the bound waits for the offsets, so every record driven before it has committed by "
                 + "the time the bound has finished")
                 .that(SandboxFixtures.highestCommittedOffset(sandbox, new TopicPartition("orders", 0)))
                 .isEqualTo(RECORDS);

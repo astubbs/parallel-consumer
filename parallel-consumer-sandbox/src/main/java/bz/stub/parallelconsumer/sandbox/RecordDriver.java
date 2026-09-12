@@ -44,7 +44,7 @@ final class RecordDriver implements AutoCloseable {
 
     /**
      * The gap between ticks, derived once from the declared rate. Per topic, not in total: a two-topic definition
-     * at a hundred a second generates two hundred records a second.
+     * at a hundred a second drives two hundred records a second.
      */
     private final long intervalNanos;
 
@@ -59,7 +59,7 @@ final class RecordDriver implements AutoCloseable {
      * engine it closes (KTD6) and this thread is outside it.
      * <p>
      * It runs <b>before</b> {@link #finished} counts down, so {@link #awaitFinished(Duration)} covers the whole
-     * bound sequence rather than only the generating half - and a wait that refuses is carried to whoever is
+     * bound sequence rather than only the driving half - and a wait that refuses is carried to whoever is
      * waiting on the bound through {@link #rethrowAnyFailure()}, instead of dying unseen on this thread.
      */
     private final Runnable onBoundReached;
@@ -69,10 +69,10 @@ final class RecordDriver implements AutoCloseable {
      * driver's thread increments it, and because the count bound is tested against the value the increment
      * returned rather than against a later read of it.
      */
-    private final AtomicLong generated = new AtomicLong();
+    private final AtomicLong driven = new AtomicLong();
 
     /**
-     * Whether the generating loop should keep going. Set by {@link #start()} with a compare-and-set, so a second
+     * Whether the driving loop should keep going. Set by {@link #start()} with a compare-and-set, so a second
      * start is refused rather than quietly running two threads over one set of feeds; cleared by {@link #close()}
      * and by the loop's own exit.
      */
@@ -80,7 +80,7 @@ final class RecordDriver implements AutoCloseable {
 
     /**
      * Counted down when the run is over - <b>after</b> the bound's close, not after the last record - so that a
-     * caller waiting on it sees the end of the run rather than the end of generating.
+     * caller waiting on it sees the end of the run rather than the end of driving.
      */
     private final CountDownLatch finished = new CountDownLatch(1);
 
@@ -112,9 +112,9 @@ final class RecordDriver implements AutoCloseable {
     private volatile Thread thread;
 
     /**
-     * @param feeds             one per topic the definition routes, each knowing how to generate and publish its
+     * @param feeds             one per topic the definition routes, each knowing how to fill and publish its
      *                          own record
-     * @param perSecondPerTopic the declared rate, which refuses zero and below rather than generating nothing and
+     * @param perSecondPerTopic the declared rate, which refuses zero and below rather than driving nothing and
      *                          leaving the caller to work out why
      * @param bound             when to stop, or {@link Bound#none()}
      * @param onBoundReached    what reaching the bound starts - see the field
@@ -122,7 +122,7 @@ final class RecordDriver implements AutoCloseable {
     RecordDriver(List<TopicFeed> feeds, double perSecondPerTopic, Bound bound, Runnable onBoundReached) {
         if (perSecondPerTopic <= 0) {
             throw new IllegalArgumentException("A driver rate of " + perSecondPerTopic + " records per second "
-                    + "would generate nothing");
+                    + "would drive nothing");
         }
         this.feeds = feeds;
         this.intervalNanos = (long) (NANOS_PER_SECOND / perSecondPerTopic);
@@ -140,7 +140,7 @@ final class RecordDriver implements AutoCloseable {
         if (!running.compareAndSet(false, true)) {
             throw new IllegalStateException("This driver is already running");
         }
-        thread = new Thread(this::generate, "pc-sandbox-driver");
+        thread = new Thread(this::drive, "pc-sandbox-driver");
         // A daemon so that a demo whose main method returns without closing its instance does not hang the JVM. The
         // bound and close() are the real stops; this is only the backstop.
         thread.setDaemon(true);
@@ -151,8 +151,8 @@ final class RecordDriver implements AutoCloseable {
      * Records published so far, across every topic - a live count while the run is going, and the run's total
      * afterwards.
      */
-    long generatedRecords() {
-        return generated.get();
+    long drivenRecords() {
+        return driven.get();
     }
 
     /**
@@ -170,7 +170,7 @@ final class RecordDriver implements AutoCloseable {
     private void rethrowAnyFailure() {
         Throwable died = failure;
         if (died != null) {
-            throw new IllegalStateException("The sandbox driver failed after " + generated.get()
+            throw new IllegalStateException("The sandbox driver failed after " + driven.get()
                     + " records: " + died, died);
         }
     }
@@ -220,7 +220,7 @@ final class RecordDriver implements AutoCloseable {
      * time passes. Every exit runs the finally below, which is what publishes {@link #boundWasReached}, starts the
      * bound's close and counts {@link #finished} down; there is no return from this method that skips it.
      */
-    private void generate() {
+    private void drive() {
         long startNanos = System.nanoTime();
         long tick = 0;
         boolean boundReached = false;
@@ -235,10 +235,10 @@ final class RecordDriver implements AutoCloseable {
                         // the ordinary way it ends. Anything else that goes wrong throws, and is caught below
                         // rather than swallowed - a driver that stops silently reads exactly like a
                         // definition that consumes nothing, which is the harder bug of the two to find.
-                        log.debug("Sandbox consumer closed while generating for {}", feed.topic());
+                        log.debug("Sandbox consumer closed while driving for {}", feed.topic());
                         return;
                     }
-                    if (bound.reachedByCount(generated.incrementAndGet())) {
+                    if (bound.reachedByCount(driven.incrementAndGet())) {
                         boundReached = true;
                         return;
                     }
@@ -261,13 +261,13 @@ final class RecordDriver implements AutoCloseable {
             // library version split, and an Error killing this thread is exactly as invisible as an exception.
             // Recorded as well as logged - see the failure field.
             failure = e;
-            log.error("The sandbox driver stopped after {} records", generated.get(), e);
+            log.error("The sandbox driver stopped after {} records", driven.get(), e);
         } finally {
             running.set(false);
             boundWasReached.set(boundReached);
             if (boundReached) {
                 log.info("Sandbox bound reached ({}) after {} records - waiting for the instance to account for "
-                        + "them, then closing", bound, generated.get());
+                        + "them, then closing", bound, driven.get());
                 try {
                     onBoundReached.run();
                 } catch (Throwable e) {
@@ -275,11 +275,11 @@ final class RecordDriver implements AutoCloseable {
                     // thread: an exception thrown out of a Thread's run method is invisible, and the run would
                     // then fail as somebody else's timeout with no mention of what actually went wrong.
                     failure = e;
-                    log.error("The sandbox bound's close failed after {} records", generated.get(), e);
+                    log.error("The sandbox bound's close failed after {} records", driven.get(), e);
                 }
             }
             // Last, so that a caller waiting on the bound is released only once the whole sequence - stop
-            // generating, wait for the engine to account for what was published, close - has run.
+            // driving, wait for the engine to account for what was published, close - has run.
             finished.countDown();
         }
     }

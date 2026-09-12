@@ -17,6 +17,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongFunction;
 
 /**
@@ -33,7 +34,7 @@ import java.util.function.LongFunction;
  *                     .build());
  *     pc.subscribe(classic.topics());
  *     pc.poll(context -> System.out.println(context.getSingleRecord().value()));
- *     classic.startGenerating(pc);
+ *     classic.startDriving(pc, index -> "cust-" + (index % 10), index -> new Order("o-" + index));
  *     classic.awaitBound(Duration.ofSeconds(30));
  * }
  * }</pre>
@@ -42,10 +43,10 @@ import java.util.function.LongFunction;
  * The classic API takes a finished consumer and has no seam that sees the instance afterwards, so the two things
  * the fluent path gets for free have to be said out loud here: <b>when</b> to assign the partitions (after
  * {@code subscribe}, or there is no rebalance listener to assign to) and <b>what</b> to close when the bound is
- * reached. {@link #startGenerating} is both.
+ * reached. {@link #startDriving} is both.
  *
  * <h2>Nothing is encoded on this path</h2>
- * A mock consumer holds records of the user's own types, so the generated objects go in as they are and the
+ * A mock consumer holds records of the user's own types, so the objects a feed makes go in as they are and the
  * instance's own deserialisers never run - which is exactly the difference from the fluent path, where the engine
  * reads raw bytes and every record has to be encoded with its route's serialiser first. A classic definition's
  * deserialisation is therefore <em>not</em> exercised by the sandbox, and the documentation says so rather than
@@ -100,13 +101,19 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     private final SandboxConsumer<K, V> consumer;
 
     // Both stay null until asked for - a definition that produces nothing never builds a producer, and nothing
-    // is driven until startGenerating. See the note on the same fields in Sandbox.
+    // is driven until startDriving. See the note on the same fields in Sandbox.
     @SuppressWarnings("NullAway.Init")
     private MockProducer<K, V> producer;
 
     /**
-     * Null until {@link #startGenerating}, which is what {@link #awaitBound(Duration)} and
-     * {@link #generatedRecords()} each check before reaching for it - a sandbox asked about a run that has not
+     * Whether this sandbox has settled since the last record the caller piped in - see the field of the same name
+     * on {@link Sandbox}, which owns the reasoning. Every read on a {@link SandboxOutputTopic} checks it.
+     */
+    private final AtomicBoolean settled = new AtomicBoolean();
+
+    /**
+     * Null until {@link #startDriving}, which is what {@link #awaitBound(Duration)} and
+     * {@link #drivenRecords()} each check before reaching for it - a sandbox asked about a run that has not
      * started should say so.
      */
     @SuppressWarnings("NullAway.Init")
@@ -184,8 +191,15 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     }
 
     /**
-     * @return the producer built by {@link #producer(Serializer, Serializer)}, or null when this definition asked
-     * for none
+     * The raw producer built by {@link #producer(Serializer, Serializer)}, for a test that needs something an output
+     * topic does not expose - whether transactions were initialised, the transactional offset history, every
+     * topic's records at once.
+     * <p>
+     * <b>To read what came out, reach for {@link #createOutputTopic(String)}</b>: that is where the read verbs live,
+     * with a cursor and the settle guard, and it is where a test should normally look. This accessor is the escape
+     * hatch under it, and it hands back a client rather than records.
+     *
+     * @return that producer, or null when this definition asked for none
      */
     public MockProducer<K, V> producer() {
         return producer;
@@ -196,19 +210,19 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * counterpart of {@code Sandbox.builder().handPublished()}.
      * <p>
      * The instance must already have subscribed, or there is no rebalance listener to assign to. After this,
-     * {@link #publish(String, Object, Object)} and {@link #awaitSettled()} are the whole shape: publish what the
+     * {@link #pipe(String, Object, Object)} and {@link #awaitSettled()} are the whole shape: pipe what the
      * test knows, wait for the instance to account for it, assert, then close the instance yourself - on this API
      * the caller built it, so the caller closes it.
      * <p>
      * There is no builder switch here, unlike the fluent path, because this API has no seam that starts anything
-     * on its own: {@link #startGenerating} is already an explicit call, so <em>not</em> making it is the opt-out.
+     * on its own: {@link #startDriving} is already an explicit call, so <em>not</em> making it is the opt-out.
      */
     public void assignAfterSeeding() {
         consumer.assignAfterSeeding();
     }
 
     /**
-     * Publishes one record from the calling thread. Nothing is encoded on this path - a mock consumer holds
+     * Pipes one record in from the calling thread. Nothing is encoded on this path - a mock consumer holds
      * records of the instance's own types - so what the function receives is the very object handed over here.
      * <p>
      * The partition is chosen by the key's value hash, the same way a driven record's is, so one key sticks to one
@@ -220,20 +234,68 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      *                                  closed
      * @throws IllegalArgumentException naming this sandbox's topics, if it does not hold the one named
      */
-    public long publish(String topic, K key, V value) {
+    public long pipe(String topic, K key, V value) {
         Objects.requireNonNull(topic, "A topic must be supplied");
-        if (!topics.contains(topic)) {
-            throw new IllegalArgumentException("This classic sandbox does not hold topic " + topic + " - it holds "
-                    + topics + ". A record for a topic the instance is not subscribed to would never be "
-                    + "delivered.");
-        }
+        requireTopic(topic);
         int partition = Math.floorMod(valueHashOf(key), partitionsPerTopic);
+        // This record is now in flight, so anything read out of the run is a race until something settles again.
+        settled.set(false);
         long offset = consumer.publish(topic, partition, key, value);
         if (offset < 0) {
             throw new IllegalStateException("This classic sandbox's consumer has closed, so " + topic + " can take "
                     + "no more records - the instance is no longer running.");
         }
         return offset;
+    }
+
+    /**
+     * One topic's way in as an object - {@code classic.createInputTopic("orders").pipeInput(key, value)} - the shape
+     * the broker-free test drivers of the stream-processing libraries users compare us with have.
+     * <p>
+     * {@link #pipe(String, Object, Object)} is the flat form, and both reach the same partition choice. Nothing is
+     * encoded on this path either way, so the instance's function receives the very object handed over.
+     *
+     * @param topic one of this sandbox's topics
+     * @throws IllegalArgumentException naming this sandbox's topics, if it does not hold the one named
+     */
+    public SandboxInputTopic<K, V> createInputTopic(String topic) {
+        Objects.requireNonNull(topic, "A topic must be supplied");
+        requireTopic(topic);
+        return new SandboxInputTopic<>(topic, this::pipe);
+    }
+
+    /**
+     * One topic's way out: what the instance produced onto it, which on this API is what a {@code pollAndProduce}
+     * definition writes. {@link SandboxOutputTopic} owns the contract - reading consumes, and every read refuses
+     * until the run has settled.
+     * <p>
+     * The topic is not checked against this sandbox's topics: those are the ones the instance consumes, and a
+     * definition produces wherever its function says.
+     *
+     * @throws IllegalStateException if this definition asked for no producer, because then there is no history to
+     *                               read - build one with {@link #producer(Serializer, Serializer)} before the
+     *                               options
+     */
+    public SandboxOutputTopic<K, V> createOutputTopic(String topic) {
+        Objects.requireNonNull(topic, "A topic must be supplied");
+        if (producer == null) {
+            throw new IllegalStateException("This classic sandbox has no producer, so nothing records what the "
+                    + "instance produced - build one with producer(keySerializer, valueSerializer) and hand it to "
+                    + "ParallelConsumerOptions.builder().producer(...) before reading " + topic + ".");
+        }
+        return new SandboxOutputTopic<>(topic, producer::history, settled::get);
+    }
+
+    /**
+     * Refuses a topic this sandbox does not hold, naming the ones it does. One place, so the refusal a pipe gives
+     * and the refusal an input topic gives are the same sentence.
+     */
+    private void requireTopic(String topic) {
+        if (!topics.contains(topic)) {
+            throw new IllegalArgumentException("This classic sandbox does not hold topic " + topic + " - it holds "
+                    + topics + ". A record for a topic the instance is not subscribed to would never be "
+                    + "delivered.");
+        }
     }
 
     /**
@@ -255,6 +317,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     public void awaitSettled() {
         consumer.awaitEveryPublishedRecordCommitted();
         refuseIfAnythingIsOutstanding();
+        settled.set(true);
     }
 
     /**
@@ -265,6 +328,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
         Objects.requireNonNull(budget, "A budget must be supplied");
         consumer.awaitEveryPublishedRecordCommitted(budget);
         refuseIfAnythingIsOutstanding();
+        settled.set(true);
     }
 
     /**
@@ -280,7 +344,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     }
 
     /**
-     * Assign the partitions - the instance must already have subscribed - and start generating. When the bound is
+     * Assign the partitions - the instance must already have subscribed - and start driving. When the bound is
      * reached the driver stops, waits until every record it published has been accounted for
      * ({@link SandboxConsumer#awaitEveryPublishedRecordCommitted()}), and only then closes {@code instance} drain
      * first - so what is readable afterwards is the end of the run.
@@ -296,9 +360,9 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * @param instance the Parallel Consumer instance to close at the bound; every processor type implements
      *                 {@link DrainingCloseable}
      */
-    public void startGenerating(DrainingCloseable instance) {
+    public void startDriving(DrainingCloseable instance) {
         RandomObjects random = RandomObjects.seededWith(seed);
-        startGenerating(instance,
+        startDriving(instance,
                 index -> random.key(keyType, index, keyCardinality),
                 index -> random.create(valueType, index));
     }
@@ -307,14 +371,14 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      * The same, with the records to publish said out loud rather than filled with realistic random data - for a
      * run that is about particular values.
      *
-     * @see #startGenerating(DrainingCloseable)
+     * @see #startDriving(DrainingCloseable)
      */
-    public void startGenerating(DrainingCloseable instance, LongFunction<K> keys, LongFunction<V> values) {
+    public void startDriving(DrainingCloseable instance, LongFunction<K> keys, LongFunction<V> values) {
         Objects.requireNonNull(instance, "The instance to close at the bound must be supplied");
         Objects.requireNonNull(keys, "A key function must be supplied");
         Objects.requireNonNull(values, "A value function must be supplied");
         if (driver != null) {
-            throw new IllegalStateException("This classic sandbox is already generating");
+            throw new IllegalStateException("This classic sandbox is already driving");
         }
         consumer.assignAfterSeeding();
 
@@ -337,11 +401,11 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     }
 
     /**
-     * How many records have been generated. Zero before {@link #startGenerating}, rather than a refusal: a caller
+     * How many records the driver has put in. Zero before {@link #startDriving}, rather than a refusal: a caller
      * asking what a run produced before it started has its answer.
      */
-    public long generatedRecords() {
-        return driver == null ? 0 : driver.generatedRecords();
+    public long drivenRecords() {
+        return driver == null ? 0 : driver.drivenRecords();
     }
 
     /**
@@ -349,17 +413,23 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
      */
     public boolean awaitBound(Duration timeout) {
         if (driver == null) {
-            throw new IllegalStateException("This classic sandbox has not started generating");
+            throw new IllegalStateException("This classic sandbox has not started driving");
         }
         if (!bound.isBounded()) {
             throw new IllegalStateException("This classic sandbox is unbounded, so it will never reach a bound - "
                     + "declare one with Sandbox.builder().bound(...)");
         }
-        return driver.awaitBound(timeout);
+        boolean reached = driver.awaitBound(timeout);
+        if (reached) {
+            // A reached bound has already waited for every driven record to be accounted for, so it settles this
+            // sandbox as surely as awaitSettled does - and earns the reads on an output topic.
+            settled.set(true);
+        }
+        return reached;
     }
 
     /**
-     * Stops generating. Does <b>not</b> close the instance - the caller built it and owns it, and on this path
+     * Stops driving. Does <b>not</b> close the instance - the caller built it and owns it, and on this path
      * closing it is {@code pc.close()} or the bound's own close.
      */
     @Override
@@ -370,7 +440,7 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     }
 
     /**
-     * One topic of a classic definition: generate, publish, no encoding.
+     * One topic of a classic definition: a value per index, published as it is, no encoding.
      */
     private final class TypedFeed implements TopicFeed {
 

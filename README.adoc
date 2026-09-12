@@ -218,7 +218,7 @@ This is the <<fluent-api,fluent API>>, which is *incubating* -- see that section
 <1> Records per second, per source topic.
 <2> Stop publishing after ten seconds and close, draining first. Without a bound the run ends when you close the instance.
 <3> How many distinct keys the driver draws from. Keys have to repeat for key ordering to have anything to order, and they have to repeat rarely for a topic to look like a real one.
-<4> *What a record contains is yours*: a function from the record's index to its value. The sandbox knows how to pace and stop; only your application knows what an order looks like. A test that wants particular records skips the driver entirely and publishes them itself -- see <<sandbox,the sandbox>>.
+<4> *What a record contains is yours*: a function from the record's index to its value. The sandbox knows how to pace and stop; only your application knows what an order looks like. A test that wants particular records skips the driver entirely and pipes them in itself -- see <<sandbox,the sandbox>>.
 <5> The one line that differs from a run against a broker.
 <6> The bound closes the instance, so this returns when the run ends.
 
@@ -393,7 +393,7 @@ without operational burden or harming the cluster's performance
 ** <<park-in-place,Park in place>> - a record that runs out of attempts stays where it is, holding no worker, while the partition commits past it, so no dead-letter topic is required to keep the partition moving
 ** Terminal outcomes counted apart: succeeded, filtered, parked, stopped
 ** A queryable parked set per route, with metrics beside it
-* A <<sandbox,sandbox>> that runs any definition - fluent or classic - with no broker, no Docker and no test environment: publish your own records, settle, and assert, or let it make up records of the definition's own types
+* A <<sandbox,sandbox>> that runs any definition - fluent or classic - with no broker, no Docker and no test environment: pipe your own records in, settle, and assert, or let it make up records of the definition's own types
 * Per `key` concurrent processing, per partition and unordered message processing
 * Offsets committed correctly, in order, of only processed messages, regardless of concurrency level or retries
 * Batch support in all versions of the API to process batches of messages in parallel instead of single messages.
@@ -824,15 +824,15 @@ The definition does not change. The `start` call does -- which is the whole clai
 
 There are two ways to get records into it, and the first is the one to reach for.
 
-*Publish, settle, assert* -- for a test, which knows its own data:
+*Pipe, settle, assert* -- for a test, which knows its own data:
 
 [source,java,indent=0]
 ----
 Sandbox sandbox = Sandbox.builder().handPublished().build();
 
 try (ParallelConsumerInstance instance = pc.start(sandbox)) {
-    sandbox.publish("orders", "cust-1", new Order("o-1"));     // <1>
-    sandbox.publish("orders", "cust-1", new Order("o-2"));
+    sandbox.pipe("orders", "cust-1", new Order("o-1"));        // <1>
+    sandbox.pipe("orders", "cust-1", new Order("o-2"));
 
     sandbox.awaitSettled();                                    // <2>
 
@@ -840,10 +840,27 @@ try (ParallelConsumerInstance instance = pc.start(sandbox)) {
     assertThat(instance.parkedAllTopics().count()).isEqualTo(0);
 }
 ----
-<1> Encoded with the route's own serialiser -- you do not supply one, because the route already declared both halves of its format. Published from your thread, and placed by the key, so key ordering means here what it means against a broker.
+<1> Encoded with the route's own serialiser -- you do not supply one, because the route already declared both halves of its format. Piped in from your thread, and placed by the key, so key ordering means here what it means against a broker.
 <2> Blocks until every record published so far is *accounted for*: completed, or parked. It refuses rather than returning quietly if the run ended before it got there -- the budget ran out, the instance failed, or a route stopped it.
 
-*Why there is a settle at all*, when the broker-free drivers of the stream-processing libraries you may be comparing us with need none: those engines are single-threaded, so a piped record is processed on the caller's thread and an assertion on the next line is already safe. This is the real engine -- polled on one thread, dispatched on a worker, committed on the control thread -- so a publish that returned would tell you nothing about whether your function had run. `awaitSettled()` is what makes the next line mean something.
+*Reading what came out* -- a per-topic object, with the verbs those same drivers use:
+
+[source,java,indent=0]
+----
+SandboxOutputTopic<String, String> shipments = classic.createOutputTopic("shipments");
+
+assertThat(shipments.queueSize()).isEqualTo(3);              // <1>
+assertThat(shipments.readValue()).isEqualTo("shipped-o-1");  // <2>
+assertThat(shipments.readValuesToList()).hasSize(2);         // <3>
+assertThat(shipments.isEmpty()).isTrue();
+----
+<1> *Every read refuses until the run has settled*, `queueSize()` and `isEmpty()` included -- an early read comes back empty, and an empty read is indistinguishable from a definition that produced nothing, so that is a test which passes for the wrong reason.
+<2> *Reading consumes*, as it does in the drivers this borrows from: the next read is the next record, not the same one again.
+<3> `readRecord()` and `readRecordsToList()` keep the keys and headers; `readKeyValuesToMap()` is there when a map is what you want, and keeps a repeated key's last value. `queueSize()` is their `getQueueSize` without the prefix, which nothing else on this surface carries.
+
+There is a matching object on the way in -- `createInputTopic("orders").pipeInput(key, value)` -- for a test that pipes into one topic repeatedly; `pipe(topic, key, value)` above is the flat form of the same path. Today it is the classic API's `pollAndProduce` that fills an output topic; a fluent definition produces nothing until export lands, and its output topic is honestly empty until then.
+
+*Why there is a settle at all*, when the broker-free drivers of the stream-processing libraries you may be comparing us with need none: those engines are single-threaded, so a piped record is processed on the caller's thread and an assertion on the next line is already safe. This is the real engine -- polled on one thread, dispatched on a worker, committed on the control thread -- so a pipe call that returned would tell you nothing about whether your function had run. `awaitSettled()` is what makes the next line mean something.
 
 *A driver that publishes for you* -- for a soak or a demo, where the point is volume rather than particular records. It fills each route's declared type with *realistic random data* -- an `email` field holds an email address, an `amount` holds money, an Avro record is filled from its own schema -- encodes it with that route's own serialiser, paces at a rate you declare, and takes an optional bound after which it settles and closes the run itself. A seed makes the run reproducible. That is what a sandbox does unless `handPublished()` says otherwise.
 

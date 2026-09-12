@@ -155,7 +155,7 @@ class KeyPartitioningTest {
     }
 
     /**
-     * One whole run: generate to the bound over {@link #PARTITIONS} partitions with byte-array keys, and record
+     * One whole run: drive to the bound over {@link #PARTITIONS} partitions with byte-array keys, and record
      * which partitions each key was seen on.
      *
      * @return key, as the UTF-8 text its bytes carry, to the set of partitions it arrived on
@@ -187,7 +187,7 @@ class KeyPartitioningTest {
             instance.awaitShutdown();
         }
 
-        assertThat(sandbox.generatedRecords()).isEqualTo(RECORD_BOUND);
+        assertThat(sandbox.drivenRecords()).isEqualTo(RECORD_BOUND);
         return placements;
     }
 }

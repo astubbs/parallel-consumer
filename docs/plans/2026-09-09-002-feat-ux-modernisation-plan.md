@@ -996,6 +996,46 @@ the shipped module differs from it, and the vocabulary to read it with.**
   anticipated ("the generator can be replaced by hand-written records"). It is `Sandbox.builder().handPublished()`,
   `Sandbox#publish` and `Sandbox#awaitSettled`, with the same pair on `ClassicSandbox`. The driver's own behaviour is
   unchanged.
+- **Annotated 2026-09-12, owner-directed: the sandbox's verbs are now the ones users already know from the
+  broker-free test drivers of the stream-processing libraries users compare us with (KTD16).** The bullet above
+  names `Sandbox#publish`; it is `Sandbox#pipe` from here on. Four renames, and the text above is left as it was:
+  `publish` becomes **`pipe`** - flat, taking a topic, a key and a value, rather than through a per-topic handle,
+  because the route already declared both halves of its format, so a handle would carry nothing the argument list
+  does not; the no-argument `producer()` accessor becomes **`readRecords()`**, reading what came out as the
+  counterpart of piping something in; `ClassicSandbox#startGenerating` becomes **`startDriving`**, the type it
+  starts being `RecordDriver` and "generating" naming a concept the annotation above retired; and
+  `generatedRecords()` becomes **`drivenRecords()`**, because it counts what the driver put in and the old name
+  also read as the consumer's own published-record accounting. **`awaitSettled` keeps its name** - it is the one
+  divergence KTD16 licenses, our engine being concurrent where theirs is single-threaded, and that reasoning is
+  recorded above. Renamed outright with no deprecated delegates, per KD15: the module has never shipped, so
+  nothing outside this repository can be calling it.
+- **Corrected 2026-09-12, owner-directed, the same day: the second of those four renames is reversed, and the
+  no-argument accessor is `producer()` again.** Both halves are kept, as KD15 keeps its own reversal, because a
+  reader who found only the correction would re-derive the mistake. As first recorded, the rename read "reading what
+  came out becomes a read verb" and the only thing the module then exposed for inspecting results was the mock
+  producer accessor, so that is what took the name. It was the wrong thing: the accessor hands back a **client**,
+  not records, and once the real read side landed in the annotation below it sat beside `readRecordsToList()`
+  returning something that is not a list of records - worse than the name it started with. **The read verbs belong
+  to the output-topic object alone**; the accessor is the escape hatch beneath it, for what an output topic does not
+  expose (transactional state, every topic at once), and its javadoc says so and points at `createOutputTopic`.
+  (session-settled: owner-directed, 2026-09-12 - "it is an escape hatch that hands back the client".)
+- **Annotated 2026-09-12, owner-directed: the module gains their per-topic objects on both sides, and a read side
+  it did not have.** Measured from the comparable driver rather than recalled, its shape is a driver handing out
+  per-topic input and output objects, `pipeInput` on the first and a family of `read*` verbs on the second. So
+  `createInputTopic(topic)` and `createOutputTopic(topic)` are here, on both sandboxes, and the flat
+  `pipe(topic, key, value)` stays as the one-line form of the same path rather than being replaced - a test that
+  pipes into one topic repeatedly reads better with the object, a test that pipes once reads better flat, and both
+  go through one encoding and one partition choice. The output side is **new surface, not a rename**: it reads the
+  mock producer's history, per topic, through a cursor, with `readValue`, `readRecord`, `readValuesToList`,
+  `readRecordsToList`, `readKeyValuesToMap`, `queueSize` and `isEmpty`. Three decisions inside it were the owner's
+  to make and are recorded on `SandboxOutputTopic` itself: **reading consumes**, as theirs does, so a test that
+  reads twice gets two records; **the size accessor drops their `get` prefix** and keeps the word, because nothing
+  else on this surface carries one; and **every read refuses until the run has settled since the last pipe**,
+  emptiness questions included, because an early read returns an empty list and a test that believed it would pass
+  for the wrong reason for ever. Their key-and-value list has no counterpart: it pairs a key with a value in a type
+  this project does not have, and `readRecordsToList` already carries the key. **This is not the capturing sink**
+  the next-milestone subsection below names - that collects what a processing *function* received; this reads what
+  the instance *produced*.
 - **The hydration ships as its own pull request above this one, and the driver takes a function instead.** Point 2's
   first half, point 5, and this unit's Instancio/Datafaker/Avro dependency set - with the bytecode-level pinning the
   Java 8 release target needed, which the Files and Risks entries below describe - move to `feat/504-sandbox-hydration`.
