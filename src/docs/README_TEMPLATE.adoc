@@ -339,7 +339,7 @@ without operational burden or harming the cluster's performance
 ** Efficient individual message acknowledgement system (without local or third party external system state storage) to massively reduce (and usually completely eliminate) message replay upon failure - see <<offset_map>> section for more details
 * Solution for the https://en.wikipedia.org/wiki/Head-of-line_blocking["head of line"] blocking problem where continued failure of a single message, prevents progress for messages behind it in the queue
 * A <<fluent-api,fluent API>> (incubating) beside the classic options-builder one: connection properties in, one typed route per topic with its own function and policy, and a running instance out
-** <<park-in-place,Park in place>> - a record that runs out of attempts stays where it is, holding no worker, while the partition commits past it, so no dead-letter topic is required to keep the partition moving
+** <<park-in-place,Park in place>> - a record that runs out of attempts stays where it is, holding no worker, while the partition commits past it, so a dead-letter topic is a relief valve rather than a requirement
 ** Terminal outcomes counted apart: succeeded, filtered, parked, stopped
 ** A queryable parked set per route, with metrics beside it
 * Per `key` concurrent processing, per partition and unordered message processing
@@ -544,7 +544,7 @@ The source topic is the store and the offset map is the index.
 This is the one thing in this library that the architecture makes possible and a commit-frontier consumer cannot do at all.
 A consumer whose committed offset is a single frontier has exactly two options for a record it cannot process: replay everything after it, or lose it.
 A dead-letter topic exists to escape that choice by copying the record somewhere else.
-Here the map already commits past an incomplete record, so nothing has to be copied anywhere, and *a definition that copies nothing anywhere is complete*.
+Here the map already commits past an incomplete record, so nothing has to be copied anywhere, and *a definition that declares no dead-letter destination is complete*.
 
 Park is the default reaction: with no retry limit declared at all, a record is attempted ten times and then parks.
 That default is only safe because parking costs offset-map capacity rather than a worker -- which is also the bound worth knowing about.
@@ -561,7 +561,7 @@ That default is only safe because parking costs offset-map capacity rather than 
 | *Its key, and nothing else.* Later records with that key wait behind it; every other key on the partition is unaffected. A route's parked view reports how many records each parked record is holding, which is the blast radius.
 
 | `PARTITION`
-| Its partition, in full. Partition ordering means records are processed in offset order, so a parked record at the head stops the partition. Park serves key and unordered processing; a partition-ordered instance needs the record to leave the topic instead, which this release cannot do.
+| Its partition, in full. Partition ordering means records are processed in offset order, so a parked record at the head stops the partition. Park serves key and unordered processing; a partition-ordered instance should declare a dead-letter destination instead.
 |===
 
 Three more consequences, none of them defects, all of them things an operator will see:
@@ -571,13 +571,12 @@ Three more consequences, none of them defects, all of them things an operator wi
 * *A close that drains waits for records queued behind a parked key.* The instance closes draining by default, and a drain waits for the work the shards still hold. Under `KEY` ordering, records queued behind a parked key are work the engine can never take, so such a close waits out its whole drain timeout and then reports the timeout. Either close without draining, or keep in mind that the wait is bounded by `drainTimeout` and nothing is lost by it.
 
 *What releases a parked record today.* A restart or a rebalance, and nothing else: the attempt count is per assignment, so a record delivered again after either is attempted afresh.
-`resume` on the instance refuses in this release and says so -- it needs an engine command that does not exist yet, and it arrives in the next milestone.
+`resume` and `dlq` on the instance refuse in this release and say so -- they need engine commands that do not exist yet, and they arrive in the next milestone.
 A parked record that the broker's retention deletes while the instance runs is unaffected, because the engine still holds it in memory and can still act on it; only a restart loses it, since it cannot be polled again.
-*A parked set does not survive a restart in this release, and there is nothing to declare that would make it.*
-Copying a record out to another topic so that it does survive is specified and is not in this release -- see <<future-work,Future Work>>.
+*A route whose parked records must survive a restart parks with a dead-letter destination or an age bound.*
 
 [[parked-set]]
-=== The parked set
+=== Dead-lettering, and the parked set
 
 A store nobody can see is a leak, so the parked set is queryable per route from the instance.
 
@@ -591,7 +590,16 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 
 The same figures are published through the <<metrics,metrics integration>>: outcome counts under the `routes` subsystem, tagged by topic and outcome, and the live parked count and oldest parked age under the `partitions` subsystem, tagged by topic and partition.
 
-NOTE: *Copying a record out to a dead-letter topic is not in this release*, and nothing in the API accepts a destination. The shape is settled and the requirement stands; what it waits on is engine work, and it lands with the milestone that builds it. Until then park in place is the whole of the story, and for the ordering modes above it is enough.
+*Copying a record to another topic is called `dlq` here, and it is a verb.*
+It is the relief valve for park rather than the first resort: `dlqTo` names the destination, `dlqAtOffsetPayload` fires when a partition's offset-map payload reaches a percentage of Kafka's commit-metadata cap, written `percentOf(...)` so the unit is on the value rather than in the reader's head, `dlqOlderThan` fires before the topic's retention could delete a parked record, and `dlqImmediately` is the classic dead-letter queue -- export on the dispatch after exhaustion, with no park in between.
+
+Those four qualify a record that parks.
+`afterRetries(dlq("payments.dlq"))` is the reaction itself, beside `park()` and `stop()`: the record is copied out on the dispatch that exhausts it and never enters the parked set, so there is nothing left for a trigger to qualify and declaring one beside it is refused.
+Reach for it when the record has to leave the topic rather than sit in it; reach for a parking policy with a trigger when it may sit there until something forces the issue.
+
+NOTE: *Dead-lettering does not run in this release.* A definition that declares a destination is refused at start, naming the topic, rather than accepted and silently doing nothing -- which is the one outcome worse than a refusal. The API is documented here because the shape is settled; what is missing is the engine accessor the payload trigger reads. Until it lands, park in place is the whole of the story, and for the ordering modes above it is enough.
+
+An exported record will carry the original key bytes, value bytes and headers unchanged, plus provenance headers naming the source topic, partition, offset, timestamp, attempt count, and the last failure's time, class and message.
 
 [[fluent-outcomes]]
 === Outcomes: what a record can end up as
@@ -621,10 +629,10 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 ----
 <1> *Park* -- the default, and the right answer for a routine poison record. One record is unprocessable, the rest of the topic is fine, and you want to look at it later without stopping anything now.
 <2> *Park with a schedule.* Wait half an hour, attempt once more, four times over, then park for good. This is scheduled retry: the record holds no worker while it waits, so a long horizon is cheap.
-<3> *Stop* -- when a record running out of attempts means the deployment is wrong rather than the record is. A schema nobody deployed a reader for, a downstream that will never come back: continuing would burn through the topic parking everything.
+<3> *Dead-letter* -- when the record must leave the topic rather than sit in it. That is a capacity or a retention question, not a severity one: the offset map is bounded, and a parked record only survives a restart if it has somewhere to go.
+<4> *Stop* -- when a record running out of attempts means the deployment is wrong rather than the record is. A schema nobody deployed a reader for, a downstream that will never come back: continuing would burn through the topic parking everything.
 
-The two are not a severity ladder. Park is about *this record*, and stop is about *the deployment*.
-The third reaction a reader will look for -- copying the record out to another topic -- is specified and is not in this release; <<future-work,Future Work>> says what it waits on.
+The three are not a severity ladder. Park is about *this record*, dead-letter is about *capacity*, and stop is about *the deployment*.
 
 [[fluent-entry-point]]
 === The entry point, routes and types
@@ -633,7 +641,7 @@ The third reaction a reader will look for -- copying the record out to another t
 
 NOTE: `connect` opens nothing. It follows Kafka's own client, which takes its configuration at construction and reaches the cluster on its first poll: the clients here are built when you call `start()`, and a definition written but never started constructs neither.
 
-*A route binds one topic to one function.* Registering a second route for a topic already routed is refused at definition time, as is supplying a deserialiser in the connection properties -- every check runs before a connection is opened, and every message names the topic or the setting.
+*A route binds one topic to one function.* Registering a second route for a topic already routed is refused at definition time, as is naming one of your own routed topics as a dead-letter destination, or supplying a deserialiser in the connection properties -- every check runs before a connection is opened, and every message names the topic or the setting.
 
 *A route naming a topic the cluster does not have fails the start, by name.* This is the one check that does reach the cluster: `start()` asks it once, before the instance joins the group, and refuses a definition it cannot satisfy. What it replaces is silence -- Kafka's consumer auto-creates a topic it subscribes to unless the broker forbids it, so a misspelled name became an empty topic with a partition count nobody chose, and where the broker did forbid it the route simply processed nothing. Declare `withMissingTopicPolicy(MissingTopic.CREATE)` to have the start create what is missing, with the broker's own partition count and replication factor, or `withMissingTopicPolicy(MissingTopic.IGNORE)` to start anyway with the missing topics named in a warning.
 
@@ -741,7 +749,7 @@ What is on the fluent API only:
 * *Terminal outcomes.* Filtered, parked and stopped are distinct from succeeded and counted apart; on the classic API a record either succeeded or it did not.
 * *A type and a function per topic.* One instance, one function, one type pair on the classic API.
 * *Per-route deserialisation off the poll thread.* On the classic API the consumer deserialises, so a payload it rejects ends the poll thread -- the one fix planned for the classic API is a policy for that.
-* *Per-route policy* -- retry limit, delay, concurrency, what happens when the retries run out.
+* *Per-route policy* -- retry limit, delay, concurrency, dead-letter destination.
 
 
 [[common_preparation]]
@@ -1050,7 +1058,7 @@ TIP: To keep the system from logging an error for an expected failure, throw an 
 
 *Where the two APIs differ is what happens when retrying is not working.*
 
-On the *fluent API* a route declares a retry limit -- ten attempts by default -- and what happens when a record reaches it: <<park-in-place,park in place>>, or stop the instance.
+On the *fluent API* a route declares a retry limit -- ten attempts by default -- and what happens when a record reaches it: <<park-in-place,park in place>>, dead-letter, or stop the instance.
 That is <<fluent-error-handling,Which reaction fits which failure>>, and it is the behaviour most people are looking for when they arrive at this section.
 
 On the *classic API* there is no retry limit: a record is retried for as long as your function keeps throwing.
@@ -1116,14 +1124,13 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 In order to have a failing record not block progress of a partition, one of the ordering modes other than `PARTITION` must be used, so that the system is allowed to process other messages that are perhaps in `KEY` order or in the case of `UNORDERED` processing - any message.
 This is because in `PARTITION` ordering mode, records are always processed in order of partition, and so the Head of Line blocking feature is effectively disabled.
 
-[[future-work]]
 === Future Work
 
 Much of the retry epic is delivered on the <<fluent-api,fluent API>>: a max-retry limit with a callback when it is reached (confluentinc#196), scheduled retry as a park with a delay (confluentinc#48), and stopping the instance when a record gives up (confluentinc#34).
 What is still open:
 
-* Dead-lettering -- copying a record out to another topic when parking it in place is not enough. The shape is settled; what it waits on is the engine work that produces from the parked set, and neither the reaction nor a destination is accepted until then (<<parked-set,The parked set>>).
-* `resume` as a command on the instance, so a parked record can be acted on without a restart.
+* Dead-lettering itself -- the API is settled and refused at start until the engine accessor it reads exists (<<parked-set,Dead-lettering, and the parked set>>).
+* `resume` and `dlq` as commands on the instance, so a parked record can be acted on without a restart.
 * A declared circuit breaker per route (<<circuit-breaker,Circuit Breaker Pattern>>).
 * A deserialisation-failure policy for the classic API's poll path, which is the one behaviour on this list that the classic API is getting rather than the fluent one.
 * https://github.com/confluentinc/parallel-consumer/issues/65[Enhanced retry epic confluentinc#65], which tracks the rest.

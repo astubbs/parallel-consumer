@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.fluent;
 import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.Percent;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.MockProducer;
@@ -20,6 +21,8 @@ import java.util.Arrays;
 import java.util.Properties;
 import java.util.regex.Pattern;
 
+import static bz.stub.parallelconsumer.Percent.percentOf;
+import static bz.stub.parallelconsumer.fluent.AfterRetries.dlqImmediately;
 import static bz.stub.parallelconsumer.fluent.AfterRetries.park;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -206,6 +209,163 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
         assertThat(refusal(pc)).hasMessageThat().contains(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG);
     }
 
+    @Test
+    void exportImmediatelyWithNoDestinationNamesTheSettingAndTheTopic() {
+        var pc = define();
+        pc.string("orders").afterRetries(park().dlqImmediately()).process(context -> Outcome.succeeded());
+
+        var thrown = refusal(pc);
+
+        assertThat(thrown).hasMessageThat().contains("dlqImmediately");
+        assertThat(thrown).hasMessageThat().contains("orders");
+    }
+
+    @Test
+    void anAgeBoundWithNoDestinationNamesTheSettingAndTheTopic() {
+        var pc = define();
+        pc.string("orders").afterRetries(park().dlqOlderThan(Duration.ofDays(2)))
+                .process(context -> Outcome.succeeded());
+
+        var thrown = refusal(pc);
+
+        assertThat(thrown).hasMessageThat().contains("dlqOlderThan");
+        assertThat(thrown).hasMessageThat().contains("orders");
+    }
+
+    @Test
+    void aDestinationWithNoTriggerNamesTheTopicAndTheDestination() {
+        var pc = define();
+        pc.string("orders").afterRetries(park().dlqTo("orders.dlq")).process(context -> Outcome.succeeded());
+
+        var thrown = refusal(pc);
+
+        assertThat(thrown).hasMessageThat().contains("orders.dlq");
+        assertThat(thrown).hasMessageThat().contains("no trigger");
+    }
+
+    /**
+     * KTD5: in this version the payload-fraction trigger has no engine accessor to read, so <em>any</em> explicit
+     * percentage is refused - not only one above the ceiling.
+     */
+    @Test
+    void anyExplicitExportPercentageIsRefusedNamingTheSetting() {
+        var pc = define();
+        pc.string("orders").afterRetries(park().dlqTo("orders.dlq").dlqAtOffsetPayload(50))
+                .process(context -> Outcome.succeeded());
+
+        var thrown = refusal(pc);
+
+        assertThat(thrown).hasMessageThat().contains("dlqAtOffsetPayload");
+        assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("50%");
+    }
+
+    /**
+     * The same refusal through the other door: a percentage declared as a {@link Percent} reaches validation the
+     * same way the bare number does, and is quoted back with its unit either way.
+     */
+    @Test
+    void anExportPercentageDeclaredAsATypeIsRefusedTheSameWay() {
+        var pc = define();
+        pc.string("orders").afterRetries(park().dlqTo("orders.dlq").dlqAtOffsetPayload(percentOf(50)))
+                .process(context -> Outcome.succeeded());
+
+        var thrown = refusal(pc);
+
+        assertThat(thrown).hasMessageThat().contains("dlqAtOffsetPayload");
+        assertThat(thrown).hasMessageThat().contains("50%");
+    }
+
+    /**
+     * What is not a percentage is refused where it is written, not carried as far as validation: the type is
+     * constructed on the spot by the plain-number overload, so both doors refuse at the call. The distinction
+     * matters because validation's own refusal explains a percentage as unsupported in this version, which would be
+     * the wrong sentence for a number that was never a percentage.
+     */
+    @Test
+    void whatIsNotAPercentageIsRefusedAtTheCallRatherThanAtValidation() {
+        var pc = define();
+        var route = pc.string("orders");
+
+        assertThat(assertThrows(IllegalArgumentException.class,
+                () -> park().dlqTo("orders.dlq").dlqAtOffsetPayload(-5)))
+                .hasMessageThat().contains("above zero");
+        assertThat(assertThrows(IllegalArgumentException.class,
+                () -> park().dlqTo("orders.dlq").dlqAtOffsetPayload(700)))
+                .hasMessageThat().contains("above a hundred");
+        assertThat(assertThrows(IllegalArgumentException.class, () -> define().withDlqAtOffsetPayload(0)))
+                .hasMessageThat().contains("above zero");
+        assertThat(assertThrows(NullPointerException.class,
+                () -> define().withDlqAtOffsetPayload((Percent) null)))
+                .hasMessageThat().contains("percentage must be supplied");
+        assertThat(assertThrows(NullPointerException.class,
+                () -> park().dlqTo("orders.dlq").dlqAtOffsetPayload((Percent) null)))
+                .hasMessageThat().contains("percentage must be supplied");
+
+        // Completing the route proves the definition was a usable one all along: every refusal above fired at the
+        // call that wrote the percentage, with nothing having been built.
+        route.process(context -> Outcome.succeeded());
+        assertThat(runtime.builtNothing()).isTrue();
+    }
+
+    @Test
+    void anExportPercentageAboveTheCeilingAlsoNamesTheCeilingAndThePauseThreshold() {
+        var pc = define();
+        pc.string("orders").afterRetries(park().dlqTo("orders.dlq")
+                .dlqAtOffsetPayload(AfterRetries.MAX_PAYLOAD_PERCENTAGE.percentage() + 1))
+                .process(context -> Outcome.succeeded());
+
+        var thrown = refusal(pc);
+
+        assertThat(thrown).hasMessageThat().contains("ceiling");
+        assertThat(thrown).hasMessageThat().contains(AfterRetries.MAX_PAYLOAD_PERCENTAGE.toString());
+        assertThat(thrown).hasMessageThat().contains(AfterRetries.PAUSE_THRESHOLD_PERCENTAGE.toString());
+    }
+
+    @Test
+    void theInstanceWideExportPercentageIsRefusedNamingTheSetting() {
+        var pc = define().withDlqAtOffsetPayload(60);
+        pc.string("orders").process(context -> Outcome.succeeded());
+
+        assertThat(refusal(pc)).hasMessageThat().contains("withDlqAtOffsetPayload");
+    }
+
+    /**
+     * The ceiling is derived from the engine's own pause threshold rather than written down twice, so a change to
+     * that threshold moves both together.
+     */
+    @Test
+    void theCeilingIsFivePointsBelowTheEnginesPauseThreshold() {
+        assertThat(AfterRetries.PAUSE_THRESHOLD_PERCENTAGE).isEqualTo(percentOf(75));
+        assertThat(AfterRetries.MAX_PAYLOAD_PERCENTAGE).isEqualTo(percentOf(70));
+    }
+
+    @Test
+    void aDestinationThatIsOneOfTheInstancesOwnTopicsNamesBoth() {
+        var pc = define();
+        pc.string("audit").process(context -> Outcome.succeeded());
+        pc.string("orders").afterRetries(dlqImmediately("audit")).process(context -> Outcome.succeeded());
+
+        var thrown = refusal(pc);
+
+        assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("audit");
+        assertThat(thrown).hasMessageThat().contains("own exports");
+    }
+
+    @Test
+    void aDestinationUnderTheTransactionalCommitModeNamesTheDependencyItWaitsFor() {
+        Properties properties = props();
+        properties.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "refusal-test");
+        var pc = new ParallelConsumerDefinition(properties)
+                .withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+        pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
+
+        var thrown = refusal(pc);
+
+        assertThat(thrown).hasMessageThat().contains("orders");
+        assertThat(thrown).hasMessageThat().contains("astubbs#410");
+    }
 
     @Test
     void aPatternSubscriptionNamesThePatternAndTheAlternative() {
@@ -275,6 +435,24 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
     }
 
     /**
+     * The three reactions are alternatives, so a stopping policy refuses an export setting where it is written
+     * rather than carrying one that could never fire.
+     * <p>
+     * It names the calls that made the policy and no hand-in call, for the reason the park-setting test beside it
+     * records: at this throw the policy has not been handed anywhere (KD16).
+     */
+    @Test
+    void anExportSettingOnAStoppingPolicyNamesTheSettingAndNeitherScope() {
+        var thrown = assertThrows(IllegalArgumentException.class, () -> AfterRetries.stop().dlqTo("orders.dlq"));
+
+        assertThat(thrown).hasMessageThat().contains("dlqTo");
+        assertThat(thrown).hasMessageThat().contains("stop()");
+        assertThat(thrown).hasMessageThat().contains("park()");
+        assertThat(thrown).hasMessageThat().doesNotContain("afterRetries(");
+        assertThat(thrown).hasMessageThat().doesNotContain("withDefaultAfterRetries");
+    }
+
+    /**
      * The two reactions are alternatives, so a stopping policy refuses a park setting where it is written rather
      * than carrying one that could never fire.
      * <p>
@@ -292,6 +470,31 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
         assertThat(thrown).hasMessageThat().contains("park()");
         assertThat(thrown).hasMessageThat().doesNotContain("afterRetries(");
         assertThat(thrown).hasMessageThat().doesNotContain("withDefaultAfterRetries");
+    }
+
+    /**
+     * A dead-letter policy turns the same settings away for the opposite reason: not that it never exports, but
+     * that it exports on exhaustion itself, so a trigger has no park left to qualify. The refusal says which of
+     * the two it is looking at, because "you cannot declare this here" is only actionable once the reader knows
+     * why - and the fix differs: park() beside it is what makes the trigger meaningful again.
+     */
+    @Test
+    void anExportTriggerOnADeadLetterPolicyNamesTheSettingAndTheReaction() {
+        var thrown = assertThrows(IllegalArgumentException.class,
+                () -> AfterRetries.dlq("orders.dlq").dlqOlderThan(Duration.ofDays(2)));
+
+        assertThat(thrown).hasMessageThat().contains("dlqOlderThan");
+        assertThat(thrown).hasMessageThat().contains("dlq(...)");
+        assertThat(thrown).hasMessageThat().contains("park()");
+    }
+
+    /**
+     * The destination is not optional on this reaction - it is half of what the reaction says - so it is refused
+     * at the call rather than at validation, where the reader would have to work out which route it meant.
+     */
+    @Test
+    void aDeadLetterReactionWithNoDestinationIsRefusedAtTheCall() {
+        assertThrows(NullPointerException.class, () -> AfterRetries.dlq(null));
     }
 
     /**
@@ -402,9 +605,9 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
     /**
      * The owner's question on astubbs/parallel-consumer#502: what happens when retry-forever meets an
      * after-retries policy? Nothing did - exhaustion is the only thing that consults a policy, and a record that
-     * retries forever never exhausts, so the reaction and the park cycles were both inert and the definition said
-     * nothing. Either half may be declared at either scope, so all four pairings are covered here, in both
-     * reactions.
+     * retries forever never exhausts, so the reaction, the park cycles and the export triggers were all inert and
+     * the definition said nothing. Either half may be declared at either scope, so all four pairings are covered
+     * here, in both reactions.
      */
     @Test
     void theInstanceDefaultPolicyIsRefusedBesideTheInstanceDefaultRetryForever() {

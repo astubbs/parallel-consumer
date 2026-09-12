@@ -43,7 +43,7 @@ public interface ClientRuntime {
      * definition's properties.
      * <p>
      * <b>Called only when {@link DefinitionView#requiresProducer()} is true</b> - a definition with no producing
-     * route and a consumer commit mode opens no producer at all (R4).
+     * route, no dead-letter destination and a consumer commit mode opens no producer at all (R4).
      * <p>
      * Empty is the better answer wherever a real broker is involved: an instance built from a producer
      * <em>config</em> can rebuild its producer, while one handed a finished producer instance cannot, and so forgoes

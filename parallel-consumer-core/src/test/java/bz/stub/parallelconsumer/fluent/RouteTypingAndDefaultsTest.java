@@ -147,10 +147,32 @@ class RouteTypingAndDefaultsTest {
     void theStopReactionCopiesIntoEveryRouteAndARouteMayOverrideIt() {
         var pc = define().withDefaultAfterRetries(AfterRetries.stop());
         pc.string("orders").process(context -> Outcome.succeeded());
-        pc.string("audit").afterRetries(AfterRetries.park()).process(context -> Outcome.succeeded());
+        pc.string("audit").afterRetries(AfterRetries.dlqImmediately("audit.dlq"))
+                .process(context -> Outcome.succeeded());
 
         assertThat(pc.route("orders").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.STOP);
         assertThat(pc.route("audit").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.PARK);
+        assertThat(pc.route("audit").afterRetries().destination()).isEqualTo("audit.dlq");
+    }
+
+    /**
+     * The dead-letter reaction copies into a route the way the other two do, and it carries its destination as
+     * part of what it is rather than as a qualifier: nothing else has to be declared for it to be complete.
+     * <p>
+     * It also answers true to {@code hasExportTrigger()} with no trigger declared anywhere, because exhaustion is
+     * its trigger. That is what keeps validation from refusing it as a destination nothing would send to.
+     */
+    @Test
+    void theDeadLetterReactionCopiesIntoEveryRouteAndCarriesItsOwnDestination() {
+        var pc = define().withDefaultAfterRetries(AfterRetries.dlq("all.dlq"));
+        pc.string("orders").process(context -> Outcome.succeeded());
+        pc.string("audit").afterRetries(AfterRetries.park()).process(context -> Outcome.succeeded());
+
+        assertThat(pc.route("orders").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.DLQ);
+        assertThat(pc.route("orders").afterRetries().destination()).isEqualTo("all.dlq");
+        assertThat(pc.route("orders").afterRetries().hasExportTrigger()).isTrue();
+        assertThat(pc.route("audit").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.PARK);
+        assertThat(pc.route("audit").afterRetries().destination()).isNull();
     }
 
     @Test
@@ -251,6 +273,7 @@ class RouteTypingAndDefaultsTest {
 
         assertThat(pc.route("orders").retryLimit().getAsInt()).isEqualTo(10);
         assertThat(pc.route("orders").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.PARK);
+        assertThat(pc.route("orders").afterRetries().destination()).isNull();
     }
 
     /**

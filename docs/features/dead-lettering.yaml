@@ -1,0 +1,87 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Dead-lettering - copying a record out when parking it in place is not enough
+category: processing
+module: parallel-consumer-core
+maturity: alpha
+availability:
+  status: planned
+  target_release: unscheduled
+release_assumptions:
+  - Nothing described here runs yet. The surface is declared on the fluent API and a definition that names a
+    dead-letter destination is refused at start, naming the topic, so no claim here may say a record can be copied
+    to another topic today.
+  - The reaction and the three triggers are recorded so that the shape is settled before the engine work starts.
+    What they wait on is the engine's export commands - producing from the parked set within the transaction's
+    budget, and doing it oldest-first once a partition's offset payload reaches a fraction of the commit-metadata
+    cap - which are Milestone C of the UX-modernisation plan. The target release is unscheduled because that
+    milestone is not assigned to one.
+  - Park in place is what a user has instead, and for key and unordered processing it is the whole answer. This
+    record is the relief valve beside it, not a replacement for it.
+summary: >-
+  A record that has run out of attempts is copied to another topic, with its original bytes, headers and
+  provenance, and then completed - so the committed offset moves past it and the offset map carries nothing for
+  it. It is declared as the route's reaction to exhaustion, or as a trigger that empties the parked set later.
+use_this_when:
+  - A partition is ordered, so a parked record at its head would hold the whole partition and parking is not an option.
+  - Parked records must outlive a restart, or the source topic's retention would delete one before anybody acted on it.
+  - >-
+    The offset map is the binding constraint: enough records park on one partition that its encoded payload
+    approaches Kafka's commit-metadata cap, and something has to leave.
+  - A failed record must reach a system that is not this consumer - an operator's queue, a replay tool, an audit topic.
+setup:
+  declare:
+    - afterRetries(dlq(topic)) as the route's reaction - the record is copied out on the dispatch that exhausts it
+      and never enters the parked view.
+    - afterRetries(park().dlqTo(topic).dlqImmediately()) to park first and make exhaustion the export trigger, which
+      is the classic dead-letter queue one retry delay later; dlqImmediately(topic) is the same thing in one call.
+    - dlqOlderThan(age) beside a destination to empty a parked record out before the source topic's retention could
+      delete it.
+    - dlqAtOffsetPayload(percentOf(...)) beside a destination to export the oldest parked records once a
+      partition's offset payload reaches that percentage of the commit-metadata cap - Percent carries the unit, which
+      is a percentage out of a hundred and not a fraction of one, and the same setting takes a bare number for a
+      caller who would rather write one.
+    - withDefaultAfterRetries(...) on the definition to set any of these once for every route (R6).
+  observe:
+    - instance.topic(name).parked() and instance.parkedAllTopics() list what is waiting to be exported.
+    - dlq(record) and dlq() on a parked view export now rather than waiting for a trigger.
+opt_in:
+  mechanism: Declared per route on a fluent-API definition, or once as the instance default. Nothing is exported
+    unless a destination is named; a definition that names none is complete.
+  isolated_from_stable_modules: false
+  explanation: It is part of the fluent package in the core artifact. The classic API has no dead-letter setting and
+    is unaffected.
+boundaries:
+  - A destination with no trigger, and a trigger with no destination, are both refused at definition time - either
+    alone would be a setting that never fires.
+  - >-
+    A destination this same definition routes is refused: the instance would consume its own exports and loop
+    them.
+  - Under the transactional commit mode a destination is refused until producer recovery lands, because an export
+    send that fails inside the transaction aborts it, the instance terminates, and on restart the attempt counts
+    reset - a persistently failing export would loop. A transactional instance parks in place instead.
+  - The export triggers qualify a parking policy. They are refused on a stopping policy, which never parks, and on
+    the dead-letter reaction, which has already copied the record out by the time a trigger could fire.
+  - An exported record carries the original key bytes, value bytes and headers unchanged, plus provenance headers
+    naming the source topic, partition, offset, timestamp, attempt count, and the last failure's time, class and
+    message. Provenance headers are appended after the user's own and their names are reserved.
+  - A destination shared by several routes carries records from all of them, so its consumer reads raw bytes and
+    dispatches on the source-topic provenance header.
+  - The dead-letter topic is at-least-once - a crash between a successful export and the offset commit replays the
+    record.
+  - Naming a destination is enough to make the definition need a producer, whether or not anything is ever
+    exported.
+validation:
+  - Confirm a record that exhausts its retries appears on the destination topic with its provenance headers, and
+    that the source partition's committed offset moved past it.
+  - Confirm a destination the definition also routes is refused before a connection is opened.
+references:
+  - label: README section
+    path: README.adoc#parked-set
+  - label: The policy and its reaction
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/fluent/AfterRetries.java
+  - label: The refusals, each naming the topic
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/fluent/DefinitionRules.java
+readme_anchor: parked-set

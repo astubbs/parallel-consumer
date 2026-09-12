@@ -16,7 +16,7 @@ release_assumptions:
     reaction to running out of attempts, together with the retry limit that gets a record there. This record
     describes what a route author sees. The engine-level record, park-in-place-engine, owns the mechanism, the
     classic-API entry point and the guarantees underneath, and is where a claim about either belongs.
-  - There is no dead-letter setting and no export command in this release, and resume refuses, so nothing here may claim a parked record can be moved or re-attempted without a restart.
+  - Dead-lettering, resume and the handle's export command are refused in this release, so nothing here may claim a parked record can be moved or re-attempted without a restart.
 summary: >-
   A record that has run out of attempts stays where it is - incomplete in the offset map, holding no worker - while
   the partition commits past it, so one poison record costs neither a stopped topic nor a dead-letter topic you
@@ -49,18 +49,17 @@ opt_in:
 boundaries:
   - Under key ordering a parked record holds its key, so later records with that key wait behind it; every other
     key on the partition is unaffected. Under partition ordering it holds its partition, so park serves key and
-    unordered processing, and a partition-ordered instance needs the record to leave the topic instead, which
-    this release cannot do.
+    unordered processing and a partition-ordered instance should declare a dead-letter destination instead.
   - Consumer-group lag reads as stuck at the oldest parked record, because the committed offset cannot advance past
     an incomplete one even while everything after it commits in the metadata.
   - The attempt count is per assignment. A rebalance or a restart delivers a parked record again and it is
-    attempted afresh - which is also the only way to release one in this release, since resume refuses and there
-    is nothing that copies a record out.
+    attempted afresh - which is also the only way to release one in this release, since resume and the export
+    command are refused.
   - A parked record deleted from the broker by retention is unaffected while the instance runs, because it is held
-    in memory; a restart loses it. Nothing in this release makes a parked set survive a restart, and there is no
-    setting to declare that would.
-  - Parked records count against the partition's offset-map payload, and nothing shrinks it while they stay
-    parked, so a partition whose payload reaches the engine's pressure threshold stops taking work.
+    in memory; a restart loses it. A route whose parked records must survive a restart needs a dead-letter
+    destination or an age bound.
+  - Parked records count against the partition's offset-map payload. With no dead-letter destination declared, a
+    partition whose payload reaches the engine's pressure threshold stops taking work.
   - A parked record is deliberately invisible to the slow-work scan, so it is not counted against the partition's
     slow-records meter and its topic is not named in the periodic waiting-too-long warning. Slow work means work
     that should have moved and has not, and a parked record is work the definition stopped on purpose. The
