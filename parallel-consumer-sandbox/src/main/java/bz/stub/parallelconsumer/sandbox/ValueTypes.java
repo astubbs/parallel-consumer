@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * What Java type is behind a route's {@link Format}, which is the one thing the generator needs and the one thing
+ * What Java type is behind a route's {@link Format}, which is the one thing the hydration needs and the one thing
  * erasure destroys.
  *
  * <h2>Three answers, in order</h2>

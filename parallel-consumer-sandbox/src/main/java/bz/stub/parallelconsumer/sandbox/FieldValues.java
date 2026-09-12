@@ -49,13 +49,13 @@ final class FieldValues {
     /**
      * The demo domain's parcel statuses, which a field called {@code status} is filled from. A closed set rather
      * than a random word, because the README's quickstart filters on one of these - a route that filtered on a
-     * value the generator never produces would demonstrate nothing.
+     * value the hydration never produces would demonstrate nothing.
      */
     private static final String[] PARCEL_STATUSES = {
             "CREATED", "COLLECTED", "IN_TRANSIT", "OUT_FOR_DELIVERY", "DELIVERED", "RETURNED"};
 
     /**
-     * Datafaker, which knows what an email address or a city looks like. Built once per generator: it loads its
+     * Datafaker, which knows what an email address or a city looks like. Built once per filler: it loads its
      * value dictionaries on construction, which is far too much work to repeat per record.
      */
     private final Faker faker;
@@ -74,7 +74,7 @@ final class FieldValues {
     private final List<Rule> rules;
 
     /**
-     * @param random the generator's own randomness, re-seeded per record by its owner rather than by this class
+     * @param random the filler's own randomness, re-seeded per record by its owner rather than by this class
      */
     FieldValues(Random random) {
         this.random = random;

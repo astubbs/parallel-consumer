@@ -26,10 +26,10 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * thousand before it. The alternative, one random stream consumed in order, would make reproducibility a property
  * of the thread schedule.
  * <p>
- * Two levels, because they can fail independently: the generator itself, and a whole run through it.
+ * Two levels, because they can fail independently: the hydration itself, and a whole run through it.
  */
 @Timeout(60)
-class GeneratorReproducibilityTest {
+class HydrationReproducibilityTest {
 
     private static final int RECORDS = 20;
 
@@ -76,8 +76,8 @@ class GeneratorReproducibilityTest {
      * "reproducible" means.
      *
      * <ol>
-     *   <li><b>What the generator produced.</b> A seeded run generates the sequence its seed and indices name,
-     *       and both runs of a seed generate the same one. That is a property of the generator alone, so it is
+     *   <li><b>What the hydration produced.</b> A seeded run generates the sequence its seed and indices name,
+     *       and both runs of a seed generate the same one. That is a property of the hydration alone, so it is
      *       asserted against the sequence recomputed from the seed and compared without regard to the order the
      *       engine happened to deliver it in.</li>
      *   <li><b>What was consumed.</b> Every generated record reached the function exactly once - nothing dropped,
@@ -85,7 +85,7 @@ class GeneratorReproducibilityTest {
      * </ol>
      *
      * <p>This used to be one assertion comparing the two runs' delivery order element by element, which made the
-     * consumption schedule part of the definition of a reproducible generator. It was also the test that caught
+     * consumption schedule part of the definition of a reproducible hydration. It was also the test that caught
      * the real defect underneath (astubbs#504): under load a run delivered nineteen of twenty records, because
      * the bound closed the instance drain-first while the worker pool still held queued tasks and the close
      * cleared that queue. The bound now waits for every published record's offset to commit before it closes -
@@ -99,10 +99,10 @@ class GeneratorReproducibilityTest {
         List<String> firstRun = runAndCollect(SEED);
         List<String> secondRun = runAndCollect(SEED);
 
-        assertWithMessage("what the generator produced: run one should be the sequence seed %s names, in "
+        assertWithMessage("what the hydration produced: run one should be the sequence seed %s names, in "
                 + "whatever order it was delivered", SEED)
                 .that(firstRun).containsExactlyElementsIn(expected);
-        assertWithMessage("what the generator produced: run two of the same seed should be the same sequence, "
+        assertWithMessage("what the hydration produced: run two of the same seed should be the same sequence, "
                 + "which is the whole of what a seed promises")
                 .that(secondRun).containsExactlyElementsIn(expected);
 
@@ -113,7 +113,7 @@ class GeneratorReproducibilityTest {
     }
 
     /**
-     * The sequence the generator will produce for a seed, derived the same way {@code ClassicSandbox.TypedFeed}
+     * The sequence the hydration will produce for a seed, derived the same way {@code ClassicSandbox.TypedFeed}
      * derives it - one topic, so the record index is the tick.
      */
     private static List<String> theSequenceTheSeedNames(long seed, int records) {

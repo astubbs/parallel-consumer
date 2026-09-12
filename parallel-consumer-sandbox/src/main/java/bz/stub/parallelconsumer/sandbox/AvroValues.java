@@ -24,7 +24,7 @@ import java.io.IOException;
  * <h2>Why not Instancio</h2>
  * A generated Avro class carries a schema that describes its fields more precisely than their Java types do -
  * which union arms are legal, which are nullable, what a logical type means - and a filler that writes fields by
- * reflection produces instances the schema rejects on the way out. Avro ships the generator that reads the schema
+ * reflection produces instances the schema rejects on the way out. Avro ships the filler that reads the schema
  * instead, {@link RandomData}, and it takes a seed, so reproducibility survives the detour.
  *
  * <h2>Why the round trip</h2>

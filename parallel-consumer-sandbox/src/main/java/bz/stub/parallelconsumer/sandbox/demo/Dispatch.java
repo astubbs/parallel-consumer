@@ -45,14 +45,14 @@ public class Dispatch {
     private long dispatchedAtEpochMillis;
 
     /**
-     * How many parcels are on board, from the quantity rule. Not derived from the list below - the generator fills
+     * How many parcels are on board, from the quantity rule. Not derived from the list below - the hydration fills
      * each field independently, which is worth seeing rather than hiding.
      */
     private int parcelCount;
 
     /**
      * The parcels, as tracking numbers: the tracking rule gives each the PC-and-ten-digits shape, and a list of
-     * strings is what a JSON route can read back. The list is short, because the generator's collection sizes are
+     * strings is what a JSON route can read back. The list is short, because the hydration's collection sizes are
      * capped at three so a record still fits on a console line.
      */
     private List<String> trackingNumbers;

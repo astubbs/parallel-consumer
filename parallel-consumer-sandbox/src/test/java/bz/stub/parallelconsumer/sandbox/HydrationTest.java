@@ -18,7 +18,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * What the generator can fill, and what it says when it cannot.
+ * What the hydration can fill, and what it says when it cannot.
  * <p>
  * The three shapes are not variations on one another - they are three different mechanisms. A bean is filled by
  * calling setters on an instance that already exists; an immutable class has no instance until its constructor has
@@ -30,16 +30,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class HydrationTest {
 
     /**
-     * The generator's own fixed "now" - {@code FieldValues.SANDBOX_NOW}. Timestamps are generated behind it, and
+     * The hydration's own fixed "now" - {@code FieldValues.SANDBOX_NOW}. Timestamps are generated behind it, and
      * fixed rather than read from the clock so that a seed reproduces them.
      */
     private static final Instant SANDBOX_NOW = Instant.parse("2026-01-01T00:00:00Z");
 
-    private final RandomObjects generator = RandomObjects.seededWith(42);
+    private final RandomObjects hydration = RandomObjects.seededWith(42);
 
     @Test
     void aBeanIsFilledThroughItsSettersWithValuesItsFieldNamesAskFor() {
-        Order order = generator.create(Order.class, 0);
+        Order order = hydration.create(Order.class, 0);
 
         assertWithMessage("an 'email' field should hold an email address, not a random string")
                 .that(order.getEmail()).contains("@");
@@ -64,7 +64,7 @@ class HydrationTest {
 
     @Test
     void anImmutableClassIsFilledThroughItsConstructor() {
-        Parcel parcel = generator.create(Parcel.class, 0);
+        Parcel parcel = hydration.create(Parcel.class, 0);
 
         assertWithMessage("a class with only a constructor and final fields must still be filled")
                 .that(parcel).isNotNull();
@@ -79,7 +79,7 @@ class HydrationTest {
 
     @Test
     void anAvroSpecificRecordIsFilledFromItsSchema() {
-        AvroParcel parcel = generator.create(AvroParcel.class, 0);
+        AvroParcel parcel = hydration.create(AvroParcel.class, 0);
 
         assertWithMessage("every field the schema declares comes back filled")
                 .that(parcel.getTrackingNumber()).isNotEmpty();
@@ -105,7 +105,7 @@ class HydrationTest {
     @Test
     void aProtobufMessageIsRefusedNamingTheTypeRatherThanFilledBadly() {
         IllegalArgumentException refusal = assertThrows(IllegalArgumentException.class,
-                () -> generator.create(Int32Value.class, 0));
+                () -> hydration.create(Int32Value.class, 0));
 
         assertThat(refusal).hasMessageThat().contains("Protobuf");
         assertWithMessage("the refusal must name the type, so the reader knows which route to fix")
@@ -120,7 +120,7 @@ class HydrationTest {
      */
     @Test
     void aFieldMatchingTwoRulesGetsTheMoreSpecificOne() {
-        AmbiguouslyNamed filled = generator.create(AmbiguouslyNamed.class, 0);
+        AmbiguouslyNamed filled = hydration.create(AmbiguouslyNamed.class, 0);
 
         assertWithMessage("emailAddress matches both the email rule and the address rule; the email rule is the "
                 + "specific one and must win")

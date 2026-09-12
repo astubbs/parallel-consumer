@@ -30,12 +30,12 @@ import java.util.Random;
  * <h2>Reproducibility</h2>
  * A run is addressed by index, not by sequence: {@link #create(Class, long)} derives the seed for record
  * <em>n</em> from the base seed and <em>n</em> alone. So the same seed gives the same record for the same index
- * however the generator threads interleave, and a failing record can be reproduced on its own rather than by
+ * however the feed threads interleave, and a failing record can be reproduced on its own rather than by
  * replaying everything before it.
  *
  * <h2>What it will not do</h2>
  * An <b>Avro</b> specific record is not an ordinary bean - its fields are described by a schema and its builder
- * enforces one - so it is filled from that schema by Avro's own generator ({@link AvroValues}), not by Instancio.
+ * enforces one - so it is filled from that schema by Avro's own filler ({@link AvroValues}), not by Instancio.
  * A <b>Protobuf</b> message is refused, naming the type: its generated classes have no settable fields at all and
  * only a builder can construct one, which is a filler of its own that this version does not have (KTD9).
  */
@@ -72,7 +72,7 @@ public final class RandomObjects {
     private final FieldValues fieldValues;
 
     /**
-     * One Instancio model per type this generator has been asked for, because building one is the expensive half
+     * One Instancio model per type this filler has been asked for, because building one is the expensive half
      * and it does not depend on the record.
      * <p>
      * A model is the settings and the whole rule table registered as selectors - twenty-odd of them - and none of
@@ -80,11 +80,11 @@ public final class RandomObjects {
      * {@link Instancio#of(Model)} per record rather than baked into the model. So the table is built once per
      * type instead of once per record.
      * <p>
-     * <b>Per generator, never static.</b> The selectors are method references bound to <em>this</em> generator's
+     * <b>Per filler, never static.</b> The selectors are method references bound to <em>this</em> filler's
      * {@link FieldValues}, which holds the {@link #random} this class re-seeds before every record. A model shared
-     * between two generators would draw its values from whichever one built it, and two seeds would stop
+     * between two fillers would draw its values from whichever one built it, and two seeds would stop
      * differing - which is the whole of what a seed is for. A plain map rather than a concurrent one for the same
-     * reason the re-seeding is safe: one generator is driven by one thread, its own.
+     * reason the re-seeding is safe: one filler is driven by one thread, its own.
      */
     private final Map<Class<?>, Model<?>> models = new HashMap<>();
 
@@ -95,14 +95,14 @@ public final class RandomObjects {
     }
 
     /**
-     * @param seed any long; two generators with the same seed produce the same object for the same index
+     * @param seed any long; two fillers with the same seed produce the same object for the same index
      */
     public static RandomObjects seededWith(long seed) {
         return new RandomObjects(seed);
     }
 
     /**
-     * The seed this generator was built with, so a sandbox can log the number a reader needs to reproduce the run.
+     * The seed this filler was built with, so a sandbox can log the number a reader needs to reproduce the run.
      */
     public long seed() {
         return seed;
@@ -129,7 +129,7 @@ public final class RandomObjects {
     }
 
     /**
-     * The seed for one record. A multiply-and-mix rather than {@code seed + index}, so that two generators one
+     * The seed for one record. A multiply-and-mix rather than {@code seed + index}, so that two fillers one
      * apart in seed do not produce overlapping sequences one record apart.
      */
     long seedFor(long index) {
@@ -205,7 +205,7 @@ public final class RandomObjects {
     private static void refuseProtobuf(Class<?> type) {
         for (Class<?> current = type; current != null; current = current.getSuperclass()) {
             if (current.getName().startsWith(PROTOBUF_PACKAGE) || implementsProtobuf(current)) {
-                throw new IllegalArgumentException("The generator cannot fill the Protobuf message type "
+                throw new IllegalArgumentException("The hydration cannot fill the Protobuf message type "
                         + type.getName() + ": a generated Protobuf class has no settable fields and only its "
                         + "builder can construct one, so it needs a filler of its own that this version does not "
                         + "have. Generate this route's records by hand, or declare a plain type for it in the "

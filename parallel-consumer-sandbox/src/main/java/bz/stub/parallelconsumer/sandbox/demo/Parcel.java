@@ -11,7 +11,7 @@ import java.time.Instant;
 /**
  * One parcel in the logistics network.
  * <p>
- * <b>Immutable, with no no-argument constructor</b> - the second hydration path the generator has to cover, and
+ * <b>Immutable, with no no-argument constructor</b> - the second hydration path the hydration has to cover, and
  * the one a reflection filler cannot take: there are no setters to call and no instance to call them on until the
  * constructor has already run. Instancio builds it through the constructor instead.
  * <p>
@@ -47,7 +47,7 @@ public final class Parcel {
     private final String city;
 
     /**
-     * A postcode, from the address rules - UK-shaped, because the generator's faker is built with a UK locale.
+     * A postcode, from the address rules - UK-shaped, because the hydration's faker is built with a UK locale.
      */
     private final String postcode;
 
@@ -63,8 +63,8 @@ public final class Parcel {
     private final String status;
 
     /**
-     * <b>The {@link Instant} the generator's time rules are exercised against</b> - the reason this type carries a
-     * java.time value where {@link Order} carries epoch millis. Within the month before the generator's fixed
+     * <b>The {@link Instant} the hydration's time rules are exercised against</b> - the reason this type carries a
+     * java.time value where {@link Order} carries epoch millis. Within the month before the hydration's fixed
      * "now", so a seed reproduces it.
      */
     private final Instant collectedAt;
@@ -121,7 +121,7 @@ public final class Parcel {
 
     /**
      * The one {@code java.time} field in the demo domain, and deliberately on the type that is never sent through
-     * a JSON route - so the generator's time rules are exercised without also exercising the bare
+     * a JSON route - so the hydration's time rules are exercised without also exercising the bare
      * {@code ObjectMapper} limitation {@link Order} records.
      */
     public Instant getCollectedAt() {

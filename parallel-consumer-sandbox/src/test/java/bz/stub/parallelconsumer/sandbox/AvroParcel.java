@@ -12,7 +12,7 @@ import org.apache.avro.specific.SpecificRecordBase;
  * <p>
  * <b>Hand-written on purpose.</b> Generating one would mean adding {@code avro-maven-plugin} and a {@code .avsc}
  * to this module's build for a single fixture, and the plugin's output is exactly the four members below: a static
- * {@code SCHEMA$}, a no-argument constructor, and the indexed {@code get}/{@code put} pair. What the generator
+ * {@code SCHEMA$}, a no-argument constructor, and the indexed {@code get}/{@code put} pair. What the hydration
  * under test cares about is that {@code SpecificData} can find the schema by class and build an instance from it,
  * and that is what these four members are.
  * <p>

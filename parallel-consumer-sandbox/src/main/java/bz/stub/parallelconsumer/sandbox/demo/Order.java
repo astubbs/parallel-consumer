@@ -13,9 +13,9 @@ import java.math.BigDecimal;
  * <p>
  * A plain bean with setters, on purpose: it is the shape most Kafka payload classes have, it is what a JSON
  * deserialiser can read back with no annotations and no module, and it is one of the two hydration paths the
- * generator has to cover. {@link Parcel} is the other.
+ * hydration has to cover. {@link Parcel} is the other.
  * <p>
- * Field names are chosen so the generator's field-name rules recognise them: {@code email} is an email address,
+ * Field names are chosen so the hydration's field-name rules recognise them: {@code email} is an email address,
  * {@code totalAmount} is money, {@code placedAtEpochMillis} is a recent time. Rename one to {@code field3} and it
  * becomes a random string, which is the point being demonstrated.
  * <p>
@@ -23,7 +23,7 @@ import java.math.BigDecimal;
  * preference: the fluent API's {@code json(...)} helper builds a bare Jackson {@code ObjectMapper}, which cannot
  * write a {@code java.time} value without {@code jackson-datatype-jsr310} registered, and fails the record with
  * {@code SerializationException: Could not write JSON}. A demo type is the wrong place to be teaching that, so it
- * sidesteps it; {@link Parcel} carries the {@code Instant} the generator's time rules are exercised against.
+ * sidesteps it; {@link Parcel} carries the {@code Instant} the hydration's time rules are exercised against.
  * <p>
  * <b>The accessors below carry no documentation of their own, deliberately.</b> Each one reads or writes the
  * field above it and does nothing else; what is worth knowing about {@code city} is on the field, and repeating it
@@ -73,7 +73,7 @@ public class Order {
 
     /**
      * When the order was placed, as epoch millis for the Jackson reason in this class's own documentation, and
-     * within the month before the generator's fixed "now" so that a seeded run reproduces it.
+     * within the month before the hydration's fixed "now" so that a seeded run reproduces it.
      */
     private long placedAtEpochMillis;
 
