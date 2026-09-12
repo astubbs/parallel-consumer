@@ -144,6 +144,13 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     private boolean preBuiltProducerSupplied;
 
     /**
+     * Whether that producer can open a transaction, read off it at the moment it was supplied and kept as a fact
+     * rather than as a reference (KTD3) - see {@link SuppliedProducer}. Empty until one is supplied, and still empty
+     * afterwards whenever the probe could not tell.
+     */
+    private Optional<Boolean> preBuiltProducerIsTransactional = Optional.empty();
+
+    /**
      * One definition starts one instance. Set by {@link #buildOptions} so a second start is refused before any
      * client is built - rather than after a second consumer has already joined the group.
      */
@@ -374,10 +381,17 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * <b>A supplied producer forgoes producer recovery</b> (astubbs#410): recovery rebuilds the producer from its
      * configuration, and an instance handed a finished producer has no configuration to rebuild from. Leave this out
      * and the definition's properties build one that can recover (R1).
+     * <p>
+     * <b>Whether it is transactional is read off it here</b>, because this is the only moment the facade holds it
+     * (KTD3), and the commit mode has to agree with the answer: a non-transactional producer under the transactional
+     * commit mode, or a transactional one under a consumer commit mode, is refused by {@link #validate()} instead of
+     * failing later from inside the engine's producer manager. Where the probe cannot tell, nothing is refused -
+     * {@link SuppliedProducer} says why that is the only safe reading.
      */
     public ParallelConsumerDefinition withProducer(Producer<byte[], byte[]> producer) {
         Objects.requireNonNull(producer, "A producer must be supplied");
         this.preBuiltProducerSupplied = true;
+        this.preBuiltProducerIsTransactional = SuppliedProducer.isTransactional(producer);
         options.producer(producer);
         return this;
     }
@@ -506,7 +520,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      */
     public void validate() {
         new DefinitionRules(routes, routesByTopic, connection, commitMode, defaults,
-                preBuiltProducerSupplied).validate();
+                preBuiltProducerSupplied, preBuiltProducerIsTransactional).validate();
     }
 
     // ---------------------------------------------------------------- start

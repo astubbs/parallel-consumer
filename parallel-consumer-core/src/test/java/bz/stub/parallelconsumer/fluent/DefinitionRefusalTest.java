@@ -8,7 +8,11 @@ import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.MockProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -44,6 +48,83 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
                 () -> definition.buildOptions(runtime));
         assertThat(runtime.builtNothing()).isTrue();
         return thrown;
+    }
+
+    /**
+     * U2: a supplied producer and the commit mode must agree at definition time, in both directions - and the
+     * producer's mere presence is not evidence that they do.
+     * <p>
+     * Supplying one used to excuse the transactional definition from every check, on the reasoning that the id is
+     * already on the client the caller built. Nothing verified that, so a non-transactional producer under the
+     * transactional commit mode passed validation and was refused later from inside the engine's producer manager.
+     */
+    @Test
+    void aNonTransactionalSuppliedProducerIsRefusedUnderTheTransactionalCommitMode() {
+        try (Producer<byte[], byte[]> plain = realProducer(null)) {
+            var pc = define().withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER).withProducer(plain);
+            pc.string("orders").process(context -> Outcome.succeeded());
+
+            assertThat(refusal(pc)).hasMessageThat().contains("can never open a transaction");
+        }
+    }
+
+    /**
+     * The other direction, which is the half nothing caught at definition time either: a transactional producer under
+     * a commit mode that never opens a transaction, so the guarantee the caller built it for silently does not apply.
+     */
+    @Test
+    void aTransactionalSuppliedProducerIsRefusedUnderAConsumerCommitMode() {
+        try (Producer<byte[], byte[]> transactional = realProducer("refusal-test-transactional")) {
+            var pc = define()
+                    .withCommitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)
+                    .withProducer(transactional);
+            pc.string("orders").process(context -> Outcome.succeeded());
+
+            assertThat(refusal(pc)).hasMessageThat().contains("would silently not apply");
+        }
+    }
+
+    /**
+     * The agreeing case is accepted, so the refusals above are about disagreement and not about supplying a producer.
+     */
+    @Test
+    void aTransactionalSuppliedProducerIsAcceptedUnderTheTransactionalCommitMode() {
+        try (Producer<byte[], byte[]> transactional = realProducer("refusal-test-agreeing")) {
+            var pc = define().withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER).withProducer(transactional);
+            pc.string("orders").process(context -> Outcome.succeeded());
+
+            pc.validate();
+        }
+    }
+
+    /**
+     * A producer whose configuration cannot be read refuses nothing: the probe reads client internals and can
+     * decline, and "could not tell" is not "not transactional" - refusing on it would fail a well formed definition
+     * for a fact nobody established. A {@code MockProducer} can act as either, which is exactly that case.
+     */
+    @Test
+    void aProducerWhoseConfigurationCannotBeReadIsNotRefused() {
+        var pc = define()
+                .withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
+                .withProducer(new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer()));
+        pc.string("orders").process(context -> Outcome.succeeded());
+
+        pc.validate();
+    }
+
+    /**
+     * A real producer, built offline - a {@code KafkaProducer} connects on its first send, not in its constructor -
+     * so the probe meets the client internals it will actually meet rather than a mock's.
+     *
+     * @param transactionalId the id to build it with, or null for a plain producer
+     */
+    private Producer<byte[], byte[]> realProducer(String transactionalId) {
+        Properties producerProperties = new Properties();
+        producerProperties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        if (transactionalId != null) {
+            producerProperties.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId);
+        }
+        return new KafkaProducer<>(producerProperties, new ByteArraySerializer(), new ByteArraySerializer());
     }
 
     @Test

@@ -10,6 +10,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
@@ -64,18 +65,26 @@ final class DefinitionRules {
      */
     private final boolean preBuiltProducerSupplied;
 
+    /**
+     * What was established about that producer when it was handed over - whether it can open a transaction. Read at
+     * supply time because the facade does not keep the client (KTD3); see {@link SuppliedProducer}.
+     */
+    private final Optional<Boolean> preBuiltProducerIsTransactional;
+
     DefinitionRules(List<RouteState> routes,
                     Map<String, RouteState> routesByTopic,
                     ConnectionProperties connection,
                     CommitMode commitMode,
                     InstanceDefaults defaults,
-                    boolean preBuiltProducerSupplied) {
+                    boolean preBuiltProducerSupplied,
+                    Optional<Boolean> preBuiltProducerIsTransactional) {
         this.routes = routes;
         this.routesByTopic = routesByTopic;
         this.connection = connection;
         this.commitMode = commitMode;
         this.defaults = defaults;
         this.preBuiltProducerSupplied = preBuiltProducerSupplied;
+        this.preBuiltProducerIsTransactional = preBuiltProducerIsTransactional;
     }
 
     /**
@@ -193,6 +202,47 @@ final class DefinitionRules {
                             + "needs the id there to make it transactional. Add it, or supply a transactional "
                             + "producer with producer(...).",
                     commitMode, ProducerConfig.TRANSACTIONAL_ID_CONFIG));
+        }
+        refuseASuppliedProducerThatDisagreesWithTheCommitMode(transactional);
+    }
+
+    /**
+     * A supplied producer and the commit mode have to agree, and <b>its presence is not evidence that they do</b>.
+     * <p>
+     * Supplying a producer used to excuse the transactional definition from every check, on the reasoning that the
+     * id is already on the client the caller built. That reasoning does not verify anything: a non-transactional
+     * producer under {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} passed validation and was refused later by
+     * the engine's producer manager at start, and a transactional producer under a consumer commit mode did the
+     * same in the other direction. Putting a {@code transactional.id} in the connection properties could even make
+     * the first of those look deliberately valid, when those properties are not what built the supplied client and
+     * nothing reads them. U2 asks for a definition-time refusal in both directions, and the answer is read off the
+     * client itself rather than inferred from what is beside it.
+     * <p>
+     * <b>An unknown answer refuses nothing.</b> The probe reads client internals and can decline - see
+     * {@link SuppliedProducer} - and "could not tell" is not "not transactional". Refusing on it would fail a well
+     * formed definition for a fact nobody established; standing aside leaves the engine's start-time check exactly
+     * where it already was.
+     */
+    private void refuseASuppliedProducerThatDisagreesWithTheCommitMode(boolean transactional) {
+        if (!preBuiltProducerSupplied) {
+            return;
+        }
+        boolean knownTransactional = preBuiltProducerIsTransactional.orElse(false);
+        boolean knownNotTransactional = preBuiltProducerIsTransactional.isPresent() && !knownTransactional;
+        if (transactional && knownNotTransactional) {
+            throw new IllegalArgumentException(msg("The commit mode is {} and the producer supplied with "
+                            + "producer(...) was not built with a {}, so it can never open a transaction. Build it "
+                            + "with one, or declare a consumer commit mode.",
+                    commitMode, ProducerConfig.TRANSACTIONAL_ID_CONFIG));
+        }
+        if (!transactional && knownTransactional) {
+            throw new IllegalArgumentException(msg("The producer supplied with producer(...) was built with a {}, so "
+                            + "it is transactional, but the commit mode is {} - which commits offsets through the "
+                            + "consumer and never opens a transaction, so that producer's transactional guarantee "
+                            + "would silently not apply. Declare withCommitMode({}), or supply a producer built "
+                            + "without a transactional id.",
+                    ProducerConfig.TRANSACTIONAL_ID_CONFIG, commitMode,
+                    CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER));
         }
     }
 
