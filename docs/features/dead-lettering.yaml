@@ -41,7 +41,7 @@ setup:
       delete it.
     - dlqWhenOffsetPayloadReaches(percentage) beside a destination to export the oldest parked records once a
       partition's offset payload reaches that whole percentage of the commit-metadata cap.
-    - defaultAfterRetries(...) on the definition to set any of these once for every route (R6).
+    - withDefaultAfterRetries(...) on the definition to set any of these once for every route (R6).
   observe:
     - instance.topic(name).parked() and instance.parkedAllTopics() list what is waiting to be exported.
     - dlq(record) and dlq() on a parked view export now rather than waiting for a trigger.

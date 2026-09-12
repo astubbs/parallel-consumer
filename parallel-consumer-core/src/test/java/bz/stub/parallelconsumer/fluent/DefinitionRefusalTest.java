@@ -189,10 +189,10 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
 
     @Test
     void theInstanceWideExportPercentageIsRefusedNamingTheSetting() {
-        var pc = define().dlqWhenOffsetPayloadReaches(60);
+        var pc = define().withDlqWhenOffsetPayloadReaches(60);
         pc.string("orders").process(context -> Outcome.succeeded());
 
-        assertThat(refusal(pc)).hasMessageThat().contains("dlqWhenOffsetPayloadReaches");
+        assertThat(refusal(pc)).hasMessageThat().contains("withDlqWhenOffsetPayloadReaches");
     }
 
     /**
@@ -222,7 +222,7 @@ class DefinitionRefusalTest extends AbstractFluentEngineTest {
         Properties properties = props();
         properties.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "refusal-test");
         var pc = new ParallelConsumerDefinition(properties)
-                .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+                .withCommitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
         pc.string("orders").afterRetries(dlqImmediately("orders.dlq")).process(context -> Outcome.succeeded());
 
         var thrown = refusal(pc);

@@ -350,7 +350,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * setting that never fires (KTD5). The default of {@link AfterRetries#MAX_PAYLOAD_PERCENTAGE} applies once that
      * accessor lands.
      */
-    public ParallelConsumerDefinition dlqWhenOffsetPayloadReaches(int percentage) {
+    public ParallelConsumerDefinition withDlqWhenOffsetPayloadReaches(int percentage) {
         this.instancePayloadPercentage = percentage;
         return this;
     }

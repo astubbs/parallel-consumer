@@ -164,7 +164,7 @@ class RouteTypingAndDefaultsTest {
      */
     @Test
     void theDeadLetterReactionCopiesIntoEveryRouteAndCarriesItsOwnDestination() {
-        var pc = define().defaultAfterRetries(AfterRetries.dlq("all.dlq"));
+        var pc = define().withDefaultAfterRetries(AfterRetries.dlq("all.dlq"));
         pc.string("orders").process(context -> Outcome.succeeded());
         pc.string("audit").afterRetries(AfterRetries.park()).process(context -> Outcome.succeeded());
 
