@@ -30,7 +30,8 @@ setup:
     - json, avro, protobuf, bytes and string helpers, which resolve to the deserialiser already on the classpath.
   policy:
     - Instance-wide - withCommitMode, and withDefaultOrdering until per-route ordering lands.
-    - Per route with an instance default - retryLimit, retryDelay, concurrency, afterRetries, onParked.
+    - Per route with an instance default - retryLimit, retryDelay, afterRetries, onParked.
+    - Instance-wide in this release, declared as a default against the per-route form arriving - ordering and concurrency.
   observe:
     - pc.route.records
     - pc.partition.parked.records

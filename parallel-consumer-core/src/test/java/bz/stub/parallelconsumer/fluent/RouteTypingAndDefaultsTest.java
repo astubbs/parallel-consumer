@@ -132,7 +132,6 @@ class RouteTypingAndDefaultsTest {
             RouteView route = pc.route(topic);
             assertThat(route.retryLimit().getAsInt()).isEqualTo(7);
             assertThat(route.retryDelay()).isEqualTo(Duration.ofSeconds(3));
-            assertThat(route.concurrency()).isEqualTo(9);
             assertThat(route.afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.PARK);
         }
         // A copy, not the instance's own object: a route editing part of a policy must not edit every other route's.
@@ -157,13 +156,11 @@ class RouteTypingAndDefaultsTest {
     @Test
     void aRoutesOwnSettingOverridesOnlyItsOwnCopy() {
         var pc = define().withDefaultRetryLimit(7).withDefaultConcurrency(9);
-        pc.string("orders").retryLimit(2).concurrency(4).process(context -> Outcome.succeeded());
+        pc.string("orders").retryLimit(2).process(context -> Outcome.succeeded());
         pc.string("audit").process(context -> Outcome.succeeded());
 
         assertThat(pc.route("orders").retryLimit().getAsInt()).isEqualTo(2);
-        assertThat(pc.route("orders").concurrency()).isEqualTo(4);
         assertThat(pc.route("audit").retryLimit().getAsInt()).isEqualTo(7);
-        assertThat(pc.route("audit").concurrency()).isEqualTo(9);
     }
 
     /**
@@ -203,7 +200,6 @@ class RouteTypingAndDefaultsTest {
 
         assertThat(pc.route("orders").retryLimit().getAsInt()).isEqualTo(0);
         assertThat(pc.route("orders").retryDelay()).isEqualTo(Duration.ofSeconds(5));
-        assertThat(pc.route("orders").concurrency()).isEqualTo(3);
         assertThat(pc.route("orders").afterRetries().reaction()).isEqualTo(AfterRetries.Reaction.STOP);
         // And the engine is configured from the same resolved value, not from the one it had already cached.
         assertThat(pc.buildOptions(new RecordingClientRuntime()).getMaxConcurrency()).isEqualTo(3);
@@ -258,17 +254,21 @@ class RouteTypingAndDefaultsTest {
     }
 
     /**
-     * A set of topics is one route: one function, one type pair, one admission target (R5).
+     * A set of topics is one route: one function, one type pair, one policy (R5).
+     * <p>
+     * It used to say "one admission target" and prove it with a per-route concurrency declaration; that setting is
+     * withdrawn from this milestone (owner-directed, 2026-09-12), so the retry limit carries the same claim - what
+     * matters is that both topics resolve through the same route object rather than which setting demonstrates it.
      */
     @Test
-    void aSetOfTopicsIsOneRouteWithOneAdmissionTarget() {
+    void aSetOfTopicsIsOneRouteWithOnePolicy() {
         var pc = define();
-        pc.bytes(java.util.Arrays.asList("audit", "audit-replay")).concurrency(4)
+        pc.bytes(java.util.Arrays.asList("audit", "audit-replay")).retryLimit(4)
                 .process(context -> Outcome.succeeded());
 
         assertThat(pc.topics()).containsExactly("audit", "audit-replay");
         assertThat(pc.routes()).hasSize(1);
         assertThat(pc.route("audit")).isSameInstanceAs(pc.route("audit-replay"));
-        assertThat(pc.route("audit").concurrency()).isEqualTo(4);
+        assertThat(pc.route("audit-replay").retryLimit().getAsInt()).isEqualTo(4);
     }
 }

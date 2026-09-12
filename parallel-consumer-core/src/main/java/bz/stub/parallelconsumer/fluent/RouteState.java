@@ -85,12 +85,6 @@ class RouteState implements RouteView {
     private Duration ownRetryDelay;
 
     /**
-     * This route's own admission target, boxed so that null means undeclared - routes do not compete for one shared
-     * limit, so an undeclared target still resolves to a target of its own (R23).
-     */
-    private Integer ownConcurrency;
-
-    /**
      * This route's own park policy, or null for the definition's default. Never handed out as-is: whichever policy
      * wins, {@link #resolveDefaults()} resolves to a {@link AfterRetries#copy()} of it, so a route cannot edit a
      * policy another route also reads (R6).
@@ -123,12 +117,6 @@ class RouteState implements RouteView {
      * The retry delay a worker actually applies, published by {@link #resolved} like every field around it.
      */
     private Duration resolvedRetryDelay;
-
-    /**
-     * The admission target the engine actually applies. A primitive rather than a box, because by the time anything
-     * reads it a value has been resolved and there is no undeclared case left to represent.
-     */
-    private int resolvedConcurrency;
 
     /**
      * The park policy a worker actually applies, always a copy nobody else holds, and never null - a route with no
@@ -165,7 +153,6 @@ class RouteState implements RouteView {
         InstanceDefaults defaults = owner.defaults();
         resolvedRetryLimit = ownRetryLimit != null ? ownRetryLimit : defaults.retryLimit();
         resolvedRetryDelay = ownRetryDelay != null ? ownRetryDelay : defaults.retryDelay();
-        resolvedConcurrency = ownConcurrency != null ? ownConcurrency : defaults.concurrency();
         AfterRetries afterRetries = ownAfterRetries != null ? ownAfterRetries : defaults.afterRetries();
         resolvedAfterRetries = afterRetries == null ? AfterRetries.park() : afterRetries.copy();
         // Not copied: an observer is the user's own object, and there is nothing about it a route could override
@@ -265,17 +252,6 @@ class RouteState implements RouteView {
     public Duration retryDelay() {
         resolveDefaults();
         return resolvedRetryDelay;
-    }
-
-    /**
-     * Satisfies {@link RouteView#concurrency()}, resolving first.
-     *
-     * @see #retryLimit()
-     */
-    @Override
-    public int concurrency() {
-        resolveDefaults();
-        return resolvedConcurrency;
     }
 
     /**
@@ -403,16 +379,6 @@ class RouteState implements RouteView {
      */
     void ownRetryDelay(Duration delay) {
         this.ownRetryDelay = delay;
-        invalidateResolution();
-    }
-
-    /**
-     * Declares this route's own admission target (R23).
-     *
-     * @see #ownRetryDelay(Duration)
-     */
-    void ownConcurrency(int concurrency) {
-        this.ownConcurrency = concurrency;
         invalidateResolution();
     }
 

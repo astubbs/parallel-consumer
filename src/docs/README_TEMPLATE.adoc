@@ -665,7 +665,7 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 <2> Per-route defaults: every route takes a copy.
 <3> This route only, overriding its copy of the default.
 
-Ordering is the exception among the per-route settings: it needs a change at the engine's shard-key seam, so in this release it is accepted as the instance default and nothing else.
+Two of the per-route settings are exceptions in this release, and both are accepted as the instance default and nothing else. Ordering needs a change at the engine's shard-key seam. Concurrency is bounded for the instance rather than per route, because a per-route limit has to be applied where work is selected -- inside the engine -- and applying it in the facade would hold a worker on one route's limit and starve the others instead of bounding that route. Both keep `default` in their names against the per-route form arriving.
 
 [[fluent-own-clients]]
 ==== Bringing your own clients

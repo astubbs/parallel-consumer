@@ -254,13 +254,20 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * The admission target every route copies: how many of its records may be in flight at once. Routes do not
-     * compete for one shared limit, so the engine's total admission is the sum of the routes' targets (R23, KD6).
+     * How many records may be in flight at once across the whole instance.
+     * <p>
+     * <b>Concurrency is the second exception among the per-route settings, beside ordering</b>: in this milestone it
+     * is accepted as the instance default and nothing else, so this is the only way to bound concurrency and it
+     * bounds the instance rather than any one route (owner-directed, 2026-09-12). A route's own target and the
+     * per-route guarantee R23 and AE17 describe are withdrawn from this milestone, because holding a worker on a
+     * route's limit starves the other routes instead of bounding that one - the limit has to be applied where work
+     * is selected, which is inside the engine. It keeps the {@code default} in its name against that setting
+     * returning, exactly as {@link #withDefaultOrdering} does for the same reason.
      */
     public ParallelConsumerDefinition withDefaultConcurrency(int limit) {
         if (limit < 1) {
-            throw new IllegalArgumentException(msg("withDefaultConcurrency ({}) must be at least one - it is each "
-                    + "route's admission target", limit));
+            throw new IllegalArgumentException(msg("withDefaultConcurrency ({}) must be at least one - it is how "
+                    + "many records this instance may have in flight at once", limit));
         }
         changingDefaults().concurrency(limit);
         return this;
@@ -667,7 +674,7 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
 
         options.commitMode(commitMode)
                 .ordering(defaults.ordering())
-                .maxConcurrency(totalAdmissionTarget())
+                .maxConcurrency(defaults.concurrency())
                 // One delay per route, answered from the topic and the record's attempt count (R6). What a throw
                 // MEANT - a park, a hand-back that is not an attempt - rides on the exception instead, so this
                 // stays a pure function and there is no note for it to find (KTD14). A park CYCLE's own delay is
@@ -691,19 +698,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
             }
         }
         return options.build();
-    }
-
-    /**
-     * The engine's total admission is the sum of the routes' targets, because routes do not compete for one shared
-     * limit (R23). On virtual threads that costs nothing; a platform-thread user sets a lower per-route target so
-     * the sum fits the pool (KD6).
-     */
-    private int totalAdmissionTarget() {
-        int total = 0;
-        for (RouteState route : routes) {
-            total += route.concurrency();
-        }
-        return total;
     }
 
     /**
