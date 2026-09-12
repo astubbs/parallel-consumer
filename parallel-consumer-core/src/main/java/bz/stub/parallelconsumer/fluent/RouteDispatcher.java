@@ -121,7 +121,20 @@ class RouteDispatcher {
     // they are what the wrapper's own tests read.
 
     /**
-     * Records the engine completed because their function reported success, a produce outcome included (R7).
+     * Records whose function reported success, a produce outcome included (R7) - counted where the outcome is
+     * mapped, which for a produce outcome is before the engine has sent anything.
+     * <p>
+     * <b>A known over-report, and what closing it needs.</b> On a producing route a send that fails after
+     * serialisation succeeded leaves the source record incomplete and retried, while this has already counted it -
+     * so repeated send failures count one record several times. The cross-model review on
+     * astubbs/parallel-consumer#502 asked for this to be driven from the engine's successful-work callback instead,
+     * and the seams that exist do not carry it: the produce callback ({@link #produceAcknowledged}) is per produced
+     * record with the batch context attached, never per source record, and
+     * {@code WorkManager.addSuccessfulWorkListener} is per record but cannot tell a success from a filtered record,
+     * because the engine completes both identically - which is the whole reason this facade counts them apart at
+     * all (R8). Driving it from there needs the facade to remember each record's reported outcome until the engine
+     * completes it, which is per-record facade state this package deliberately does not keep (KTD14). Left as the
+     * count of reported successes until that is decided; the produced-record total beside it is exact.
      */
     private final LongAdder succeeded = new LongAdder();
 
@@ -138,8 +151,12 @@ class RouteDispatcher {
     private final LongAdder parked = new LongAdder();
 
     /**
-     * Records handed back for the engine to send, summed over every produce outcome - records, not outcomes, since
-     * one outcome may carry several.
+     * Produced records the broker has acknowledged, counted one at a time as the engine's produce callback reports
+     * each send - records, not outcomes, since one outcome may carry several.
+     * <p>
+     * It used to be summed at dispatch, off the list handed back, which counted records the engine had not sent yet
+     * and would go on counting them again on every retry of a record whose send kept failing. The engine's callback
+     * runs after the send's own future has returned its metadata, so what this counts now is acknowledged sends.
      */
     private final LongAdder producedRecords = new LongAdder();
 
@@ -347,6 +364,20 @@ class RouteDispatcher {
         return producedRecords.sum();
     }
 
+    /**
+     * One produced record the broker has acknowledged, from the engine's produce callback - the seam that fires
+     * after the send's future has returned its metadata, and not at all when the send failed (R7).
+     * <p>
+     * <b>Only the produced-record total is driven from here, not the success count.</b> This callback fires once per
+     * produced RECORD and carries the whole poll context rather than the one source record that produced it, so it
+     * cannot say "this source record completed": a function returning three records fires it three times, and one
+     * returning none never fires it at all. What the succeeded counter still cannot see is recorded on
+     * {@link #succeeded}.
+     */
+    void produceAcknowledged() {
+        producedRecords.increment();
+    }
+
     // ---------------------------------------------------------------- the engine function
 
     /**
@@ -509,7 +540,8 @@ class RouteDispatcher {
                 List<ProducerRecord<byte[], byte[]>> serialised = serialise(route, outcome.records());
                 succeeded.increment();
                 meters.recordOutcome(record.topic(), OutcomeTag.SUCCEEDED);
-                producedRecords.add(serialised.size());
+                // Not counted here: the engine has not sent these yet, and produceAcknowledged() is told when it
+                // has.
                 return serialised;
             case PARK:
                 // The function already knows this record is hopeless, so its remaining attempts are skipped - and

@@ -543,7 +543,10 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         // Before the poll, so the first control loop already carries the hook rather than the second.
         instance.startObserving();
         if (requiresProducer()) {
-            processor.pollAndProduceMany(dispatcher::dispatch);
+            // The callback overload, not the bare one: it is the engine's own report that a produced record's send
+            // was acknowledged, and it is what the produced-record total is counted from rather than the list the
+            // wrapper handed over a moment earlier (R7).
+            processor.pollAndProduceMany(dispatcher::dispatch, acknowledged -> dispatcher.produceAcknowledged());
         } else {
             processor.poll(dispatcher::dispatchWithoutProducing);
         }
