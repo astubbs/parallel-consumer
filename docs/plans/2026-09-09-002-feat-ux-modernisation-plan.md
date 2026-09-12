@@ -1009,6 +1009,16 @@ the shipped module differs from it, and the vocabulary to read it with.**
   divergence KTD16 licenses, our engine being concurrent where theirs is single-threaded, and that reasoning is
   recorded above. Renamed outright with no deprecated delegates, per KD15: the module has never shipped, so
   nothing outside this repository can be calling it.
+- **Corrected 2026-09-12, owner-directed, the same day: the second of those four renames is reversed, and the
+  no-argument accessor is `producer()` again.** Both halves are kept, as KD15 keeps its own reversal, because a
+  reader who found only the correction would re-derive the mistake. As first recorded, the rename read "reading what
+  came out becomes a read verb" and the only thing the module then exposed for inspecting results was the mock
+  producer accessor, so that is what took the name. It was the wrong thing: the accessor hands back a **client**,
+  not records, and once the real read side landed in the annotation below it sat beside `readRecordsToList()`
+  returning something that is not a list of records - worse than the name it started with. **The read verbs belong
+  to the output-topic object alone**; the accessor is the escape hatch beneath it, for what an output topic does not
+  expose (transactional state, every topic at once), and its javadoc says so and points at `createOutputTopic`.
+  (session-settled: owner-directed, 2026-09-12 - "it is an escape hatch that hands back the client".)
 - **Annotated 2026-09-12, owner-directed: the module gains their per-topic objects on both sides, and a read side
   it did not have.** Measured from the comparable driver rather than recalled, its shape is a driver handing out
   per-topic input and output objects, `pipeInput` on the first and a family of `read*` verbs on the second. So

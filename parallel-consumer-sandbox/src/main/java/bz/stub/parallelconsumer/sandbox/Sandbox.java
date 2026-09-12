@@ -612,15 +612,17 @@ public final class Sandbox implements ClientRuntime, AutoCloseable {
     }
 
     /**
-     * The read side of the sandbox: the mock producer, whose {@code history()} holds every record the instance
-     * produced - exported records included, once export lands.
+     * The raw mock producer, for a test that needs something an output topic does not expose - whether transactions
+     * were initialised, the transactional offset history, every topic's records at once.
      * <p>
-     * This is the whole client, across every topic, and the escape hatch for what only a {@code MockProducer} can
-     * answer - {@code transactionInitialized()}, the transactional offset history. <b>For reading what came out of
-     * one topic, reach for {@link #createOutputTopic(String)}</b>, which carries the read verbs, a cursor and the
-     * settle guard. The client a definition asks for is {@link #producer(DefinitionView)}.
+     * <b>To read what came out, reach for {@link #createOutputTopic(String)}</b>: that is where the read verbs live,
+     * with a cursor and the settle guard, and it is where a test should normally look. This accessor is the escape
+     * hatch under it, and it hands back a client rather than records - so it carries no read verb of its own.
+     * <p>
+     * The client a definition asks for is {@link #producer(DefinitionView)}; this is the same object, reached from a
+     * test rather than from the facade.
      */
-    public MockProducer<byte[], byte[]> readRecords() {
+    public MockProducer<byte[], byte[]> producer() {
         return producer;
     }
 

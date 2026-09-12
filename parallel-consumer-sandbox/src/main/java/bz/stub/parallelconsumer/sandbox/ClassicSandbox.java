@@ -159,14 +159,17 @@ public final class ClassicSandbox<K, V> implements AutoCloseable {
     }
 
     /**
-     * The whole producer built by {@link #producer(Serializer, Serializer)}, whose {@code history()} holds every
-     * record the instance produced and whose transactional state only a {@code MockProducer} can answer. <b>For
-     * reading what came out of one topic, reach for {@link #createOutputTopic(String)}</b>, which carries the read
-     * verbs, a cursor and the settle guard.
+     * The raw producer built by {@link #producer(Serializer, Serializer)}, for a test that needs something an output
+     * topic does not expose - whether transactions were initialised, the transactional offset history, every
+     * topic's records at once.
+     * <p>
+     * <b>To read what came out, reach for {@link #createOutputTopic(String)}</b>: that is where the read verbs live,
+     * with a cursor and the settle guard, and it is where a test should normally look. This accessor is the escape
+     * hatch under it, and it hands back a client rather than records.
      *
      * @return that producer, or null when this definition asked for none
      */
-    public MockProducer<K, V> readRecords() {
+    public MockProducer<K, V> producer() {
         return producer;
     }
 
