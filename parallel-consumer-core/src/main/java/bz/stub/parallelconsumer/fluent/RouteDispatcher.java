@@ -361,8 +361,10 @@ class RouteDispatcher {
         }
         if (produced != 0) {
             throw new IllegalStateException(msg("A route returned {} records to produce on an instance that opened "
-                    + "no producer. A route that declares produced types is what makes a definition need one, so "
-                    + "this is a bug in the fluent API rather than in the definition.", produced));
+                    + "no producer. A route that declares produced types is what makes a definition need one, and a "
+                    + "route with none that returns records is refused by name in the outcome mapping - see "
+                    + "producedWithoutProducedTypes - so reaching this is a bug in the fluent API rather than in "
+                    + "the definition.", produced));
         }
     }
 
@@ -421,12 +423,43 @@ class RouteDispatcher {
         } catch (Exception userFunctionThrew) {
             throw afterAttempt(context, route, userFunctionThrew, attempts);
         }
-        if (outcome == null) {
-            throw new IllegalStateException(msg("The processing function for topic {} returned null. Return "
-                    + "Outcome.succeeded() for a record that was processed, or throw to retry it.",
-                    route.describeTopics()));
+        return applyWithinTheRetryLimit(outcome, context, route, attempts);
+    }
+
+    /**
+     * Everything after the user's function returns, held inside the same retry limit as the function itself (R10).
+     *
+     * <h2>Why this exists</h2>
+     * Mapping an outcome can fail, and those failures used to escape straight to the engine - which retries
+     * forever, because the route's finite limit is applied here and nowhere else. A serialiser that consistently
+     * rejects a produced value, a null record inside a producing outcome, or a function returning null therefore
+     * retried without end: the route's after-retries reaction was never reached, so nothing ever parked and,
+     * under key ordering, the key stayed blocked behind a record that would never finish. The limit now covers the
+     * whole of what this wrapper does with a record, not just the part the user wrote.
+     *
+     * <h2>What is deliberately let through</h2>
+     * A park and a stop leave {@link #apply} by a throw because a throw is the only way to hand a record back
+     * (R8, R24) - they are what the mapping DID, not a failure of it. Both are recognised by type and rethrown
+     * untouched, so a park still spends the attempt it declared and a stop still stops the instance. Sending either
+     * through the exhaustion path would re-park an already-parked record and count it twice.
+     */
+    private List<ProducerRecord<byte[], byte[]>> applyWithinTheRetryLimit(Outcome<Object, Object> outcome,
+                                                                         TypedRecordContext<Object, Object> context,
+                                                                         RouteState route,
+                                                                         int attempts) {
+        try {
+            if (outcome == null) {
+                throw new IllegalStateException(msg("The processing function for topic {} returned null. Return "
+                        + "Outcome.succeeded() for a record that was processed, or throw to retry it.",
+                        route.describeTopics()));
+            }
+            return apply(outcome, context, route, attempts);
+        } catch (RecordParkedException | StopRequestedException whatTheMappingDid) {
+            // The park and the stop arms of apply(), which report an outcome rather than failing to map one.
+            throw whatTheMappingDid;
+        } catch (RuntimeException mappingTheOutcomeFailed) {
+            throw afterAttempt(context, route, mappingTheOutcomeFailed, attempts);
         }
-        return apply(outcome, context, route, attempts);
     }
 
     /**
@@ -456,6 +489,9 @@ class RouteDispatcher {
                 meters.recordOutcome(record.topic(), OutcomeTag.FILTERED);
                 return emptyProduce();
             case PRODUCE:
+                if (!route.producesRecords()) {
+                    throw producedWithoutProducedTypes(route, record);
+                }
                 List<ProducerRecord<byte[], byte[]>> serialised = serialise(route, outcome.records());
                 succeeded.increment();
                 meters.recordOutcome(record.topic(), OutcomeTag.SUCCEEDED);
@@ -683,6 +719,31 @@ class RouteDispatcher {
         stopping.notAnAttempt().park("it asked the instance to stop");
         instance.stopRequested(record, reason);
         return stopping;
+    }
+
+    /**
+     * A route with no produced types returned records to produce: a definition fault, never a retry - the same
+     * shape as the raw-bytes consumer fault below, and raised the same way.
+     * <p>
+     * R3 makes producing from such a route a compile error by declaring its produced types as {@code Void}, and
+     * that closes every case but one: {@code null} inhabits every reference type, so
+     * {@code Outcome.produce(new ProducerRecord<>("out", null, null))} infers {@code ProducerRecord<Void, Void>}
+     * and compiles. Kafka permits null keys and values, so that is a real record shape rather than an impossible
+     * generic value, and no choice of type parameter can exclude it. What reached the route then was a
+     * {@code NullPointerException} out of the produced formats that are not there; this says what actually
+     * happened instead, and says it once rather than per record, because retrying it would fail identically for
+     * every record on the topic forever.
+     */
+    private RuntimeException producedWithoutProducedTypes(RouteState route,
+                                                          ConsumerRecord<byte[], byte[]> record) {
+        IllegalStateException fault = new IllegalStateException(msg("The route for {} returned records to produce, "
+                        + "and declares no produced types - so there is nothing to serialise them with. Declare "
+                        + "them on the route with produced(...) to produce from it, or return "
+                        + "Outcome.succeeded() instead (R3, R4). Raised at {}-{}@{}; this is a fault of the "
+                        + "definition, so retrying it would fail identically for every record on this topic.",
+                route.describeTopics(), record.topic(), record.partition(), record.offset()));
+        instance.fatal(fault);
+        return fault;
     }
 
     /**

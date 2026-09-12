@@ -7,18 +7,23 @@ package bz.stub.parallelconsumer.fluent;
 import bz.stub.parallelconsumer.ParallelConsumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.errors.SerializationException;
 import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.common.serialization.Serializer;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * A record reaches exactly one terminal outcome, and which one is what the function returned (R7, R8, F3, AE5).
@@ -66,6 +71,114 @@ class RouteDispatchOutcomesTest extends AbstractFluentEngineTest {
         // Nothing produced, and nothing was even asked to produce it: this definition opens no producer at all.
         assertThat(runtime.producerCalls).isEqualTo(0);
         assertThat(dispatcher.producedRecordCount()).isEqualTo(0);
+    }
+
+    /**
+     * R10 bounds every failure a record can have on a route, and mapping the outcome is one of them.
+     * <p>
+     * A serialiser that consistently rejects a produced value used to escape to the engine, which retries for ever:
+     * the route's finite limit was applied only to the function's own throws, so the after-retries reaction was
+     * never reached, nothing parked, and under key ordering the key stayed blocked behind a record that could never
+     * finish. It runs out of attempts and parks now, like any other failure on the route.
+     */
+    @Test
+    void aSerialiserThatAlwaysRejectsRunsOutOfAttemptsAndParks() {
+        var ran = new AtomicInteger();
+        var pc = ParallelConsumer.connect(props());
+        pc.string(TOPIC)
+                .retryLimit(2)
+                .retryDelay(Duration.ofMillis(10))
+                .produced(Produced.with(Serdes.String(), alwaysRejecting()))
+                .process(context -> {
+                    ran.incrementAndGet();
+                    return Outcome.produce(new ProducerRecord<>("order-events", context.key(), context.value()));
+                });
+
+        handle = runtime.startAndAssign(pc, 1);
+        runtime.publish(TOPIC, 0, 0, "key-0", "an order nothing can serialise");
+
+        RouteDispatcher dispatcher = pc.dispatcher();
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
+                assertThat(dispatcher.parkedCount()).isEqualTo(1));
+
+        // A limit of two allows three runs, and the third is the one that parks - so the function ran three times
+        // and no more, rather than for ever.
+        assertThat(ran.get()).isEqualTo(3);
+        assertThat(dispatcher.succeededCount()).isEqualTo(0);
+        assertThat(dispatcher.producedRecordCount()).isEqualTo(0);
+        assertThat(runtime.mockProducer().history()).isEmpty();
+    }
+
+    /**
+     * The park a function declares is what the mapping DID, not a failure of it - so it is handed back untouched and
+     * counts once, and the reason recorded is the function's own.
+     * <p>
+     * The route's limit is zero, which is what makes this discriminating: a declared park sent through the
+     * exhaustion path on a route with nothing left would park the already-parked record a second time, count it
+     * twice, tell the observer twice, and overwrite the function's reason with "it ran out of attempts".
+     */
+    @Test
+    void aDeclaredParkStillCountsOnceAndKeepsItsOwnReason() {
+        var pc = ParallelConsumer.connect(props());
+        pc.string(TOPIC)
+                .retryLimit(0)
+                .retryDelay(Duration.ofMillis(10))
+                .process(context -> Outcome.park("the function already knows this one is hopeless"));
+
+        handle = runtime.startAndAssign(pc, 1);
+        runtime.publish(TOPIC, 0, 0, "key-0", "a hopeless order");
+
+        RouteDispatcher dispatcher = pc.dispatcher();
+        Awaitility.await().atMost(defaultTimeout).untilAsserted(() ->
+                assertThat(handle.topic(TOPIC).parked().count()).isEqualTo(1));
+
+        ParkedRecord parked = handle.topic(TOPIC).parked().records().get(0);
+        assertThat(parked.reason()).contains("hopeless");
+        assertWithMessage("the function's reason survives, rather than being overwritten by exhaustion")
+                .that(parked.reason()).doesNotContain("ran out of attempts");
+        assertThat(parked.attempts()).isEqualTo(1);
+        assertWithMessage("one park event, not two").that(dispatcher.parkedCount()).isEqualTo(1);
+    }
+
+    /**
+     * R3 makes producing from a route that declared no produced types a compile error - except for the one shape
+     * {@code null} lets through, which no choice of type parameter can exclude: {@code null} inhabits every
+     * reference type, so this call infers {@code ProducerRecord<Void, Void>} and compiles, and Kafka permits null
+     * keys and values so it is a real record rather than an impossible generic value.
+     * <p>
+     * It used to reach the produced formats that are not there and fail as a {@code NullPointerException}. It is a
+     * definition fault now - named, raised once, and fatal, because retrying it would fail identically for every
+     * record on the topic for ever.
+     */
+    @Test
+    void producingFromARouteWithNoProducedTypesIsADefinitionFault() {
+        var pc = ParallelConsumer.connect(props());
+        pc.string(TOPIC)
+                .retryDelay(Duration.ofMillis(10))
+                // Compiles: null inhabits Void, so this infers ProducerRecord<Void, Void>.
+                .process(context -> Outcome.produce(new ProducerRecord<>("order-events", null, null)));
+
+        handle = runtime.startAndAssign(pc, 1);
+        runtime.publish(TOPIC, 0, 0, "key-0", "an order");
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> handle.awaitShutdown(Duration.ofSeconds(30)));
+
+        assertThat(thrown).hasMessageThat().contains("declares no produced types");
+        assertThat(thrown).hasMessageThat().contains("fault of the definition");
+        assertThat(thrown).hasMessageThat().contains(TOPIC);
+        assertWithMessage("a definition fault stops the instance rather than parking every record")
+                .that(pc.dispatcher().parkedCount()).isEqualTo(0);
+    }
+
+    /**
+     * A serialiser that refuses everything, for the exhaustion test above. Written as the produced half only: what
+     * this route does with a value on the way out is the whole of what is under test.
+     */
+    private static Serializer<String> alwaysRejecting() {
+        return (topic, data) -> {
+            throw new SerializationException("nothing on " + topic + " can be serialised");
+        };
     }
 
     /**
