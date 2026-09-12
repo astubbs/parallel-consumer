@@ -10,7 +10,6 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.PCModule;
-import com.google.errorprone.annotations.InlineMe;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -60,10 +59,10 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * {@link #withDefaultConcurrency}, {@link #withDefaultAfterRetries}. A route that declares its own overrides its
  * copy and nobody else's (KD11, R6).
  * <p>
- * <b>Every spelling those names replaced is still here</b>, marked {@link Deprecated} and delegating (KD15), so a
- * caller already built against one keeps compiling; removing one is a separate, release-gated decision. Each
- * delegate carries {@link InlineMe} because it is a pure forward and nothing else, which lets a caller's own
- * static analysis move their call sites to the new name for them rather than leaving the migration by hand.
+ * <b>The spellings those names replaced are gone, not deprecated</b> (KD15): this package has never been released,
+ * so there is no caller outside this repository to keep compiling, and a deprecated alias would have claimed a
+ * compatibility that was never at stake. The day the fluent API ships, that reverses - a replaced name then keeps
+ * its old spelling as a deprecated delegate, and removing it becomes a release-gated decision.
  *
  * <h2>What this class is, and what it delegates</h2>
  * It is the fluent surface and the assembly: the setters, the route helpers, {@link #start} and the
@@ -201,18 +200,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * Superseded by {@link #withCommitMode}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withCommitMode(CommitMode)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withCommitMode(commitMode)")
-    public final ParallelConsumerDefinition commitMode(CommitMode commitMode) {
-        return withCommitMode(commitMode);
-    }
-
-    /**
      * How this instance shuts down: whether the records already fetched are processed first (R17, R24).
      * <p>
      * Instance-wide because the stop outcome closes the instance from a thread of its own, with nobody there to
@@ -222,18 +209,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     public ParallelConsumerDefinition withClosePath(ClosePath path) {
         this.closePath = Objects.requireNonNull(path, "A close path must be supplied");
         return this;
-    }
-
-    /**
-     * Superseded by {@link #withClosePath}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16), and this one names the {@link ClosePath} it takes rather than the sentence it completed. This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withClosePath(ClosePath)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withClosePath(path)")
-    public final ParallelConsumerDefinition whenClosing(ClosePath path) {
-        return withClosePath(path);
     }
 
     /**
@@ -254,18 +229,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * Superseded by {@link #withMissingTopicPolicy}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16), and this one names the {@link MissingTopic} policy it takes rather than the sentence it completed. This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withMissingTopicPolicy(MissingTopic)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withMissingTopicPolicy(policy)")
-    public final ParallelConsumerDefinition whenTopicMissing(MissingTopic policy) {
-        return withMissingTopicPolicy(policy);
-    }
-
-    /**
      * Where this instance's meters go (R19). Without one, Parallel Consumer registers into a no-op registry and
      * nothing is published.
      * <p>
@@ -279,18 +242,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         return this;
     }
 
-    /**
-     * Superseded by {@link #withMetrics}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16), and this one names what it turns on rather than the type it happens to take (R19). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withMetrics(MeterRegistry)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withMetrics(registry)")
-    public final ParallelConsumerDefinition meterRegistry(MeterRegistry registry) {
-        return withMetrics(registry);
-    }
-
     // ---------------------------------------------------------------- per-route defaults
 
     /**
@@ -300,18 +251,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     public ParallelConsumerDefinition withDefaultOrdering(ProcessingOrder ordering) {
         defaults.ordering(Objects.requireNonNull(ordering, "An ordering must be supplied"));
         return this;
-    }
-
-    /**
-     * Superseded by {@link #withDefaultOrdering}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withDefaultOrdering(ProcessingOrder)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withDefaultOrdering(ordering)")
-    public final ParallelConsumerDefinition defaultOrdering(ProcessingOrder ordering) {
-        return withDefaultOrdering(ordering);
     }
 
     /**
@@ -328,18 +267,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * Superseded by {@link #withDefaultConcurrency}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withDefaultConcurrency(int)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withDefaultConcurrency(limit)")
-    public final ParallelConsumerDefinition defaultConcurrency(int limit) {
-        return withDefaultConcurrency(limit);
-    }
-
-    /**
      * How many attempts after the first every route allows before its records park (R10).
      */
     public ParallelConsumerDefinition withDefaultRetryLimit(int attempts) {
@@ -352,35 +279,11 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * Superseded by {@link #withDefaultRetryLimit}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withDefaultRetryLimit(int)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withDefaultRetryLimit(attempts)")
-    public final ParallelConsumerDefinition defaultRetryLimit(int attempts) {
-        return withDefaultRetryLimit(attempts);
-    }
-
-    /**
      * Retry forever, as the classic API always has. Opt-in on purpose (R10).
      */
     public ParallelConsumerDefinition withDefaultRetryForever() {
         defaults.retryLimit(OptionalInt.empty());
         return this;
-    }
-
-    /**
-     * Superseded by {@link #withDefaultRetryForever}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withDefaultRetryForever()}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withDefaultRetryForever()")
-    public final ParallelConsumerDefinition defaultRetryForever() {
-        return withDefaultRetryForever();
     }
 
     /**
@@ -396,35 +299,11 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * Superseded by {@link #withDefaultRetryDelay}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withDefaultRetryDelay(Duration)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withDefaultRetryDelay(delay)")
-    public final ParallelConsumerDefinition defaultRetryDelay(Duration delay) {
-        return withDefaultRetryDelay(delay);
-    }
-
-    /**
      * What happens to a record that runs out of attempts, on every route that declares nothing of its own (R27).
      */
     public ParallelConsumerDefinition withDefaultAfterRetries(AfterRetries policy) {
         defaults.afterRetries(Objects.requireNonNull(policy, "An after-retries policy must be supplied"));
         return this;
-    }
-
-    /**
-     * Superseded by {@link #withDefaultAfterRetries}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withDefaultAfterRetries(AfterRetries)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withDefaultAfterRetries(policy)")
-    public final ParallelConsumerDefinition defaultAfterRetries(AfterRetries policy) {
-        return withDefaultAfterRetries(policy);
     }
 
     /**
@@ -437,18 +316,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     public ParallelConsumerDefinition withDefaultOnParked(ParkObserver<Object, Object> observer) {
         defaults.parkObserver(Objects.requireNonNull(observer, "A park observer must be supplied"));
         return this;
-    }
-
-    /**
-     * Superseded by {@link #withDefaultOnParked}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withDefaultOnParked(ParkObserver)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withDefaultOnParked(observer)")
-    public final ParallelConsumerDefinition defaultOnParked(ParkObserver<Object, Object> observer) {
-        return withDefaultOnParked(observer);
     }
 
     // ---------------------------------------------------------------- pre-built clients (Java binding only)
@@ -473,18 +340,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     }
 
     /**
-     * Superseded by {@link #withConsumer}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withConsumer(Consumer)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withConsumer(consumer)")
-    public final ParallelConsumerDefinition consumer(Consumer<byte[], byte[]> consumer) {
-        return withConsumer(consumer);
-    }
-
-    /**
      * Run against a producer you built yourself. Sugar for the Java binding, as {@link #withConsumer} is.
      * <p>
      * <b>A supplied producer forgoes producer recovery</b> (astubbs#410): recovery rebuilds the producer from its
@@ -496,18 +351,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
         this.preBuiltProducerSupplied = true;
         options.producer(producer);
         return this;
-    }
-
-    /**
-     * Superseded by {@link #withProducer}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withProducer(Producer)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withProducer(producer)")
-    public final ParallelConsumerDefinition producer(Producer<byte[], byte[]> producer) {
-        return withProducer(producer);
     }
 
     // ---------------------------------------------------------------- routes
@@ -725,18 +568,6 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
     public ParallelConsumerDefinition withRebalanceListener(ConsumerRebalanceListener listener) {
         this.usersRebalanceListener = Objects.requireNonNull(listener, "A rebalance listener must be supplied");
         return this;
-    }
-
-    /**
-     * Superseded by {@link #withRebalanceListener}: the definition's settings now read as one family, each one prefixed {{@code with}} (KD16). This spelling still works and delegates to it, so nothing
-     * already built against the old name breaks (KD15).
-     *
-     * @deprecated use {@link #withRebalanceListener(ConsumerRebalanceListener)}
-     */
-    @Deprecated
-    @InlineMe(replacement = "this.withRebalanceListener(listener)")
-    public final ParallelConsumerDefinition rebalanceListener(ConsumerRebalanceListener listener) {
-        return withRebalanceListener(listener);
     }
 
     /**
