@@ -8,8 +8,9 @@
 <!-- post-merge: checked-begin - what astubbs#506 did is history once it lands; the exposure it widened is what this note is about -->
 A user who can reach a `WorkManager` or a `PartitionState` can call the engine's own mutators on it.
 This is **not new**, and astubbs#506 did not open it - it widened it twice, and the fluent API's
-`ConsumerHandle.parkedContainers()` hands one of the two lists to end users, which is where the
-question stops being theoretical.
+`ParallelConsumerInstance.parkedContainers()` hands one of the two lists to end users, which is
+where the question stops being theoretical. That type lives on astubbs/parallel-consumer#502, not
+here, and was called `ConsumerHandle` when this note was written.
 <!-- post-merge: checked-end -->
 
 ## What is reachable, and what it would do
