@@ -10,6 +10,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.PCModule;
+import com.google.errorprone.annotations.InlineMe;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -58,6 +59,11 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * {@code default} inside the name, after the prefix: {@link #withDefaultRetryLimit},
  * {@link #withDefaultConcurrency}, {@link #withDefaultAfterRetries}. A route that declares its own overrides its
  * copy and nobody else's (KD11, R6).
+ * <p>
+ * <b>Every spelling those names replaced is still here</b>, marked {@link Deprecated} and delegating (KD15), so a
+ * caller already built against one keeps compiling; removing one is a separate, release-gated decision. Each
+ * delegate carries {@link InlineMe} because it is a pure forward and nothing else, which lets a caller's own
+ * static analysis move their call sites to the new name for them rather than leaving the migration by hand.
  *
  * <h2>What this class is, and what it delegates</h2>
  * It is the fluent surface and the assembly: the setters, the route helpers, {@link #start} and the
@@ -201,7 +207,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withCommitMode(CommitMode)}
      */
     @Deprecated
-    public ParallelConsumerDefinition commitMode(CommitMode commitMode) {
+    @InlineMe(replacement = "this.withCommitMode(commitMode)")
+    public final ParallelConsumerDefinition commitMode(CommitMode commitMode) {
         return withCommitMode(commitMode);
     }
 
@@ -224,7 +231,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withClosePath(ClosePath)}
      */
     @Deprecated
-    public ParallelConsumerDefinition whenClosing(ClosePath path) {
+    @InlineMe(replacement = "this.withClosePath(path)")
+    public final ParallelConsumerDefinition whenClosing(ClosePath path) {
         return withClosePath(path);
     }
 
@@ -252,7 +260,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withMissingTopicPolicy(MissingTopic)}
      */
     @Deprecated
-    public ParallelConsumerDefinition whenTopicMissing(MissingTopic policy) {
+    @InlineMe(replacement = "this.withMissingTopicPolicy(policy)")
+    public final ParallelConsumerDefinition whenTopicMissing(MissingTopic policy) {
         return withMissingTopicPolicy(policy);
     }
 
@@ -277,7 +286,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withMetrics(MeterRegistry)}
      */
     @Deprecated
-    public ParallelConsumerDefinition meterRegistry(MeterRegistry registry) {
+    @InlineMe(replacement = "this.withMetrics(registry)")
+    public final ParallelConsumerDefinition meterRegistry(MeterRegistry registry) {
         return withMetrics(registry);
     }
 
@@ -299,7 +309,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withDefaultOrdering(ProcessingOrder)}
      */
     @Deprecated
-    public ParallelConsumerDefinition defaultOrdering(ProcessingOrder ordering) {
+    @InlineMe(replacement = "this.withDefaultOrdering(ordering)")
+    public final ParallelConsumerDefinition defaultOrdering(ProcessingOrder ordering) {
         return withDefaultOrdering(ordering);
     }
 
@@ -323,7 +334,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withDefaultConcurrency(int)}
      */
     @Deprecated
-    public ParallelConsumerDefinition defaultConcurrency(int limit) {
+    @InlineMe(replacement = "this.withDefaultConcurrency(limit)")
+    public final ParallelConsumerDefinition defaultConcurrency(int limit) {
         return withDefaultConcurrency(limit);
     }
 
@@ -346,7 +358,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withDefaultRetryLimit(int)}
      */
     @Deprecated
-    public ParallelConsumerDefinition defaultRetryLimit(int attempts) {
+    @InlineMe(replacement = "this.withDefaultRetryLimit(attempts)")
+    public final ParallelConsumerDefinition defaultRetryLimit(int attempts) {
         return withDefaultRetryLimit(attempts);
     }
 
@@ -365,7 +378,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withDefaultRetryForever()}
      */
     @Deprecated
-    public ParallelConsumerDefinition defaultRetryForever() {
+    @InlineMe(replacement = "this.withDefaultRetryForever()")
+    public final ParallelConsumerDefinition defaultRetryForever() {
         return withDefaultRetryForever();
     }
 
@@ -388,7 +402,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withDefaultRetryDelay(Duration)}
      */
     @Deprecated
-    public ParallelConsumerDefinition defaultRetryDelay(Duration delay) {
+    @InlineMe(replacement = "this.withDefaultRetryDelay(delay)")
+    public final ParallelConsumerDefinition defaultRetryDelay(Duration delay) {
         return withDefaultRetryDelay(delay);
     }
 
@@ -407,7 +422,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withDefaultAfterRetries(AfterRetries)}
      */
     @Deprecated
-    public ParallelConsumerDefinition defaultAfterRetries(AfterRetries policy) {
+    @InlineMe(replacement = "this.withDefaultAfterRetries(policy)")
+    public final ParallelConsumerDefinition defaultAfterRetries(AfterRetries policy) {
         return withDefaultAfterRetries(policy);
     }
 
@@ -430,7 +446,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withDefaultOnParked(ParkObserver)}
      */
     @Deprecated
-    public ParallelConsumerDefinition defaultOnParked(ParkObserver<Object, Object> observer) {
+    @InlineMe(replacement = "this.withDefaultOnParked(observer)")
+    public final ParallelConsumerDefinition defaultOnParked(ParkObserver<Object, Object> observer) {
         return withDefaultOnParked(observer);
     }
 
@@ -462,7 +479,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withConsumer(Consumer)}
      */
     @Deprecated
-    public ParallelConsumerDefinition consumer(Consumer<byte[], byte[]> consumer) {
+    @InlineMe(replacement = "this.withConsumer(consumer)")
+    public final ParallelConsumerDefinition consumer(Consumer<byte[], byte[]> consumer) {
         return withConsumer(consumer);
     }
 
@@ -487,7 +505,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withProducer(Producer)}
      */
     @Deprecated
-    public ParallelConsumerDefinition producer(Producer<byte[], byte[]> producer) {
+    @InlineMe(replacement = "this.withProducer(producer)")
+    public final ParallelConsumerDefinition producer(Producer<byte[], byte[]> producer) {
         return withProducer(producer);
     }
 
@@ -715,7 +734,8 @@ public class ParallelConsumerDefinition implements DefinitionView, AutoCloseable
      * @deprecated use {@link #withRebalanceListener(ConsumerRebalanceListener)}
      */
     @Deprecated
-    public ParallelConsumerDefinition rebalanceListener(ConsumerRebalanceListener listener) {
+    @InlineMe(replacement = "this.withRebalanceListener(listener)")
+    public final ParallelConsumerDefinition rebalanceListener(ConsumerRebalanceListener listener) {
         return withRebalanceListener(listener);
     }
 
