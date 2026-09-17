@@ -16,6 +16,22 @@ A high level summary of noteworthy changes in each version.
 
 First release of the community fork of [confluentinc/parallel-consumer](https://github.com/confluentinc/parallel-consumer), which is no longer maintained. Published to Maven Central as `bz.stub.parallelconsumer`.
 
+**Maven Central coordinates.** The groupId is new with the fork, so this is the one release where they belong at the top:
+
+```xml
+<dependency>
+    <groupId>bz.stub.parallelconsumer</groupId>
+    <artifactId>parallel-consumer-core</artifactId>
+    <version>0.6.0.0</version>
+</dependency>
+```
+
+The Vert.x, Reactor and Mutiny modules are `parallel-consumer-vertx`, `parallel-consumer-reactor` and `parallel-consumer-mutiny` under the same groupId and version. The Java package is `bz.stub.parallelconsumer` too, so imports change with it - one command rewrites them (GNU `sed`; on macOS use `sed -i ''`):
+
+```bash
+find . -name '*.java' -exec sed -i 's/io\.confluent\.parallelconsumer/bz.stub.parallelconsumer/g' {} +
+```
+
 - **Upgrading from upstream 0.5.x** means changing the Maven groupId and the package your imports name. The Breaking section below is short; read it once.
 - **Committed offsets are unchanged.** An existing consumer group upgrades in place, with no reset and no migration.
 - **Everything upstream merged after its last published release ships here for the first time.** Upstream's last release on Maven Central is 0.5.3.2; its `0.5.3.3` section below was tagged but never published.
