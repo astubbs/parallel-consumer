@@ -39,6 +39,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
         with:
@@ -151,6 +152,23 @@ jobs:
           ./mvnw --batch-mode -Pmaven-central -Pci \
             -pl '!:parallel-consumer-examples,!:parallel-consumer-example-core,!:parallel-consumer-example-metrics,!:parallel-consumer-example-streams,!:parallel-consumer-example-vertx,!:parallel-consumer-example-reactor' \
             clean deploy -DskipTests
+
+      - name: Wait for Maven Central to serve the release
+        if: ${{ !inputs.dryRun }}
+        env:
+          RELEASE_VERSION: ${{ inputs.releaseVersion }}
+        run: |
+          # The deploy above returns once Central has VALIDATED the bundle (pom.xml, central-publishing:
+          # waitUntil). Publishing is Central's side and took over thirty minutes for 0.6.0.0, past the
+          # plugin's own ceiling - which failed the run with every artefact already published and left
+          # the release page unposted. So the wait is here, long, and a warning when it runs out: the
+          # artefacts are Central's responsibility once validated, and the release page still goes up.
+          URL="https://repo1.maven.org/maven2/bz/stub/parallelconsumer/parallel-consumer-core/$RELEASE_VERSION/parallel-consumer-core-$RELEASE_VERSION.pom"
+          for i in $(seq 1 90); do
+            if curl -sfI "$URL" >/dev/null; then echo "$RELEASE_VERSION is fetchable from Maven Central"; exit 0; fi
+            sleep 60
+          done
+          echo "::warning::$RELEASE_VERSION was validated by Central but is not fetchable from repo1 after 90 minutes. Check https://central.sonatype.com/publishing/deployments before announcing."
 
       - name: GitHub release
         if: ${{ !inputs.dryRun }}

@@ -338,7 +338,15 @@
                         <configuration>
                             <publishingServerId>central</publishingServerId>
                             <autoPublish>true</autoPublish>
-                            <waitUntil>published</waitUntil>
+                            <!-- Return once Central has VALIDATED the bundle, not once it is published.
+                                 Publishing is Central's side of the contract and took over thirty
+                                 minutes for 0.6.0.0, past the plugin's 1800s ceiling (waitMaxTime,
+                                 which the plugin refuses to lower and could only be raised): the
+                                 deploy step reported failure with every artefact already published,
+                                 so release.yml never posted the GitHub release. release.yml now waits
+                                 for the artefact to be fetchable from repo1 itself, as a warning, not
+                                 a failed release. -->
+                            <waitUntil>validated</waitUntil>
                         </configuration>
                     </plugin>
                 </plugins>
