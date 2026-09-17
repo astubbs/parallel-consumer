@@ -51,6 +51,32 @@ equivalent shipped, with credit to the contributor.
 - [ ] confluentinc#908 (devingryu) - virtual threads; the fork went its own way in astubbs#360 and
   replied on the issue, never on that PR.
 
+**Mirror bodies whose `## Fork status` section is wrong, with the corrected text already
+drafted.** [`upstream-mirror-bodies-are-stale.md`](upstream-mirror-bodies-are-stale.md) owns the
+diagnosis and the recurrence question; this is its posting list, here because four of the nine sit
+on threads the release announcements now point readers at, and a reader following an announcement
+to its mirror lands on the wrong account. Same shape as astubbs#162 on 2026-09-17: replace the
+section, post the account as a comment, one mirror at a time, shown to the owner first.
+
+- [ ] astubbs#241 - premise false; a commit-failure taxonomy has existed since 2022
+  ([`core-241-tx-commit-failure-taxonomy.md`](core-241-tx-commit-failure-taxonomy.md)).
+- [ ] astubbs#189 - understates it: no retry ceiling; jitter is not the fix
+  ([`core-189-batch-failure-granularity.md`](core-189-batch-failure-granularity.md)).
+- [ ] astubbs#181 - never names the mechanism, a kafka-clients SASL callback
+  ([`deps-181-java-24-compatibility.md`](deps-181-java-24-compatibility.md)).
+- [ ] astubbs#178 - "not reproducible by inspection" is too broad; the chaos-suite reasoning is stale
+  ([`core-178-key-order-across-a-rebalance.md`](core-178-key-order-across-a-rebalance.md)).
+- [ ] astubbs#175 - credits the wrong PR; omits the close-path failure
+  ([`upstream-175-sporadic-commit-timeouts.md`](upstream-175-sporadic-commit-timeouts.md)).
+- [ ] astubbs#173 - contradicts the README on the transactional guarantee
+  ([`upstream-173-revocation-duplicate-processing.md`](upstream-173-revocation-duplicate-processing.md)).
+- [ ] astubbs#163 - false: a typed poll seam already exists
+  ([`core-163-poll-path-has-no-error-seam.md`](core-163-poll-path-has-no-error-seam.md)).
+- [ ] astubbs#161 - names the wrong thread
+  ([`upstream-161-reactor-scheduler-rationale.md`](upstream-161-reactor-scheduler-rationale.md)).
+- [ ] astubbs#139 - points at the wrong surface; never mentions the run-state machine
+  ([`core-139-public-api-thread-safety-contract.md`](core-139-public-api-thread-safety-contract.md)).
+
 **A question only the owner can answer:** on confluentinc#894, the 2026-09-01 follow-up asks whether
 single-record interactive replay should live inside Parallel Consumer or in an external recovery
 layer. A design position, not a release announcement.
