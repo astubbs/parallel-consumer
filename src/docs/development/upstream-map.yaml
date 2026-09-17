@@ -750,7 +750,7 @@ entries:
       DynamicLoadFactor#isStaticFactor() -> debug for a fixed factor, plus
       RateLimiter(30s) and a reworded WARN for a dynamic factor at its cap. No
       change to buffering behaviour. The reply to the original reporter is drafted
-      in docs/inflight/issue-response-155.md and posted by the pre-release sweep,
+      as issue-response-155.md and posted by the pre-release sweep on 2026-09-17,
       not at merge.
 
   # ---------------------------------------------------------------------------
@@ -1276,7 +1276,7 @@ entries:
       IGNORE policy it keeps the committed offset. astubbs#106, astubbs#306 and astubbs#207
       touch this code and address none of it. The knowledge is in
       docs/solutions/logic-errors/absence-of-commit-data-was-inferred-from-a-sentinel-that-a-real-commit-shares-2026-09-09.md;
-      the drafted mirror reply is docs/inflight/issue-response-162.md.
+      the mirror reply was drafted as issue-response-162.md and posted 2026-09-17.
 
   - id: reactor-scheduler-rationale
     group: features

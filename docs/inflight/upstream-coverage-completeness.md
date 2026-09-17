@@ -39,6 +39,10 @@ actually *read*, which is the only thing recorded below:
 - **Discussions.** Only the zero-reply ones surfaced by `--audit` have been read; the remainder are
   unread.
 
+**The 2026-09-08 pass at this obligation** was `upstream-items-with-no-fix-and-no-response.md`
+(retired at the 0.6.0.0 tag; `git show e6a429d87:docs/inflight/upstream-items-with-no-fix-and-no-response.md`); what it left to answer
+is [`upstream-v6-release-responses.md`](upstream-v6-release-responses.md).
+
 ## Also unchecked
 
 - **Project boards.** `has_projects: true` upstream, but our token lacks the `read:project` scope, so

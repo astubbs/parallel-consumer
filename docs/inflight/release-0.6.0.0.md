@@ -66,8 +66,9 @@ astubbs#201 and is no longer tracked here; what is left has no issue of its own.
   [`docs/solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md`](../solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md).
   **Responses to the three issues this closes are already drafted** - astubbs#121, confluentinc#894
   and confluentinc#893 - in
-  [`release-0.6.0.0-issue-response-drafts.md`](release-0.6.0.0-issue-response-drafts.md), written at
-  merge while the context was fresh and deliberately held for this release rather than posted then.
+  the astubbs#337 draft bundle, written at merge while the context was fresh, held for this release,
+  and posted 2026-09-17 (astubbs#121, confluentinc#894, confluentinc#893; the file is deleted -
+  `git show e6a429d87:docs/inflight/release-0.6.0.0-issue-response-drafts.md`).
   Post them with this note, on the operator's explicit instruction, and delete that file in the same
   change.
 <!-- post-merge: checked-end -->
@@ -128,7 +129,7 @@ worth.
 
 At release, when the changelog section is regenerated, check both survived into `### Breaking`:
 generation reads the commit log, so they are only as findable as those commit bodies. The rename side
-of that same check is in [`release-v6-scope.md`](release-v6-scope.md), under the tag-day artefact checks.
+of that same check was in the burn-down note's tag-day artefact checks (`git show e6a429d87:docs/inflight/release-v6-scope.md`).
 **Checked 2026-09-09, on regeneration:** all three survived - the `setupWorkerPool` and `setState`
 narrowings share one `### Breaking` bullet that opens by saying only subclasses of the internal
 controller are affected, and the `getSuccessfulWorkListeners()` removal sits in the astubbs#267 bullet

@@ -55,7 +55,7 @@ astubbs/parallel-consumer#29 carried.
 
 ## What gates v6, as the sweep read it
 
-Moved into `release-v6-scope.md` on 2026-09-08 and back here on 2026-09-09, because it is the
+Moved into the burn-down note on 2026-09-08 and back here on 2026-09-09 (that note, `release-v6-scope.md`, retired at the tag - `git show e6a429d87:docs/inflight/release-v6-scope.md`), because it is the
 sweep's dated reading rather than a decision; the burn-down's tiers override it where they
 disagree and say so there. Kept whole as the record.
 
@@ -128,7 +128,7 @@ comes first because nothing else matters until it clears.
   of this file); the "is it enough?" call, whose own target date has passed; and astubbs#257's
   changelog wording, which has one window because the section is generated from the log.
 - **Read as not gating, by the agent that vetted each:** the new modules (astubbs#271, astubbs#269,
-  astubbs#268 - capabilities, not defects); the `deps-` majors; every `issue-response-*` draft; the
+  astubbs#268 - capabilities, not defects); the `deps-` majors; every `issue-response-*` draft (all posted 2026-09-17 and deleted); the
   `static-` registers (advisory lanes); the `branch-` notes; the `test-debt` and feature notes; the
   unfenced `PartitionState` booleans and the plain-int counter (real, unmeasured, possibly absorbed
   by the shared-nothing rework); and the poisoned-transaction pair, where today's behaviour is
