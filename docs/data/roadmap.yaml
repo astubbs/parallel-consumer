@@ -86,7 +86,8 @@ entries:
       mechanism by mechanism. Two known critical defects sit outside the claim, both transactional
       producer mode only and named under the notes' Known limitations: the revoke wait on the
       transaction lock (astubbs#44 - bounded since astubbs#466, declined in astubbs#408 after the
-      release) and the poisoned-transaction wedge (fixed on the producer-recovery stack, astubbs#434).
+      release) and the poisoned-transaction wedge (its fix, astubbs#434, sits on the producer-recovery
+      stack and follows the release).
       One arm of the 857 family is unattributed - a member that stops answering the coordinator
       during a churn storm, seen only in the randomised chaos suite - and astubbs#119 stays open
       for it; the family ledger (`docs/inflight/bug-857-family.md`) carries the seeds.
