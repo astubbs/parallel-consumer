@@ -33,7 +33,7 @@ noted.**
 - [ ] confluentinc#803 (astubbs#44) - the revocation's wait on the transaction lock is bounded, not
   yet declined (astubbs#466; fix follows in astubbs#408). The mirror got its what-shipped comment on
   2026-09-17; the upstream thread has not.
-- [ ] confluentinc#809 (astubbs#175) - every known cause of the commit-response timeout is fixed and
+- [x] confluentinc#809 (astubbs#175) - every known cause of the commit-response timeout is fixed and - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/issues/809#issuecomment-5723607583), with the soak rerun (astubbs#518).
   the message names which; the reported symptom itself never reproduced. Mirror commented
   2026-09-17; upstream not.
 - [x] confluentinc#777 (astubbs#173) - settled as by-design: a revocation redelivers in-flight work. - **posted 2026-09-18, mirror closed as by-design.**
@@ -66,7 +66,7 @@ section, post the account as a comment, one mirror at a time, shown to the owner
   ([`deps-181-java-24-compatibility.md`](deps-181-java-24-compatibility.md)).
 - [ ] astubbs#178 - "not reproducible by inspection" is too broad; the chaos-suite reasoning is stale - the rebalance route is fixed in astubbs#517; posts held until it merges
   ([`core-178-key-order-across-a-rebalance.md`](core-178-key-order-across-a-rebalance.md)).
-- [ ] astubbs#175 - credits the wrong PR; omits the close-path failure - drafted; held for the soak rerun result
+- [x] astubbs#175 - credits the wrong PR; omits the close-path failure - **done 2026-09-18**, Fork status replaced with the strand table and the soak rerun; astubbs#44's stale attribution of 809 and 833 to astubbs#100 corrected the same day.
   ([`upstream-175-sporadic-commit-timeouts.md`](upstream-175-sporadic-commit-timeouts.md)).
 - [x] astubbs#173 - contradicts the README on the transactional guarantee - **done 2026-09-18.**
   ([`upstream-173-revocation-duplicate-processing.md`](upstream-173-revocation-duplicate-processing.md)).
@@ -97,6 +97,7 @@ obligation it was one pass at.
 - [`process-candidate-ranking.md`](process-candidate-ranking.md) carried the seven maintainer decisions these posts needed; all made 2026-09-18.
 - [`release-0.6.0.0.md`](release-0.6.0.0.md), "Do at release", was the sweep's plan; it ran.
 - [`upstream-coverage-completeness.md`](upstream-coverage-completeness.md) owns the standing obligation this note is one pass at.
+- [`upstream-tell-809-833-the-hang-is-fixed.md`](upstream-tell-809-833-the-hang-is-fixed.md) carried the three tellings for the commit-timeout pair; all three done 2026-09-18.
 - The per-issue notes named beside each box above hold the drafted text and the verification behind it; the astubbs#178 draft is `issue-response-178.md` on the astubbs#517 branch.
 
 Delete this note when every box is ticked; nothing in it outlives the posts.

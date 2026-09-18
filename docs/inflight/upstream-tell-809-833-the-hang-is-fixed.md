@@ -1,8 +1,8 @@
-# confluentinc#809 and confluentinc#833 are fixed here, and the reporters have not been told
+# confluentinc#809 and confluentinc#833 are fixed here - and, as of 2026-09-18, the reporters are told
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
-<!-- inflight-vetted: 2026-09-07 - re-read both upstream issues: confluentinc#833 and confluentinc#809 are still OPEN and their newest comment is still the 2026-08-05 mirror-tracking one, so the telling has still not happened; astubbs#177's mirror is still CLOSED and astubbs#175 still OPEN; task 3 rewritten because astubbs#44's body has since dropped the "likely the same defect" claim but still attributes both reports to astubbs#100, and astubbs#29 has merged -->
+<!-- inflight-vetted: 2026-09-18 - all three tellings done; nothing here is owed any more, and the note is kept only for the corrected diagnosis until the sweep that retires it. Earlier: 2026-09-07 - re-read both upstream issues: confluentinc#833 and confluentinc#809 are still OPEN and their newest comment is still the 2026-08-05 mirror-tracking one, so the telling has still not happened; astubbs#177's mirror is still CLOSED and astubbs#175 still OPEN; task 3 rewritten because astubbs#44's body has since dropped the "likely the same defect" claim but still attributes both reports to astubbs#100, and astubbs#29 has merged -->
 
 Two upstream reports, **both still open upstream with no reply**, mirrored as astubbs#175 and
 astubbs#177. Both show the same signature:
@@ -73,19 +73,19 @@ The fix landed; closing the mirror follows.
 
 <!-- post-merge: checked-begin - each item is stated against master and against the upstream issues,
      neither of which is a branch, so none of it turns false on a merge -->
-1. **Reply on confluentinc#833.** There is now a named fix rather than a hypothesis: the poll thread
+1. **Reply on confluentinc#833.** Done 2026-09-18 (https://github.com/confluentinc/parallel-consumer/issues/833#issuecomment-5723466465). There is now a named fix rather than a hypothesis: the poll thread
    publishes its death, waiters are released with its exception, and the timeout message reports the
    budget it actually waited on. Say which released version carries it. Per AGENTS.md, comment
    upstream only when there is something to act on - a fix in a published version is exactly that.
    Use plain cross-repo references, never `Fixes`/`Closes`, and check for the hidden marker before
    posting so it cannot double-comment.
-2. **Establish whether confluentinc#809 is the same defect, then reply there too.** Its stack is
+2. **Establish whether confluentinc#809 is the same defect, then reply there too.** Done 2026-09-18: the close path was read (`upstream-175-sporadic-commit-timeouts.md` carries the strand table - confluentinc#818 for the close-path hang, astubbs#204 for the rest) and the reply posted (https://github.com/confluentinc/parallel-consumer/issues/809#issuecomment-5723607583), with a soak re-run on the released code (astubbs#518). Its stack is
    inside `close()` -> `doClose` -> `commitOffsetsThatAreReady`, a different entry point from
    confluentinc#833's steady-state commit, and **no commit on master names astubbs#175 or
    confluentinc#809** - so nothing has been claimed about it. `notifyPollerDied` plausibly covers it
    for the same reason it covers the other, but that is the inference this note already got wrong
    once. Read the close path before replying.
-3. **Finish correcting astubbs#44's summary.** Half done: the body no longer claims these two are
+3. **Finish correcting astubbs#44's summary.** Done 2026-09-18: the paragraph now says astubbs#100 removed one route and astubbs#204 closed the class. Half done: the body no longer claims these two are
    "likely the same defect" as confluentinc#803, and it names astubbs#29 (merged) as the fix for
    confluentinc#803 itself. What it still says is that confluentinc#809 and confluentinc#833 "were
    later triaged onto astubbs#100" - which is the attribution the section above corrects.
