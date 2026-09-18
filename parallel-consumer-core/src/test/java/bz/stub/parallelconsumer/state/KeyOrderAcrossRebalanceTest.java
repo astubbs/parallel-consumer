@@ -170,16 +170,24 @@ class KeyOrderAcrossRebalanceTest {
         assertThat(wm.getWorkIfAvailable(10)).hasSize(1);
     }
 
-    /** Control: the wait is per shard. Another key's re-delivery is not held back by this key's old flight. */
-    @Test
-    void anotherKeyIsNotHeldBackByThisKeysOldEpochFlight() {
-        givenAnAssignedPartitionUnder(KEY);
-
+    /**
+     * The state every control arm starts from: one record of {@link #THE_KEY} taken and still out at a worker,
+     * and the partition revoked and handed straight back so that flight is stale but running.
+     */
+    private WorkContainer<String, String> givenAnOldEpochFlightStillRunningAfterARevokeAndReassign() {
         wm.registerWork(pollOf(recordAt(0, THE_KEY)));
         WorkContainer<String, String> oldFlight = wm.getWorkIfAvailable(10).get(0);
         wm.onPartitionsRevoked(UniLists.of(TP));
         wm.onPartitionsAssigned(UniLists.of(TP));
-        assertThat(oldFlight.isInFlight()).isTrue();
+        assertWithMessage("PRECONDITION: nothing drained the worker").that(oldFlight.isInFlight()).isTrue();
+        return oldFlight;
+    }
+
+    /** Control: the wait is per shard. Another key's re-delivery is not held back by this key's old flight. */
+    @Test
+    void anotherKeyIsNotHeldBackByThisKeysOldEpochFlight() {
+        givenAnAssignedPartitionUnder(KEY);
+        givenAnOldEpochFlightStillRunningAfterARevokeAndReassign();
 
         wm.registerWork(pollOf(recordAt(0, THE_KEY), recordAt(1, "another-key")));
 
@@ -197,12 +205,7 @@ class KeyOrderAcrossRebalanceTest {
     @Test
     void unorderedMakesNoPromiseAndIsNotHeldBack() {
         givenAnAssignedPartitionUnder(UNORDERED);
-
-        wm.registerWork(pollOf(recordAt(0, THE_KEY)));
-        WorkContainer<String, String> oldFlight = wm.getWorkIfAvailable(10).get(0);
-        wm.onPartitionsRevoked(UniLists.of(TP));
-        wm.onPartitionsAssigned(UniLists.of(TP));
-        assertThat(oldFlight.isInFlight()).isTrue();
+        givenAnOldEpochFlightStillRunningAfterARevokeAndReassign();
 
         wm.registerWork(pollOf(recordAt(0, THE_KEY)));
 
@@ -220,11 +223,7 @@ class KeyOrderAcrossRebalanceTest {
     void aShardOwedAFlightSurvivesCollectionUntilTheFlightEnds() {
         givenAnAssignedPartitionUnder(KEY);
         ShardKey key = ShardKey.of(recordAt(0, THE_KEY), KEY);
-
-        wm.registerWork(pollOf(recordAt(0, THE_KEY)));
-        WorkContainer<String, String> oldFlight = wm.getWorkIfAvailable(10).get(0);
-        wm.onPartitionsRevoked(UniLists.of(TP));
-        wm.onPartitionsAssigned(UniLists.of(TP));
+        WorkContainer<String, String> oldFlight = givenAnOldEpochFlightStillRunningAfterARevokeAndReassign();
 
         assertWithMessage("the shard is empty of work but still owed the old flight, so it must not be collected")
                 .that(sm.getShard(key).isPresent()).isTrue();

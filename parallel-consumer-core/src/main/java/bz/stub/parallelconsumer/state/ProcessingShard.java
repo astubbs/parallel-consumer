@@ -141,15 +141,36 @@ public class ProcessingShard<K, V> {
      * the poll-interval budget inside {@code poll()}, and the sweeps were made shard-only precisely so a callback
      * never waits on anything ({@link ShardManager#removeStaleContainers}).
      * <p>
-     * <b>Written on both threads, guarded by no lock, and safe in the only direction that matters.</b> Entries
-     * arrive from {@link #retire} - the broker-poll thread's sweeps and the controller's displacement branch -
-     * and are settled by the controller's scan once {@link WorkContainer#isInFlight()} is false. There is no
-     * {@code @GuardedBy} to write: the set is a concurrent collection and the question it answers is read off
-     * the container's own atomic state, so the invariant recorded here stands in for a lock name, as this
-     * tree's {@code AGENTS.md} asks. A flight that ends between the read and the return costs one extra scan
-     * of waiting; a flight that is evicted between a scan's read and its return is still resident at the
+     * <b>Written on both threads, guarded by no lock, and the ORDERING is what makes that safe.</b> Entries
+     * arrive from {@link #oweFlightIfStillRunning} - the broker-poll thread's sweeps through {@link #retire},
+     * and {@link #addWorkContainer}'s displacement branch - and are settled by the scan once
+     * {@link WorkContainer#isInFlight()} is false. Two rules, one per side, and together they close every
+     * interleaving without a lock:
+     * <ul>
+     * <li><b>A writer owes BEFORE it publishes.</b> The displacement branch records the resident it is about to
+     *     displace before the {@code put} that makes the replacement resident (and therefore selectable). The
+     *     sweeps remove without publishing anything, and the re-delivery that follows them is registered from
+     *     the mailbox after the callback has returned, so it is ordered behind their owe by the mailbox's own
+     *     happens-before edge.</li>
+     * <li><b>A scan asks AFTER it reads.</b> {@link #getWorkIfAvailable} reads a candidate off {@link #workMap}
+     *     and only then asks {@link #isOwedAFlight()}. Reading the replacement is the {@code java.util.concurrent}
+     *     happens-before edge to the {@code put} that published it, and the owe precedes that put in program
+     *     order - so a scan that can see the replacement can see the debt. Asked before the loop it could not:
+     *     an empty debt, then the replacement, then a double delivery, which is the window the
+     *     astubbs/parallel-consumer#517 review found in the first version and
+     *     {@code ShardDisplacementOwesTheFlightBeforePublishingTest} forces.</li>
+     * </ul>
+     * There is no {@code @GuardedBy} to write: the set is a concurrent collection and the question it answers is
+     * read off the container's own atomic state, so the invariant recorded here stands in for a lock name, as
+     * this tree's {@code AGENTS.md} asks. A flight that ends between the read and the return costs one extra
+     * scan of waiting; a flight that is evicted between a scan's read and its return is still resident at the
      * scan's head, where the ordered {@code break} already stops on it. Departure is monotonic - a container
      * instance is never re-inserted into a shard - so nothing here can go stale in the dangerous direction.
+     * <p>
+     * On the shipped engine the displacement branch and the scan are BOTH the controller thread - the poll
+     * thread's {@code registerWork} only posts to the mailbox - so that gap cannot open today. That is a
+     * confinement claim nothing checks, and the direct-pull engine (astubbs#361) scans from worker threads, so
+     * the ordering above is what the correctness rests on, not the confinement.
      * <p>
      * Only the ordered modes record anything: {@link ProcessingOrder#UNORDERED} makes no promise and pays
      * nothing. {@link #isEmpty()} consults it, so a shard owed a flight survives
@@ -170,6 +191,14 @@ public class ProcessingShard<K, V> {
         if (residentBeforePut != null) {
             log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
                     residentBeforePut.getEpoch(), offset, incomingWorkContainer.getEpoch());
+            // OWE BEFORE PUBLISHING. The put below makes the arrival resident, and resident is selectable; the
+            // displaced container's flight has to be on the books before that, or a scan landing between the
+            // put and retire(displaced) sees no debt and a takeable replacement, and hands it out while the
+            // displaced one is still executing (astubbs/parallel-consumer#517 review). Owing it here is what
+            // makes the gap harmless: the scan reads the candidate off the map first and asks about the debt
+            // second, so the map's own happens-before edge carries this write to it - see flightsOwed. The
+            // retire below then re-owes the same container, which the set absorbs.
+            oweFlightIfStillRunning(residentBeforePut);
         }
 
         // ADMIT FIRST, then let the map itself say what happened - never the read above.
@@ -394,17 +423,27 @@ public class ProcessingShard<K, V> {
         // sweeps and the displacement branch) is covered without any of them having to remember. The success
         // and failure paths end the flight BEFORE they remove (WorkManager#onSuccessResult / onFailureResult),
         // so a completed record never lands here; and a flight that ends between this read and the add is
-        // settled by the next scan, which is the safe direction.
-        if (isOrderRestricted() && removed.isInFlight()) {
-            // The add's answer is LOGGED rather than dropped or parked in a dead local (the same trade
-            // ShardManager.onFailure settled). TRUE is the only outcome departure being monotonic allows; FALSE
-            // would mean one container instance left this shard twice, i.e. something re-inserted it.
-            boolean firstTimeOwed = flightsOwed.add(removed);
-            log.debug("{} left shard {} while still in flight - the shard waits for that flight before handing " +
-                    "out more work (astubbs#178). First time owed: {} (FALSE would mean a container left the same " +
-                    "shard twice, which nothing should do)", removed, getKey(), firstTimeOwed);
-        }
+        // settled by the next scan, which is the safe direction. The displacement branch owes its container
+        // EARLIER as well, before it publishes the replacement - this call is then the no-op that keeps the
+        // exit path uniform.
+        oweFlightIfStillRunning(removed);
         return removed;
+    }
+
+    /**
+     * Put {@code departing} on the shard's books if it is still out at a worker, so an ordered scan waits for it.
+     * Idempotent: the set is identity-keyed, and the displacement branch calls this twice for one container on
+     * purpose (before the put, and again from {@link #retire}).
+     */
+    private void oweFlightIfStillRunning(WorkContainer<K, V> departing) {
+        if (isOrderRestricted() && departing.isInFlight()) {
+            // The add's answer is LOGGED rather than dropped or parked in a dead local (the same trade
+            // ShardManager.onFailure settled). FALSE is expected on the displacement branch's second call and
+            // nowhere else - departure is monotonic, so a container cannot otherwise be owed twice.
+            boolean newlyOwed = flightsOwed.add(departing);
+            log.debug("{} is leaving shard {} while still in flight - the shard waits for that flight before " +
+                    "handing out more work (astubbs#178). Newly owed: {}", departing, getKey(), newlyOwed);
+        }
     }
 
     /**
@@ -550,23 +589,29 @@ public class ProcessingShard<K, V> {
         var workTaken = new ArrayList<WorkContainer<K, V>>();
 
         if (isOrderRestricted()) {
-            // Settle the flights this shard was owed whose workers have since returned - housekeeping the scan
-            // does because it is the controller, the one thread allowed to wait, and it visits here anyway. Then
-            // wait on whatever is still out: in the ordered modes a container that left the shard in flight
-            // still holds the shard's serialisation, exactly as it would at the head of the map had it not
-            // been swept (astubbs#178). See flightsOwed.
+            // Housekeeping only: settle the flights this shard was owed whose workers have since returned. The
+            // scan is the controller, the one thread allowed to wait, and it visits here anyway. The DECISION is
+            // not made here - it is made per candidate below, after the candidate has been read off the map,
+            // because that read is what orders a concurrent owe-before-publish in front of it (see flightsOwed).
             flightsOwed.removeIf(WorkContainer::isNotInFlight);
-            if (!flightsOwed.isEmpty()) {
-                log.trace("Shard {} is owed {} flight(s) that left it while still running; taking nothing until " +
-                        "they end: {}", getKey(), flightsOwed.size(), flightsOwed);
-                return workTaken;
-            }
         }
 
         var iterator = workMap.entrySet().iterator();
         while (workTaken.size() < workToGetDelta && iterator.hasNext()) {
             var workContainer = iterator.next().getValue();
             scanMeter.onEntryExamined();
+
+            if (isOrderRestricted() && isOwedAFlight()) {
+                // In the ordered modes a container that left this shard while still in flight still holds the
+                // shard's serialisation, exactly as it would at the head of the map had it not been swept or
+                // displaced (astubbs#178) - so nothing is taken until it ends. Asked AFTER the candidate was read,
+                // never before the loop: a displacement owes the flight and THEN publishes the replacement, and
+                // reading the replacement off the map is what makes the owe visible here. Asked before the loop
+                // it could read an empty debt, then find the replacement, and take it.
+                log.trace("Shard {} is owed a flight that left it while still running; taking nothing until it " +
+                        "ends: {}", getKey(), flightsOwed);
+                break;
+            }
 
             if (pm.couldBeTakenAsWork(workContainer)) {
                 // ONE call, deliberately. This used to read `isAvailableToTakeAsWork()` and then call
