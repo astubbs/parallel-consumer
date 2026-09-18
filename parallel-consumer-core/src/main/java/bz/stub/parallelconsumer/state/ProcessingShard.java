@@ -15,6 +15,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
@@ -121,6 +122,44 @@ public class ProcessingShard<K, V> {
      */
     private final AtomicLong workAwaitingSelectionCount = new AtomicLong(0);
 
+    /**
+     * Containers that have LEFT this shard while still out at a worker - flights the shard's ordering promise
+     * is still owed, even though {@link #workMap} no longer knows about them.
+     * <p>
+     * <b>Why the map alone cannot keep the promise across a rebalance (astubbs#178, confluentinc#843).</b> In
+     * the ordered modes a taken container stays resident, and {@link #getWorkIfAvailable} stops at it: an
+     * in-flight head is what serialises the shard. The revoke and epoch-change sweeps evict on staleness alone
+     * and never ask whether the container is in flight, so a revoke-and-reassign under work empties the slot
+     * while the worker is still inside the user function; the uncommitted offset is then re-delivered, the fresh
+     * container is takeable, and one key is running on two threads. PC's own bookkeeping never notices, because
+     * {@link WorkManager#handleFutureResult} drops the old result as stale - only the user's ordering does.
+     * The {@code Replacing stale entry} branch of {@link #addWorkContainer} is the same state by a second door.
+     * <p>
+     * <b>So a departure that is still in flight is remembered here, and an ordered scan waits for it</b> - the
+     * re-delivered record waits for the flight exactly as it would have waited with no rebalance at all. The
+     * alternative, draining in-flight work inside the revoke callback, is the confluentinc#857 recipe: it spends
+     * the poll-interval budget inside {@code poll()}, and the sweeps were made shard-only precisely so a callback
+     * never waits on anything ({@link ShardManager#removeStaleContainers}).
+     * <p>
+     * <b>Written on both threads, guarded by no lock, and safe in the only direction that matters.</b> Entries
+     * arrive from {@link #retire} - the broker-poll thread's sweeps and the controller's displacement branch -
+     * and are settled by the controller's scan once {@link WorkContainer#isInFlight()} is false. There is no
+     * {@code @GuardedBy} to write: the set is a concurrent collection and the question it answers is read off
+     * the container's own atomic state, so the invariant recorded here stands in for a lock name, as this
+     * tree's {@code AGENTS.md} asks. A flight that ends between the read and the return costs one extra scan
+     * of waiting; a flight that is evicted between a scan's read and its return is still resident at the
+     * scan's head, where the ordered {@code break} already stops on it. Departure is monotonic - a container
+     * instance is never re-inserted into a shard - so nothing here can go stale in the dangerous direction.
+     * <p>
+     * Only the ordered modes record anything: {@link ProcessingOrder#UNORDERED} makes no promise and pays
+     * nothing. {@link #isEmpty()} consults it, so a shard owed a flight survives
+     * {@link ShardManager#removeShardIfEmpty} with an empty map - otherwise KEY ordering's collection of the
+     * emptied shard would take the memory with it. Equality is identity ({@link WorkContainer} overrides neither
+     * {@code equals} nor {@code hashCode}), so the set means "these containers", never "these coordinates".
+     * Pinned by {@code KeyOrderAcrossRebalanceTest}.
+     */
+    private final Set<WorkContainer<K, V>> flightsOwed = ConcurrentHashMap.newKeySet();
+
     void addWorkContainer(WorkContainer<K, V> incomingWorkContainer) {
         long offset = incomingWorkContainer.offset();
         WorkContainer<K, V> residentBeforePut = workMap.get(offset);
@@ -198,12 +237,16 @@ public class ProcessingShard<K, V> {
             // surprise, which is why both records are kept.
             // Proof, control arms and ablation matrix: ShardDisplacementOrphanReachabilityTest and
             // docs/solutions/logic-errors/the-shard-displacement-orphan-is-unreachable-and-the-guard-is-outside-the-class-2026-09-08.md.
-            population.onRetired();
+            //
             // The displaced container gives back its claim IF it still holds one. It does not when it was
             // already taken as work, and does when it was only ever queued - the compare-and-set tells those
             // apart from the container's own record instead of guessing, which is what used to leave this
-            // branch a claim short every time a taken entry was replaced.
-            excludeFromSelection(displaced);
+            // branch a claim short every time a taken entry was replaced. And if it WAS taken and is still out
+            // at a worker, the shard is still owed that flight - retire() records it, so the arrival that just
+            // took its slot cannot be handed out on top of it (astubbs#178's second door).
+            // retire() hands back the container it was given, which is `displaced` itself - the same bare call
+            // onSuccess makes, and nothing to act on.
+            retire(displaced);
         }
     }
 
@@ -258,8 +301,23 @@ public class ProcessingShard<K, V> {
     }
 
 
+    /**
+     * Holding no work AND owed no flight. The second half is what lets a shard emptied by a revoke sweep survive
+     * {@link ShardManager#removeShardIfEmpty} while a container that left it is still out at a worker - see
+     * {@link #flightsOwed}. A pure query: it reads each owed container's own state rather than the housekeeping
+     * {@link #getWorkIfAvailable} does, so the answer is true the moment the last flight ends, whichever thread
+     * asks and whether or not a scan has run since.
+     */
     public boolean isEmpty() {
-        return workMap.isEmpty();
+        return workMap.isEmpty() && !isOwedAFlight();
+    }
+
+    /**
+     * @return true while any container that left this shard is still out at a worker - the condition an ordered
+     *         scan waits on, and the one that keeps an otherwise-empty shard from being collected
+     */
+    boolean isOwedAFlight() {
+        return flightsOwed.stream().anyMatch(WorkContainer::isInFlight);
     }
 
     public long getCountOfWorkAwaitingSelection() {
@@ -331,6 +389,21 @@ public class ProcessingShard<K, V> {
         }
         population.onRetired();
         excludeFromSelection(removed);
+        // A departure still out at a worker leaves the shard owed its flight - see flightsOwed. Recorded here
+        // because this is the ONE exit path, so every route by which an in-flight container can leave (the two
+        // sweeps and the displacement branch) is covered without any of them having to remember. The success
+        // and failure paths end the flight BEFORE they remove (WorkManager#onSuccessResult / onFailureResult),
+        // so a completed record never lands here; and a flight that ends between this read and the add is
+        // settled by the next scan, which is the safe direction.
+        if (isOrderRestricted() && removed.isInFlight()) {
+            // The add's answer is LOGGED rather than dropped or parked in a dead local (the same trade
+            // ShardManager.onFailure settled). TRUE is the only outcome departure being monotonic allows; FALSE
+            // would mean one container instance left this shard twice, i.e. something re-inserted it.
+            boolean firstTimeOwed = flightsOwed.add(removed);
+            log.debug("{} left shard {} while still in flight - the shard waits for that flight before handing " +
+                    "out more work (astubbs#178). First time owed: {} (FALSE would mean a container left the same " +
+                    "shard twice, which nothing should do)", removed, getKey(), firstTimeOwed);
+        }
         return removed;
     }
 
@@ -475,6 +548,20 @@ public class ProcessingShard<K, V> {
 
         var slowWork = new HashSet<WorkContainer<?, ?>>();
         var workTaken = new ArrayList<WorkContainer<K, V>>();
+
+        if (isOrderRestricted()) {
+            // Settle the flights this shard was owed whose workers have since returned - housekeeping the scan
+            // does because it is the controller, the one thread allowed to wait, and it visits here anyway. Then
+            // wait on whatever is still out: in the ordered modes a container that left the shard in flight
+            // still holds the shard's serialisation, exactly as it would at the head of the map had it not
+            // been swept (astubbs#178). See flightsOwed.
+            flightsOwed.removeIf(WorkContainer::isNotInFlight);
+            if (!flightsOwed.isEmpty()) {
+                log.trace("Shard {} is owed {} flight(s) that left it while still running; taking nothing until " +
+                        "they end: {}", getKey(), flightsOwed.size(), flightsOwed);
+                return workTaken;
+            }
+        }
 
         var iterator = workMap.entrySet().iterator();
         while (workTaken.size() < workToGetDelta && iterator.hasNext()) {

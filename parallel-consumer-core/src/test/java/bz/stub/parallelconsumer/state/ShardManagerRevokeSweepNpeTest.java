@@ -152,6 +152,19 @@ class ShardManagerRevokeSweepNpeTest {
     }
 
     /**
+     * The control thread's completion, as {@code WorkManager#onSuccessResult} performs it: the flight ENDS, then
+     * the shard is told. The order is load-bearing since astubbs#178 - a container that leaves its shard while
+     * still in flight leaves the shard owed that flight ({@code ProcessingShard#flightsOwed}), and a shard owed
+     * a flight is not empty, so KEY ordering does not collect it. Calling {@code sm.onSuccess} on a container
+     * still in flight is a state production never produces, and this stand-in used to produce it.
+     */
+    private void completeOnTheControlThread(WorkContainer<String, String> wc) {
+        wc.onUserFunctionSuccess();
+        wc.endFlight();
+        sm.onSuccess(wc);
+    }
+
+    /**
      * The interleaving under test. The last container's success lands between {@code containsKey} and
      * {@code get}; under KEY ordering that removes the now-empty shard, and the sweep dereferences null.
      * <p>
@@ -164,7 +177,7 @@ class ShardManagerRevokeSweepNpeTest {
         WorkContainer<String, String> wc = registerOneRecordAndTakeIt();
 
         // the control thread's production mutation, scheduled to land between the sweep's two map reads
-        racingShardMap.arm(sm.computeShardKey(wc), () -> sm.onSuccess(wc));
+        racingShardMap.arm(sm.computeShardKey(wc), () -> completeOnTheControlThread(wc));
 
         assertDoesNotThrow(() -> wm.onPartitionsRevoked(UniLists.of(tp)),
                 "candidate 2: a shard removal landing between removeWorkFromShardFor's containsKey and get "
@@ -187,7 +200,7 @@ class ShardManagerRevokeSweepNpeTest {
         WorkContainer<String, String> wc = registerOneRecordAndTakeIt();
 
         // same magnitude, different position: the completion lands wholly before the sweep starts
-        sm.onSuccess(wc);
+        completeOnTheControlThread(wc);
         assertWithMessage("fixture: the completion must have removed the now-empty shard, as KEY ordering does")
                 .that(sm.getShard(sm.computeShardKey(wc)).isPresent())
                 .isFalse();
