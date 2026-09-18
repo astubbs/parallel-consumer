@@ -45,6 +45,10 @@ noted.**
   https://github.com/astubbs/parallel-consumer/issues/164#issuecomment-5724766990, upstream
   https://github.com/confluentinc/parallel-consumer/issues/551#issuecomment-5724767191.
 
+**Announced beyond the issue tracker.** Not on the owed list, added when done:
+
+- [x] confluentinc discussion 849, the "how many people use this?" thread the owner opened in 2025 - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/discussions/849#discussioncomment-18493655), tagging everyone who answered; it also answers riccardoforzan's maintenance/releases/roadmap questions and invites Moniepoint's Batch-By-Key fork to open a PR. The rest of the discussions backlog is [`upstream-discussions-unanswered.md`](upstream-discussions-unanswered.md)'s.
+
 **Upstream PRs absorbed by fork work, with no comment saying so.** One paragraph each: the
 equivalent shipped, with credit to the contributor.
 
