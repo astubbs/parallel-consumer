@@ -9,8 +9,10 @@
 correctly says the honest options are "reproduce and diagnose, or close on their own merits" - but it
 owns the *attribution* question, not the investigation, so "reproduce and diagnose" has sat as a
 sentence nobody could pick up. The field report sat open for months with no reproduction attempt at
-all - **the attempt now exists**, as `CommitResponseTimeoutSoakIT` in the `soak` lane, and its first
-two runs are recorded at the bottom of this note. A grep of `docs/plans/` and `docs/solutions/` still
+all - **the attempt now exists**, as `CommitResponseTimeoutSoakIT` in the `soak` lane, and its runs
+are recorded at the bottom of this note - the latest, 2026-09-18, on the released v0.6.0.0 with the
+intake latch held open, is the first in which the assertion could have failed for the whole thirty
+minutes; it found nothing. A grep of `docs/plans/` and `docs/solutions/` still
 finds nothing targeting the report; the only adjacent record is
 `unforceable-trigger-commit-lock-timeout-2026-08-07.md`, which is a *test* flake on the same lock and
 unrelated to the reporter's scenario.
@@ -182,7 +184,9 @@ which exist to make this scenario able to falsify its own assertion, are unchang
 2. **Per-attempt rather than per-record failure**, so records eventually succeed, the shards drain and
    the instance keeps committing for the whole run. On this evidence it is the only shape that keeps
    the commit path alive indefinitely - promoted from "a different mechanism" to "the first arm that
-   can falsify the assertion at all".
+   can falsify the assertion at all". *2026-09-18: the same property was obtained with `UNORDERED`
+   plus a buffer the run cannot fill (arm C below), and the assertion held for thirty falsifiable
+   minutes; this arm stays the way to get the property under `KEY`.*
 3. **`gtassone`'s configuration from confluentinc#809** - 128 partitions, concurrency 64, user
    function 100ms to minutes, `PERIODIC_CONSUMER_SYNC`. This is astubbs#175's own shape, and the
    scenario does not have it: the workload transcribes the now-closed astubbs#177 report instead,
@@ -190,6 +194,43 @@ which exist to make this scenario able to falsify its own assertion, are unchang
    `upstream-175-sporadic-commit-timeouts.md` no longer nominates it as a *wedge* candidate - see
    the section below - but it remains the closest recorded configuration to the live report, which is
    what this arm buys.
+
+### 2026-09-18: re-run on v0.6.0.0 with the latch held open - zero timeouts in the first run that could have found one
+
+Since the 2026-09-07 runs the 857 family's stall fixes shipped in v0.6.0.0, and the question left is
+whether a *bare* `Timeout waiting for commit response` - the poller wedged but alive - ever appears on
+the released code once the workload is arranged so the intake gate does not latch and commits keep
+happening. Three arms on the tree at v0.6.0.0 plus two docs commits (`2e6f13ef1`), same seed
+`3747722682837130843`, `failureFraction` 0.5, retry-forever, `PERIODIC_CONSUMER_SYNC` at 1s, the
+suite's Testcontainers `confluentinc/cp-kafka:7.9.0`, a Linux x86_64 workstation with every JVM pinned
+to 8 processors, no other Maven JVM on the box at any arm's start. Commit activity was read from the
+broker's `__consumer_offsets` (one row per partition per acknowledged commit, timestamped) rather than
+from the product, whose commit-path lines are all DEBUG - the command is in the scenario's
+`Calibration status`, which owns the full numbers.
+
+| Arm | Change | Gate | Commit path | Result |
+|---|---|---|---|---|
+| A, control, 6 min | none | astubbs#497 WARN 13.2s after the banner (`inShards=549 parkedForRetry=140 workable=409 vs 42, pausedPartitions=20`); latched at all 11 samples | 8 commit instants, all in the first 7.3s, then none | succeeded 451 frozen, failed 49,710; no findings |
+| B, 30 min | `messageBufferSize=20000`, `KEY` | open for 7m06s, then latched at `inShards=20993 vs 20006` for the remaining 22m54s | 27 commit instants, the last 3m06s in; none after | succeeded 897 (frozen from 3.5 min), failed 250,067; no findings |
+| C, 30 min | `messageBufferSize=100000`, `UNORDERED` | open at all 59 samples; `inShards` peaked 51,949 vs 100,002; no WARN | a commit in every one of the 30 minutes - 619 instants, the last 1794.8s in | succeeded 37,641 and still rising, failed 213,533; **no findings** |
+
+**Arm B settles that the buffer is the wrong knob for this question under `KEY`, for a reason the
+gate arms did not isolate.** Its commit path went quiet at minute three with the gate open and no
+partition paused: under `KEY` each key retires records until its first poisoned one and never again,
+so with permanent poison successes are bounded by the key space (897 observed, twice), and dirty is
+derived from completions (`PartitionState#isDirtyAt`), so once successes stop nothing is ever dirty
+and `commitAndWait` is never entered. A 100,000 buffer would have held the gate open for the full
+thirty minutes and commits would still have stopped at minute three. `UNORDERED` is what lifts that
+bound - it is a departure from astubbs#177's reporter's ordering, chosen because it is the only
+combination of the existing knobs under which the assertion can fail at all after minute three, and
+the 2026-09-08 arm 2 had already shown ordering does not decide the latch.
+
+**What this is, and is not.** On v0.6.0.0, one instance, a quiet box: zero bare commit-response
+timeouts and zero poller deaths across 654 acknowledged commit instants, 619 of them in thirty
+minutes of a continuously exercised commit path. One run at one shape; it says the shape did not
+reproduce once, never that it cannot. It says nothing about astubbs#175's own configuration (128
+partitions, concurrency 64, a user function of minutes - item 3 above, still unrun), a loaded box, a
+rebalance, more than one instance, or durations past thirty minutes.
 
 ### The stall may be the better lead than the timeout
 
