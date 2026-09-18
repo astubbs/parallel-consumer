@@ -30,8 +30,10 @@ is already closed.
 **Partly addressed or settled by design - answerable with the honest scope, on both sides unless
 noted.**
 
-- [x] confluentinc#803 (astubbs#44) - the revocation's wait on the transaction lock is bounded, not
-  yet declined (astubbs#466; fix follows in astubbs#408). Mirror commented 2026-09-17; upstream
+- [x] confluentinc#803 (astubbs#44) - the revocation's wait on the transaction lock is bounded by
+  astubbs#466 but can still exceed `max.poll.interval.ms`; bounding it under the poll interval is
+  astubbs#408 (the decline design there was refuted by astubbs#466). Both posted comments were
+  edited on 2026-09-18 to say so, having first claimed decline was the fix. Mirror commented 2026-09-17; upstream
   **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/issues/803#issuecomment-5724766834).
 - [x] confluentinc#809 (astubbs#175) - every known cause of the commit-response timeout is fixed and - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/issues/809#issuecomment-5723607583), with the soak rerun (astubbs#518).
   the message names which; the reported symptom itself never reproduced. Mirror commented
