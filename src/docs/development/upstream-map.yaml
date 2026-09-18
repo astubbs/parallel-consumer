@@ -1160,7 +1160,7 @@ entries:
   - id: key-order-across-rebalance
     group: rebalance-stability
     summary: Same key on two worker threads across a rebalance - the rebalance-gated route, ruled a violation and fixed; the detector widened
-    fork: {branches: [fix/178-key-order-across-rebalance], prs: [], fork_issue: 178, status: ready}
+    fork: {branches: [], prs: [517], fork_issue: 178, status: merged}
     upstream: {repo: confluentinc/parallel-consumer, issues: [843], prs: [], related: [777, 909, 893, 623], status: open, last_checked: 2026-08-20}
     adoc_anchor: part3-cat2-correctness
     notes: >
