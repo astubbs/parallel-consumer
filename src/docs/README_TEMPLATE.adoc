@@ -646,6 +646,19 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-str
 
 See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/bz/stub/parallelconsumer/examples/streams/StreamsApp.java[Kafka Streams example] project, and it's test.
 
+[[several-instances]]
+=== Several instances in one application: isolation versus sharing
+
+An instance is the isolation boundary. Each `ParallelStreamProcessor` owns its `KafkaConsumer` and `group.id`, its worker pool sized by `maxConcurrency`, its buffer and its commit cadence, and pauses its own poller when its own buffer fills. Nothing is shared between two instances in one JVM unless you share it.
+
+So for a service with more than one workload -- a fast command topic and a slow, heavy event topic, say, or the stages of a fan-out pipeline -- run one instance per workload, each with its own consumer group. Each stage's lag is then its own signal, back-pressure is per stage, and a slow workload cannot starve a fast one, because they do not share a pool. The `pcinstance` metrics tag (see <<metrics>>) keeps their meters apart in one registry.
+
+The reasons to share one instance across topics are fewer: one group to operate, one set of threads. The costs are what sharing always costs here -- interference between workloads, lag and back-pressure that look global, and no in-library scheduler to make one instance fair across its topics. Prefer separate instances unless the workloads are alike.
+
+Two things not to share: a `KafkaConsumer` between instances, ever; and a `Producer` between instances in the transactional commit mode, where each instance needs its own `transactional.id`. Two instances in the *same* `group.id` on one JVM only split the partitions between them and isolate nothing.
+
+Thread cost is the sum of `maxConcurrency` across instances, in the core module a fixed pool of platform threads per instance, so size each stage for what its downstream can take rather than for speed. Limiting one stage by another's capacity is not built in: today it is that stage's `maxConcurrency`, or `pauseIfRunning()` and `resumeIfPaused()` driven by a monitor of the downstream group's lag. Group-wide rate limiting and self-tuning concurrency are on the <<roadmap>>.
+
 [[upgrading]]
 == Upgrading
 
