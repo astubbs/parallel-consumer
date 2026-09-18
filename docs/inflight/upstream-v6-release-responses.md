@@ -30,17 +30,20 @@ is already closed.
 **Partly addressed or settled by design - answerable with the honest scope, on both sides unless
 noted.**
 
-- [ ] confluentinc#803 (astubbs#44) - the revocation's wait on the transaction lock is bounded, not
-  yet declined (astubbs#466; fix follows in astubbs#408). The mirror got its what-shipped comment on
-  2026-09-17; the upstream thread has not.
+- [x] confluentinc#803 (astubbs#44) - the revocation's wait on the transaction lock is bounded, not
+  yet declined (astubbs#466; fix follows in astubbs#408). Mirror commented 2026-09-17; upstream
+  **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/issues/803#issuecomment-5724766834).
 - [x] confluentinc#809 (astubbs#175) - every known cause of the commit-response timeout is fixed and - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/issues/809#issuecomment-5723607583), with the soak rerun (astubbs#518).
   the message names which; the reported symptom itself never reproduced. Mirror commented
   2026-09-17; upstream not.
 - [x] confluentinc#777 (astubbs#173) - settled as by-design: a revocation redelivers in-flight work. - **posted 2026-09-18, mirror closed as by-design.**
   The documentation reply is what remains; [`upstream-173-revocation-duplicate-processing.md`](upstream-173-revocation-duplicate-processing.md)
   holds the grace-period decision.
-- [ ] confluentinc#551 (astubbs#164) - batching over-request: the validation half shipped
-  (astubbs#496), the `target - modulo` arithmetic half is open as astubbs#311.
+- [x] confluentinc#551 (astubbs#164) - batching over-request: the validation half shipped
+  (astubbs#496), the `target - modulo` arithmetic half is open as astubbs#311; the batchSize-is-a-maximum
+  doc fix rides on this branch. **Posted 2026-09-18** on both: mirror
+  https://github.com/astubbs/parallel-consumer/issues/164#issuecomment-5724766990, upstream
+  https://github.com/confluentinc/parallel-consumer/issues/551#issuecomment-5724767191.
 
 **Upstream PRs absorbed by fork work, with no comment saying so.** One paragraph each: the
 equivalent shipped, with credit to the contributor.
