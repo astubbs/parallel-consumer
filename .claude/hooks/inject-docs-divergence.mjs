@@ -3,8 +3,8 @@
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-// PostToolUse hook on `Read|Bash`: when the agent has just read a document under one of the three
-// corpus areas (docs/inflight/, docs/solutions/, docs/plans/), put the divergence header's summary
+// PostToolUse hook on `Read|Bash`: when the agent has just read a document under one of the corpus
+// areas (bin/lib/repo.mjs's `DOC_AREAS`, which this reads rather than listing), put the divergence header's summary
 // line beside the read - how many versions of that document exist on other live refs carrying
 // content the baseline has never held, whether this copy is the baseline's, its branch's own, or
 // branch-only, and the command for the rest.

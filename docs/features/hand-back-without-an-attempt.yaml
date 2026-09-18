@@ -1,0 +1,47 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Hand a record back without spending one of its attempts
+category: processing
+module: parallel-consumer-core
+maturity: alpha
+availability:
+  status: planned
+  target_release: next-0x
+release_assumptions:
+  - Not in 0.6.0.0. Until the release that carries it is cut, everything here is a claim about the source, not about a published artifact.
+summary: >-
+  PCRetriableException(message).notAnAttempt() returns a record to the engine without counting a
+  failed attempt against it, for a delivery where your work never actually ran - so a record
+  declined by a gate does not spend the budget meant for records that were tried and failed.
+use_this_when:
+  - "Something in front of your work declined the delivery: a circuit breaker that is open, a tenant or feature switched off, a dependency you chose not to call yet."
+  - A record must be returned repeatedly while a condition clears, and you do not want every return to look like a failure of the record itself.
+  - A payload can never be processed at all, where it pairs with park to stop the record for good without first recording an attempt that never happened.
+setup:
+  mechanism: >-
+    throw new PCRetriableException(message).notAnAttempt() from the processing function. The record
+    returns to awaiting selection; its failed-attempt count is left where it was.
+  observe:
+    - RecordContext.getNumberOfFailedAttempts(), which does not advance across hand-backs made this way.
+  combine: park(reason).notAnAttempt() is the permanent case - the record stops, with nothing charged to it.
+opt_in:
+  mechanism: Call notAnAttempt() on the PCRetriableException you throw. A throw without it counts as an attempt, as every hand-back always has.
+  isolated_from_stable_modules: false
+boundaries:
+  - The attempt count is what a retry budget and any attempt-derived backoff read, so a record returned this way can be returned without limit and nothing will ever stop it. Bounding the loop is yours - a condition that never clears is an infinite one.
+  - It is not a skip and not a success. The record stays incomplete and its offset stays uncommitted, so the partition does not advance past it while the condition holds.
+  - A retry-delay provider that computes backoff from the failure count sees a count that is not moving, and will keep returning the same delay.
+  - Pairing it with retryAfter(delay) DOES produce that delay, on a first delivery as on any other - the two facts are independent, and a withheld delivery that asked to wait 30 seconds waits them. Eligibility is asked of whether a deadline was ever written, not of the attempt count, so suppressing the count does not suppress the wait.
+  - It does not suppress anything in the logs beyond what PCRetriableException already suppresses - see controlled-retry-exception.yaml.
+validation:
+  - Return the same record several times this way and confirm its failed-attempt count is unchanged, while an ordinary retriable throw advances it.
+  - Confirm the record is re-selected rather than left held, and that no retry entry for it survives once it is back in flight.
+references:
+  - label: The exception and the facts a throw can carry
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/PCRetriableException.java
+  - label: What a hand-back does to the record's history
+    path: parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/state/WorkContainerHandbackTest.java
+  - label: Stopping a record for good, which this pairs with
+    path: docs/features/park-in-place-engine.yaml

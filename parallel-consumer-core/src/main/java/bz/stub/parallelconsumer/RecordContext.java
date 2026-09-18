@@ -77,5 +77,30 @@ public class RecordContext<K, V> {
      * @return if the record has failed, returns the last failure reason
      */
     public Optional<Throwable> getLastFailureReason() { return workContainer.getLastFailureReason(); }
+
+    /**
+     * @return whether this record's partition has been revoked since it was handed out, so this instance no longer
+     * owns it
+     * @see bz.stub.parallelconsumer.state.WorkContainer#isStale()
+     */
+    public boolean isStale() {
+        return workContainer.isStale();
+    }
+
+    /**
+     * @return whether this record is <em>parked</em> - never attempted again on its own, holding no worker, still
+     * incomplete in the offset map, and carrying a reason an operator can act on
+     * @see bz.stub.parallelconsumer.PCRetriableException#park(String)
+     */
+    public boolean isParked() {
+        return workContainer.isParked();
+    }
+
+    /**
+     * @return why this record parked, or empty when it is not parked
+     */
+    public Optional<String> getParkedReason() {
+        return Optional.ofNullable(workContainer.getParkedReason());
+    }
 }
 

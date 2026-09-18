@@ -40,7 +40,7 @@ const INDEX_DELIVERY = 'session index'
 const BRANCH_DELIVERY = 'branch facts'
 const DEFAULT_INDEX_MAX_LINES = 400
 
-/** Under one of the three corpus areas - the only paths the divergence query is defined for. */
+/** Under one of the corpus areas - the only paths the divergence query is defined for. */
 const inCorpus = (path) => DOC_AREAS.some((a) => path.startsWith(`${a.dir}/`))
 
 // --- The text the registry imports. -------------------------------------------------------------
@@ -52,7 +52,7 @@ export const docsUsage = `Usage: bin/inflight.mjs docs                          
        bin/inflight.mjs docs header <path> [--ref <ref>]
        bin/inflight.mjs docs for-branch [<ref>]                 what names the branch, its PR, its issues
 
-The docs corpus - docs/inflight/, docs/solutions/, docs/plans/ - read across EVERY ref, never the
+The docs corpus - ${DOC_AREAS.map((a) => `${a.dir}/`).join(', ')} - read across EVERY ref, never the
 working tree. Bare \`docs\` prints each area, its groups and their counts, how many documents exist
 only off the baseline, the subcommands with when to use each, and a notice for any delivery of the
 context query that has a recorded failure. Every level prints the commands for the next, so the
@@ -61,16 +61,16 @@ walk from here to one document is copy and paste.
   list    the areas; one area's groups; or one group's documents, each with its \`docs show\`
   show    one document with its divergence header, from the right ref
   header  the header alone - what the read-time hook shows, in full
-  index   the session-start index for the three areas - every title, corpus-scoped
+  index   the session-start index for every area - every title, corpus-scoped
   for-branch  the documents naming a branch, its cached PR and its issue numbers - the block after the index`
 
 export const listSummary = "one level of the corpus shape - the areas, one area's groups, or one group's documents with their docs show commands"
 export const listUsage = `Usage: bin/inflight.mjs docs list <area> [<group>]
 
-Areas are the corpus directories by their last segment: inflight, solutions, plans. Groups are what
-the session index groups by - a solution's category directory, an in-flight note's impact (plus
-registers, feature, unmatched, closed and deferred), a plan's year-month - and the area level lists
-them with the command for each. The leaf lists every document as a title, its path, whether it
+Areas are the corpus directories by their last segment: ${DOC_AREAS.map((a) => a.dir.split('/').pop()).join(', ')}.
+Groups are what the session index groups by - a solution's category directory, an in-flight note's
+impact (plus registers, feature, unmatched, closed and deferred), a plan's year-month, a feature
+record's own \`category:\` key (plus staging) - and the area level lists them with the command for each. The leaf lists every document as a title, its path, whether it
 exists only off the baseline (and on which ref), and the \`docs show\` command that prints it.
 
 An unknown area or group is not an error: the valid names are printed, each as a command, exit 0.
@@ -78,7 +78,8 @@ An unknown area or group is not an error: the valid names are printed, each as a
   bin/inflight.mjs docs list inflight
   bin/inflight.mjs docs list inflight crash
   bin/inflight.mjs docs list solutions test-flakiness
-  bin/inflight.mjs docs list plans 2026-09`
+  bin/inflight.mjs docs list plans 2026-09
+  bin/inflight.mjs docs list features operability`
 
 export const showSummary = 'one document with its full divergence header, from the baseline or the first live ref carrying it'
 export const showUsage = `Usage: bin/inflight.mjs docs show <path> [--ref <ref>] [--header-only]
@@ -109,14 +110,15 @@ points at.
 
   bin/inflight.mjs docs header docs/inflight/bug-857-family.md`
 
-export const indexSummary = 'the session-start index for the three areas - every title, grouped as the hook groups them, corpus-scoped'
+export const indexSummary = 'the session-start index for every corpus area - every title, grouped as the hook groups them, corpus-scoped'
 export const indexUsage = `Usage: bin/inflight.mjs docs index [--max-lines <n>]
 
-What .claude/hooks/inject-recorded-knowledge.sh injects at session start for docs/solutions,
-docs/inflight and docs/plans - rendered from the refs, not the working tree, so it lists the whole
-corpus: on-baseline documents under the groups the index has always used (solutions by category,
-in-flight notes by the cost-of-not-knowing order with registers first and deferred last, plans by
-month), and documents that exist ONLY off the baseline under the branch set carrying them, as
+What .claude/hooks/inject-recorded-knowledge.sh injects at session start for every corpus area -
+rendered from the refs, not the working tree, so it lists the whole corpus: on-baseline documents
+under the groups the index has always used (solutions by category, in-flight notes by the
+cost-of-not-knowing order with registers first and deferred last, plans by month, feature records by
+their own category with staged ones last), and documents that exist ONLY off the baseline under the
+branch set carrying them, as
 \`stranded\` clusters them, largest first.
 
 --max-lines <n>   the cap on the off-baseline groups across the whole index (default ${DEFAULT_INDEX_MAX_LINES});
@@ -152,9 +154,9 @@ to stderr; exit 0.
 
 /**
  * The index, its stranded clusters and the shape over both - what bare `docs` and every `docs
- * list` level share. One build per call and no cache, per the plan's KTD5: the three-area index
- * measures about five seconds here and the budget is eight, so the cost is stated in the usage
- * rather than hidden behind a file that would go stale.
+ * list` level share. One build per call and no cache, per the plan's KTD5: the index measures about
+ * five seconds here and the budget is eight, so the cost is stated in the usage rather than hidden
+ * behind a file that would go stale.
  */
 export function corpusShape() {
     const index = corpusIndex()

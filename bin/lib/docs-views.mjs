@@ -121,7 +121,10 @@ export function formatDivergenceHeader(d, { tier = 'summary', top = HEADER_TOP, 
                 const named = headings.slice(0, ADDS_SHOWN).map((h) => `"${h}"`).join(', ')
                 const rest = headings.length - ADDS_SHOWN
                 out.push(`        adds: ${named}${rest > 0 ? ` and ${rest} more` : ''}`)
-            } else if (c.preview.firstLine !== null) out.push(`        adds: "${c.preview.firstLine}" (no heading added)`)
+            // The word follows the document kind: a YAML record has keys where prose has headings,
+            // and "no heading added" about a file that cannot hold one is a sentence a reader has
+            // to decode before discarding.
+            } else if (c.preview.firstLine !== null) out.push(`        adds: "${c.preview.firstLine}" (no ${c.preview.kind === 'record' ? 'key' : 'heading'} added)`)
             else out.push('        adds: nothing visible in a line diff')
         }
     }
@@ -358,8 +361,13 @@ export function formatDocsList(shape, { area = null, group = null } = {}) {
 
 const INDEX_TOOL_MORE = `${TOOL} docs`
 
-/** The hook's area order, which is not `DOC_AREAS`'s: solved first, then work, then the plans. */
-const INDEX_AREA_ORDER = ['solutions', 'inflight', 'plans']
+/**
+ * The hook's area order, which is not `DOC_AREAS`'s: solved first, then work, then the plans, then
+ * what the product does. Features last because it is the only area that is not a record of somebody
+ * working - a session reads it to find out whether a capability already exists, which is a question
+ * asked less often than "has this been solved" but is the one a wrong answer is most expensive on.
+ */
+const INDEX_AREA_ORDER = ['solutions', 'inflight', 'plans', 'features']
 
 /**
  * A cluster's branch names: local and remote-tracking copies of one branch are one name, and the
@@ -383,11 +391,15 @@ const noteTail = (d) => {
     return d.note.impact ? `  _${d.note.impact}_` : ''
 }
 
+/** The disposition a feature line carries: whether the capability EXISTS yet, which the title cannot say. */
+const featureTail = (d) => (d.feature?.status ? `  _${d.feature.status}_` : '')
+
 /** One document as a line of the index, in the shape the hook gave that area's lines. */
 const INDEX_LINE = {
     solutions: (d) => `- ${d.title}  \`${d.path}\``,
     inflight: (d) => `- [${d.note?.type || 'untyped'}] ${d.title}${noteTail(d)}`,
     plans: (d) => `- ${planStem(d.path)}`,
+    features: (d) => `- ${d.title}${featureTail(d)}  \`${d.path}\``,
 }
 
 /** The on-baseline half of one area, as the hook rendered it. */
@@ -440,6 +452,18 @@ const ON_BASELINE = {
         }
         return out
     },
+    features: (area, docs) => {
+        const out = ['# What the product does - capability records', '',
+            '`docs/features/` - one YAML record per user-visible capability, grouped by its own `category`. '
+            + 'Read before proposing one: a record here means the capability is shipped or already specified.']
+        for (const g of area.groups) {
+            const mine = docs.filter((d) => g.docs.includes(d))
+            if (mine.length === 0) continue
+            out.push('', `## ${g.label}`, ...mine.map(INDEX_LINE.features))
+        }
+        out.push('')
+        return out
+    },
     plans: (area, docs) => {
         const out = ['# Dated plans and investigations', '', '`docs/plans/` - the method that settled a question of this shape before:']
         let any = false
@@ -459,6 +483,7 @@ const OFF_BASELINE_HEADING = {
     solutions: '# Solved only on branches - grouped by the branch set carrying them, largest first',
     inflight: '# In flight only on branches - grouped by the branch set carrying them, largest first',
     plans: '# Plans only on branches - grouped by the branch set carrying them, largest first',
+    features: '# Capabilities recorded only on branches - grouped by the branch set carrying them, largest first',
 }
 
 /**

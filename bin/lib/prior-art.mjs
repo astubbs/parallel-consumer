@@ -67,7 +67,18 @@ export function jqFilter(pattern, shape) {
     return `.[] | select((.title + " " + (.body // "")) | test(${JSON.stringify(pattern)}; "i")) | ${shape}`
 }
 
-export const summary = 'search plans, solutions, notes, commits and GitHub across EVERY ref'
+export const summary = 'search plans, solutions, notes, feature records, commits and GitHub across EVERY ref'
+
+/**
+ * THE SECTION NUMBERS ARE COUNTED, NEVER WRITTEN DOWN. The tree sections are `DOC_AREAS` plus the
+ * everything-else sweep, and the commit and GitHub sections follow them - so a fourth area used to
+ * mean a section 4 printed twice, once for the area and once for the hard-coded tail. Every number
+ * below is derived from that one count, and the self-test pins the resulting headings.
+ */
+const TREE_SECTIONS = DOC_AREAS.length + 1
+const COMMITS_SECTION = TREE_SECTIONS + 1
+const GITHUB_FIRST = COMMITS_SECTION + 1
+const GITHUB_LAST = GITHUB_FIRST + 2
 
 export const usage = `Usage: bin/inflight.mjs prior-art [--headings] [--by-ref] <term> [<term>...]
 
@@ -255,16 +266,16 @@ export function priorArt(terms, opts = {}) {
         result.github.lists.push({ heading, note, entries: lines(res.out), failed: !res.ok })
     }
 
-    ghList('6. Open PRs whose title or body matches (collision check)', undefined,
+    ghList(`${GITHUB_FIRST}. Open PRs whose title or body matches (collision check)`, undefined,
         ['pr', 'list', '-R', REPO, '--state', 'open', '--limit', '200', '--json', 'number,title,body',
             '--jq', jqSelect('"  #\\(.number) \\(.title)"')])
 
-    ghList('7. MERGED PRs whose title or body matches',
+    ghList(`${GITHUB_FIRST + 1}. MERGED PRs whose title or body matches`,
         '(the PR that already solved something in your file is, by definition, merged)',
         ['pr', 'list', '-R', REPO, '--state', 'merged', '--limit', '200', '--json', 'number,title,body',
             '--jq', jqSelect('"  #\\(.number) \\(.title)"')])
 
-    ghList('8. Issues, --state all (fork issues and upstream-mirror ones)',
+    ghList(`${GITHUB_LAST}. Issues, --state all (fork issues and upstream-mirror ones)`,
         "(read the upstream original, not the mirror's summary)",
         ['issue', 'list', '-R', REPO, '--state', 'all', '--limit', '400', '--json', 'number,title,body,state',
             '--jq', jqSelect('"  #\\(.number) [\\(.state)] \\(.title)"')])
@@ -353,7 +364,7 @@ export function formatByRef(r) {
 
 /** Commits and GitHub - identical in both views, because neither is per-path. */
 export function formatTail(r) {
-    const out = ['=== 5. Commits that added or removed the term (git log --all -S) ===']
+    const out = [`=== ${COMMITS_SECTION}. Commits that added or removed the term (git log --all -S) ===`]
     if (r.commits.length === 0) out.push(`  nothing, across every ref`)
     for (const c of r.commits) {
         out.push(`  -- ${c.term}`)
@@ -363,7 +374,7 @@ export function formatTail(r) {
     out.push('')
 
     if (!r.github.ran) {
-        out.push(`=== 6-8. GitHub checks SKIPPED - ${r.github.skipped} ===`)
+        out.push(`=== ${GITHUB_FIRST}-${GITHUB_LAST}. GitHub checks SKIPPED - ${r.github.skipped} ===`)
         out.push('  These are NOT "nothing found". Run the gh checks in AGENTS.md by hand.')
         out.push('')
         return out.join('\n')

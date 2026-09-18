@@ -484,8 +484,9 @@ what this one got wrong was not calling the tool but owning the tool's correctne
 - `PostToolUse` on `Bash` runs `.claude/hooks/after-push-check-ci.sh`. Why it has to be there
   rather than any earlier layer is above, under `PostToolUse`.
 - `PostToolUse` on `Read|Bash` runs `.claude/hooks/inject-docs-divergence.mjs`, the read-time
-  delivery of the document context query: when the agent has just read a file under
-  `docs/inflight/`, `docs/solutions/` or `docs/plans/` - through the Read tool, or a Bash command
+  delivery of the document context query: when the agent has just read a file under one of the
+  corpus areas - `bin/lib/repo.mjs`'s `DOC_AREAS`, which the hook reads rather than listing, so an
+  area added there is covered with no edit here - through the Read tool, or a Bash command
   whose tokens name the path - it puts the divergence header's summary line beside the read: how
   many versions of that document exist on other live refs carrying content the baseline has never
   held, whether this copy is the baseline's, its own branch's, or branch-only, whether the
@@ -525,8 +526,8 @@ what this one got wrong was not calling the tool but owning the tool's correctne
   `bin/test-check-docs-hooks.mjs` against a fixture repository holding every state the header
   reports, with a mutant control and a git shim proving the silent path makes no git call.
 - `SessionStart` runs `.claude/hooks/inject-recorded-knowledge.sh`, which lists the **titles** of
-  every `docs/solutions/` write-up, the open items in `docs/inflight/`, and the size of
-  `docs/plans/`. Titles only, once per session, no bodies - the length tracks the corpus, so no
+  every `docs/solutions/` write-up, the open items in `docs/inflight/`, the size of `docs/plans/`,
+  and the capability records in `docs/features/`. Titles only, once per session, no bodies - the length tracks the corpus, so no
   line count is promised here.
 
   It exists because the prior-art check in `AGENTS.md` is the one most often skipped, and skipping

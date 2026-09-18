@@ -141,6 +141,7 @@ that line, leave it in the code - it will show up here.
 - todo rename isRecordComplete()
 - todo add support for this to TruthGen
 - todo refactor use of null shouldn't be needed. Is OffsetMapCodecManager stateful? remove null - confluentinc#233
+- TODO(refactor): each parked gauge walks the whole retry queue on every scrape, so a scrape costs
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionStateManager.java`**
 
@@ -161,6 +162,7 @@ that line, leave it in the code - it will show up here.
 - TODO(refactor): rename to partitionManager - `pm` also abbreviates ProducerManager elsewhere in core
 - todo make private
 - TODO(refactor): rename to shardManager - see the note beside `pm`; both getters are public API
+- that is public only because nothing has finished making it private (the {@code TODO(refactor)} beside the
 
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/AmbientProbeExtension.java`**
 

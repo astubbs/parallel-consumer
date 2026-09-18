@@ -105,6 +105,53 @@ line the note quotes and never looked at the next one.
 2026-09-09 - a busy hour with many branches in flight - this was the only failure; every other one
 passed. That is a low-rate environment fault, not a lane that is broken.
 
+## Fourth and fifth sightings, 2026-09-11 - two branches in one night, and a second spelling of the cause line
+
+<!-- post-merge: checked-begin - a dated ledger of two runs, cited by PR number, commit and job id;
+     all four stay resolvable and the tense reads identically once these PRs have merged -->
+Two `Integration Tests` failures the same night on two unrelated branches, both the signature above,
+both exit **126**:
+
+- astubbs/parallel-consumer#507 at `f0f5f4c13`,
+  [job 103115992589](https://github.com/astubbs/parallel-consumer/actions/runs/34551732454/job/103115992589).
+  `ManagedPCInstanceLifecycleTest` fell first and slowly (91.13s); every other broker class in that
+  fork fell in milliseconds with
+  `NoClassDefFoundError: Could not initialize class ...BrokerIntegrationTest`.
+- astubbs/parallel-consumer#506 at `3d339298c`,
+  [job 103122944977](https://github.com/astubbs/parallel-consumer/actions/runs/34554073533/job/103122944977).
+  The same shape, with `TransactionalVisibilityIT` first and slowly (85.81s).
+
+**The class that falls slowly is whichever one that fork happened to initialise first** - a different
+one in each of these two runs - which is the cheapest evidence available that no individual test is
+at fault.
+
+**The cause line has two spellings, and the one quoted above matches only the second of these runs.**
+astubbs#506's log carries the exact form already recorded, `sh: /tmp/testcontainers_start.sh: Text file
+busy`. astubbs#507's carries a variant:
+
+```
+sh: /tmp/testcontainers_start.sh: /bin/bash: bad interpreter: Text file busy
+```
+
+The same `ETXTBSY`, one level further in: the kernel refused the **interpreter** named in the script's
+shebang rather than the script itself. So **grep the log for `Text file busy` alone** - the longer
+line this note used to quote is not stable across occurrences, and a grep anchored on it reports a
+clean log for a run that has exactly this fault.
+
+**The control arms.** `Integration Tests (heavy)` passed in the same run on the same commit for astubbs#507,
+so the fault is per-fork rather than per-commit. `node bin/inflight.mjs codecov test
+RegistrationRaceStaleResidentIT` shows the class-level entry failing on precisely these two commits
+while the test method itself passes on every other recorded commit - run it rather than trusting a
+transcription of it. And astubbs/parallel-consumer#505 passed the same lane earlier the same night.
+<!-- post-merge: checked-end -->
+
+**What this is not** - restated because two sightings in one night reads like a regression. Not a
+product bug, not resource exhaustion, not an image-pull failure, and **not a quarantine candidate**:
+no test is at fault, so there is nothing to annotate, and the evidence bar in
+[`docs/quarantined-tests.md`](../quarantined-tests.md) is not the instrument for an infrastructure
+fault. The ambient probe has nothing to say either, for the reason given above - no broker existed
+for it to probe.
+
 ## The actual open item: the lane cannot explain its own infra failures
 
 The container's stdout is nowhere in the job log - only Testcontainers' outside view of it. So "exit
@@ -121,3 +168,22 @@ Worth doing, in rough order of value:
    A failure surfaced once, with the container's own output, would be strictly more informative.
 3. Only then ask whether exit 126 has a fixable local cause (image pull, runner disk, nested
    virtualisation). It is not worth guessing at before step 1 exists.
+
+**The open question this reached on 2026-09-11, posed rather than answered.** The cause is now
+settled (`ETXTBSY` on the start script or its interpreter - a known Docker/Testcontainers start race,
+nothing local) and so is the blast radius (one container start costs a whole fork's results). What is
+left is a harness choice nobody has made:
+
+- **(a) retry the container start once on `ETXTBSY`** - cheapest, treats the race where it happens,
+  and leaves the `<clinit>` shape alone.
+- **(b) move the container out of the static initialiser**, so one start failure surfaces once with
+  its own output instead of poisoning every class the fork runs afterwards - item 2 above, restated
+  as a decision rather than an investigation.
+- **(c) both** - on the argument that (a) lowers the rate while (b) bounds the cost, and neither does
+  the other's job.
+
+Untriaged: nobody has picked it, and this note deliberately does not choose. The mechanisms either
+side of it have owners - [`docs/testing.md`](../testing.md) owns the ambient probe ("The ambient
+probe: contention artifact, or genuine bug?"), and [`docs/ci.md`](../ci.md) owns the lanes and their
+shards ("The Integration Tests lane runs as two shards").
+

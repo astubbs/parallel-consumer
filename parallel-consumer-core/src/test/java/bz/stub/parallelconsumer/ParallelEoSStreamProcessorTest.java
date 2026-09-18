@@ -268,11 +268,13 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     @SneakyThrows
     public void executorThreadsInterruptedOnShutdownTimeout(CommitMode commitMode) {
         AtomicBoolean interrupted = new AtomicBoolean(false);
+        AtomicBoolean inFlight = new AtomicBoolean(false);
         CountDownLatch latch = new CountDownLatch(1);
         setupParallelConsumerInstance(getBaseOptionsKeyOrdered(commitMode, Duration.ofSeconds(1)));
         primeFirstRecord();
 
         parallelConsumer.poll((ignore) -> {
+            inFlight.set(true);
             try {
                 latch.await();
             } catch (InterruptedException interruptedException) {
@@ -282,8 +284,17 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
             }
         });
 
-        // let it process
-        awaitForSomeLoopCycles(2);
+        // Wait for the record to actually BE in flight, for the reason spelled out in full on
+        // inFlightMessagesCommittedIfProcessedDuringShutdown: `awaitForSomeLoopCycles` counts CONTROL thread
+        // iterations, and nothing orders those against the worker entering the user function, so under load the
+        // loop turns twice while the record is still queued in the pool. This test is the outstanding instance
+        // that comment names. It became a red rather than a silent pass in 0.6, when a dont-drain close started
+        // handing queued batches back instead of starting them: a record that is not yet in the function is not
+        // in flight, so there is nothing for the shutdown timeout to interrupt and `interrupted` stays false.
+        //
+        // A STRONGER precondition, not a looser deadline: with the record proven in flight, a false below now
+        // means the shutdown timeout genuinely failed to interrupt it.
+        awaitUntilTrue(inFlight::get);
 
         parallelConsumer.close();
 

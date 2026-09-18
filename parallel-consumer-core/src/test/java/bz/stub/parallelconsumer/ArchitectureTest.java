@@ -22,6 +22,7 @@ import java.util.Deque;
 import com.tngtech.archunit.lang.ConditionEvents;
 import com.tngtech.archunit.lang.SimpleConditionEvent;
 import bz.stub.parallelconsumer.internal.ConsumerManager;
+import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.state.ControllerThreadOnly;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -54,7 +55,22 @@ class ArchitectureTest {
             "bz.stub.parallelconsumer.internal.ThreadConfinedConsumer",
             ParallelConsumerOptions.class.getName(),
             // Lombok @Builder generates this inner class which also holds the consumer field
-            ParallelConsumerOptions.class.getName() + "$ParallelConsumerOptionsBuilder"
+            ParallelConsumerOptions.class.getName() + "$ParallelConsumerOptionsBuilder",
+            // The composition root, added deliberately with astubbs#504 rather than excluded. Until PC could build
+            // its own consumer, the only instance in existence was the caller's and ParallelConsumerOptions was the
+            // only place it lived; PCModule.consumer() simply forwarded that field. With ParallelConsumerOptions
+            // .consumerConfig, PC constructs the consumer itself, and the constructed instance has to live
+            // somewhere for the lifetime of the module - it is memoised so that ConsumerManager, the start-up
+            // checks and the offset codec all address one client rather than each building their own.
+            //
+            // This does NOT widen what the rule protects. The invariant is that no engine class caches a raw
+            // consumer and calls it directly, bypassing thread confinement; PCModule is the DI module that
+            // constructs collaborators, not one of them, and every engine access still goes through
+            // ConsumerManager. Note the producer side avoids this entry only because PCModule wraps its built
+            // producer immediately (it holds a ProducerWrapper, never a Producer) - the consumer has no equivalent
+            // wrapper it can hold, because the raw instance is what ThreadConfinedConsumer is handed and what the
+            // auto-commit and subscription checks must inspect.
+            PCModule.class.getName()
     ));
 
     /**
