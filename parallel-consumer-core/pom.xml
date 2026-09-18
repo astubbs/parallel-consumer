@@ -55,12 +55,29 @@
             <artifactId>kafka-clients</artifactId>
             <version>${kafka.version}</version>
         </dependency>
+        <!-- Both codecs are DIRECT dependencies, not just Kafka's transitives: OffsetSimpleSerialisation
+             compresses the offset map in commit metadata with zstd (ZstdOutputStream / ZstdInputStream)
+             and has a snappy sibling nothing calls (dead code, main or test), so the versions belong here
+             rather than in the root's dependencyManagement where lz4-java is pinned. Declaring them also pins
+             Kafka's runtime copies ahead of what kafka-clients 3.9.2 ships (zstd-jni 1.5.6-4, snappy-java
+             1.1.10.5).
+
+             zstd-jni: 1.5.7-14 fixed CVE-2026-87795, CVE-2026-87823 and CVE-2026-89045 (bounds checks
+             on ZstdDictCompress, the direct-ByteBuffer frame-size natives and a negative length passed
+             to ZstdInputStreamNoFinalizer.read - none of which this tree or kafka-clients reaches,
+             but the bump is free: Java 8 bytecode, no new compile-scope dependency, public
+             signatures unchanged). Kept at the newest release rather than the first fixed one. -->
         <dependency>
             <groupId>com.github.luben</groupId>
             <artifactId>zstd-jni</artifactId>
-            <version>1.5.7-12</version>
+            <version>1.5.7-17</version>
             <scope>compile</scope>
         </dependency>
+        <!-- snappy-java: 1.1.10.8 is the newest release on Central and carries CVE-2026-90559, which
+             is excluded in the root pom with the reachability argument (the vulnerable overload is
+             Snappy.uncompress(ByteBuffer, ByteBuffer); everything here goes through the stream
+             classes, which never call it). Bump and delete that exclusion when a fixed release
+             ships - xerial/snappy-java#728 is the issue, xerial/snappy-java#734 the candidate fix. -->
         <dependency>
             <groupId>org.xerial.snappy</groupId>
             <artifactId>snappy-java</artifactId>
