@@ -20,6 +20,7 @@ import pl.tlinkowski.unij.api.UniMaps;
 import java.util.List;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -195,6 +196,33 @@ class KeyOrderAcrossRebalanceTest {
         assertWithMessage("only the key with a flight outstanding waits; the other key's record is free to go")
                 .that(taken).hasSize(1);
         assertThat(taken.get(0).getCr().key()).isEqualTo("another-key");
+    }
+
+    /**
+     * The same control under PARTITION, where "another shard" means another partition. The departure set is per
+     * shard and the scan asks only the shard it is reading, so partition 1's record goes out while partition 0's
+     * old-epoch flight is still running. This is the arm the KEY control above cannot reach - under KEY both keys
+     * share the partition - and it is what pins that the gate withholds one shard's work rather than the
+     * instance's: a starvation across partitions with no revoke in play is NOT something this gate can cause.
+     */
+    @Test
+    void anotherPartitionIsNotHeldBackByThisPartitionsOldEpochFlight() {
+        givenAnAssignedPartitionUnder(PARTITION);
+        TopicPartition otherPartition = new TopicPartition(TOPIC, 1);
+        wm.onPartitionsAssigned(UniLists.of(otherPartition));
+        givenAnOldEpochFlightStillRunningAfterARevokeAndReassign();
+
+        var otherPartitionsRecord = new ConsumerRecord<>(TOPIC, 1, 0L, "other-key", "v-other");
+        var bothPartitions = new ConsumerRecords<>(UniMaps.of(
+                TP, UniLists.of(recordAt(0, THE_KEY)),
+                otherPartition, UniLists.of(otherPartitionsRecord)));
+        wm.registerWork(new EpochAndRecordsMap<>(bothPartitions, pm));
+
+        List<WorkContainer<String, String>> taken = wm.getWorkIfAvailable(10);
+        assertWithMessage("only the partition with a flight outstanding waits; the other partition's record is free "
+                + "to go")
+                .that(taken).hasSize(1);
+        assertThat(taken.get(0).getTopicPartition()).isEqualTo(otherPartition);
     }
 
     /**
