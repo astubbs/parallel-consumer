@@ -45,11 +45,11 @@ noted.**
 **Upstream PRs absorbed by fork work, with no comment saying so.** One paragraph each: the
 equivalent shipped, with credit to the contributor.
 
-- [ ] confluentinc#918, confluentinc#919, confluentinc#920 (singhvishalkr) - the log-noise trims and
-  the JDK 17 build doc.
-- [ ] confluentinc#901 (johnbyrnejb) - the licence check and `.gitignore`.
-- [ ] confluentinc#908 (devingryu) - virtual threads; the fork went its own way in astubbs#360 and
-  replied on the issue, never on that PR.
+- [x] confluentinc#918, confluentinc#919, confluentinc#920 (singhvishalkr) - the log-noise trims and
+  the JDK 17 build doc. Posted 2026-09-18; the doc landed as astubbs#519.
+- [x] confluentinc#901 (johnbyrnejb) - the licence check and `.gitignore`. Posted 2026-09-18.
+- [x] confluentinc#908 (devingryu) - virtual threads; the fork went its own way in astubbs#360 and
+  replied on the issue, never on that PR. Posted 2026-09-18.
 
 **Mirror bodies whose `## Fork status` section is wrong, with the corrected text already
 drafted.** [`upstream-mirror-bodies-are-stale.md`](upstream-mirror-bodies-are-stale.md) owns the
