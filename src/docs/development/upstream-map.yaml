@@ -552,7 +552,8 @@ entries:
       status: in-progress
     upstream:
       repo: confluentinc/parallel-consumer
-      prs: [866, 920]
+      prs: [866]
+      related: [920]
       status: open
       last_checked: 2026-07-28
     adoc_anchor: part3-cat5-jdk
@@ -566,8 +567,9 @@ entries:
       alike because both say "Java". confluentinc PR #866 bumps
       Kafka to v4 (NOTE: .adoc previously said v7 -- stale). confluentinc PR #920
       (found by the 2026-07-28 sweep) documents the JDK 17 build requirement +
-      Jabel Java 8 bytecode -- overlaps our Java-baseline framing; compare before
-      landing our own. Branch is stale: 1 ahead, 57 behind master (2026-08-04).
+      Jabel Java 8 bytecode; carried into the README on its own by
+      docs-920-build-jdk-requirement (2026-09-18), so it is related here, not
+      primary. Branch is stale: 1 ahead, 57 behind master (2026-08-04).
       Also gates fork PR #38 (JUnit 6 needs Java 17, plus an ArchUnit engine that
       does not exist yet -- TNG/ArchUnit#1556).
 
@@ -1329,3 +1331,32 @@ entries:
       reference for the subscribe half only, not a cherry-pick: closed unmerged, on
       pre-rename packages, and predating the fork's actor work.
       Done-definition in docs/inflight/core-139-public-api-thread-safety-contract.md.
+
+  - id: docs-920-build-jdk-requirement
+    group: build-tooling
+    summary: README says a source build needs JDK 17 and why the jar is still Java 8 (Jabel)
+    fork:
+      branches: [docs/920-jdk17-build-requirement]
+      prs: []
+      fork_issue: 194
+      status: ready
+    upstream:
+      repo: confluentinc/parallel-consumer
+      issues: [906]
+      prs: [920]
+      related: [866]
+      status: open
+      last_checked: 2026-09-18
+    adoc_anchor: part3-cat5-jdk
+    notes: >
+      Carries singhvishalkr's README subsection from confluentinc PR #920 (still
+      open upstream, 2026-09-18) into src/docs/README_TEMPLATE.adoc, with credit
+      in the commit. The wording is re-verified against this pom rather than
+      copied: the fork needs JDK 17 specifically, not "17 or newer", because
+      Jabel 1.0.0's Byte Buddy refuses JDK 21's class files (see
+      docs/solutions/build-errors/error-prone-jabel-and-the-jdk-that-satisfies-neither-2026-08-25.md);
+      and the Mutiny module no longer builds at release 8 through Jabel - it
+      overrides release.target to 17 since astubbs#214, which is what closed the
+      fork mirror astubbs#194 of the issue PR #920 fixes (confluentinc#906).
+      Distinct from java-17-baseline-kafka4, which is about moving the build
+      baseline; this entry only documents the baseline that exists today.
