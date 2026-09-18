@@ -1,57 +1,21 @@
 # Next candidates, ranked
 
 <!-- inflight-type: register -->
-<!-- inflight-vetted: 2026-09-09 - the astubbs#162 decision was made and shipped, so that line is removed and the ranking is seven; the rest are still open issues awaiting the same reply (astubbs#161, astubbs#181, astubbs#163, astubbs#189, astubbs#241, astubbs#173, astubbs#178) and every note they name is present. 2026-09-07: four settled lines removed - the astubbs#155/astubbs#169/astubbs#170 scheduling sentence and the logging-verbosity pick (merged as astubbs#203 and astubbs#428), the astubbs#40 dedup pick (astubbs#206), and confluentinc#906 out of the contributor-friction pick (astubbs#194 closed) -->
+<!-- inflight-vetted: 2026-09-18 - the seven decisions are made and posted; the ranking section is retired to a pointer. Earlier: 2026-09-09 - the astubbs#162 decision was made and shipped, so that line is removed and the ranking is seven; the rest were still open issues awaiting the same reply (astubbs#161, astubbs#181, astubbs#163, astubbs#189, astubbs#241, astubbs#173, astubbs#178) and every note they name is present. 2026-09-07: four settled lines removed - the astubbs#155/astubbs#169/astubbs#170 scheduling sentence and the logging-verbosity pick (merged as astubbs#203 and astubbs#428), the astubbs#40 dedup pick (astubbs#206), and confluentinc#906 out of the contributor-friction pick (astubbs#194 closed) -->
 
 
-## Decisions waiting on the maintainer, ranked
+## Decisions waiting on the maintainer - all seven made, 2026-09-18
 
-**These outrank everything below, and the reason is cost rather than importance.** Each is a note
-whose engineering is already done or already unnecessary - what is left is one reply, and until it
-arrives the note cannot close and the work behind it cannot be scheduled. Ranked by how little input
-each needs, not by the size of what it unblocks: an item needing a yes/no beats one needing a policy,
-and a policy beats a bound that has to be argued for.
-
-They came out of the 2026-08-20 mirror triage, which produced one note per issue - each carrying the
-verification, the draft answer, and the collision list. **Do not re-derive any of it here**; the note
-named on each line owns it.
-
-1. **astubbs#161** (confluentinc#543), `upstream-161-reactor-scheduler-rationale.md` - the reply is
-   written and postable as-is, so the only decision is to post it and close. Two code findings ride
-   along that nothing else records: the scheduler supplier is resolved per wrapped invocation rather
-   than once, so a factory-shaped supplier leaks a `Scheduler` and its threads every batch, and the
-   two-argument `ReactorProcessor` constructor has no test.
-2. **astubbs#181** (confluentinc#862), `deps-181-java-24-compatibility.md` - close it on the
-   kafka-clients 3.9.2 rationale and let astubbs#128 carry the CI proof, or hold it open until that
-   lane exists. The note has the evidence and states the one caveat (`MockConsumer` cannot exercise
-   SASL, which is the path that broke).
-3. **astubbs#163** (confluentinc#550), `core-163-poll-path-has-no-error-seam.md` - post the drafted
-   answer, then close as a duplicate of astubbs#153 with astubbs#148 as the contained step. **This
-   one has a deadline the others do not**: it corrects open question 6 of the DLQ prior-art report on
-   astubbs#313, which currently assumes deserialization failures can ride along with the DLQ work.
-   They cannot, on the mechanism. Deciding DLQ requirements before this is answered settles them on a
-   false premise.
-4. **astubbs#189** (confluentinc#887), `core-189-batch-failure-granularity.md` - go/no-go on jitter in
-   the default retry delay. A small change, but it moves retry timing for every existing deployment,
-   which is why it is a call rather than a commit. Nothing else in the poison-isolation ladder waits
-   on the answer.
-5. **astubbs#241** (confluentinc#144), `core-241-tx-commit-failure-taxonomy.md` - agree the issue's
-   stated premise died in confluentinc#355, then keep it open with a rewritten `## Fork status` and
-   relabel `bug` to `feature`. No defect is demonstrated; what survives is a policy design.
-6. **astubbs#173** (confluentinc#777), `upstream-173-revocation-duplicate-processing.md` - should PC
-   offer a revocation grace period at all? Upstream declined it. **If the answer is no, confluentinc#777
-   is a documentation obligation rather than a defect** and the close is unblocked - at the cost of a
-   README section and one chaos cell that must be run rather than predicted.
-7. **astubbs#178** (confluentinc#843), `core-178-key-order-across-a-rebalance.md` - is an undrained
-   old-epoch delivery a violation of the README's "strong ordering by key", or legitimate
-   at-least-once? Last because it is the only one that needs a *bound* argued for rather than a
-   yes/no, and `KeyOrderLedger`'s javadoc already says picking that number is the whole job.
-
-**What is NOT on this list, from the same triage, and why:** astubbs#139 is a 1.0 blocker with a
-four-step definition of done in `core-139-public-api-thread-safety-contract.md` - real work, not a
-call. astubbs#175 has no decision left in it; its one live strand is the AB-BA wedge that
-<!-- post-merge: checked - names that PR as the work the strand belonged to, in the past tense, so it reads the same once it has landed -->
-astubbs/parallel-consumer#29 carried.
+The ranked list that stood here from the 2026-08-20 mirror triage is decided and posted: each mirror
+body corrected, each reporter answered on the upstream original, every decision recorded on the
+issue itself. astubbs#161 answered and closed; astubbs#181 closed on the kafka-clients 3.9.2
+rationale with astubbs#128 carrying the CI proof; astubbs#163 answered, held open for the fluent API
+(astubbs#502) rather than closed as a duplicate; astubbs#189 answered with default-on jitter as the
+first rung; astubbs#241 rewritten and relabelled `feature`; astubbs#173 closed as by-design, no
+revocation grace period; astubbs#178 ruled a violation and fixed in astubbs#517. The posting list
+and what the release still owes is
+[`upstream-v6-release-responses.md`](upstream-v6-release-responses.md). The version of this
+section that carried the ranking: `git show 2e6f13ef1:docs/inflight/process-candidate-ranking.md`.
 
 ## What gates v6, as the sweep read it
 
