@@ -1574,6 +1574,25 @@ link:docs/data/module-maturity.yaml[the module-maturity data].
 * Integration tests require a https://docs.docker.com/docker-for-mac/[running locally accessible Docker host].
 * Has a Maven `profile` setup for IntelliJ Idea, but not Eclipse for example.
 
+[[build-jdk-and-bytecode-level]]
+=== Build JDK and bytecode level
+
+Building from source needs *JDK 17* - not the Java 8 the library runs on, and not a newer JDK either.
+
+The parent `pom.xml` sets `source.version` to 17 and `release.target` to 8: the sources are Java 17, and the command-line build compiles them to Java 8 bytecode with the https://github.com/bsideup/jabel[Jabel] javac plugin (`--release 8`, see the `maven-compiler-plugin` configuration).
+That is why the jar runs on Java 8 while the code that produced it does not compile there.
+
+* *JDK 17, specifically.* The Maven enforcer's `requireJavaVersion` rule rejects anything older than `source.version`, and JDK 21 or newer fails in the other direction: Jabel 1.0.0 bundles a Byte Buddy that refuses class-file version 65, so `javac` cannot load the plugin at all.
+CI builds on Temurin 17, and that is the toolchain this repository is tested on - the measurements are in link:{project_root}/docs/solutions/build-errors/error-prone-jabel-and-the-jdk-that-satisfies-neither-2026-08-25.md[docs/solutions/build-errors/error-prone-jabel-and-the-jdk-that-satisfies-neither-2026-08-25.md].
+* *The Mutiny module is the exception.* SmallRye Mutiny is itself compiled for Java 17 and implements `java.util.concurrent.Flow`, which a release level of 8 hides, so `parallel-consumer-mutiny` overrides `release.target` to 17 and emits Java 17 bytecode - the same floor it needs at runtime, see <<java-version-per-module>>.
+Core, Vert.x and Reactor stay at Java 8.
+* *IntelliJ IDEA does not use Jabel.* Importing the project activates the `intellij-idea-only` Maven profile, which compiles at `source.version` for `source`, `target` and `release` alike and drops Jabel from the annotation processors, because the IDE's compiler cannot run it.
+Plain `mvn` on the command line uses Jabel with `--release 8` as above.
+* *Tests run on the JDK that launched Maven.* Surefire and Failsafe fork `${jvm.location}/bin/java`, which defaults to `${java.home}`.
+The `jvm8-release` and `jvm9-release` profiles point it at a `jvm8.location` / `jvm9.location` property instead, for running the suite on the target JVM before a release; the pom marks `jvm8-release` as currently broken.
+
+The first command in a fresh clone, and the generated-sources trap behind it, are in <<Maven targets>> and link:{project_root}/docs/building.md[docs/building.md].
+
 === Notes
 
 The unit test code is set to run at a very high frequency, which can make it difficult to read debug logs (or impossible).
