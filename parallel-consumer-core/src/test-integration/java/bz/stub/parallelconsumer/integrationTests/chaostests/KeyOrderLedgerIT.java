@@ -194,14 +194,63 @@ class KeyOrderLedgerIT {
     }
 
     @Test
-    void aHeavyRecordStillRunningWhenItsPartitionIsRevokedIsNotAnOverlap() {
-        // offset 10 of epoch 4 is a heavy record: PC does not interrupt in-flight work on revoke, so it
-        // is still running (ends at seq 9) while epoch 5's redelivery of 10 and 11 runs. Different
-        // windows - the epoch is read off the record's own WorkContainer, so the straggler keeps epoch 4
+    void aHeavyRecordStillRunningWhenItsPartitionComesBackToTheSameInstanceIsAnOverlap() {
+        // THE astubbs#178 shape: offset 10 of epoch 4 is a heavy record, PC does not interrupt in-flight
+        // work on revoke, so it is still running (ends at seq 9) when the SAME instance gets the partition
+        // back and starts epoch 5's redelivery of 10 (seq 4) and 11 (seq 7). One key, two threads, and
+        // the epoch boundary between them does not excuse it - the engine now makes the re-delivery wait
+        // for the straggler (ProcessingShard#flightsOwed), so this is a violation the ledger must see.
+        // Both of epoch 5's starts fall inside the straggler's interval, so both are overlaps
         List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
                 delivery(PC_A, P0, 4, "k-1", 9, 1, 2L),
                 delivery(PC_A, P0, 4, "k-1", 10, 3, 9L),
                 delivery(PC_A, P0, 5, "k-1", 10, 4, 6L),
+                delivery(PC_A, P0, 5, "k-1", 11, 7, 8L)));
+
+        List<String> problems = KeyOrderLedger.check(history);
+
+        assertWithMessage("an old-epoch delivery still running while the same instance starts the same key "
+                + "in the new epoch is a key-ordering violation (astubbs#178), not at-least-once at work")
+                .that(problems).hasSize(1);
+        assertThat(problems.get(0)).contains("LEDGER_KEY_CONCURRENCY");
+        assertThat(problems.get(0)).contains("2 overlapping delivery pair(s), 2 of them across an assignment epoch");
+        assertThat(problems.get(0)).contains("ACROSS an assignment epoch");
+    }
+
+    @Test
+    void aHeavyRecordStillRunningWhenItsPartitionMovesToAnotherIncarnationIsNotJudged() {
+        // the same straggler, but the partition went to a RESTARTED instance (new incarnation) - PC's
+        // promise is per consumer, and nothing client-side can see a worker in a previous lifetime, so
+        // this is at-least-once delivery and not the ledger's to raise
+        List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
+                delivery("PC-1#1", P0, 4, "k-1", 9, 1, 2L),
+                delivery("PC-1#1", P0, 4, "k-1", 10, 3, 9L),
+                delivery("PC-1#2", P0, 0, "k-1", 10, 4, 6L),
+                delivery("PC-1#2", P0, 0, "k-1", 11, 7, 8L)));
+
+        assertThat(KeyOrderLedger.check(history)).isEmpty();
+    }
+
+    @Test
+    void aHeavyRecordStillRunningWhenItsPartitionMovesToAnotherInstanceIsNotJudged() {
+        // and the same again for a DIFFERENT member of the group taking the partition
+        List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
+                delivery(PC_A, P0, 4, "k-1", 9, 1, 2L),
+                delivery(PC_A, P0, 4, "k-1", 10, 3, 9L),
+                delivery(PC_B, P0, 0, "k-1", 10, 4, 6L),
+                delivery(PC_B, P0, 0, "k-1", 11, 7, 8L)));
+
+        assertThat(KeyOrderLedger.check(history)).isEmpty();
+    }
+
+    @Test
+    void aRedeliveryThatWaitedForTheStragglerIsClean() {
+        // what the fixed engine produces for the same shape: the straggler ends at seq 4, and epoch 5's
+        // redelivery of 10 starts only after it - across the epoch, in offset order within each
+        List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
+                delivery(PC_A, P0, 4, "k-1", 9, 1, 2L),
+                delivery(PC_A, P0, 4, "k-1", 10, 3, 4L),
+                delivery(PC_A, P0, 5, "k-1", 10, 5, 6L),
                 delivery(PC_A, P0, 5, "k-1", 11, 7, 8L)));
 
         assertThat(KeyOrderLedger.check(history)).isEmpty();

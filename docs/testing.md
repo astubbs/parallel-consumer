@@ -302,12 +302,14 @@ already carries `incarnationId`, `partition`, `epoch`, `key`, `offset`, `startSe
 (`null` while still running), and the full history is retained - the per-window grouping is a choice
 `check()` makes, not a limit on what was captured.
 
-The worked example is cross-epoch comparison. Nothing today compares deliveries across an epoch
-boundary, but the data to do it is present: a delivery with `endSeq == null` in one epoch, against a
-delivery of the same key and partition in a later epoch whose `startSeq` falls after it. **If a test
-needs that, write the comparison - do not add instrumentation for it.** The work is the calibration,
-not the capture: a revoked owner finishing its in-flight record is legitimate, so such a check needs a
-defensible bound on how long an old-epoch delivery may still run before it counts as a violation.
+The worked example is cross-epoch comparison, which was exactly this shape until astubbs#178: the
+overlap half of the ledger compared only within an epoch, and the cross-epoch overlap it could not see
+turned out to be a real engine defect. Closing it was an analysis change - `Delivery#serialisationWindow`
+leaves the epoch out, and `check()` keys the overlap half on that - with no new recording. **If a test
+needs a comparison the ledger does not make, write the comparison - do not add instrumentation for
+it.** The calibration question that had parked it ("how long may a revoked owner legitimately still be
+finishing?") was answered by the engine rather than by a number: within one incarnation the bound is
+zero, because the re-delivery now waits for the flight.
 
 Scenario cells, each isolating one disturbance shape: `ChaosChurnStormIT` (W1, continuous churn),
 `ChaosRevokeUnderWorkIT` (W4, revoke while work is in flight), `ChaosKeyOrderIT` (key-ordered
@@ -316,13 +318,13 @@ processing under churn), `ChaosRevokeUnderWorkKeyOrderIT` (key order under revok
 assignor and stop-mode, whose weights are shared through `drainOnlyChaosWeights()` so the two cannot
 drift apart.
 
-**Two limits worth knowing before you trust a verdict.** `KeyOrderLedger` compares only within one
-incarnation, partition, epoch and key - so a **cross-epoch overlap** (an old owner still running past
-a revoke while the new owner takes the same key) lands in two windows and is not reported. It is
-**not** unanswerable, though: every delivery records its epoch and incarnation and the full history is
-kept, so the check is a function nobody has written rather than data nobody has. What it would need is
-a calibrated bound on how long a revoked owner may legitimately still be finishing - see the class
-javadoc. That shape is a real defect this repo has already fixed once (astubbs#80). The second limit used to
+**Two limits worth knowing before you trust a verdict.** `KeyOrderLedger`'s overlap check is scoped
+to one incarnation, partition and key - across epochs, since astubbs#178 - so a **cross-instance
+overlap** (an old owner on another JVM, or a previous lifetime of this one, still running past a
+revoke while this owner takes the same key) is not reported, and cannot be: PC's promise is per
+consumer, and nothing client-side can see a worker in another process. That shape is a real defect
+this repo has already fixed once (astubbs#80), and the within-instance half of it is now both
+prevented (`ProcessingShard#flightsOwed`) and detected. The second limit used to
 be that `CLASS2_STALL` **gated** on a timing bound - it no longer does, and the reason is the limit:
 it measures how long a committed offset stayed pinned, which one incomplete record does
 legitimately, so a crossing only ever proved the bound was met and never that the backlog failed to

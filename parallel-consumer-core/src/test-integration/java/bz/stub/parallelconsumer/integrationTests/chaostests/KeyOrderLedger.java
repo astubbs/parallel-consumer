@@ -26,20 +26,31 @@ import java.util.stream.Collectors;
  * ("key concurrency without losing per-key order"), asserted under the same churn the loss/duplicate
  * half of the ledger ({@link ProgressProbe#ledger}) runs under.
  *
- * <h2>The guarantee this asserts, and the window it holds in</h2>
+ * <h2>The guarantee this asserts, and the windows it holds in</h2>
  * <p>
- * <b>Within one PC incarnation, one partition, one partition-assignment epoch and one record key, the
- * records of that key are executed strictly one at a time, in ascending offset order.</b> Two
- * violations follow from that, and this class reports exactly those two:
+ * <b>Within one PC incarnation, one partition and one record key, at most one delivery of that key is
+ * executing at any instant - across assignment epochs; and within one assignment epoch, the deliveries
+ * of that key start in ascending offset order.</b> Two violations follow from that, and this class
+ * reports exactly those two, each in its own window:
  * <ul>
  *   <li>{@code LEDGER_KEY_ORDER} - a later-started delivery has a LOWER offset than one already started
- *   in the same window (an out-of-order regression).</li>
- *   <li>{@code LEDGER_KEY_CONCURRENCY} - two deliveries of the same window overlapped in flight (the
- *   serialisation half of the same promise; an ordering bug can show up as either).</li>
+ *   in the same incarnation, partition, EPOCH and key (an out-of-order regression). Scoped to the epoch
+ *   because a revoke re-delivers uncommitted work from the last commit, so an earlier offset legitimately
+ *   follows a later one across an epoch boundary.</li>
+ *   <li>{@code LEDGER_KEY_CONCURRENCY} - two deliveries of the same incarnation, partition and key
+ *   overlapped in flight, <b>whatever their epochs</b> (the serialisation half of the same promise; an
+ *   ordering bug can show up as either). Not scoped to the epoch, since astubbs#178: a revoke does not
+ *   interrupt a running worker, and the same instance getting the partition back and starting the
+ *   re-delivered record while that worker is still inside the user function is the one route in the
+ *   engine that puts one key on two threads at once. The engine now makes the re-delivery wait
+ *   ({@code ProcessingShard#flightsOwed}), so the bound on "how long may an old-epoch delivery still be
+ *   running once the new epoch starts the same key" is ZERO within an incarnation - which is why this
+ *   check needs no calibrated allowance, and why an earlier version of this javadoc, which said picking
+ *   that number was "the whole job", no longer stands.</li>
  * </ul>
  * <p>
- * The window is not decoration - it is the whole difficulty, because a NAIVE "offsets per key must
- * increase" fires on correct behaviour. Each of the four components excludes one class of legitimate
+ * The windows are not decoration - they are the whole difficulty, because a NAIVE "offsets per key must
+ * increase" fires on correct behaviour. Each of the components excludes one class of legitimate
  * re-processing that at-least-once delivery under churn produces on purpose:
  * <ul>
  *   <li><b>key</b> - PC orders per key ONLY; two different keys share no order (that is the
@@ -47,12 +58,13 @@ import java.util.stream.Collectors;
  *   {@link bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder#KEY} mode.</li>
  *   <li><b>partition</b> - {@code ShardKey.KeyOrderedKey} carries the record's {@code TopicPartition},
  *   not just the topic, so the shard (and therefore the order) is per key PER PARTITION.</li>
- *   <li><b>epoch</b> - the assignment generation, incremented per partition on BOTH revoke and assign
- *   ({@code PartitionStateManager.incrementPartitionAssignmentEpoch}). When an assignment moves,
- *   uncommitted work is redelivered from the last commit, so an earlier offset is legitimately
- *   processed after a later one. That opens a NEW window; it does not violate the old one. The epoch
- *   is read off the record's own {@code WorkContainer}, so a heavy record still in flight when its
- *   partition is revoked keeps the OLD epoch - it cannot be mistaken for the new window's work.</li>
+ *   <li><b>epoch</b> (the ORDER window only) - the assignment generation, incremented per partition on
+ *   BOTH revoke and assign ({@code PartitionStateManager.incrementPartitionAssignmentEpoch}). When an
+ *   assignment moves, uncommitted work is redelivered from the last commit, so an earlier offset is
+ *   legitimately processed after a later one. That opens a NEW order window; it does not violate the
+ *   old one. The epoch is read off the record's own {@code WorkContainer}, so a heavy record still in
+ *   flight when its partition is revoked keeps the OLD epoch and lands in the order window it was taken
+ *   from. The serialisation window deliberately leaves the epoch out - see above.</li>
  *   <li><b>incarnation</b> - a chaos restart builds a fresh {@code ParallelEoSStreamProcessor}, whose
  *   epoch counter starts again at zero. Scoping to the (stable) chaos instance id would collide epoch
  *   0 of two unrelated PC lifetimes and report the second one's legitimate redelivery as a regression.</li>
@@ -89,33 +101,25 @@ import java.util.stream.Collectors;
  *
  * <h2>What this does NOT assert</h2>
  *
- * "Asserts ordering under churn" is easy to read as "no two owners ever concurrently touch a key
- * across a revoke", and it does not mean that. Overlap and order are compared only WITHIN a window,
- * so a <b>cross-epoch overlap</b> - an old-epoch delivery still executing on a stopped-but-not-drained
- * owner while the new owner processes the same key in a new epoch - falls into two different windows
- * and is not raised as {@code LEDGER_KEY_CONCURRENCY}. That is the window doing its job:
- * a new epoch legitimately opens a new window, which is what keeps at-least-once redelivery after a
- * revoke from reading as a violation.
+ * "Asserts ordering under churn" is easy to read as "no two owners ever concurrently touch a key", and
+ * it does not mean that. The serialisation window is scoped to one INCARNATION, so a straggler on a
+ * stopped-but-not-drained owner still executing while a <em>different</em> instance (or a restarted
+ * one) processes the same key is not raised. That is deliberate and not a gap this ledger could
+ * close: PC promises order within one consumer, and no client-side mechanism can see a worker in
+ * another JVM - that is at-least-once delivery, and the fence for it is the application's. The
+ * within-incarnation case used to be excluded on the same footing, and is not any more: astubbs#178
+ * ruled it a violation and the engine now prevents it, so the check above asserts it (it was a
+ * function nobody had written, not data nobody had - every {@link Delivery} carries its epoch, the
+ * history is retained, and the window is a grouping the ANALYSIS chooses).
  *
- * <p><b>The data to close that gap is already here.</b> Nothing is discarded: every {@link Delivery}
- * carries its {@code epoch} and {@code incarnationId}, and the whole history is retained - the window
- * is a grouping the ANALYSIS chooses, not a limit on what was recorded. So a cross-epoch check is a
- * function nobody has written yet rather than a question this ledger cannot answer. It would look
- * for a delivery with {@code endSeq == null} in one epoch, and a delivery of the same key and
- * partition in a LATER epoch whose {@code startSeq} falls after it - which is an overlap on the same
- * evidence the within-window check already uses. What makes it a separate piece of work is not the
- * data but the calibration: a revoked owner finishing its in-flight record is legitimate, so such a
- * check needs a defensible bound on how long an old-epoch delivery may still be running before it
- * counts as a violation, and picking that number is the whole job.
- *
- * <p>It is worth stating explicitly because that gap is the shape of a product bug this repo has
- * already found once - the drain-path zombie in
+ * <p>The cross-instance case is worth stating because it is the shape of a product bug this repo
+ * has already found once - the drain-path zombie in
  * {@code docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md}, fixed in
- * astubbs#80 - so a reader could reasonably assume this ledger now covers it. It does not, and it is
- * not trying to: {@code AbstractRevokeUnderWorkScenario} names the same boundary from the scenario
- * side ("a drain opens the Class 1 drain-zombie window, which can mask the Class 2 mechanism it
- * isolates"). Detecting cross-epoch overlap needs an instrument that outlives an epoch, which is a
- * different tool from this one.
+ * astubbs#80 - so a reader could reasonably assume this ledger covers it. It covers the half that
+ * lives inside one instance; {@code AbstractRevokeUnderWorkScenario} names the other half from the
+ * scenario side ("a drain opens the Class 1 drain-zombie window, which can mask the Class 2 mechanism
+ * it isolates"). Detecting cross-instance overlap needs an instrument that outlives an instance, which
+ * is a different tool from this one.
  *
  * <h2>It is an event register: record facts, decide meaning at the end</h2>
  *
@@ -197,9 +201,19 @@ public final class KeyOrderLedger {
             this.endSeq = endSeq;
         }
 
-        /** The ordering window this delivery belongs to - see the class javadoc for why each part is in it. */
+        /** The ORDER window this delivery belongs to - see the class javadoc for why each part is in it. */
         String window() {
             return incarnationId + "|p" + partition + "|e" + epoch + "|" + key;
+        }
+
+        /**
+         * The SERIALISATION window: the order window without the epoch, because a revoke does not interrupt a
+         * running worker and the same instance may start the re-delivered key before that worker returns
+         * (astubbs#178). The epoch stays in {@link #toString()} through {@link #window()}, so an overlap
+         * report shows whether the two deliveries crossed one.
+         */
+        String serialisationWindow() {
+            return incarnationId + "|p" + partition + "|" + key;
         }
 
         @Override
@@ -279,17 +293,22 @@ public final class KeyOrderLedger {
                 .collect(Collectors.toList());
 
         Map<String, Long> highestOffsetStarted = new HashMap<>();
-        Map<String, Long> latestEndSeq = new HashMap<>();
-        // A window with a delivery that never ended. Kept as its own FACT rather than folded into
-        // latestEndSeq as Long.MAX_VALUE: that sentinel is a real, valid end value standing in for
+        // The serialisation half is keyed by the SERIALISATION window (no epoch) - see Delivery#serialisationWindow.
+        // The latest-ending delivery is kept rather than its end alone, so the report can name the delivery that
+        // was still running, epoch and all.
+        Map<String, Delivery> latestEnded = new HashMap<>();
+        // A serialisation window with a delivery that never ended. Kept as its own FACT rather than folded
+        // into latestEnded as a Long.MAX_VALUE end: that sentinel is a real, valid end value standing in for
         // "no end", so it fabricates information the run never produced - and it leaked, printing
         // "ended at seq 9223372036854775807" in the very report meant to explain the overlap.
-        Set<String> windowsWithOpenDelivery = new HashSet<>();
+        Map<String, Delivery> openDelivery = new HashMap<>();
         Set<String> assertingWindows = new HashSet<>();
         Set<String> keysSeen = new HashSet<>();
+        long crossEpochOverlapCount = 0;
 
         for (Delivery delivery : byStartSeq) {
             String window = delivery.window();
+            String lane = delivery.serialisationWindow();
             keysSeen.add(delivery.getKey());
 
             Long previousOffset = highestOffsetStarted.get(window);
@@ -309,33 +328,46 @@ public final class KeyOrderLedger {
                 } else {
                     highestOffsetStarted.put(window, delivery.getOffset());
                 }
+            }
 
-                Long previousEnd = latestEndSeq.get(window);
-                boolean openDeliveryHere = windowsWithOpenDelivery.contains(window);
-                if (openDeliveryHere || (previousEnd != null && previousEnd > delivery.getStartSeq())) {
-                    overlapCount++;
-                    if (overlapProblems.size() < MAX_REPORTED_PER_KIND) {
-                        overlapProblems.add(delivery + " started at seq " + delivery.getStartSeq()
-                                + " while an earlier delivery of the same key was still in flight ("
-                                + (openDeliveryHere ? "that delivery never finished" : "it ended at seq " + previousEnd)
-                                + ")");
-                    }
+            // The overlap half, across epochs: whichever earlier delivery of this key on this instance is
+            // still running - never finished, or finished after this one started - this one overlapped it.
+            Delivery stillOpen = openDelivery.get(lane);
+            Delivery lastEnded = latestEnded.get(lane);
+            Delivery overlapped = stillOpen != null ? stillOpen
+                    : (lastEnded != null && lastEnded.getEndSeq() > delivery.getStartSeq()) ? lastEnded
+                    : null;
+            if (overlapped != null) {
+                overlapCount++;
+                boolean crossedAnEpoch = overlapped.getEpoch() != delivery.getEpoch();
+                if (crossedAnEpoch) {
+                    crossEpochOverlapCount++;
+                }
+                if (overlapProblems.size() < MAX_REPORTED_PER_KIND) {
+                    String howItWasStillRunning = stillOpen != null
+                            ? "that delivery never finished"
+                            : "it ended at seq " + overlapped.getEndSeq();
+                    overlapProblems.add(delivery + " started at seq " + delivery.getStartSeq() + " while "
+                            + overlapped + " was still in flight (" + howItWasStillRunning
+                            + (crossedAnEpoch ? "; ACROSS an assignment epoch - the old epoch's worker was still "
+                                    + "running when the same instance started the re-delivered key, astubbs#178" : "")
+                            + ")");
                 }
             }
 
             if (delivery.getEndSeq() != null) {
-                latestEndSeq.merge(window, delivery.getEndSeq(), Math::max);
+                latestEnded.merge(lane, delivery, (a, b) -> a.getEndSeq() >= b.getEndSeq() ? a : b);
             } else {
                 // No end recorded is a FACT, and it is recorded as one. finished() is
                 // finally-guaranteed ({@code ChaosScenarioBase#newInstance}), so no end means the
                 // delivery is genuinely still running - which makes any later start in the same
-                // window a CERTAIN overlap, with no guess and no invented end value involved.
-                // Legitimate redelivery of a wedged record opens a NEW window (epoch bump on
-                // revoke+assign, or a new incarnation), so this cannot fire on correct behaviour.
-                // Deleting the window's end here instead was the original bug: it silently disabled
-                // the overlap half for exactly the confluentinc#857 wedge shape this detector exists
-                // to catch.
-                windowsWithOpenDelivery.add(window);
+                // serialisation window a CERTAIN overlap, with no guess and no invented end value
+                // involved. Legitimate redelivery of a wedged record to ANOTHER incarnation opens a
+                // new serialisation window, so this cannot fire on correct behaviour; the same
+                // incarnation starting it is exactly astubbs#178. Deleting the window's end here
+                // instead was the original bug: it silently disabled the overlap half for exactly the
+                // confluentinc#857 wedge shape this detector exists to catch.
+                openDelivery.putIfAbsent(lane, delivery);
             }
         }
 
@@ -346,8 +378,9 @@ public final class KeyOrderLedger {
                     + "is the guarantee PC exists to keep (sample: " + orderProblems + ")");
         }
         if (!overlapProblems.isEmpty()) {
-            problems.add("LEDGER_KEY_CONCURRENCY: " + overlapCount + " overlapping delivery pair(s) - "
-                    + "two records of one key were in flight at once within one instance+partition+epoch, so "
+            problems.add("LEDGER_KEY_CONCURRENCY: " + overlapCount + " overlapping delivery pair(s), "
+                    + crossEpochOverlapCount + " of them across an assignment epoch - "
+                    + "two records of one key were in flight at once within one instance+partition, so "
                     + "per-key order was not merely reordered but abandoned (sample: " + overlapProblems + ")");
         }
         if (assertingWindows.isEmpty()) {
@@ -361,9 +394,9 @@ public final class KeyOrderLedger {
         // a predecessor in its own window, so heavy churn (short windows) shows up here as a smaller
         // number rather than as a quietly weaker check
         log.info("[chaos-ledger] ordering: deliveries={} comparedDeliveries={} keys={} windows={} "
-                        + "assertingWindows={} orderRegressions={} overlaps={}",
+                        + "assertingWindows={} orderRegressions={} overlaps={} crossEpochOverlaps={}",
                 byStartSeq.size(), comparedCount, keysSeen.size(), highestOffsetStarted.size(),
-                assertingWindows.size(), orderCount, overlapCount);
+                assertingWindows.size(), orderCount, overlapCount, crossEpochOverlapCount);
         return problems;
     }
 
