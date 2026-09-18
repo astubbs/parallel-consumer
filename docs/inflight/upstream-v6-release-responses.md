@@ -17,14 +17,14 @@ upstream posts, one line on what shipped, and the fork mirror's number.
 **Upstream issues the release fixed outright, still open there, no announcement yet.** Each mirror
 is already closed.
 
-- [ ] confluentinc#875 (astubbs#183) - a record polled after a rebalance was dropped if a stale
+- [x] confluentinc#875 (astubbs#183) - a record polled after a rebalance was dropped if a stale - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/issues/875#issuecomment-5723465325).
   container still held its offset.
-- [ ] confluentinc#912 (astubbs#122) - the JStream result stream blocks until close instead of ending
+- [x] confluentinc#912 (astubbs#122) - the JStream result stream blocks until close instead of ending - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/issues/912#issuecomment-5723465506).
   early.
-- [ ] confluentinc#906 (astubbs#194) - `parallel-consumer-mutiny` declares its real Java 17 floor.
-- [ ] confluentinc#526 (astubbs#159) - `LongPollingMockConsumer` ships in the main artefact.
-- [ ] confluentinc#622 (astubbs#167) - the README retry-delay example's multiplier corrected.
-- [ ] confluentinc#833 (astubbs#177) - `OffsetCommitBudgetExceededException`, and the timeout names
+- [x] confluentinc#906 (astubbs#194) - `parallel-consumer-mutiny` declares its real Java 17 floor. - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/issues/906#issuecomment-5723465699).
+- [x] confluentinc#526 (astubbs#159) - `LongPollingMockConsumer` ships in the main artefact. - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/issues/526#issuecomment-5723466064).
+- [x] confluentinc#622 (astubbs#167) - the README retry-delay example's multiplier corrected. - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/issues/622#issuecomment-5723466298).
+- [x] confluentinc#833 (astubbs#177) - `OffsetCommitBudgetExceededException`, and the timeout names - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/issues/833#issuecomment-5723466465).
   its cause.
 
 **Partly addressed or settled by design - answerable with the honest scope, on both sides unless
