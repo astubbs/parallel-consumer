@@ -359,8 +359,10 @@ cause a wrong close.
 * *confluentinc#843 is not caused by confluentinc#909.* That defect *drops* the fresh container
   and wedges the offset - loss and stall, not duplication - and astubbs#322's reproduction counts
   lost records and no duplicates. It also requires a rebalance the reporter explicitly denies.
-  One rebalance-gated route to the reported symptom does exist and is live at HEAD; see
-  `docs/inflight/core-178-key-order-across-a-rebalance.md`.
+  One rebalance-gated route to the reported symptom did exist - the stale sweeps evicted a
+  container without asking whether it was in flight, so the same instance could start the
+  re-delivered key beside its still-running worker - and is fixed on the fork; see
+  `docs/solutions/logic-errors/a-revoke-sweep-freed-a-key-whose-worker-was-still-running-2026-09-18.md`.
 
 Detail: `docs/inflight/upstream-173-revocation-duplicate-processing.md`.
 
