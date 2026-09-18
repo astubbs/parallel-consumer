@@ -67,8 +67,20 @@ public class PCModuleTestEnv extends PCModule<String, String> {
         };
     }
 
+    /**
+     * A factor fixed at the default INITIAL value stands in for the dynamic one, so a unit test never depends on the
+     * warm-up clock - unless the options ask for {@link ParallelConsumerOptions#messageBufferSize}, which in
+     * production is already a static factor derived from the buffer ({@link PCModule#dynamicExtraLoadFactor()}),
+     * and then the module answers exactly as it would live. Without that, a test setting the buffer would silently
+     * get the stand-in and assert against a threshold the option never produced.
+     * <p>
+     * Public rather than protected so a test outside this package can read the factor its options produced.
+     */
     @Override
-    protected DynamicLoadFactor dynamicExtraLoadFactor() {
+    public DynamicLoadFactor dynamicExtraLoadFactor() {
+        if (options().getMessageBufferSize() > 0) {
+            return super.dynamicExtraLoadFactor();
+        }
         return limitedDynamicLoadFactor;
     }
 

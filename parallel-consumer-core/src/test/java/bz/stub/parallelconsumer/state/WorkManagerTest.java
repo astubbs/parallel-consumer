@@ -15,6 +15,7 @@ import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
 import bz.stub.parallelconsumer.FakeRuntimeException;
 import bz.stub.parallelconsumer.ManagedTruth;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
@@ -770,6 +771,126 @@ public class WorkManagerTest {
                         .collect(Collectors.toList()))
                 .containsNoDuplicates();
 
+    }
+
+    /**
+     * <b>The default buffer, filled by one partition's poll, pauses intake with four of five partitions unserved -
+     * and keeps it paused until that one partition has drained to the threshold.</b> The README's PARTITION tuning
+     * passage ("As default buffer size is calculated as {@code maxConcurrency * batchSize * loadFactor}") stated as
+     * what the code does, with fixed inputs and no broker.
+     * <p>
+     * The buffer is counted in RECORDS while the Java client answers a poll largely from one partition at a time,
+     * so one {@code max.poll.records}-sized poll from one partition is past a threshold of {@code 5 * 1 * 2 = 10},
+     * and the intake gate - {@link WorkManager#shouldThrottle()}, the broker poller's route into
+     * {@link WorkManager#isSufficientlyLoaded()} - pauses fetching with only that partition resident. Under
+     * PARTITION ordering one shard is one record in flight, so a pool of five is handed one, and the other four
+     * partitions go unserved because nothing of theirs can be admitted while the poller is paused. The gate reopens
+     * only once the resident partition has drained TO the threshold, so this is the steady state of a pre-loaded
+     * topic, not a first-poll transient.
+     * <p>
+     * This replaced {@code PartitionOrderProcessingTest.allPartitionsAreNotProcessedInParallel}, which asserted the
+     * same property as an OUTCOME against a real broker and so depended on the consumer's first fetch landing after
+     * every partition held 500 records - a producer-versus-fetch race that went red on a javadoc-only change. The
+     * fetch composition belongs to the broker and the client; the gate and the shard draw are PC's, and those are
+     * what is pinned here. The gate-to-pause wiring is pinned separately by
+     * {@code BrokerPollerBackpressureTest.brokerPollPausedWhenBlockedInFlightFillsBuffer}. The twin,
+     * {@link #aBufferSizedForEveryPartitionsPollKeepsIntakeOpenAndEveryPartitionIsDrawnFrom}, is the README's
+     * remedy at the same inputs.
+     * <p>
+     * The loading factor is the test module's fixed {@link DynamicLoadFactor#DEFAULT_INITIAL_LOADING_FACTOR}, the
+     * factor a fresh instance holds through its warm-up - the README's lower bound of "10 to 500". At the dynamic
+     * maximum the threshold would be 500 and a 500-record poll would sit exactly AT it: the gate is strict, so there
+     * it takes one more record, or a second poll, to close.
+     */
+    @Test
+    void aDefaultBufferFilledByOnePartitionsPollPausesIntakeAndStarvesTheOtherPartitions() {
+        int partitions = 5;
+        int recordsPerPoll = 500; // one max.poll.records batch, the shape the integration pair configured
+        setupWorkManager(ParallelConsumerOptions.builder()
+                .ordering(PARTITION)
+                .maxConcurrency(partitions)
+                .build());
+        for (int partition = 1; partition < partitions; partition++) {
+            assignPartition(partition); // subscribed and assigned, holding nothing yet - the first poll assigns 0
+        }
+        long threshold = intakeThreshold();
+        assertWithMessage("the README's formula, maxConcurrency * batchSize * loadFactor, at the initial factor")
+                .that(threshold).isEqualTo(10);
+
+        registerRecords(0, recordsPerPoll); // the first poll: one partition's batch, as the Java client fetches
+
+        assertWithMessage("one partition's poll alone is past the threshold, so the poller is told to pause")
+                .that(wm.shouldThrottle()).isTrue();
+
+        var firstDraw = wm.getWorkIfAvailable(partitions);
+        assertWithMessage("a pool of five asks for five and is handed one: one resident shard, one in flight")
+                .that(firstDraw).hasSize(1);
+        Truth.assertThat(firstDraw.get(0).getTopicPartition()).isEqualTo(topicPartitionOf(0));
+        succeed(firstDraw);
+
+        int retired = 1;
+        while (wm.shouldThrottle()) {
+            assertWithMessage("a buffer read as loaded after its last record retired would be a gate that never opens")
+                    .that(retired).isLessThan(recordsPerPoll);
+            var draw = wm.getWorkIfAvailable(partitions);
+            assertWithMessage("every draw while the poller is paused is one record, from the one resident partition")
+                    .that(draw).hasSize(1);
+            Truth.assertThat(draw.get(0).getTopicPartition()).isEqualTo(topicPartitionOf(0));
+            succeed(draw);
+            retired++;
+        }
+        assertWithMessage("the gate reopens only when the resident partition has drained TO the threshold - the "
+                + "other four partitions are starved for the whole of that drain, not just the first pass")
+                .that(retired).isEqualTo(recordsPerPoll - threshold);
+    }
+
+    /**
+     * <b>The README's remedy, at the same inputs: a buffer sized for two polls from every partition keeps intake
+     * open, so every partition's poll is admitted and the pool is handed one record per partition.</b>
+     * {@code 2 * partitions * 500} is the README's rough target and the figure the integration twin configures; it
+     * becomes a static factor of {@code 5000 / 5 = 1000}, so five partitions' polls sit at half the threshold and
+     * the poller is never paused while they arrive.
+     * <p>
+     * The live half of that pair, {@code PartitionOrderProcessingTest.allPartitionsAreProcessedInParallel}, still
+     * proves what this cannot: that a real broker and fetcher deliver those five polls at all.
+     *
+     * @see #aDefaultBufferFilledByOnePartitionsPollPausesIntakeAndStarvesTheOtherPartitions
+     */
+    @Test
+    void aBufferSizedForEveryPartitionsPollKeepsIntakeOpenAndEveryPartitionIsDrawnFrom() {
+        int partitions = 5;
+        int recordsPerPoll = 500;
+        int buffer = 2 * partitions * recordsPerPoll;
+        setupWorkManager(ParallelConsumerOptions.builder()
+                .ordering(PARTITION)
+                .maxConcurrency(partitions)
+                .messageBufferSize(buffer)
+                .build());
+        assertWithMessage("the buffer option becomes a static factor of the buffer over the in-flight target")
+                .that(intakeThreshold()).isEqualTo(buffer);
+
+        for (int partition = 0; partition < partitions; partition++) {
+            registerRecords(partition, recordsPerPoll);
+            assertWithMessage("partition %s's poll is admitted with the gate still open, so the next one is fetched",
+                    partition)
+                    .that(wm.shouldThrottle()).isFalse();
+        }
+
+        var draw = wm.getWorkIfAvailable(partitions);
+        assertWithMessage("a pool of five is handed five")
+                .that(draw).hasSize(partitions);
+        assertWithMessage("one from each partition")
+                .that(draw.stream().map(WorkContainer::getTopicPartition).collect(Collectors.toList()))
+                .containsNoDuplicates();
+    }
+
+    /**
+     * The intake gate's threshold as the README states it, {@code maxConcurrency * batchSize * loadFactor}, read
+     * from the operands {@link WorkManager#isSufficientlyLoaded()} compares against.
+     */
+    private long intakeThreshold() {
+        return (long) wm.getOptions().getTargetAmountOfRecordsInFlight()
+                * module.dynamicExtraLoadFactor().getCurrentFactor();
     }
 
     /**

@@ -30,7 +30,14 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.P
 import static org.awaitility.Awaitility.await;
 
 /**
- * Tests around what should happen when rebalancing occurs
+ * PARTITION ordering against a real broker with the buffer tuned the way the README's "As default buffer size is
+ * calculated as" passage recommends - the liveness half of what arrived with upstream PR
+ * confluentinc/parallel-consumer#682.
+ * <p>
+ * Its negative twin, {@code allPartitionsAreNotProcessedInParallel}, asserted the untuned starvation as an outcome of
+ * the broker's fetch composition and raced it; it now lives at unit level as
+ * {@code WorkManagerTest.aDefaultBufferFilledByOnePartitionsPollPausesIntakeAndStarvesTheOtherPartitions}, where the
+ * gate that produces it is asserted with fixed inputs.
  *
  * @author Antony Stubbs
  */
@@ -57,29 +64,24 @@ class PartitionOrderProcessingTest extends BrokerIntegrationTest<String, String>
         pc.close();
     }
 
-    private ParallelEoSStreamProcessor<String, String> setupPC() {
-        return setupPC(null);
-    }
-
     private ParallelEoSStreamProcessor<String, String> setupPC(Function<ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String>, ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String>> optionsCustomizer) {
         ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> optionsBuilder =
                 ParallelConsumerOptions.<String, String>builder()
                         .consumer(consumer)
                         .ordering(PARTITION)
                         .maxConcurrency(5);
-        if (optionsCustomizer != null) {
-            optionsBuilder = optionsCustomizer.apply(optionsBuilder);
-        }
-
-        return new ParallelEoSStreamProcessor<>(optionsBuilder.build());
+        return new ParallelEoSStreamProcessor<>(optionsCustomizer.apply(optionsBuilder).build());
     }
 
     /**
      * Check that all partitions are processed in parallel and not starved when Consumer options for max partition fetch
      * size and ParallelConsumer buffer size are tuned. Increasing ParallelConsumer buffer size improves parallel
-     * processing load over the {@link #allPartitionsAreNotProcessedInParallel()} scenario due to having enough buffer
-     * to fit 10 x polls so allows underlying Consumer to fetch from each partition at least 2 times before
-     * back-pressure control pauses polling.
+     * processing load over the untuned default - which {@code WorkManagerTest} pins at unit level, see the class
+     * javadoc - due to having enough buffer to fit 10 x polls so allows underlying Consumer to fetch from each
+     * partition at least 2 times before back-pressure control pauses polling.
+     * <p>
+     * What this proves that the unit twin cannot: a real broker and fetcher deliver every partition's poll while the
+     * gate is open. It is a bounded liveness claim, and can only go red if some partition is never served.
      */
     @SneakyThrows
     @Test
@@ -111,39 +113,6 @@ class PartitionOrderProcessingTest extends BrokerIntegrationTest<String, String>
                     "Expect all partitions to have some messages processed, actual partitionCounts:" + partitionCounts);
         });
 
-    }
-
-    /**
-     * Negative test of the {@link #allPartitionsAreProcessedInParallel} confirming that without tuning buffer size and
-     * max partition fetch - processing threads are easily starved in Partition ordering mode.
-     * <p>
-     * This is due to default buffer size is small (max concurrency (5) * batchSize(1) * loadFactor (2 to 100) - gives
-     * buffer of 10 to 500 max.
-     * <p>
-     * With reduced partition fetch size of 50KB and ~100 byte messages - we poll 500 messages per partition. But even
-     * reducing partition fetch size still starves our processing threads as buffer is so small and we have pre-loaded
-     * topics with data to simulate higher incoming rate than processing rate.
-     */
-    @SneakyThrows
-    @Test
-    void allPartitionsAreNotProcessedInParallel() {
-        var numberOfRecordsToProduce = 10000L;
-        Map<Integer, AtomicInteger> partitionCounts = new HashMap<>();
-        IntStream.range(0, 5).forEach(part -> partitionCounts.put(part, new AtomicInteger(0)));
-        pc = setupPC();
-        pc.subscribe(UniSets.of(topic));
-
-        //
-        getKcu().produceMessages(topic, numberOfRecordsToProduce);
-
-        // consume all the messages
-        pc.poll(recordContexts -> {
-            partitionCounts.get(recordContexts.getSingleConsumerRecord().partition()).getAndIncrement();
-            ThreadUtils.sleepQuietly(10); // introduce a bit of processing delay - to make sure polling backpressure kicks in.
-        });
-        // 120s explicit timeout — bare await() used shaded Awaitility's 10s default, too tight for CI.
-        await().atMost(Duration.ofSeconds(120)).until(() -> partitionCounts.values().stream().mapToInt(AtomicInteger::get).sum() > 500);
-        Assertions.assertFalse(partitionCounts.values().stream().allMatch(v -> v.get() > 0), "Expect some processing thread starving and not all partition counts to have some messages processed, actual partitionCounts:" + partitionCounts);
     }
 
     //Tune consumer for smaller message polls both per partition and max poll records.
