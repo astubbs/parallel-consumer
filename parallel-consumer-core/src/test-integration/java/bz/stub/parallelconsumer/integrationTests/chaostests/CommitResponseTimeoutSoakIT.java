@@ -291,7 +291,9 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *   <li><b>Per-ATTEMPT failure instead of per-record</b>, so records eventually succeed, the shards
  *   drain, and the instance keeps committing for the whole run. On this evidence it is the only shape
  *   that keeps the commit path alive indefinitely, which promotes it from "a different mechanism" to
- *   "the first arm that can actually falsify the assertion".</li>
+ *   "the first arm that can actually falsify the assertion". <i>2026-09-18: the same property - commit
+ *   path alive for the whole run - was obtained instead with {@code UNORDERED} plus a buffer the run
+ *   cannot fill (arm C below); this arm stays the way to get it under {@code KEY}.</i></li>
  *   <li><b>{@code gtassone}'s configuration from confluentinc#809</b> - 128 partitions, concurrency
  *   64, a user function from 100ms to minutes, {@code PERIODIC_CONSUMER_SYNC}. It is the closest
  *   recorded configuration to astubbs#175, the live report, and this scenario does not have it - the
@@ -309,6 +311,90 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * showed {@code pc_processed_records_total} FLAT across the window in which their timeout fired -
  * which is this state, not a busy one. Anyone picking this up should consider whether the reports'
  * timeout is a consequence of the stall rather than a peer of it.
+ *
+ * <h2>Calibration status, 2026-09-18 - re-run on the released code, v0.6.0.0, with the intake gate
+ * held open: zero timeouts, and the first run in which the assertion was falsifiable for the whole
+ * soak</h2>
+ * Three arms on the tree at v0.6.0.0 plus two docs commits ({@code 2e6f13ef1}), on a Linux x86_64
+ * workstation whose JVMs are pinned to 8 processors, the suite's Testcontainers
+ * {@code confluentinc/cp-kafka:7.9.0} on Docker, with no other Maven JVM on the box at the start of
+ * any arm (checked, not assumed) and the load average recorded at each arm's start and end. Same seed
+ * {@code 3747722682837130843}, {@code failureFraction} 0.5, 1000 keys over {@value #PARTITIONS}
+ * partitions, {@code maxConcurrency} 14, 100ms user function, 1000 records every
+ * {@value #BURST_INTERVAL_SECONDS}s, {@code PERIODIC_CONSUMER_SYNC} at 1s, retry-forever;
+ * {@code -Dpc.loadgate.log.level=info} so astubbs#497's latch report is in the log, and
+ * {@code -Dsoak.progressInterval=PT30S}.
+ * <p>
+ * <b>Commit activity was read off the broker, not the product.</b> Every commit-path line in
+ * {@code ConsumerOffsetCommitter} is DEBUG, and raising it for thirty minutes at 140 failures/s is
+ * not a log anyone can read, so each arm tailed {@code __consumer_offsets} inside the Kafka container
+ * with the broker's own formatter and kept the soak's topic:
+ * <pre>{@code
+ * docker exec <kafka> kafka-console-consumer --bootstrap-server localhost:9092 --topic __consumer_offsets \
+ *     --from-beginning --consumer-property exclude.internal.topics=false \
+ *     --formatter 'kafka.coordinator.group.GroupMetadataManager$OffsetsMessageFormatter'
+ * }</pre>
+ * One line per partition per acknowledged commit, each carrying its {@code commitTimestamp}, so
+ * "were commits happening" is a count per minute rather than an inference from the success counter.
+ * The container is recreated per run, so attach after the run's own container is up - a tail
+ * attached to the previous run's container reads nothing, which happened once here.
+ * <ul>
+ *   <li><b>Arm A, the control - unchanged, six minutes.</b> Reproduces the 2026-09-09 confirmation
+ *   on the released code, to the number: succeeded <b>451</b> at the first 30s sample and at every
+ *   one of the ten after it; the astubbs#497 WARN <b>13.2s after the run banner</b>
+ *   ({@code inShards=549 parkedForRetry=140 workable=409 vs target(14)*loadingFactor(3)=42,
+ *   pausedPartitions=20}), no clear line; {@code loaded=true pausedPartitions=20} at all eleven
+ *   samples; failed 49,710 in six minutes (138/s); 18,000 produced. The broker saw <b>eight commit
+ *   instants, all inside the first 7.3 seconds</b>, and none in the remaining 5m50s. Load average
+ *   2.93 at start (its own build) to 1.54 at end.</li>
+ *   <li><b>Arm B, the arm as specified - {@code -Dsoak.messageBufferSize=20000}, KEY, thirty
+ *   minutes.</b> Zero findings; 90,000 produced, succeeded <b>897</b> (arm 3's number), failed
+ *   250,067 (139/s). The gate held open for <b>7m06s</b> - {@code loaded=false pausedPartitions=0}
+ *   at every sample up to {@code inShards=20,103} - then the WARN fired at
+ *   {@code inShards=20993 parkedForRetry=140 workable=20853 vs target(14)*loadingFactor(1429)=20006,
+ *   pausedPartitions=20}, and it stayed latched with {@code inShards} pinned at 20,993 for the
+ *   remaining 22m54s. So arm 3's value keeps the gate open for about seven minutes of this producer,
+ *   not thirty: under KEY nearly everything produced is held (a healthy record behind a poisoned head
+ *   is held too), so the held population tracks the producer at ~1000 per burst, and a value that
+ *   outlasts a thirty-minute run has to clear ~90,000. <b>But the assertion had already stopped being
+ *   falsifiable at 3m06s, four minutes before the latch, and the gate is not why.</b> Successes went
+ *   680, 784, 869, 884, 893, 895, 897 at the 30s samples and froze from 3.5 minutes with the gate
+ *   open and no partition paused; the broker's last acknowledged commit landed 185.7s after the
+ *   first (27 commit instants: 16, 6, 4 and 1 per minute, then none for 26 minutes). Under KEY
+ *   ordering each key retires records until its first poisoned one and then never again, so with
+ *   permanent poison the success count is bounded by the key space (expected ~{@value #KEY_SPACE}
+ *   at 0.5; 897 observed twice now), and dirty is derived from completions
+ *   ({@code PartitionState#isDirtyAt}), so once successes stop no partition is ever dirty again and
+ *   {@code commitAndWait} is never entered. <b>No buffer size changes that under KEY</b> - 100,000
+ *   would hold the gate open for the full thirty minutes and commits would still stop at minute
+ *   three.</li>
+ *   <li><b>Arm C - {@code -Dsoak.messageBufferSize=100000 -Dsoak.ordering=UNORDERED}, thirty
+ *   minutes: the arm that holds BOTH conditions.</b> UNORDERED removes the head-of-line bound, so
+ *   healthy records keep retiring and partitions keep going dirty; 100,000 clears the ~90,000 a
+ *   thirty-minute producer can have held. Both held for the whole run: {@code loaded=false
+ *   pausedPartitions=0} at all 59 samples, {@code inShards} climbing to 51,949 against a threshold of
+ *   100,002 (~45,000 poison plus a backlog of healthy records queued behind due retries), no WARN,
+ *   no clear line, no back-pressure line; succeeded <b>37,641</b>, still rising at the last sample
+ *   (37,051 thirty seconds earlier); failed 213,533 (119/s); and the broker saw <b>a commit in every
+ *   one of the thirty minutes - 16 to 26 commit instants per minute, 619 in all, the last 1794.8s
+ *   after the first</b>, with the encoded offset map growing to 768 base64 characters per partition
+ *   (inside the broker's default 4096-byte metadata limit). <b>Zero findings: no
+ *   {@value #COMMIT_RESPONSE_TIMEOUT}, no {@value #POLLER_DIED}, no thread dump written.</b> Load
+ *   average 0.12 to 1.46.</li>
+ * </ul>
+ * <b>What this establishes, as a rate under conditions.</b> On v0.6.0.0, one instance, this box:
+ * zero bare commit-response timeouts and zero poller deaths across 654 acknowledged commit instants
+ * - 619 of them in thirty minutes of continuously exercised commit path (arm C), the other 35 in the
+ * first three minutes of the two KEY arms before their commit paths went quiet. It is one run at one
+ * shape on a quiet machine, and it says the shape did not reproduce once - not that it cannot.
+ * <p>
+ * <b>What it does not establish.</b> Anything about astubbs#175's own configuration (128 partitions,
+ * concurrency 64, a user function of minutes) - still unrun; anything under a loaded box, a
+ * rebalance, or more than one instance; anything past thirty minutes; and nothing about KEY ordering
+ * with the commit path alive, which on this evidence needs the per-attempt arm above rather than a
+ * buffer size. Arm C departs from the reporter's ordering deliberately: it is the only combination
+ * of the existing knobs under which the assertion can fail at all after minute three, and arm 2 of
+ * 2026-09-08 had already shown ordering does not decide the latch.
  *
  * <h2>Running it</h2>
  * Tagged {@code @Tag("soak")}, which sits in {@code pom.xml}'s {@code excluded.groups} default, so it
