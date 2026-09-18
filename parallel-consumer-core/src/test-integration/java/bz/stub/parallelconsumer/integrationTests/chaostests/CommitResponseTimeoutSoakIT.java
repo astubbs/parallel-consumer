@@ -125,7 +125,8 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * {@code ConsumerOffsetCommitter#commitAndWait} - the sole thrower of
  * {@value #COMMIT_RESPONSE_TIMEOUT} - is never entered. A green assertion here cannot tell "no
  * timeout occurred" from "no commit was attempted". This is the {@code dirty} asymmetry
- * {@code docs/inflight/upstream-tell-809-833-the-hang-is-fixed.md} names for this very workload.
+ * the astubbs#177 write-up in {@code docs/solutions/logic-errors/} (the-only-producer-of-commit-responses-died)
+ * names for this very workload.
  * <p>
  * <b>Lowering the failure fraction does NOT fix it - that arm has been run.</b> Dropping 0.5 to 0.03
  * bought about 1.5 extra bursts of throughput and then stalled identically, which rules out "too many
@@ -298,7 +299,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *   64, a user function from 100ms to minutes, {@code PERIODIC_CONSUMER_SYNC}. It is the closest
  *   recorded configuration to astubbs#175, the live report, and this scenario does not have it - the
  *   workload here transcribes the now-closed astubbs#177 instead, whose defect
- *   {@code upstream-tell-809-833-the-hang-is-fixed.md} says is already fixed.
+ *   is fixed - the astubbs#177 write-up in {@code docs/solutions/logic-errors/}.
  *   {@code docs/inflight/upstream-175-sporadic-commit-timeouts.md} no longer nominates it as a WEDGE
  *   candidate - astubbs#29 merged 2026-09-02 and closed the AB-BA cycle for that report - so this arm
  *   buys the configuration, not the cycle.</li>

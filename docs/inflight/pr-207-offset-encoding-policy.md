@@ -163,7 +163,7 @@ Each of these outlived this PR and now has its own note, so nothing is restated 
 
   What is **not** on any of them is what this PR found after those comments were written - the
   corrupt-body class, where a decoder trusting its own header returned a fabricated offset map rather
-  than failing. `issue-response-118.md` drafts that half; per this directory's rules it is posted only
-  on explicit instruction, and it outlives this PR rather than being deleted with it.
+  than failing. That half was drafted as `issue-response-118.md` and posted on 2026-09-17
+  (https://github.com/astubbs/parallel-consumer/issues/118#issuecomment-5708185358); the draft is deleted.
 
 <!-- post-merge: checked-end -->

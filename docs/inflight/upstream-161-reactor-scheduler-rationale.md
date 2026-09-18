@@ -53,10 +53,10 @@ while it is open, not in the root README.
 - **The two-argument constructor has no test.** `ReactorUnitTestBase` builds
   `new ReactorProcessor<>(build)` and no test in the tree passes a scheduler.
 
-## The answer to post, then close
+## The answer - posted 2026-09-18 (https://github.com/confluentinc/parallel-consumer/issues/543#issuecomment-5723281035), mirror closed
 
-astubbs#161 is not on the 0.6.0.0 tag-day checks in
-[`release-v6-scope.md`](release-v6-scope.md); its `0.6.0.0` label groups it with the other
+astubbs#161 was not on the 0.6.0.0 tag-day checks (the burn-down note is retired -
+`git show e6a429d87:docs/inflight/release-v6-scope.md`); its `0.6.0.0` label groups it with the other
 question mirrors to answer around the release. Post this and close, keeping the existing labels:
 
 > Good question, and the answer changed after you filed this.

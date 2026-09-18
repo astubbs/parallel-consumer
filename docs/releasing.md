@@ -122,6 +122,29 @@ Post each to its issue, then `git rm` it - **posting is what deletes a draft, no
 actually shipped before posting: a draft written against a PR can be overtaken by a later change,
 and this is the last point where that is cheap to notice.
 
+## On the day: what the 0.6.0.0 burn-down learned
+
+Folded in from the retired `release-v6-scope.md` when the tag was cut, because each was learned the
+hard way and none is enforced:
+
+- **`README.adoc` is generated - never hand-edit it.** Edit `src/docs/README_TEMPLATE.adoc` and
+  regenerate with `./mvnw -N asciidoc-template:build`. A PR that touches only the template has
+  silently not changed the published README.
+- **The changelog's release section is the highest-collision file in the repo once it is being
+  finalised.** Anything that merges after the section is written, with a release-note line, has to be
+  folded into the section by hand before the tag; when agents work in parallel, exactly one holds
+  that file.
+- **Reread the README's trademark attribution against the Apache Software Foundation's third-party
+  naming guidance**, and confirm no "licensed for use" claim has crept back in - the 2026-08-11
+  branding rename put the Foundation's licensee boilerplate there for a licence nobody holds
+  (astubbs#495 removed it).
+- **A dependency version in prose drifts silently.** A Dependabot group bump moved `kafka.version`
+  after the notes named it; re-read the `### Dependencies` section against `pom.xml` immediately
+  before cutting, not weeks earlier.
+- **The published release page is edited by hand after the tag, and the changelog follows it.** The
+  page is what people read; a correction made there is made in `CHANGELOG.md` in the same sitting
+  (astubbs#509 is the worked example), so the two never disagree.
+
 ## At release time
 
 **The mechanism is undecided, and this document should not pretend otherwise.** What is settled is
