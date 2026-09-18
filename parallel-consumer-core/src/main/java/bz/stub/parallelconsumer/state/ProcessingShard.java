@@ -143,7 +143,7 @@ public class ProcessingShard<K, V> {
      * <p>
      * <b>Written on both threads, guarded by no lock, and the ORDERING is what makes that safe.</b> Entries
      * arrive from {@link #recordDepartureIfInFlight} - the broker-poll thread's sweeps through {@link #retire},
-     * and {@link #addWorkContainer}'s displacement branch - and are settled by the scan once
+     * and {@link #addWorkContainer}'s displacement branch - and are cleared by the scan once
      * {@link WorkContainer#isInFlight()} is false. Two rules, one per side, and together they close every
      * interleaving without a lock:
      * <ul>
@@ -173,7 +173,7 @@ public class ProcessingShard<K, V> {
      * confinement claim nothing checks, and the direct-pull engine (astubbs#361) scans from worker threads, so
      * the ordering above is what the correctness rests on, not the confinement.
      * <p>
-     * Only the ordered modes record anything: {@link ProcessingOrder#UNORDERED} makes no promise and pays
+     * Only the ordered modes record anything: {@link ProcessingOrder#UNORDERED} makes no promise and records
      * nothing. {@link #isEmpty()} consults it, so a shard with an in-flight departure survives
      * {@link ShardManager#removeShardIfEmpty} with an empty map - otherwise KEY ordering's collection of the
      * emptied shard would take the memory with it. Equality is identity ({@link WorkContainer} overrides neither
@@ -193,7 +193,7 @@ public class ProcessingShard<K, V> {
             log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
                     residentBeforePut.getEpoch(), offset, incomingWorkContainer.getEpoch());
             // RECORD THE DEPARTURE BEFORE PUBLISHING. The put below makes the arrival resident, and resident is
-            // selectable; the displaced container's flight has to be on the books before that, or a scan landing
+            // selectable; the displaced container's departure has to be recorded before that, or a scan landing
             // between the put and retire(displaced) sees no departure and a takeable replacement, and hands it
             // out while the displaced one is still executing (astubbs/parallel-consumer#517 review). Recording it
             // here is what makes the gap harmless: the scan reads the candidate off the map first and asks about
