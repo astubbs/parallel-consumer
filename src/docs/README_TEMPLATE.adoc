@@ -508,6 +508,10 @@ In the transactional commit mode, set `transactional.id` in that configuration a
 <2> Choose your ordering type, `KEY` in this case.
 This ensures maximum concurrency, while ensuring messages are processed and committed in `KEY` order, making sure no offset is committed unless all offsets before it in it's partition, are completed also.
 <3> The maximum number of concurrent processing operations to be performing at any given time.
+In the core module this is the size of the worker pool: a fixed `ThreadPoolExecutor` whose core and maximum size are both `maxConcurrency`, its platform threads created on demand as work arrives and kept once created.
+A value far above the core count is right for IO-bound functions, because a thread parked on an HTTP call or a database write costs stack memory and little else; for a CPU-bound function it is context-switch cost, so set it near the core count instead.
+It also sizes the buffer: the in-flight target is `maxConcurrency * batchSize * loadFactor`, so it decides how many records are held in memory as well as how many are processed at once (`messageBufferSize` fixes that number independently, see <<ordered-by-partition>>).
+In the Vert.x, Reactor and Mutiny modules it is a ceiling on outstanding asynchronous work, not a thread count.
 Also, because the library coordinates offsets, `enable.auto.commit` must be disabled in your consumer.
 <5> Subscribe to your topics
 
@@ -753,6 +757,7 @@ This is the fastest option.
 .Unordered concurrent processing of message
 image::https://lucid.app/publicSegments/view/aab5d743-de05-46d0-8c1e-0646d7d2946f/image.png[align="center"]
 
+[[ordered-by-partition]]
 === Ordered by Partition
 
 At most only one message from any given input partition will be in flight at any given time.
