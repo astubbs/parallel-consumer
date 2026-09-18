@@ -57,9 +57,10 @@
         </dependency>
         <!-- Both codecs are DIRECT dependencies, not just Kafka's transitives: OffsetSimpleSerialisation
              compresses the offset map in commit metadata with zstd (ZstdOutputStream / ZstdInputStream)
-             and has a snappy sibling that only tests reach, so the versions belong here rather than in
-             the root's dependencyManagement where lz4-java is pinned. Declaring them also pins Kafka's runtime
-             copies ahead of what kafka-clients 3.9.2 ships (zstd-jni 1.5.6-4, snappy-java 1.1.10.5).
+             and has a snappy sibling nothing calls (dead code, main or test), so the versions belong here
+             rather than in the root's dependencyManagement where lz4-java is pinned. Declaring them also pins
+             Kafka's runtime copies ahead of what kafka-clients 3.9.2 ships (zstd-jni 1.5.6-4, snappy-java
+             1.1.10.5).
 
              zstd-jni: 1.5.7-14 fixed CVE-2026-87795, CVE-2026-87823 and CVE-2026-89045 (bounds checks
              on ZstdDictCompress, the direct-ByteBuffer frame-size natives and a negative length passed
