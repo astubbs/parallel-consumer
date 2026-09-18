@@ -36,7 +36,7 @@ noted.**
 - [ ] confluentinc#809 (astubbs#175) - every known cause of the commit-response timeout is fixed and
   the message names which; the reported symptom itself never reproduced. Mirror commented
   2026-09-17; upstream not.
-- [ ] confluentinc#777 (astubbs#173) - settled as by-design: a revocation redelivers in-flight work.
+- [x] confluentinc#777 (astubbs#173) - settled as by-design: a revocation redelivers in-flight work. - **posted 2026-09-18, mirror closed as by-design.**
   The documentation reply is what remains; [`upstream-173-revocation-duplicate-processing.md`](upstream-173-revocation-duplicate-processing.md)
   holds the grace-period decision.
 - [ ] confluentinc#551 (astubbs#164) - batching over-request: the validation half shipped
@@ -58,23 +58,23 @@ on threads the release announcements now point readers at, and a reader followin
 to its mirror lands on the wrong account. Same shape as astubbs#162 on 2026-09-17: replace the
 section, post the account as a comment, one mirror at a time, shown to the owner first.
 
-- [ ] astubbs#241 - premise false; a commit-failure taxonomy has existed since 2022
+- [x] astubbs#241 - premise false; a commit-failure taxonomy has existed since 2022 - **done 2026-09-18.**
   ([`core-241-tx-commit-failure-taxonomy.md`](core-241-tx-commit-failure-taxonomy.md)).
-- [ ] astubbs#189 - understates it: no retry ceiling; jitter is not the fix
+- [x] astubbs#189 - understates it: no retry ceiling; jitter is not the fix - **done 2026-09-18, reporter answered on confluentinc#887.**
   ([`core-189-batch-failure-granularity.md`](core-189-batch-failure-granularity.md)).
-- [ ] astubbs#181 - never names the mechanism, a kafka-clients SASL callback
+- [x] astubbs#181 - never names the mechanism, a kafka-clients SASL callback - **done 2026-09-18, mirror closed, confluentinc#862 told.**
   ([`deps-181-java-24-compatibility.md`](deps-181-java-24-compatibility.md)).
-- [ ] astubbs#178 - "not reproducible by inspection" is too broad; the chaos-suite reasoning is stale
+- [ ] astubbs#178 - "not reproducible by inspection" is too broad; the chaos-suite reasoning is stale - the rebalance route is fixed in astubbs#517; posts held until it merges
   ([`core-178-key-order-across-a-rebalance.md`](core-178-key-order-across-a-rebalance.md)).
-- [ ] astubbs#175 - credits the wrong PR; omits the close-path failure
+- [ ] astubbs#175 - credits the wrong PR; omits the close-path failure - drafted; held for the soak rerun result
   ([`upstream-175-sporadic-commit-timeouts.md`](upstream-175-sporadic-commit-timeouts.md)).
-- [ ] astubbs#173 - contradicts the README on the transactional guarantee
+- [x] astubbs#173 - contradicts the README on the transactional guarantee - **done 2026-09-18.**
   ([`upstream-173-revocation-duplicate-processing.md`](upstream-173-revocation-duplicate-processing.md)).
-- [ ] astubbs#163 - false: a typed poll seam already exists
+- [x] astubbs#163 - false: a typed poll seam already exists - **done 2026-09-18, confluentinc#550 told; the fluent API (astubbs#502) is the answer.**
   ([`core-163-poll-path-has-no-error-seam.md`](core-163-poll-path-has-no-error-seam.md)).
-- [ ] astubbs#161 - names the wrong thread
+- [x] astubbs#161 - names the wrong thread - **done 2026-09-18, mirror closed, confluentinc#543 told.**
   ([`upstream-161-reactor-scheduler-rationale.md`](upstream-161-reactor-scheduler-rationale.md)).
-- [ ] astubbs#139 - points at the wrong surface; never mentions the run-state machine
+- [x] astubbs#139 - points at the wrong surface; never mentions the run-state machine - **done 2026-09-18, confluentinc#186 told.**
   ([`core-139-public-api-thread-safety-contract.md`](core-139-public-api-thread-safety-contract.md)).
 
 **A question only the owner can answer:** on confluentinc#894, the 2026-09-01 follow-up asks whether
