@@ -154,8 +154,8 @@ class ShardManagerRevokeSweepNpeTest {
     /**
      * The control thread's completion, as {@code WorkManager#onSuccessResult} performs it: the flight ENDS, then
      * the shard is told. The order is load-bearing since astubbs#178 - a container that leaves its shard while
-     * still in flight leaves the shard owed that flight ({@code ProcessingShard#flightsOwed}), and a shard owed
-     * a flight is not empty, so KEY ordering does not collect it. Calling {@code sm.onSuccess} on a container
+     * still in flight is an in-flight departure ({@code ProcessingShard#inFlightDepartures}), and a shard with one
+     * is not empty, so KEY ordering does not collect it. Calling {@code sm.onSuccess} on a container
      * still in flight is a state production never produces, and this stand-in used to produce it.
      */
     private void completeOnTheControlThread(WorkContainer<String, String> wc) {

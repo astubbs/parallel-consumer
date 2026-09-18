@@ -1176,7 +1176,7 @@ entries:
       execute concurrently with the still-running old-epoch one. Present in 0.5.3.0 via
       confluentinc#623, not fork-introduced. RULED a violation 2026-09-17 and fixed:
       ProcessingShard remembers containers that left it while still in flight
-      (flightsOwed) and an ordered scan waits for them, so the re-delivery waits for
+      (inFlightDepartures) and an ordered scan waits for them, so the re-delivery waits for
       the flight as it would with no rebalance; KeyOrderLedger's overlap check now
       spans epochs and would catch the shape under churn. The reporter's own
       no-rebalance case is unaffected and stays with the no-disturbance scenario.

@@ -199,7 +199,7 @@ class KeyOrderLedgerIT {
         // work on revoke, so it is still running (ends at seq 9) when the SAME instance gets the partition
         // back and starts epoch 5's redelivery of 10 (seq 4) and 11 (seq 7). One key, two threads, and
         // the epoch boundary between them does not excuse it - the engine now makes the re-delivery wait
-        // for the straggler (ProcessingShard#flightsOwed), so this is a violation the ledger must see.
+        // for the straggler (ProcessingShard#inFlightDepartures), so this is a violation the ledger must see.
         // Both of epoch 5's starts fall inside the straggler's interval, so both are overlaps
         List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
                 delivery(PC_A, P0, 4, "k-1", 9, 1, 2L),

@@ -214,24 +214,24 @@ class KeyOrderAcrossRebalanceTest {
     }
 
     /**
-     * Under KEY ordering an empty shard is garbage-collected. A shard that is empty but still owed a flight
+     * Under KEY ordering an empty shard is garbage-collected. A shard that is empty but has an in-flight departure
      * must survive that collection - or the memory of the flight goes with it, which is the first arm - and
      * must then be collected once the flight has ended, or every key in flight at a revoke that is never
      * re-delivered here leaks one shard for the life of the instance.
      */
     @Test
-    void aShardOwedAFlightSurvivesCollectionUntilTheFlightEnds() {
+    void aShardWithAnInFlightDepartureSurvivesCollectionUntilTheFlightEnds() {
         givenAnAssignedPartitionUnder(KEY);
         ShardKey key = ShardKey.of(recordAt(0, THE_KEY), KEY);
         WorkContainer<String, String> oldFlight = givenAnOldEpochFlightStillRunningAfterARevokeAndReassign();
 
-        assertWithMessage("the shard is empty of work but still owed the old flight, so it must not be collected")
+        assertWithMessage("the shard is empty of work but the old flight is still out, so it must not be collected")
                 .that(sm.getShard(key).isPresent()).isTrue();
         assertThat(sm.getShard(key).get().getCountOfWorkTracked()).isEqualTo(0);
 
         // no re-delivery ever arrives here (the partition could equally have gone elsewhere); the flight ends
         wm.handleFutureResult(oldFlight);
-        // the scan is what settles the debt, and there is nothing for it to hand out
+        // the scan is what clears the departure, and there is nothing for it to hand out
         assertThat(wm.getWorkIfAvailable(10)).isEmpty();
 
         assertWithMessage("once the flight has ended and a scan has seen that, the empty shard is collected")

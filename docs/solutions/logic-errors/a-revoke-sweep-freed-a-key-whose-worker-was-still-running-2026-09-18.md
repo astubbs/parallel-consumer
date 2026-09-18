@@ -59,13 +59,13 @@ five arms, green with the fix, red again with only the two engine files reverted
 
 ## Fix
 
-`ProcessingShard` remembers containers that left it while still in flight (`flightsOwed`, an identity
+`ProcessingShard` remembers containers that left it while still in flight (`inFlightDepartures`, an identity
 set - `WorkContainer` equality is identity, so it means "these containers", never "these coordinates").
 `retire` is the one exit path every departure route shares, so it is recorded there and the three
-routes are covered without any of them having to remember. An ordered scan settles the flights whose
+routes are covered without any of them having to remember. An ordered scan clears the departures whose
 workers have returned and takes nothing while any is still out; `isEmpty` derives from the same
-question, so a shard owed a flight survives `removeShardIfEmpty` and the scan collects it once the
-debt is paid. UNORDERED records nothing and pays nothing.
+question, so a shard with an in-flight departure survives `removeShardIfEmpty` and the scan collects it
+once the flight ends. UNORDERED records nothing.
 
 ## Rejected alternatives
 

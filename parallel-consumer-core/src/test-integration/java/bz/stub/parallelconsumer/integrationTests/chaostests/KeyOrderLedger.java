@@ -43,7 +43,7 @@ import java.util.stream.Collectors;
  *   interrupt a running worker, and the same instance getting the partition back and starting the
  *   re-delivered record while that worker is still inside the user function is the one route in the
  *   engine that puts one key on two threads at once. The engine now makes the re-delivery wait
- *   ({@code ProcessingShard#flightsOwed}), so the bound on "how long may an old-epoch delivery still be
+ *   ({@code ProcessingShard#inFlightDepartures}), so the bound on "how long may an old-epoch delivery still be
  *   running once the new epoch starts the same key" is ZERO within an incarnation - which is why this
  *   check needs no calibrated allowance, and why an earlier version of this javadoc, which said picking
  *   that number was "the whole job", no longer stands.</li>

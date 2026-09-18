@@ -324,7 +324,7 @@ overlap** (an old owner on another JVM, or a previous lifetime of this one, stil
 revoke while this owner takes the same key) is not reported, and cannot be: PC's promise is per
 consumer, and nothing client-side can see a worker in another process. That shape is a real defect
 this repo has already fixed once (astubbs#80), and the within-instance half of it is now both
-prevented (`ProcessingShard#flightsOwed`) and detected. The second limit used to
+prevented (`ProcessingShard#inFlightDepartures`) and detected. The second limit used to
 be that `CLASS2_STALL` **gated** on a timing bound - it no longer does, and the reason is the limit:
 it measures how long a committed offset stayed pinned, which one incomplete record does
 legitimately, so a crossing only ever proved the bound was met and never that the backlog failed to
