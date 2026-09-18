@@ -188,7 +188,7 @@
              exists to serve - see docs/inflight/static-error-prone-rule-registry.md. -->
         <error-prone.version>2.42.0</error-prone.version>
         <nullaway.version>0.12.7</nullaway.version>
-        <netty.version>4.1.137.Final</netty.version>
+        <netty.version>4.1.138.Final</netty.version>
         <logback.version>1.6.1</logback.version>
         <!-- Held on the 1.13 LINE, not at a version: keep the micrometer family version-aligned
              with micrometer-registry-prometheus (pinned to 1.12.x in example-metrics until the
@@ -547,10 +547,14 @@
             <!-- Netty arrives transitively through vertx-core, so the only lever here is a pin.
                  CVE-2026-75596 (CVSS 6.9) lands on netty-handler 4.1.136.Final, which is the version
                  the August 2026 batch (-59898, -59899, -59901) was fixed in - see the
-                 excludeVulnerabilityIds comment below, which records that batch. Importing the BOM
+                 excludeVulnerabilityIds comment below, which records that batch. 4.1.137.Final
+                 closed that one; 4.1.138.Final closes CVE-2026-89044 (GHSA-hcvj-94mj-jp5c, HTTP
+                 request smuggling through a malformed Transfer-Encoding in netty-codec-http /
+                 netty-codec-http2, affecting 4.1.133 through 4.1.137) - same shape, same answer:
+                 move up rather than suppress, because a fixed release exists. Importing the BOM
                  rather than pinning netty-handler alone keeps every netty artifact on one version;
                  pinning a single one is how a codec and a handler end up a release apart. Drop this
-                 block once vertx-core resolves 4.1.137.Final or later on its own. -->
+                 block once vertx-core resolves 4.1.138.Final or later on its own. -->
             <dependency>
                 <groupId>io.netty</groupId>
                 <artifactId>netty-bom</artifactId>
@@ -888,6 +892,29 @@
                         <excludeVulnerabilityId>CVE-2026-59295</excludeVulnerabilityId>
                         <excludeVulnerabilityId>CVE-2026-59296</excludeVulnerabilityId>
 
+                        <!-- org.xerial.snappy:snappy-java (declared in parallel-consumer-core, beside
+                             zstd-jni, and also Kafka's own snappy codec). CVE-2026-90559 (CVSS 8.7,
+                             CWE-787, xerial/snappy-java#728): Snappy.uncompress(ByteBuffer, ByteBuffer)
+                             never checks that the destination has room for the declared decompressed
+                             size, so a well-formed blob declaring more than the buffer's capacity
+                             writes past the off-heap allocation and kills the JVM. Real, and
+                             UNREACHABLE HERE for a structural reason: that overload is called by
+                             nothing in this tree. kafka-clients' SnappyCompression and this
+                             project's OffsetSimpleSerialisation both go through SnappyInputStream /
+                             SnappyOutputStream, which (read from the 1.1.10.8 bytecode) invoke only
+                             the byte[] overloads and size the output from Snappy.uncompressedLength
+                             first; inside snappy-java the ByteBuffer overload is reached only from
+                             SnappyFramedInputStream, and nothing here uses the framed format. The
+                             issue itself says the sibling paths already carry the check.
+                             1.1.10.8 is the newest release on Central (July 2025); the candidate fix
+                             xerial/snappy-java#734 is open and unmerged, so this is standing, not
+                             temporary - there is no written-and-merged fix to wait on yet.
+                             Re-argue this entry if anything here starts calling Snappy.uncompress or
+                             Snappy.rawUncompress directly, or reading the framed format.
+                             RETIRE WHEN: snappy-java ships a release carrying the capacity check -
+                             then bump the version in parallel-consumer-core/pom.xml and delete this. -->
+                        <excludeVulnerabilityId>CVE-2026-90559</excludeVulnerabilityId>
+
                         <!-- com.fasterxml.jackson.core:jackson-databind (example-streams only). False
                              positive: GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and
                              the module resolves a 2.18.x - see jackson.examples.version in the
@@ -902,6 +929,25 @@
                              2.21.x that is genuinely in scope (then it needs >= 2.21.5, not an
                              exclusion). -->
                         <excludeVulnerabilityId>CVE-2026-54518</excludeVulnerabilityId>
+
+                        <!-- ==== TEMPORARY-SINCE: 2026-09-18 - delete when Jackson 2.18.11 ships ====
+                             com.fasterxml.jackson.core:jackson-databind 2.18.10 (example-streams, via
+                             jackson.examples.version in the examples parent). Two real advisories,
+                             both fixed on the 2.18 branch and milestoned 2.18.11, which is not on
+                             Central yet: CVE-2026-91776 (CWE-770, unbounded growth of the type-id
+                             cache in TypeDeserializer, FasterXML/jackson-databind#6203, merged
+                             2026-09-14) and CVE-2026-91777 (CWE-407, quadratic forward-reference
+                             resolution in Collection/Map deserializers, FasterXML/jackson-databind#6204,
+                             merged 2026-09-15). Neither is in GHSA or OSV, so no Dependabot alert will
+                             fire; the retirement trigger is the VERSION-UPDATE PR, which the patch-only
+                             scoping of the jackson-bom ignore in .github/dependabot.yml lets through.
+                             Reachability is moot: the example module is never published, and a fix
+                             is one patch away.
+                             RETIRE WHEN: jackson-databind 2.18.11 is on Central - move
+                             jackson.examples.version to it and delete both ids.
+                             bin/check-cve-exclusions.sh fails this entry at 90 days otherwise. -->
+                        <excludeVulnerabilityId>CVE-2026-91776</excludeVulnerabilityId>
+                        <excludeVulnerabilityId>CVE-2026-91777</excludeVulnerabilityId>
                     </excludeVulnerabilityIds>
                 </configuration>
                 <executions>
