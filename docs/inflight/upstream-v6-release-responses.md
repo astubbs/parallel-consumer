@@ -97,7 +97,7 @@ obligation it was one pass at.
 - [`process-candidate-ranking.md`](process-candidate-ranking.md) carried the seven maintainer decisions these posts needed; all made 2026-09-18.
 - [`release-0.6.0.0.md`](release-0.6.0.0.md), "Do at release", was the sweep's plan; it ran.
 - [`upstream-coverage-completeness.md`](upstream-coverage-completeness.md) owns the standing obligation this note is one pass at.
-- [`upstream-tell-809-833-the-hang-is-fixed.md`](upstream-tell-809-833-the-hang-is-fixed.md) carried the three tellings for the commit-timeout pair; all three done 2026-09-18.
+- `upstream-tell-809-833-the-hang-is-fixed.md` carried the three tellings for the commit-timeout pair; all three done 2026-09-18, and it retired into [`docs/solutions/logic-errors/the-only-producer-of-commit-responses-died-so-every-waiter-reported-a-timeout-2026-09-18.md`](../solutions/logic-errors/the-only-producer-of-commit-responses-died-so-every-waiter-reported-a-timeout-2026-09-18.md).
 - The per-issue notes named beside each box above hold the drafted text and the verification behind it; the astubbs#178 draft is `issue-response-178.md` on the astubbs#517 branch.
 
 Delete this note when every box is ticked; nothing in it outlives the posts.
