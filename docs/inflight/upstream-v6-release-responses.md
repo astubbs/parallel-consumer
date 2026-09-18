@@ -41,7 +41,7 @@ noted.**
   holds the grace-period decision.
 - [x] confluentinc#551 (astubbs#164) - batching over-request: the validation half shipped
   (astubbs#496), the `target - modulo` arithmetic half is open as astubbs#311; the batchSize-is-a-maximum
-  doc fix rides on this branch. **Posted 2026-09-18** on both: mirror
+  doc fix landed with astubbs#516 <!-- post-merge: checked - a PR number, true once it merges -->. **Posted 2026-09-18** on both: mirror
   https://github.com/astubbs/parallel-consumer/issues/164#issuecomment-5724766990, upstream
   https://github.com/confluentinc/parallel-consumer/issues/551#issuecomment-5724767191.
 
