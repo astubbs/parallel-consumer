@@ -1337,9 +1337,9 @@ entries:
     summary: README says a source build needs JDK 17 and why the jar is still Java 8 (Jabel)
     fork:
       branches: [docs/920-jdk17-build-requirement]
-      prs: []
+      prs: [519]
       fork_issue: 194
-      status: ready
+      status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
       issues: [906]
