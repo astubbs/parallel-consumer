@@ -49,7 +49,24 @@ noted.**
 
 **Announced beyond the issue tracker.** Not on the owed list, added when done:
 
-- [x] confluentinc discussion 849, the "how many people use this?" thread the owner opened in 2025 - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/discussions/849#discussioncomment-18493655), tagging everyone who answered; it also answers riccardoforzan's maintenance/releases/roadmap questions and invites Moniepoint's Batch-By-Key fork to open a PR. The rest of the discussions backlog is [`upstream-discussions-unanswered.md`](upstream-discussions-unanswered.md)'s.
+- [x] confluentinc discussion 849, the "how many people use this?" thread the owner opened in 2025 - **posted 2026-09-18** (https://github.com/confluentinc/parallel-consumer/discussions/849#discussioncomment-18493655), tagging everyone who answered; it also answers riccardoforzan's maintenance/releases/roadmap questions and invites Moniepoint's Batch-By-Key fork to open a PR. - [x] **The discussions backlog, 2026-09-18.** `docs/inflight/upstream-discussions-unanswered.md` listed it (retired here; its last version is `git show 41c0f7d40:docs/inflight/upstream-discussions-unanswered.md`) and `scripts/upstream-sweep.sh --audit` is the instrument. Every thread with no reply, and every Q&A thread whose accepted answer the fork has superseded, got one comment: the answer, where the fork stands, the coordinates block. Discussion 461 was judged closed without a reply. Two threads' accepted answers (820, 754) are now out of date and the owner re-marks them. The 883 reproducer was attached to astubbs#187 as promised (https://github.com/astubbs/parallel-consumer/issues/187#issuecomment-5725484959).
+- [x] confluentinc discussion 403 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/403#discussioncomment-18494816
+- [x] confluentinc discussion 512 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/512#discussioncomment-18494734
+- [x] confluentinc discussion 542 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/542#discussioncomment-18494653
+- [x] confluentinc discussion 577 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/577#discussioncomment-18494595
+- [x] confluentinc discussion 601 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/601#discussioncomment-18494535
+- [x] confluentinc discussion 611 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/611#discussioncomment-18494877
+- [x] confluentinc discussion 643 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/643#discussioncomment-18494733
+- [x] confluentinc discussion 671 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/671#discussioncomment-18494732
+- [x] confluentinc discussion 677 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/677#discussioncomment-18494666
+- [x] confluentinc discussion 754 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/754#discussioncomment-18494581
+- [x] confluentinc discussion 778 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/778#discussioncomment-18494654
+- [x] confluentinc discussion 815 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/815#discussioncomment-18494534
+- [x] confluentinc discussion 820 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/820#discussioncomment-18494580
+- [x] confluentinc discussion 848 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/848#discussioncomment-18494819
+- [x] confluentinc discussion 873 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/873#discussioncomment-18494818
+- [x] confluentinc discussion 883 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/883#discussioncomment-18494532
+- [x] confluentinc discussion 910 - posted 2026-09-18, https://github.com/confluentinc/parallel-consumer/discussions/910#discussioncomment-18494531
 
 **Upstream PRs absorbed by fork work, with no comment saying so.** One paragraph each: the
 equivalent shipped, with credit to the contributor.

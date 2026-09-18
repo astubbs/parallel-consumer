@@ -36,8 +36,10 @@ actually *read*, which is the only thing recorded below:
   completeness check has ever been run against the live list.
 - **PRs - closed unmerged, human-authored.** Only the 2023-06-15 sweep has been examined; the rest
   are unread.
-- **Discussions.** Only the zero-reply ones surfaced by `--audit` have been read; the remainder are
-  unread.
+- **Discussions.** Read in full on 2026-09-18 - the zero-reply ones from `--audit` plus every
+  answered-without-accepted-answer thread from the live listing - and answered; the pass is recorded
+  in [`upstream-v6-release-responses.md`](upstream-v6-release-responses.md). New threads are the
+  standing obligation; `--audit` finds the zero-reply ones.
 
 **The 2026-09-08 pass at this obligation** was `upstream-items-with-no-fix-and-no-response.md`
 (retired at the 0.6.0.0 tag; `git show e6a429d87:docs/inflight/upstream-items-with-no-fix-and-no-response.md`); what it left to answer
