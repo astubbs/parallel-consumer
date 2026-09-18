@@ -97,6 +97,10 @@ below are five different things "un-quarantining" can mean:
   size, the precondition is asserted rather than left mute, and the reproduction was re-proved red
   against the defect. Diagnosis, arms and numbers:
   [`docs/solutions/test-flakiness/the-setup-guard-was-waiting-on-records-back-pressure-had-stopped-fetching-2026-09-07.md`](solutions/test-flakiness/the-setup-guard-was-waiting-on-records-back-pressure-had-stopped-fetching-2026-09-07.md).
+  **It has since failed again on the same setup guard** - not re-quarantined, and this paragraph
+  stands as the record of the fix; the *Seen again after being called fixed* section of
+  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md) carries the
+  sightings and why two in a day is not a rate.
 - `MultiInstanceRebalanceTest.largeNumberOfInstances` is the **wrong-shelf** case, and the one worth
   not misreading as a fix. Nothing about it was repaired: its residual failures were measured as the
   Kafka consumer group protocol under this profile's churn rate, so it is a measurement whose output
