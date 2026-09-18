@@ -390,6 +390,8 @@ and those fixes are already in users' hands.
 
 ## Do at release: one sweep over the upstream mirrors
 
+**Ran 2026-09-17 to 2026-09-18.** astubbs#186, astubbs#195 and the rest of the version-labelled mirrors were reconciled, the announcing comments went out on confluentinc#880, confluentinc#885's mirror was already closed, and confluentinc#907, and every drafted response was posted and deleted. What the release still owes a response on, and where each drafted answer lived, is [`upstream-v6-release-responses.md`](upstream-v6-release-responses.md). The text below is the plan as it stood.
+
 The upstream issues are mirrored here, labelled `upstream-mirror`, and each carries a **Fork status** section
 written on 2026-08-05. Roughly **11 of them name `0.6.0.0`** in the future tense - "ships in", "is set
 to ship", "answered by the fork" - and those statements only become true when the release goes out.

@@ -74,7 +74,7 @@ reporter today and the proof that desynchronising breaks the lockstep. But it ch
 for every existing deployment, so it wants a go/no-go rather than silent shipping. Nothing else in
 the ladder waits on that answer.
 
-## Draft answer to the reporter, ready to post
+## Draft answer to the reporter - posted 2026-09-18 (https://github.com/confluentinc/parallel-consumer/issues/887#issuecomment-5722724287), mirror body corrected the same day
 
 astubbs#189 stays open - the ladder is real work - but the reporter has been waiting since 2025-08
 and the workaround exists today. Post something like:

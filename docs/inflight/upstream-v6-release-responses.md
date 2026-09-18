@@ -90,4 +90,13 @@ retired `upstream-items-with-no-fix-and-no-response.md`
 [`upstream-coverage-completeness.md`](upstream-coverage-completeness.md) owns the standing
 obligation it was one pass at.
 
+**Where the rule and the other records live**, so nobody re-derives this list from a stale one:
+
+- [`AGENTS.md`](AGENTS.md) in this directory owns the rule - a note mapped to an issue carries a draft response, posted only on explicit instruction, deleted when posted.
+- [`upstream-mirror-bodies-are-stale.md`](upstream-mirror-bodies-are-stale.md) owns the diagnosis of the wrong mirror bodies and the recurrence question; its table says which are corrected.
+- [`process-candidate-ranking.md`](process-candidate-ranking.md) carried the seven maintainer decisions these posts needed; all made 2026-09-18.
+- [`release-0.6.0.0.md`](release-0.6.0.0.md), "Do at release", was the sweep's plan; it ran.
+- [`upstream-coverage-completeness.md`](upstream-coverage-completeness.md) owns the standing obligation this note is one pass at.
+- The per-issue notes named beside each box above hold the drafted text and the verification behind it; the astubbs#178 draft is `issue-response-178.md` on the astubbs#517 branch.
+
 Delete this note when every box is ticked; nothing in it outlives the posts.
