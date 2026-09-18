@@ -567,6 +567,16 @@ public class ShardManager<K, V> {
             var work = shard.getWorkIfAvailable(remainingToGet, retryQueue);
             workFromAllShards.addAll(work);
 
+            // A shard that a revoke sweep emptied while one of its containers was still out at a worker
+            // survives that sweep's collection on purpose (ProcessingShard#isEmpty, astubbs#178). Nothing else
+            // visits it once the flight ends unless the key is re-delivered here, so the scan - which just asked
+            // the shard about that very flight - is where it is collected. Under KEY ordering only; the other
+            // modes keep their shards, and removeShardIfEmpty says so itself. The check in front is the O(1)
+            // map read; the removal re-checks under the per-key lock.
+            if (shard.isEmpty()) {
+                removeShardIfEmpty(shardEntry.get().getKey());
+            }
+
             // next
             next = shardQueueIterator.next();
         }
