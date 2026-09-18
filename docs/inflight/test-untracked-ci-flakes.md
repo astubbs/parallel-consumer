@@ -7,6 +7,21 @@
 Found 2026-08-07 by scanning surefire `Flakes:` markers across the 45 most recent CI runs (Integration
 and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any ledger.
 
+**Read this register through `bin/inflight.mjs`, never from one checkout.** It is distributed the way
+every note here is, and a register that accretes sightings forks with every branch that records one:
+the copy in front of you is one version, and other live refs carry whole dated sighting sections -
+and conventions, like the *Seen again after being called fixed* heading below - that this copy may
+not. `node bin/inflight.mjs docs header docs/inflight/test-untracked-ci-flakes.md` says how many
+divergent versions exist and what the largest ones added; `note drift` and `docs show --ref <ref>`
+read them; the read-time hook prints the same divergence line whenever this file is opened. So a
+rate is never a total written here: a rate read off one copy is computed over a subset of what the
+corpus recorded, with nothing marking it partial. `node bin/inflight.mjs codecov test <name>` is the
+recorded outcome per commit, from a store that does not fork with the tree; what the prose in a row
+adds is what that store lacks - the failure signature, the mechanism-clear, and the master-state
+argument rule 1 of [`docs/quarantined-tests.md`](../quarantined-tests.md) asks for.
+[`docs/inflight-tool.md`](../inflight-tool.md) owns the commands; [`AGENTS.md`](AGENTS.md) in this
+directory states the per-branch fork as the trade the in-repo design makes.
+
 The retry that hid them is gone - that half is done and written up in
 [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](../solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md),
 which also has the scan method. What is open is the tests themselves - the ones met after it. All
@@ -225,9 +240,9 @@ listed in this note's header as fixed and out, and in [`docs/quarantined-tests.m
 as its worked example of the **flake diagnosed and fixed** exit. It has failed again. **Recorded
 because it is a recurrence of something declared fixed, which is the one case where a single sighting
 is worth writing down** - this heading and that sentence are the ledger's own convention for the case,
-recovered from versions of this file carried on other refs, because `origin/master`'s copy has never
-held it ([`process-flake-ledger-fragments-per-branch.md`](process-flake-ledger-fragments-per-branch.md)
-is about why that is so).
+recovered from versions of this file carried on other refs, because `origin/master`'s copy had never
+held it - `node bin/inflight.mjs docs header docs/inflight/test-untracked-ci-flakes.md` lists those
+versions, and the header paragraph above says why reading this file through the tool is the rule.
 
 **What the recorded outcome says, which is more than the report that prompted this.**
 `node bin/inflight.mjs codecov test RegistrationRaceStaleResidentIT` shows the failure at `f5e4674` on
