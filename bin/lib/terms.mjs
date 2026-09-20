@@ -323,7 +323,7 @@ export function matchDocs(terms, { areas = DOC_AREAS, bodyCap = BODY_CAP_PER_TER
         d.onBaseline = s.found ? s.onBaseline : false
         d.divergent = s.found ? (s.divergent ?? []).length > 0 : false
         d.blob = s.at?.blob ?? null
-        if (d.blob && !d.heading) blobs.push(d.blob)
+        if (d.blob && !d.heading) blobs.push({ blob: d.blob, path: d.path })
     }
     const titles = blobTitles(blobs)
     for (const d of top) d.title = d.heading ?? (d.blob ? titles.get(d.blob) ?? null : null)

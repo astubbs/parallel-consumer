@@ -13,6 +13,15 @@ availability:
     tag: 0.5.1.0
     path: CHANGELOG.md
     basis: Listed as content of this release - pause and resume without unsubscribing from topics.
+  milestones:
+    - release: next-0x
+      basis: >-
+        A pause reaches the worker pool. Batches already queued in the pool but not started are taken
+        back on the controller's next pass, and each of their records returns to awaiting selection
+        with nothing counted against it. Before this, a pause stopped only the controller, so queued
+        batches ran anyway and processing continued until that queue drained.
+release_assumptions:
+  - The next-0x milestone, and the boundaries below that describe queued work being taken back, are conditional until that release ships. On 0.6.0.0 and earlier a pause stops the controller handing out new work and nothing more.
 readme_anchor: features-list
 summary: Pause new work submission across the processor without unsubscribing from its topics, then resume when the application is ready.
 use_this_when:
@@ -26,8 +35,16 @@ opt_in:
   mechanism: Call the processor's pause or resume API.
   isolated_from_stable_modules: false
 boundaries:
-  - Pause does not interrupt work already in flight.
+  - Pause does not interrupt work already in flight. A record inside your processing function runs to completion, and a pause never cancels or interrupts it.
+  - The guarantee is that no new work starts after the CONTROLLER acts, not after the call returns. Pausing wakes the controller, so that window is a control-loop pass rather than a commit interval - but a worker that picks up a queued batch inside it runs that batch. This is a stated window, not a defect.
+  - A record taken back out of the pool has nothing recorded against it - no attempt spent, no failure, no retry delay - so pausing never advances any record's retry history. It is abandoned, not failed.
+  - "A close that does not drain takes queued work back the same way, on the same contract: work still queued is not in flight, so starting it would be starting new work during a close that promised not to. A draining close deliberately does not, because it exists to dispatch what is already buffered."
   - Automatic per-partition throttling is separate from this application-controlled processor state.
+validation:
+  - Pause while work is queued and confirm the records that ran are exactly those already inside the processing function; the processor reports how many were taken back out of the pool.
+  - Confirm the paused instance stays in its consumer group and resumes without a rebalance.
 references:
   - label: Processor pause implementation
     path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java
+  - label: Queued work is taken back on pause and on a non-draining close
+    path: parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/PausedWorkIsTakenBackOutOfThePoolTest.java

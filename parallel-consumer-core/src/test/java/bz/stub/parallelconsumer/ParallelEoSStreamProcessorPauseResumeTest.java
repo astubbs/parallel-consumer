@@ -167,10 +167,17 @@ class ParallelEoSStreamProcessorPauseResumeTest extends ParallelEoSStreamProcess
     }
 
     /**
-     * This test verifies that in flight work is finished successfully when the consumer is paused. In flight work is
-     * work that's currently being processed inside a user function has already been submitted to be processed based on
-     * the dynamic load factor. The test also verifies that new offsets are committed once the in-flight work finishes
-     * even if the consumer is still paused.
+     * This test verifies that in flight work is finished successfully when the consumer is paused, and that work
+     * which was merely <em>queued</em> is not started. In flight work is work currently inside a user function; work
+     * the controller had already handed to the worker pool but which no worker had picked up is taken back out of
+     * that queue, spends no attempt, and is processed on resume. The test also verifies that new offsets are committed once the
+     * in-flight work finishes even if the consumer is still paused.
+     * <p>
+     * <b>The queued half changed in 0.6</b>, and this test is where it is pinned. Until then a pause reached only
+     * the controller, so every batch already in the pool's queue ran anyway - the assertion here used to be "more
+     * than {@code degreeOfParallelism} records were processed, exact number based on the dynamic load factor", which
+     * is to say a pause did not stop processing for as long as the queue took to drain. It is now the records that
+     * were inside the function, and {@code getRecordsPurgedWhilePaused()} counts what the controller took back.
      *
      * @param commitMode The commit mode to be configured for the parallel consumer.
      */
@@ -204,11 +211,11 @@ class ParallelEoSStreamProcessorPauseResumeTest extends ParallelEoSStreamProcess
         // unlock the user function
         testUserFunction.unlockProcessing();
 
-        // in flight messages + buffered messages should get processed now (exact number is based on dynamic load factor)
+        // the in flight messages finish; the ones queued behind them in the pool are taken back out of the queue
         Awaitility
                 .waitAtMost(defaultTimeout)
-                .alias("at least " + degreeOfParallelism + " records should be processed")
-                .untilAsserted(() -> assertThat(testUserFunction.numProcessedRecords.get()).isGreaterThan(degreeOfParallelism));
+                .alias(degreeOfParallelism + " records should be processed and no more")
+                .untilAsserted(() -> assertThat(testUserFunction.numProcessedRecords.get()).isEqualTo(degreeOfParallelism));
 
         // overall committed offset should reach the same value
         awaitForCommit(testUserFunction.numProcessedRecords.get());
@@ -216,6 +223,11 @@ class ParallelEoSStreamProcessorPauseResumeTest extends ParallelEoSStreamProcess
         // shouldn't have anymore in flight records now
         assertThat(testUserFunction.numInFlightRecords.get()).isEqualTo(0);
         assertThat(parallelConsumer.getWm().getNumberRecordsOutForProcessing()).isEqualTo(0);
+
+        // and the pause really did reach the pool: the controller took the queued batches back out of it, rather
+        // than the workers having drained them. Without this the assertion above would also pass on an instance
+        // that had nothing queued.
+        assertThat(parallelConsumer.getRecordsPurgedWhilePaused()).isGreaterThan(0L);
 
         // resume parallel consumer ->
         parallelConsumer.resumeIfPaused();

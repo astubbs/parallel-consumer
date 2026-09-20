@@ -30,6 +30,8 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -430,6 +432,16 @@ public class PartitionState<K, V> {
     private Gauge highestSequentialSucceededOffsetGauge;
     private Gauge numberOfIncompletesGauge;
     private Gauge ephochGauge;
+
+    /**
+     * How many of this partition's records are parked right now, and how long the oldest of them has been parked
+     * (KTD14). Registered and dropped with every other gauge here, so they belong to the assignment rather than to
+     * whoever happens to be watching - which is what makes them true for a classic-API user, who parks records
+     * through {@code PCRetriableException.park} exactly as a fluent-API one does.
+     */
+    private Gauge parkedRecordsGauge;
+    private Gauge parkedOldestAgeGauge;
+
     private DistributionSummary ratioPayloadUsedDistributionSummary;
     private DistributionSummary ratioMetadataSpaceUsedDistributionSummary;
     private final PCMetrics pcMetrics;
@@ -1370,6 +1382,85 @@ public class PartitionState<K, V> {
         return false;
     }
 
+    /**
+     * How many of this instance's parked records sit on this partition - the live size of the set an operator can
+     * act on, which is deliberately not the same figure as a count of park <em>events</em>.
+     * <p>
+     * <b>Reads containers, not the parked record VIEW, and that is a measured decision.</b> The only three facts
+     * needed here are topic, partition and when the record parked, all of which are on the
+     * {@link WorkContainer} already. Building {@code ParkedRecord} instead cost a {@code RecordContext}, a
+     * {@code ParkedRecord} and a <b>full key deserialisation</b> per parked record, per gauge, per scrape - two
+     * gauges per assigned partition, each walking the whole retry queue, so a two-dozen-partition instance
+     * holding a thousand parked records decoded tens of thousands of keys every time a dashboard refreshed. The
+     * values are identical either way.
+     * <p>
+     * <b>Cleared suspicion, 2026-09-11: the scrape thread is not the control thread, and that is safe.</b> A
+     * gauge is read by whoever drives the user's {@code MeterRegistry}, so this walks the retry queue from a
+     * thread the engine does not own - the suspicion is that it races the controller adding to that queue.
+     * The discriminator is that {@link ShardManager#getParkedWorkContainers(boolean)} takes the queue's READ
+     * lock for the walk and hands back a snapshot list, and the controller adds under the matching write lock,
+     * so the walk never observes a partly-linked entry and never holds the lock past its own return. It is the
+     * same contract {@code ConsumerHandle.parkedContainers()} already relies on from a user's own thread. What
+     * would reopen it: a parked store that is not the retry queue, or a collector here that reaches a container
+     * by some route other than that method - and nothing would go red, because no gate can see which edge a
+     * read arrived by.
+     */
+    private double countParkedNow() {
+        int count = 0;
+        for (WorkContainer<?, ?> container : parkedContainersOfThisInstance()) {
+            if (isOnThisPartition(container)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * @return the age in seconds of the oldest record parked on this partition, or zero when nothing is parked -
+     *         zero rather than NaN, because a gauge that vanishes from a dashboard when the good news arrives
+     *         reads as a broken exporter
+     */
+    private double oldestParkedAgeSeconds() {
+        Instant oldest = null;
+        for (WorkContainer<?, ?> container : parkedContainersOfThisInstance()) {
+            if (!isOnThisPartition(container)) {
+                continue;
+            }
+            // The moment of the failure that parked it - the same instant a parked-record view reports.
+            Instant parkedSince = container.getLastFailedAt().orElse(Instant.EPOCH);
+            if (oldest == null || parkedSince.isBefore(oldest)) {
+                oldest = parkedSince;
+            }
+        }
+        if (oldest == null) {
+            return 0d;
+        }
+        return Duration.between(oldest, module.clock().instant()).toMillis() / 1000d;
+    }
+
+    /**
+     * Asked of the work manager rather than reached for through {@code getSm()}, for the reason
+     * {@link bz.stub.parallelconsumer.state.WorkManager#getParkedWorkContainers(boolean)} gives.
+     * <p>
+     * {@code true}: a container whose partition this instance no longer holds is not one of ours to report, and
+     * a gauge for a partition somebody else now owns is the thing deregistration exists to prevent.
+     */
+    private List<WorkContainer<?, ?>> parkedContainersOfThisInstance() {
+        // TODO(refactor): each parked gauge walks the whole retry queue on every scrape, so a scrape costs
+        //  (2 x assigned partitions) walks of it. An index of parked containers by partition would make it one.
+        return module.workManager().getParkedWorkContainers(true);
+    }
+
+    /**
+     * Whether a parked container belongs to this partition. Compared field by field rather than through
+     * {@code getTopicPartition()}, which builds a {@link TopicPartition} per call and would allocate one per
+     * parked record per gauge per scrape.
+     */
+    private boolean isOnThisPartition(WorkContainer<?, ?> container) {
+        ConsumerRecord<?, ?> record = container.getCr();
+        return record.partition() == tp.partition() && record.topic().equals(tp.topic());
+    }
+
     private void initMetrics() {
         TopicPartition topicPartition = getTp();
         if (topicPartition == null) {
@@ -1388,6 +1479,10 @@ public class PartitionState<K, V> {
                 this, partitionState -> partitionState.incompleteOffsets.size(), partitionStateTags);
         ephochGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.PARTITION_ASSIGNMENT_EPOCH,
                 this, PartitionState::getPartitionsAssignmentEpoch, partitionStateTags);
+        parkedRecordsGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.PARTITION_PARKED_RECORDS,
+                this, PartitionState::countParkedNow, partitionStateTags);
+        parkedOldestAgeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.PARTITION_PARKED_OLDEST_AGE,
+                this, PartitionState::oldestParkedAgeSeconds, partitionStateTags);
         ratioMetadataSpaceUsedDistributionSummary = pcMetrics.getDistributionSummaryFromMetricDef(PCMetricsDef.METADATA_SPACE_USED, partitionStateTags);
         ratioPayloadUsedDistributionSummary = pcMetrics.getDistributionSummaryFromMetricDef(PCMetricsDef.PAYLOAD_RATIO_USED, partitionStateTags);
     }
@@ -1399,6 +1494,8 @@ public class PartitionState<K, V> {
         pcMetrics.removeMeter(highestSequentialSucceededOffsetGauge);
         pcMetrics.removeMeter(numberOfIncompletesGauge);
         pcMetrics.removeMeter(ephochGauge);
+        pcMetrics.removeMeter(parkedRecordsGauge);
+        pcMetrics.removeMeter(parkedOldestAgeGauge);
         pcMetrics.removeMeter(ratioMetadataSpaceUsedDistributionSummary);
         pcMetrics.removeMeter(ratioPayloadUsedDistributionSummary);
     }

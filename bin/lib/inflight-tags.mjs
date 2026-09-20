@@ -149,11 +149,40 @@ const first = (re, text) => {
     return m ? m[1].trim() : ''
 }
 
+/** A YAML scalar as a title: the quotes a colon or an apostrophe forces are not part of the name. */
+const unquoteScalar = (raw) => raw.trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1')
+
+/** Everything after the last `/`, without the extension of any document kind the corpus holds. */
+const stemOf = (path) => path.replace(/^.*\//, '').replace(/\.(md|html|ya?ml)$/, '')
+
+/**
+ * A DATA RECORD'S TITLE IS A KEY, AND THERE IS NO PROSE TO FALL BACK ON. `docs/features/` holds
+ * YAML, so the markdown chain below is wrong for it twice over: there is no `---` frontmatter fence
+ * to find the `title:` inside, and the first `# ` line of every record is its copyright comment -
+ * which the heading fallback would have served up as the feature's name, confidently and wrongly,
+ * for every record in the area.
+ *
+ * A RECORD WITH NO `title:` SAYS SO. Falling back to the filename stem, as a markdown document
+ * does, would render a schema that has moved on - a renamed key, a record written to the wrong
+ * shape - as a tidy list of filenames that reads exactly like a working area. The stem is still
+ * printed, because the reader needs to know WHICH record, but the line names the fault first.
+ *
+ * Keyed on the extension rather than on `FEATURES_DIR`, so a data record is read as data wherever
+ * it lives; column-0 anchored, so a nested `title:` inside a block cannot be mistaken for the
+ * record's own.
+ */
+function dataRecordTitle(text, path) {
+    const m = /^title:[ \t]*(.*)$/m.exec(text)
+    const raw = m ? unquoteScalar(m[1]) : ''
+    return raw || `NO title: KEY - ${stemOf(path)}`
+}
+
 /**
  * A document's title, by the fallback chain the session index uses: the frontmatter `title:` when
  * the file opens with a frontmatter block (solutions carry one, and their titles are YAML, so the
  * quotes a colon or an apostrophe forces are stripped), else the first `# ` heading, else the
- * filename stem. Never empty, so a document always has a line to be listed on.
+ * filename stem. Never empty, so a document always has a line to be listed on. A YAML record takes
+ * the data chain above instead.
  *
  * AN IN-FLIGHT NOTE IS NAMED BY ITS HEADING, frontmatter or not. docs/inflight/AGENTS.md puts the
  * note's markers "after the heading" - the heading is the note's identity - and the bash index
@@ -163,16 +192,17 @@ const first = (re, text) => {
  * bin/test-check-agent-hooks.sh caught it as the only title the old hook listed and this did not.
  */
 export function titleOf(text, path) {
+    if (/\.ya?ml$/.test(path)) return dataRecordTitle(text, path)
     const fm = path.startsWith(`${NOTES_DIR}/`) ? null : /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
     if (fm) {
         const t = /^title:[ \t]*(.*)$/m.exec(fm[1])
         if (t) {
-            const raw = t[1].trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1')
+            const raw = unquoteScalar(t[1])
             if (raw) return raw
         }
     }
     for (const l of text.split('\n')) if (l.startsWith('# ')) return l.slice(2).trim()
-    return path.replace(/^.*\//, '').replace(/\.(md|html)$/, '')
+    return stemOf(path)
 }
 
 /**

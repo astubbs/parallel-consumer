@@ -48,6 +48,14 @@ public class TestParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStr
         super.wm = wm;
     }
 
+    /**
+     * Runs the controller's take-back pass on the calling thread, so a test can drive it deterministically instead
+     * of waiting for a control loop it has not started.
+     */
+    public int purgeQueuedWork() {
+        return super.purgeQueuedWorkNotAllowedToStart();
+    }
+
     public long getMailBoxSuccessCnt() {
         return super.getWorkMailBox().stream()
                 .filter(kvControllerEventMessage -> {

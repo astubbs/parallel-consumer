@@ -100,13 +100,21 @@ public class ConsumerManager<K, V> {
      * because nothing downstream re-reports it.
      * <p>
      * <b>A missing {@code group.id} is not what this catch is for</b>, though the shape invites that
-     * reading. The processor's constructor runs {@code validateConfiguration()} - and through it
-     * {@code checkGroupIdConfigured()} - before it asks the module for the broker poller, and the
-     * poller is what first constructs this manager and calls this method. On that path the
-     * missing-config error has already been thrown, naming the config, before priming is reached.
-     * The catch stays broad because the manager is built lazily, so nothing guarantees that ordering
-     * for a future caller, and because a genuine broker-side priming failure has no such backstop at
-     * all.
+     * reading - and the refusal that gets there first depends on which way the consumer arrived:
+     * <ul>
+     *     <li><b>The configuration path.</b> {@code ParallelConsumerOptions.validate()} refuses a
+     *     {@code consumerConfig} with no {@code group.id} at the very top of the processor's
+     *     constructor, before the module builds any client at all - so this method is never reached
+     *     with one.</li>
+     *     <li><b>The instance path.</b> The caller's client already exists, so there is nothing to
+     *     refuse until {@code checkGroupIdConfigured()} asks it - and that runs in
+     *     {@code validateConfiguration()}, <em>after</em> the constructor has taken the manager from
+     *     the module and this priming has run. So on that path the broad catch IS what keeps a
+     *     missing group id from surfacing from here, one frame before the check whose message names
+     *     it.</li>
+     * </ul>
+     * The catch stays broad for a second, independent reason: a genuine broker-side priming failure
+     * has no such backstop at all.
      */
     void init() {
         try {
