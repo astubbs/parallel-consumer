@@ -235,7 +235,7 @@ jobs:
       # below), so the job needs a JDK and a warm Maven cache - otherwise every invocation
       # fails or spends its budget re-downloading the world.
       - name: Setup JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
