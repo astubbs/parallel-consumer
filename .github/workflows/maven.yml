@@ -74,7 +74,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -285,7 +285,7 @@ jobs:
     timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -577,7 +577,7 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -869,7 +869,7 @@ jobs:
       # Dependabot PR sets up nothing it will not use. `server-id: ossindex` is inert when the audit
       # steps skip anyway: setup-java only writes a settings.xml <server> entry, which nothing reads
       # unless the Maven audit run happens.
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
         with:
           distribution: 'temurin'
@@ -1028,7 +1028,7 @@ jobs:
           # Do not narrow this - the lane falls back to the FULL glob when the base will not resolve.
           fetch-depth: 0
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -1113,7 +1113,7 @@ jobs:
       checks: write
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -1318,7 +1318,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
