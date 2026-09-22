@@ -72,7 +72,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - name: Restore Maven cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.m2/repository
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}

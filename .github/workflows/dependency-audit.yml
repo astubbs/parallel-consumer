@@ -131,7 +131,7 @@ jobs:
       # Restore-only, off maven.yml's rotating prepare-deps key. This job must not SAVE a cache: it
       # would compete with the key the build lanes own, and it resolves a different (smaller) set.
       - name: Restore Maven cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.m2/repository
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
