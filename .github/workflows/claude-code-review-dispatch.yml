@@ -216,7 +216,7 @@ jobs:
           echo "Reviewing PR #$PR (head in $head_repo)"
 
       - name: Checkout the PR under review
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # The PR's head, NOT the ref this workflow was dispatched from. The workflow comes
           # from master (see "WHY --ref master"); the code under review comes from the PR.
