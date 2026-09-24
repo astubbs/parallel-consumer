@@ -341,41 +341,15 @@ cosmetic - see the last bullet.*
   `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
 
 ### Decompose the God class - `AbstractParallelEoSStreamProcessor`
-- Control loop + lifecycle/state machine + commit orchestration + threading +
-  rebalance listener + deprecated options in one class. Design ref: draft
-  `confluentinc#488`. Do alongside the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) work; high risk.
-- **Size is deliberately not written down here.** It was recorded as 1533 lines and was still being
-  cited as that after the class had grown by most of a thousand - a stale figure reads as current
-  state forever, and nothing goes red. Ask instead:
-  `wc -l parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java`
-- **And one argument built on that figure is now falsified, which is worth more than the figure.**
-  `docs/ideation/2026-08-17-actor-collection-revival-ideation.html` reasons from "the file has moved
-  one line in 3.5 years, which is the clearest evidence that branch-shaped goals don't move it", and
-  proposes tracking progress by that line count. Measured 2026-09-03: the class was 1534 lines at
-  that ideation's own date and is over a thousand lines larger now - it moved in a fortnight what the
-  argument said it had not moved in three and a half years. The dated record is left as written, per
-  `docs/citations.md`; the correction belongs here, where the live decision is. It does not weaken the
-  case for decomposing - it inverts the reason. The class is not inert, it is accreting, and a
-  line-count target measures growth this section did not predict rather than progress against it.
-- **Two branches already attempted it, and one of them got much further** (both catalogued in
-  `branch_accounting` in `src/docs/development/upstream-map.yaml`; `bin/inflight.mjs branch <name>`
-  answers from any checkout):
-  - `origin/refactor/state-machine` @8f90da8a - extracts the lifecycle state machine only.
-  - `origin/refactor/control-loop` @c3a0f28ae - **the furthest any attempt reached**: it compiles,
-    with tests migrated and a review pass. It cuts along **`ControlLoop` / `Controller` /
-    `StateMachine` / `PCWorkerPool` / `WorkMailbox`**. Those five names are the useful part: this
-    section argues about *whether* to split without recording what a working split actually cut
-    along, and someone starting fresh would re-derive the seams rather than start from a set that
-    was shown to compile. `origin/refactor/controller-extract-base` was a marker for this work and
-    was deleted 2026-09-03 (an ancestor of master, nothing lost).
-- **Landing this unblocks whole-FILE static analysis, and it can be taken piecemeal.** The
-  new-code analysis profile is scoped to changed *lines* rather than changed *files* purely because
-  of size: touching a class this large would otherwise inherit every latent finding in it. Line
-  scoping is the weaker choice - it misses a finding reported away from the edit that caused it - so
-  each file that comes down to a reviewable size can be promoted to file scoping on its own, without
-  waiting for the whole decomposition.
-  [`docs/inflight/static-analysis-rule-profiles.md`](inflight/static-analysis-rule-profiles.md) owns
-  the profiles and carries the promotion list.
+- **Promoted to
+  [`docs/inflight/core-decompose-abstract-parallel-eos-stream-processor.md`](inflight/core-decompose-abstract-parallel-eos-stream-processor.md)
+  on 2026-09-08**, which owns the seams, the old upstream drafts and their ideas, the PRs that must
+  merge before each cut, and the cut order. This heading stays because notes and the manifest cite it
+  by name; nothing else about the decomposition lives here. The five classes below it in size are
+  [`docs/inflight/core-shrink-the-five-next-largest-classes.md`](inflight/core-shrink-the-five-next-largest-classes.md).
+  Design ref: draft `confluentinc#488`. Do alongside the
+  [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142)
+  work; high risk.
 
 ### Actor / IPC message bus for commits & results
 - Replace shared-state coordination with a lightweight actor/mailbox. Design refs:
