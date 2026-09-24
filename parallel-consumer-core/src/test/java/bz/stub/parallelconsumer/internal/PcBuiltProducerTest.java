@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.internal;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -12,6 +13,7 @@ import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniMaps;
@@ -144,6 +146,101 @@ class PcBuiltProducerTest {
         assertThat(wrapper.isConfiguredForTransactions()).isFalse();
         wrapper.send(null);
         verify(instance).send(null);
+    }
+
+    /**
+     * A source of further producers exists only where PC built the first one: the instance path carries no
+     * configuration to build from. Each build is a fresh wrapper from the same map, the caller's transactional id
+     * with it, so a replacement can be initialised under the id that fences the producer it replaces.
+     */
+    @Test
+    void theConfigurationPathOffersAReplacementSourceThatBuildsAFreshProducerEachTimeUnderTheCallersId() {
+        var built = new java.util.ArrayList<MockProducer<String, String>>();
+        var module = moduleBuildingWith(optionsWith(UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092",
+                        ProducerConfig.TRANSACTIONAL_ID_CONFIG, "callers-id"), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER),
+                config -> {
+                    var producer = new MockProducer<String, String>(true, new StringSerializer(), new StringSerializer());
+                    built.add(producer);
+                    return producer;
+                });
+        var initial = module.producerWrap();
+
+        var source = module.replacementProducerWrap();
+
+        assertThat(source).isPresent();
+        assertThat(source.get().getTransactionalId()).isEqualTo("callers-id");
+        var first = source.get().build();
+        var second = source.get().build();
+        assertWithMessage("three producers built: the initial one and one per build").that(built).hasSize(3);
+        assertThat(first).isNotSameInstanceAs(initial);
+        assertThat(second).isNotSameInstanceAs(first);
+        assertThat(first.isConfiguredForTransactions()).isTrue();
+    }
+
+    @Test
+    void theReplacementSourceCarriesNoIdInAConsumerCommitMode() {
+        var module = moduleBuildingWith(optionsWith(UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092"), CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS),
+                config -> new MockProducer<>(false, new StringSerializer(), new StringSerializer()));
+
+        var source = module.replacementProducerWrap();
+
+        assertThat(source).isPresent();
+        assertThat(source.get().getTransactionalId()).isNull();
+    }
+
+    /**
+     * The start-up build is the path every caller already has, and its failures reach whoever is constructing PC -
+     * so a configuration the client refuses fails as the client refuses it, the type and message intact, not
+     * renamed as a failure of "code supplied by user". Found by the review of astubbs#472.
+     */
+    @Test
+    void theStartUpBuildSurfacesAConstructionFailureAsTheClientThrewIt() {
+        var noSerializers = new java.util.HashMap<String, Object>();
+        noSerializers.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "127.0.0.1:1");
+        var module = new PCModule<>(optionsWith(noSerializers, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS));
+
+        var thrown = assertThrows(ConfigException.class, module::producerWrap);
+
+        assertThat(thrown).hasMessageThat().contains(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG);
+    }
+
+    /**
+     * A replacement build runs on the recovery path, inside the instance, where an {@link Error} from the
+     * construction seam - a serializer's static initialiser failing, say - would escape every catch and leave the
+     * instance RUNNING with its workers parked. So the source wraps whatever the seam throws, and the policy reads
+     * the wrapped failure as terminal: the build is not going to succeed on retry.
+     */
+    @Test
+    void aReplacementBuildWrapsWhatTheSeamThrowsSoAnErrorCannotEscapeTheRecoveryPath() {
+        var builds = new java.util.concurrent.atomic.AtomicInteger();
+        var module = moduleBuildingWith(optionsWith(UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092",
+                        ProducerConfig.TRANSACTIONAL_ID_CONFIG, "callers-id"), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER),
+                config -> {
+                    if (builds.getAndIncrement() == 0) {
+                        return new MockProducer<>(true, new StringSerializer(), new StringSerializer());
+                    }
+                    throw new NoClassDefFoundError("the serializer's static initialiser failed");
+                });
+        var ignoredInitial = module.producerWrap(); // built unwrapped, and first
+        var source = module.replacementProducerWrap().get();
+
+        var thrown = assertThrows(ExceptionInUserFunctionException.class, source::build);
+
+        assertThat(thrown).hasCauseThat().isInstanceOf(NoClassDefFoundError.class);
+        assertWithMessage("an Error from the build is terminal however it arrives")
+                .that(ProducerRecoveryPolicy.isTerminalBuildFailure(thrown)).isTrue();
+    }
+
+    @Test
+    void theInstancePathOffersNoReplacementSource() {
+        @SuppressWarnings("unchecked")
+        Producer<String, String> instance = mock(Producer.class);
+        var module = new PCModule<>(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerInGroup())
+                .producer(instance)
+                .build());
+
+        assertThat(module.replacementProducerWrap()).isEmpty();
     }
 
     /**

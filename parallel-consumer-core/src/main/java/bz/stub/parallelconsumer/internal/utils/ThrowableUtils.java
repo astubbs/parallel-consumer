@@ -10,6 +10,7 @@ import lombok.experimental.UtilityClass;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.Optional;
 import java.util.function.Predicate;
 
 /**
@@ -204,7 +205,11 @@ public class ThrowableUtils {
      * {@code UserFunctions.carefullyRun}, plus the user's rebalance listener in
      * {@code AbstractParallelEoSStreamProcessor.onPartitionsRevoked}. So it adds a name and no failure semantics of
      * its own. (Grep {@code new ExceptionInUserFunctionException} before trusting this - the claim is about all
-     * sites, so one new site that wraps something else falsifies it.)
+     * sites, so one new site that wraps something else falsifies it.) One caller of {@code carefullyRun} wraps
+     * something that is only user code when overridden: the replacement-producer build in
+     * {@code PCModule.replacementProducerWrap}, whose construction seam is protected. It is wrapped for the catch,
+     * not the name - an {@link Error} from a replacement build must not escape the recovery path - and the wrapper
+     * stays transparent for it because the cause is still the whole failure. The start-up build is not wrapped.
      * <p>
      * <b>{@link PCInternalRuntimeException} deliberately does NOT qualify</b>, though it reads like a wrapper. Its
      * message is how callers tell distinct internal failures apart - {@code "Error encoding offsets"},
@@ -216,6 +221,32 @@ public class ThrowableUtils {
      */
     private static boolean isTransparentWrapper(Throwable t) {
         return t instanceof ExceptionInUserFunctionException;
+    }
+
+    /**
+     * The innermost link in {@code t}'s cause chain that {@code match} accepts - the one the broker actually raised,
+     * under whatever wrappers the client put around it - or empty when none does, including for a null {@code t}.
+     * Bounded and cycle-safe the way every walk here is.
+     */
+    public static Optional<Throwable> innermostInCauseChain(Throwable t, Predicate<Throwable> match) {
+        var found = new Throwable[1];
+        walkCauseChain(t, link -> {
+            if (match.test(link)) {
+                found[0] = link; // keep walking: a deeper match wins
+            }
+            return true;
+        });
+        return Optional.ofNullable(found[0]);
+    }
+
+    /** True when any link in {@code t}'s cause chain satisfies {@code match}; false for a null {@code t}. */
+    public static boolean anyInCauseChain(Throwable t, Predicate<Throwable> match) {
+        var hit = new boolean[1];
+        walkCauseChain(t, link -> {
+            hit[0] = match.test(link);
+            return !hit[0]; // stop at the first match
+        });
+        return hit[0];
     }
 
     /**

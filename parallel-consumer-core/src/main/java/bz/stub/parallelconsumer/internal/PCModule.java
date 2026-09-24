@@ -16,11 +16,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerConfig;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Minimum dependency injection system, modled on how Dagger works.
@@ -71,9 +73,38 @@ public class PCModule<K, V> {
         if (this.producerWrapper == null) {
             this.producerWrapper = options().isProducerInstanceSupplied()
                     ? new ProducerWrapper<>(options())
-                    : wrapPcBuilt(buildProducer(new LinkedHashMap<>(options().getProducerConfig())));
+                    : buildProducerWrapperFromConfiguration();
         }
         return producerWrapper;
+    }
+
+    /**
+     * The {@link ReplacementProducerSource} for this module, the seam a recovery replaces an invalidated producer
+     * through: present only where PC built the producer itself, because a caller's finished instance carries no
+     * configuration to rebuild from. Nothing in this rung calls it; the manager that does is the recovery PR above.
+     * <p>
+     * Only the builds this source makes run under {@link UserFunctions#carefullyRun}: the seam is overridable, and an
+     * {@link Error} from the constructor (a serializer's static initialiser failing, say) must surface as a failure
+     * of the build rather than escape every catch on the recovery path, leaving the instance RUNNING with its
+     * workers parked on the produce lock for good. The first producer, built by {@link #producerWrap()} at
+     * start-up, is not wrapped: that path predates recovery, its failures reach the caller constructing PC, and
+     * they keep the type and message the Kafka client gave them.
+     */
+    public Optional<ReplacementProducerSource<K, V>> replacementProducerWrap() {
+        if (options().isProducerInstanceSupplied()) {
+            return Optional.empty();
+        }
+        // null in a non-transactional commit mode, where the caller sets none
+        String transactionalId = (String) options().getProducerConfig().get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+        return Optional.of(new ReplacementProducerSource<>(
+                () -> UserFunctions.carefullyRun(this::buildProducerWrapperFromConfiguration), transactionalId));
+    }
+
+    private ProducerWrapper<K, V> buildProducerWrapperFromConfiguration() {
+        // a copy per call: the seam may read or edit it, and must not edit the options
+        Map<String, Object> config = new LinkedHashMap<>(options().getProducerConfig());
+        Producer<K, V> producer = buildProducer(config);
+        return wrapPcBuilt(producer);
     }
 
     /**
