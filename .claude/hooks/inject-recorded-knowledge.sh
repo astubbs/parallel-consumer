@@ -9,7 +9,7 @@
 # WHY THIS EXISTS
 #
 # AGENTS.md already tells every agent to grep `docs/solutions/`, `docs/plans/` and `docs/inflight/`
-# before forming a hypothesis, and it is the check most often skipped - because skipping it is
+# - and `docs/features/`, which the same index carries - before forming a hypothesis, and it is the check most often skipped - because skipping it is
 # invisible. An agent that never learns a document exists cannot miss it; it just rediscovers the
 # problem, and its work looks like progress the whole way.
 #
@@ -27,8 +27,8 @@
 # title is in context, the agent's own grep does the rest.
 #
 # A THIN WRAPPER OVER `bin/inflight.mjs docs index`, since the docs context query landed (the plan
-# in docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, KTD8). The three corpus
-# areas - solutions, in-flight notes, plans - are rendered by that command, CORPUS-SCOPED: it reads
+# in docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, KTD8). Every corpus area -
+# solutions, in-flight notes, plans, feature records - is rendered by that command, CORPUS-SCOPED: it reads
 # every live ref, so a note that exists only on an unmerged branch is listed under the branch set
 # carrying it, where this hook's own `find` and `grep` over the working tree could never see it. The
 # grouping, the headings and the impact order are the ones this file used to compute in bash; they
@@ -73,7 +73,7 @@
 #
 # Never fails a session: any error prints nothing and exits 0. A broken reminder must not be a
 # broken session. When the command cannot run - no `node` on PATH, or the corpus cannot be read -
-# the framing is printed with ONE line saying the three areas are missing and how to get them, and
+# the framing is printed with ONE line saying the corpus areas are missing and how to get them, and
 # the non-corpus sections follow; the old bash scan is never fallen back to, because a partial
 # index that reads as complete is the failure this hook exists to end.
 
@@ -112,7 +112,7 @@ emit() {
 # every scan over docs/ needs the same guard. Without it the rules doc lists as an ideation document
 # or an audit, under a heading telling you to read it as one. Nothing goes red; the index just
 # quietly says something false. Anchored on `/` so a real document named e.g. `writing-agents.md`
-# is not swallowed. The three corpus areas carry the same guard inside bin/lib/docs-shape.mjs.
+# is not swallowed. The corpus areas carry the same guard inside bin/lib/docs-shape.mjs.
 DIRECTORY_DOCS_RE='/(AGENTS|CLAUDE|README)\.'
 
 emit "# Already solved here - read before you diagnose"
@@ -145,7 +145,7 @@ emit "working-tree grep can reach those - \`bin/inflight.mjs docs show <path>\` 
 emit "branch that holds it, and \`bin/inflight.mjs prior-art <mechanism>\` searches all of them."
 emit ""
 
-# THE THREE CORPUS AREAS, FROM THE TOOL. Stdout only, in one read, so a partial render is never
+# THE CORPUS AREAS, FROM THE TOOL. Stdout only, in one read, so a partial render is never
 # emitted: the command prints its whole page or exits non-zero with the reason on stderr, and
 # nothing here has an opinion about which. `node` absent is the same outcome as a failed run - the
 # notice names both - and the outcome is never the old bash scan.
@@ -158,7 +158,7 @@ if [ -n "$corpus_index" ]; then
     emit ""
 else
     emit "**DELIVERY FAILED: session index** - \`node bin/inflight.mjs docs index\` did not run here (no \`node\`"
-    emit "on PATH, or the corpus could not be read), so the solutions, in-flight notes and plans are NOT"
+    emit "on PATH, or the corpus could not be read), so the solutions, in-flight notes, plans and feature records are NOT"
     emit "listed below. Nothing else will tell you what exists: run \`node bin/inflight.mjs docs\` yourself,"
     emit "and if that fails too its exit reason is the fault to fix."
     emit ""

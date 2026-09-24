@@ -18,6 +18,7 @@
 #    9. a required field EMPTIED rather than removed                    -> FAIL (1)
 #   10. a field the kind never declared, where it declares an optional  -> FAIL (1)
 #   11. an optional list with no required partner to extend             -> FAIL (1)
+#   12. a record written `.yml` rather than `.yaml`                      -> FAIL (1)
 #
 # Case 2 is the one worth keeping. The guard's first cross-reference check only resolved a string
 # that was ENTIRELY a path, so it caught `path: foo.yaml` and missed `... see foo.yaml.` - which is
@@ -27,6 +28,12 @@
 # Case 7 guards the guard's own completeness: a schema that declares a per-item contract the checker
 # cannot locate must fail loudly, because the alternative is a contract everybody believes is
 # enforced and nothing enforces. Six were in that state when this was written.
+#
+# Case 12 cannot be a mutation, because the gap was a GLOB: `docs/features/*.yaml` matched one of the
+# two spellings the corpus tools accept, so a record written `.yml` was listed to every session and
+# reached this guard never - and the guard called the corpus valid with a malformed record in it. The
+# case therefore CREATES one. The `staging/` subdirectories are a different matter and stay out of
+# scope deliberately; the guard's own header argues that, and so do both staging READMEs.
 #
 # Cases 10 and 11 are the same class caught a second time, in the optional lists. Those were pure
 # documentation: nothing checked that a record's fields came from required plus optional, so the
@@ -43,6 +50,7 @@ GUARD=bin/check-docs-data.sh
 failures=0
 restore_path=""
 restore_copy=""
+stray_file=""
 
 # Restore by copying bytes back, not by replaying a shell variable: command substitution strips
 # trailing newlines, so a variable round-trip silently rewrites every fixture file it touches. The
@@ -54,6 +62,12 @@ restore() {
     rm -f "$restore_copy"
     restore_path=""
     restore_copy=""
+  fi
+  # Case 12 ADDS a file rather than editing one, so the trap has to be able to take it away again -
+  # a case that fails part-way must not leave a malformed record in the corpus for the next reader.
+  if [ -n "$stray_file" ]; then
+    rm -f "$stray_file"
+    stray_file=""
   fi
 }
 trap restore EXIT
@@ -187,6 +201,13 @@ restore
 mutate docs/data/schema.yaml \
   't.replace("  roadmap:\n    required:\n", "  roadmap:\n    stray_optional:\n      - x\n    required:\n", 1)'
 expect 1 "an optional list with no required partner is caught"
+restore
+
+# A minimal feature record in the OTHER spelling, missing every field its kind requires. Before the
+# glob covered `.yml` the guard never opened it and reported the corpus valid.
+stray_file=docs/features/zz-check-docs-data-selftest.yml
+printf '# Copyright (C) 2026 Antony Stubbs and contributors\n\nschema_version: 1\nkind: feature\n' > "$stray_file"
+expect 1 "a record written .yml rather than .yaml is checked too"
 restore
 
 expect 0 "restored: the corpus is valid again"

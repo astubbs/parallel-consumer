@@ -3,7 +3,23 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Validate the structure of the release-documentation data: docs/features/*.yaml and docs/data/*.yaml.
+# Validate the structure of the release-documentation data: the records directly under
+# docs/features/ and docs/data/, in either YAML spelling.
+#
+# WHAT IS DELIBERATELY NOT CHECKED, stated here because the reasoning lived only in the directories
+# themselves and a reader of this gate could not tell the exclusion from an oversight: the `staging/`
+# subdirectory of each. Staged records describe capabilities the tree does not have yet, so they cite
+# files and releases that do not exist; gating them would either fail permanently or push authors to
+# fake the references. docs/features/staging/README.md and the header of
+# docs/data/staging/module-maturity-rows.yaml both argue it, and moving a record out of staging is
+# part of the change that makes its claims true - which is when this gate first sees it.
+#
+# That exclusion is a real gap and is meant to be paid for elsewhere: the corpus tools DO surface
+# staged records to every session, so what keeps an unchecked record honest is that they render it as
+# staged rather than as whatever it declares (bin/lib/docs-shape.mjs -> `isStaged`). Both spellings
+# are globbed here because the corpus accepts both, and a record in the other one would otherwise be
+# listed to every session while silently never reaching this gate - which is the same gap with no
+# argument behind it.
 #
 # WHY THIS EXISTS
 #
@@ -182,7 +198,14 @@ def check_refs(node, path, where):
             )
 
 
-for path in sorted(glob.glob("docs/features/*.yaml") + glob.glob("docs/data/*.yaml")):
+# Both spellings, one depth. The depth is the staging exclusion this file's header argues for; the
+# spellings are not an exclusion at all, and were only ever one glob's worth of omission.
+RECORDS = sorted(set(
+    glob.glob("docs/features/*.yaml") + glob.glob("docs/features/*.yml")
+    + glob.glob("docs/data/*.yaml") + glob.glob("docs/data/*.yml")
+))
+
+for path in RECORDS:
     if os.path.basename(path) == os.path.basename(SCHEMA_PATH):
         continue
     doc = load(path)

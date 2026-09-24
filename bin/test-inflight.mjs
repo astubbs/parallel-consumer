@@ -197,7 +197,7 @@ const rankLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'rank.mjs')
 const vetLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'vet.mjs')).href)
 const repoLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'repo.mjs')).href)
 
-/** The notes-area corpus index, the way the `rank` row builds it - notes only, never all three areas. */
+/** The notes-area corpus index, the way the `rank` row builds it - notes only, never the whole corpus. */
 async function rankCorpus(binDir) {
     const { corpusIndex } = await notes(binDir)
     const { DOC_AREAS, NOTES_DIR } = await repoLib(binDir)
@@ -469,6 +469,54 @@ function buildDocsIndexFixture() {
     return dir
 }
 const docsIndexFixture = () => (DOCS_INDEX ??= buildDocsIndexFixture())
+
+/**
+ * THE CORPUS FIXTURE PLUS THREE VERSIONS OF ONE RECORD, none of them on the baseline - the shape the
+ * divergence preview could not tell apart and no check covered.
+ *
+ * Every version carries the SAME schema preamble, the same title and the same category, because that
+ * is what defeated the preview: a version the merge-base has never held counts as wholly added, so
+ * the evidence was the keys every record of that kind opens with, identical for all three and
+ * indistinguishable from evidence.
+ *
+ * The three differ on purpose in three ways, not one. `rival-b` REPLACES the entry `rival-a` holds -
+ * two versions that disagree. `rival-c` KEEPS that entry and adds a second - a version that contains
+ * another, which is the case a one-line preview describes with the line they share. And each entry is
+ * a folded scalar, so the first line of a structural difference is `  - >-`: punctuation both sides
+ * hold, which is the third way two different versions come out reading the same.
+ *
+ * Its own repository for the reason bin/lib/fixture-repos.mjs gives: the drift checks on the shared
+ * corpus assert exact ref and version counts, and three more live refs would move them.
+ */
+let RECORD_VERSIONS = null
+const RIVAL = 'docs/features/rival.yaml'
+function buildRecordVersionsFixture() {
+    const { dir, git, commit, write } = buildDocsFixture()
+    const rival = (entries, keys = []) => ['# Copyright (C) 2026 Antony Stubbs and contributors', '',
+        'schema_version: 1', 'kind: feature', 'title: A capability three branches describe differently',
+        'category: processing', 'module: parallel-consumer-core', 'availability:', '  status: planned',
+        'summary: what it does, in one line.', ...keys, 'boundaries:',
+        ...entries.flatMap((e) => ['  - >-', `    ${e}`]), ''].join('\n')
+    const branch = (name, entries, keys) => {
+        git('checkout', '-q', '-b', name, 'master')
+        write(RIVAL, rival(entries, keys))
+        commit(`the record as ${name} describes it`)
+    }
+    branch('rival-a', ['alpha is the only entry here'])
+    branch('rival-b', ['beta replaces alpha entirely'])
+    // ...and one TOP-LEVEL KEY no other version declares, so a record's own table of contents is
+    // reachable as evidence. Without it every difference here is nested, and the rule that reads a
+    // record's keys where a document's headings would be could be reverted with nothing going red -
+    // which is how that fix shipped unguarded in the first place.
+    branch('rival-c', ['alpha is the only entry here', 'gamma adds a second entry'], ['readme_anchor: park-in-place'])
+    git('checkout', '-q', 'master')
+    return dir
+}
+const recordVersionsFixture = () => (RECORD_VERSIONS ??= buildRecordVersionsFixture())
+
+/** The evidence one divergent version's preview carries, as the header would render it, by ref. */
+const evidenceByRef = (d) => new Map(d.divergent.map((c) => [c.refs[0],
+    [c.preview?.againstRef ?? '', ...(c.preview?.headings ?? []), ...(c.preview?.contentLines ?? [])].join(' | ')]))
 
 /**
  * The corpus fixture plus the two shapes the shared-tree index build is specified against and the
@@ -820,8 +868,8 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
-            "            'docs/', ...DOC_AREAS.map((a) => `:(exclude)${a.dir}/`)]],",
-            "            'docs/*.md']],"),
+            "            pathspec: ['docs/', ...areas.map((a) => `:(exclude)${a.dir}/`)],",
+            "            pathspec: ['docs/*.md'],"),
     },
     {
         id: 'ref-clusters-are-deduplicated',
@@ -1199,8 +1247,8 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
-            'const grepPattern = opts.headings ? `^#{1,6}[[:space:]].*(${pattern})` : pattern',
-            'const grepPattern = pattern'),
+            'const grepFor = (headings) => (opts.headings ? `${headings}.*(${pattern})` : pattern)',
+            'const grepFor = (headings) => pattern'),
     },
     {
         id: 'relatedness-is-containment-not-a-guess',
@@ -1871,8 +1919,122 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
-            '        headings: added.filter((l) => /^#{1,6}\\s/.test(l)),',
-            '        headings: [],'),
+            '        headings: added.filter((l) => isHeading.test(l)),', '        headings: [],'),
+    },
+    {
+        id: 'two-versions-of-one-record-do-not-get-the-same-preview',
+        why: 'the preview is the evidence a reader chooses which branch to read from; three different versions of one record all reported the same added keys, which is output shaped like evidence that carries none - worse than no preview at all, because it looks answered',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(recordVersionsFixture(), () => {
+                const d = n.drift(RIVAL, { prs: new Map() })
+                if (!d.found || d.onBaseline || d.divergent.length !== 3) return false
+                const ev = evidenceByRef(d)
+                if (ev.size !== 3) return false
+                // THE CLAIM: pairwise distinct. This is what reverting the fix breaks - every
+                // version then reports the schema preamble every record of this kind opens with.
+                if (new Set(ev.values()).size !== 3) return false
+                // No version has a merge-base copy to diff against, so every row must NAME the
+                // version it was compared with - evidence whose baseline is unstated is not evidence.
+                if ([...d.divergent].some((c) => !c.preview || !c.preview.againstRef)) return false
+                // And the evidence is content, never the preamble that says nothing about a version.
+                const all = [...ev.values()].join(' ')
+                if (/schema_version|kind: feature|category: processing/.test(all)) return false
+                // Each version's own words reach its own row.
+                return ev.get('rival-b').includes('beta replaces alpha') && ev.get('rival-c').includes('gamma adds a second')
+            })
+        },
+        // The pre-fix behaviour exactly: a version with no merge-base copy is treated as wholly
+        // added, so what it "adds" is its whole self - the same sentence for every version of it.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '    const sibling = stat.newFile && peer && peer.blob !== blob ? peer : null',
+            '    const sibling = null'),
+    },
+    {
+        id: 'a-record-version-preview-names-the-keys-it-added-not-markdown-headings',
+        why: "a record's only `#` line is its copyright comment, so the markdown-heading rule gave every version of every record the same one-line evidence - and the fix for that shipped with no check behind it, which a reviewer proved by reverting it and watching the whole suite stay green",
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(recordVersionsFixture(), () => {
+                const d = n.drift(RIVAL, { prs: new Map() })
+                if (!d.found) return false
+                const c = d.divergent.find((x) => x.refs.includes('rival-c'))
+                if (!c?.preview) return false
+                // The one top-level key this version declares and no other does IS its table of
+                // contents entry, and it is what the preview must name.
+                if (!c.preview.headings.some((l) => l.startsWith('readme_anchor:'))) return false
+                if (c.preview.kind !== 'record') return false
+                // Never the copyright comment - the wrong answer the old rule gave, every time.
+                return !c.preview.headings.some((l) => /Copyright/.test(l))
+                    && !(c.preview.contentLines ?? []).some((l) => /Copyright/.test(l))
+            })
+        },
+        // The pre-fix rule, restored: markdown headings for every document, records included.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '    const isHeading = headingRe(path)', '    const isHeading = /^#{1,6}\\s/'),
+    },
+    {
+        id: 'a-record-version-is-not-summarised-by-punctuation-it-shares-with-the-other',
+        why: 'a folded scalar opens with `- >-`, so the first line of a structural difference is a token both versions hold - two different records summarised by the same punctuation is the same indistinguishability one layer down, and it survived the first fix',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(recordVersionsFixture(), () => {
+                const d = n.drift(RIVAL, { prs: new Map() })
+                if (!d.found || d.divergent.length !== 3) return false
+                const previews = d.divergent.map((c) => c.preview)
+                if (previews.some((p) => !p || p.contentLines.length === 0)) return false
+                // Not one line of evidence anywhere is YAML structure with no content in it.
+                const punctuation = /^[\s>|+-]*$/
+                if (previews.some((p) => p.contentLines.some((l) => punctuation.test(l)))) return false
+                // `firstLine` is the first of them, so the single-line callers get content too.
+                return previews.every((p) => p.firstLine === p.contentLines[0] && !punctuation.test(p.firstLine))
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '    const content = added.filter((l) => l.trim().length > 0 && !(record && RECORD_PUNCTUATION_RE.test(l)))',
+            '    const content = added.filter((l) => l.trim().length > 0)'),
+    },
+    {
+        id: 'a-record-comment-is-not-a-heading-and-does-not-outrank-a-real-match',
+        why: "adding docs/features/ to the prompt query sent YAML to a reader that was never made path-aware: a record's `# ` line is its copyright comment, and calling it a heading put it in the tier that OUTRANKS body - so a prompt word appearing in any record's comment surfaced a block of identically-titled records above the documents that matched on substance",
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            return inDir(docsFixture(), () => {
+                // `contributors` appears in every record's copyright comment and nowhere else in
+                // the corpus, so every hit it returns is a line that is NOT about anything.
+                const r = t.matchDocs(['contributors'])
+                if (!r.ok || r.hits.length === 0) return false
+                const records = r.hits.filter((h) => h.path.endsWith('.yaml'))
+                if (records.length === 0) return false
+                if (records.some((h) => h.tier === 'heading')) return false
+                if (records.some((h) => /Copyright/.test(h.title ?? ''))) return false
+                // THE POSITIVE CONTROL: a markdown heading is still a heading, and still ranks.
+                const prose = t.matchDocs(['What the branch learned'])
+                const doc = prose.hits.find((h) => h.path === 'docs/inflight/note.md')
+                return !!doc && doc.tier === 'heading'
+                    // And a record's own declared field still reaches the tier a claim belongs in.
+                    && t.tierOfLine(5, 'category: processing', 'docs/features/x.yaml') === 'frontmatter'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            "    if (!isRecord(path) && /^#{1,6}\\s/.test(text)) return 'heading'",
+            "    if (/^#{1,6}\\s/.test(text)) return 'heading'"),
+    },
+    {
+        id: 'a-record-hit-is-titled-by-the-reader-that-knows-records-not-by-the-matched-line',
+        why: 'taking the matched `# ` line as the title also SKIPPED the path-aware title read entirely, because the cheap read wins - so the one reader that knows a record is named by its `title:` key was never reached for the area it was taught to serve',
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            return inDir(docsFixture(), () => {
+                const r = t.matchDocs(['contributors'])
+                if (!r.ok) return false
+                const batching = r.hits.find((h) => h.path === 'docs/features/batching.yaml')
+                return !!batching && batching.title === 'Batch processing'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            "        if (doc.heading === null && !isRecord(path) && /^#\\s/.test(text))",
+            "        if (doc.heading === null && /^#\\s/.test(text))"),
     },
     {
         id: 'a-tag-only-version-is-preserved-not-divergent',
@@ -1948,15 +2110,18 @@ const CHECKS = [
             const p = await lib(binDir)
             return inDir(docsFixture(), () => {
                 const r = p.priorArt(['note'], { github: false })
-                if (!r.ok || r.sections.length !== 4) return false
+                if (!r.ok || r.sections.length !== 5) return false
                 // Byte-identical to the headings the hard-coded list produced, captured before the
-                // derivation - the point is that deriving them changed nothing a reader sees.
+                // derivation - the point is that deriving them changed nothing a reader sees. The
+                // features row was APPENDED for that reason: 1 to 3 still say what they always did.
                 const expected = [
                     ['1', 'Prior investigations - docs/plans/', ['docs/plans/']],
                     ['2', 'Solved problems - docs/solutions/', ['docs/solutions/']],
                     ['3', 'In-flight state - docs/inflight/', ['docs/inflight/']],
-                    ['4', 'Everything else under docs/',
-                        ['docs/', ':(exclude)docs/plans/', ':(exclude)docs/solutions/', ':(exclude)docs/inflight/']],
+                    ['4', 'Shipped and planned capability - docs/features/', ['docs/features/']],
+                    ['5', 'Everything else under docs/',
+                        ['docs/', ':(exclude)docs/plans/', ':(exclude)docs/solutions/', ':(exclude)docs/inflight/',
+                            ':(exclude)docs/features/']],
                 ]
                 return r.sections.every((s, i) => s.n === expected[i][0] && s.heading === expected[i][1]
                     && JSON.stringify(s.pathspec) === JSON.stringify(expected[i][2]))
@@ -1973,14 +2138,16 @@ const CHECKS = [
             const n = await notes(binDir)
             const perf = await perfOf(binDir)
             return inDir(docsFixture(), () => {
-                const blobs = g.treeEntries('master', 'docs').entries.map((e) => e.blob)
-                if (blobs.length < 3) return false
+                // The PATH travels with the blob: a title read without one is read as prose, which
+                // is the wrong rule for every record in the features area.
+                const entries = g.treeEntries('master', 'docs').entries.map((e) => ({ blob: e.blob, path: e.path }))
+                if (entries.length < 3) return false
                 perf.perfReset()
-                const titles = n.blobTitles(blobs)
+                const titles = n.blobTitles(entries)
                 if (callCount(perf.perfReport(), 'git cat-file') !== 1) return false
-                if (titles.size !== blobs.length) return false
-                return blobs.every((b) => titles.get(b) === n.blobTitle(b))
-                    && titles.get(blobs[0]) !== null
+                if (titles.size !== new Set(entries.map((e) => e.blob)).size) return false
+                return entries.every((e) => titles.get(e.blob) === n.blobTitle(e.blob, e.path))
+                    && titles.get(entries[0].blob) !== null
             })
         },
         // Forks once per blob, which is the loop the batch replaced.
@@ -2446,9 +2613,15 @@ const CHECKS = [
         why: 'a typo is not a failure to run; the valid names, each as the command that would have worked, are the answer',
         run: async (binDir) => {
             const dir = docsFixture()
+            const repo = await import(pathToFileURL(join(binDir, 'lib', 'repo.mjs')).href)
             const area = invoke(binDir, ['docs', 'list', 'nowhere'], { cwd: dir })
             if (area.code !== 0 || !area.out.includes("no area named 'nowhere'")) return false
-            if (!['inflight', 'solutions', 'plans'].every((a) => area.out.includes(`bin/inflight.mjs docs list ${a}`))) return false
+            // DERIVED FROM THE AREA TABLE, never a list written here: an area missing from the
+            // refusal is a name an agent is told does not exist, and a hand-written list of three
+            // reddened for nothing when a fourth arrived.
+            const keys = repo.DOC_AREAS.map((a) => a.dir.split('/').pop())
+            if (keys.length < 2) return false // a list that cannot be incomplete proves nothing
+            if (!keys.every((a) => area.out.includes(`bin/inflight.mjs docs list ${a}`))) return false
             const group = invoke(binDir, ['docs', 'list', 'inflight', 'nowhere'], { cwd: dir })
             if (group.code !== 0 || !group.out.includes("no group named 'nowhere' in inflight")) return false
             if (!group.out.includes('bin/inflight.mjs docs list inflight crash')) return false
@@ -2498,6 +2671,383 @@ const CHECKS = [
             ' ? null : /^---\\r?\\n([\\s\\S]*?)\\r?\\n---/.exec(text)', ' ? null : null'),
     },
     {
+        id: 'feature-records-are-an-area-of-the-corpus-not-an-uncategorised-tail',
+        why: 'feature data spans branches exactly as notes and plans do, and until it was an area the only command that reached it was a working-tree grep - which answered "nobody has specified this" for a record that existed on another branch',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const bare = invoke(binDir, ['docs'], { cwd: dir })
+            if (bare.code !== 0 || !bare.out.includes('Shipped and planned capability  docs/features/')) return false
+            if (!bare.out.includes('bin/inflight.mjs docs list features')) return false
+            const listed = invoke(binDir, ['docs', 'list', 'features', 'operability'], { cwd: dir })
+            // The branch-only record is THE case: master's working tree cannot show it at all.
+            return listed.code === 0 && listed.out.includes('Pause and resume')
+                && listed.out.includes('A capability only this branch records')
+                && listed.out.includes('(off baseline - on only-here)')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'repo.mjs'),
+            "    { dir: FEATURES_DIR, name: 'Shipped and planned capability', documents: RECORD_FILE_RE, headings: RECORD_CLAIM_ERE },\n", ''),
+    },
+    {
+        id: 'a-feature-record-is-titled-by-its-title-key-never-by-its-copyright-comment',
+        why: "every record opens with `# Copyright (C) 2026 ...`, so the markdown heading rule gives one identical wrong title to every capability in the area - a listing that looks complete and names nothing",
+        run: async (binDir) => {
+            const t = await tagsLib(binDir)
+            const rec = (body) => `# Copyright (C) 2026 Antony Stubbs and contributors\n\nschema_version: 1\n${body}`
+            if (t.titleOf(rec('title: The real name\ncategory: processing\n'), 'docs/features/x.yaml') !== 'The real name') return false
+            if (t.titleOf(rec('title: "Quoted: because of the colon"\n'), 'docs/features/x.yaml') !== 'Quoted: because of the colon') return false
+            // A nested `title:` belongs to the block it sits in - a reference's label is not the record's name.
+            return t.titleOf(rec('references:\n  - title: a link\n'), 'docs/features/x.yaml').startsWith('NO title: KEY')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'inflight-tags.mjs'),
+            '    if (isRecord(path)) return dataRecordTitle(text, path)\n', ''),
+    },
+    {
+        id: 'a-feature-record-with-no-title-key-says-so-rather-than-showing-its-filename',
+        why: 'falling back to the stem renders a schema that has moved on - a renamed key, a record written to the wrong shape - as a tidy list of filenames that reads exactly like a working area',
+        run: async (binDir) => {
+            const t = await tagsLib(binDir)
+            if (t.titleOf('# Copyright (C) 2026 x\n\nkind: feature\n', 'docs/features/x.yaml') !== 'NO title: KEY - x') return false
+            const listed = invoke(binDir, ['docs', 'list', 'features', 'processing'], { cwd: docsFixture() })
+            return listed.code === 0 && listed.out.includes('NO title: KEY - no-title')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'inflight-tags.mjs'),
+            'return raw || `NO title: KEY - ${stemOf(path)}`', 'return raw || stemOf(path)'),
+    },
+    {
+        id: 'feature-records-group-by-the-category-they-declare',
+        why: "a solution's category is a directory and a feature's is a key, so the area that groups by path puts every record in one bucket called uncategorised - a group nobody can ask for is not a group",
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const area = invoke(binDir, ['docs', 'list', 'features'], { cwd: dir })
+            if (area.code !== 0) return false
+            if (!['operability', 'processing', 'staging'].every((g) => area.out.includes(`bin/inflight.mjs docs list features ${g}`))) return false
+            if (area.out.includes('uncategorised')) return false
+            const processing = invoke(binDir, ['docs', 'list', 'features', 'processing'], { cwd: dir })
+            return processing.code === 0 && processing.out.includes('Batch processing') && !processing.out.includes('Pause and resume')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-shape.mjs'),
+            'features: groupFeatures }', 'features: groupSolutions }'),
+    },
+    {
+        id: 'a-staged-feature-record-is-grouped-as-staged-and-not-by-the-category-it-declares',
+        why: 'docs/features/staging/ holds records the tree contradicts, and filing one under `integration` beside published records is how it gets read as shipped - the one thing that directory exists to prevent',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const staged = invoke(binDir, ['docs', 'list', 'features', 'staging'], { cwd: dir })
+            if (staged.code !== 0 || !staged.out.includes('A capability not settled yet')) return false
+            if (!staged.out.includes('not settled in the tree yet, so not published')) return false
+            // It declares `category: integration`, and that must not have become a group.
+            const declared = invoke(binDir, ['docs', 'list', 'features', 'integration'], { cwd: dir })
+            return declared.code === 0 && declared.out.includes("no group named 'integration' in features")
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-shape.mjs'),
+            "        const key = d.feature?.staged ? STAGED_GROUP : (d.feature?.category || 'uncategorised')",
+            "        const key = d.feature?.category || 'uncategorised'"),
+    },
+    {
+        id: 'the-line-cap-is-allocated-over-demand-so-a-new-area-cannot-starve-an-existing-one',
+        why: 'an equal split per area let the surplus flow FORWARDS only, and the area that reliably has one is the newest - appended, therefore last - so adding an area narrowed every share and then wasted its own on nobody, and a pre-existing area that had always listed all of its branch-only documents began omitting some',
+        run: async (binDir) => {
+            const dv = await docsViews(binDir)
+            const cmds = await import(pathToFileURL(join(binDir, 'lib', 'docs-commands.mjs')).href)
+            // The allocation itself, where the property is stateable exactly: one area wanting less
+            // than an equal share releases the rest to one wanting more, whatever their order, and
+            // nothing is handed out that nobody asked for.
+            const fair = dv.fairShares([120, 40], 200)
+            if (fair[0] !== 120 || fair[1] !== 40) return false
+            if (dv.fairShares([40, 120], 200).join() !== '40,120') return false // order-independent
+            // A last-placed area wanting nothing releases its whole share rather than wasting it.
+            if (dv.fairShares([300, 0], 200).join() !== '200,0') return false
+            // Nobody fits: the remainder splits evenly, which is where the equal split started.
+            if (dv.fairShares([300, 300], 200).join() !== '100,100') return false
+            // And never more than the cap, which is the one thing the caller is promised.
+            if (dv.fairShares([10, 10, 10], 400).reduce((a, b) => a + b) !== 30) return false
+            return inDir(docsIndexFixture(), () => {
+                const built = cmds.corpusShape()
+                if (!built.ok) return false
+                // A cap the equal split cannot serve: the in-flight area wants most of it, and the
+                // other three want less than a quarter each. Fair shares fit the workstream group;
+                // an equal quarter is too small for it and drops all three of its groups.
+                const page = dv.formatDocsIndex(built.shape, { clusters: built.stranded, maxLines: 12 })
+                if (!page.includes('## only on feats/workstream')) return false
+                // The smaller areas keep theirs, and the truncation lands on the one area that
+                // genuinely wants more than the cap can give - with its command, as designed.
+                if (page.includes('docs list plans') || page.includes('docs list solutions')) return false
+                return page.includes('docs list inflight')
+            })
+        },
+        // The equal split, restored - the whole reason the two-pass render exists.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
+            '    const out = needs.map(() => 0)',
+            '    return needs.map(() => Math.floor(total / Math.max(1, needs.length)))\n    const out = needs.map(() => 0)'),
+    },
+    {
+        id: 'every-area-of-the-corpus-reaches-the-session-index',
+        why: 'the index held a SECOND hand-kept copy of the area list and used it to decide membership, so an area present in the table but absent from that copy exited 0, was counted in the preamble total, had its directory named in the same sentence, and was listed nowhere - and no reader can notice a section that was never printed',
+        run: async (binDir) => {
+            const dv = await docsViews(binDir)
+            const cmds = await import(pathToFileURL(join(binDir, 'lib', 'docs-commands.mjs')).href)
+            const repo = await import(pathToFileURL(join(binDir, 'lib', 'repo.mjs')).href)
+            return inDir(docsFixture(), () => {
+                const built = cmds.corpusShape()
+                if (!built.ok) return false
+                const page = dv.formatDocsIndex(built.shape, { clusters: built.stranded })
+                // DERIVED FROM THE TABLE, never a list of names: a fifth area is covered the day it
+                // is added. Each area must have a DOCUMENT listed, not merely its directory named -
+                // the preamble names the directory whether or not anything below it was rendered.
+                for (const key of repo.DOC_AREAS.map((a) => a.dir.split('/').pop())) {
+                    const area = built.shape.areas.find((a) => a.key === key)
+                    if (!area) return false
+                    const docs = area.groups.flatMap((g) => g.docs)
+                    if (docs.length === 0) return false // a fixture that cannot see the area proves nothing
+                    if (!docs.some((d) => page.includes(d.title) || page.includes(d.path)
+                        || page.includes(d.path.replace(/^docs\/plans\//, '').replace(/\.(md|html)$/, '')))) return false
+                }
+                // And an area the renderers have never heard of is APPENDED rather than dropped.
+                const invented = { ...built.shape.areas[0], key: 'inventions', dir: 'docs/inventions', name: 'Inventions' }
+                const widened = dv.formatDocsIndex({ ...built.shape, areas: [...built.shape.areas, invented] },
+                    { clusters: built.stranded })
+                return widened.includes('Inventions') && widened.includes('docs/inventions/')
+            })
+        },
+        // The membership filter, restored: an area absent from the hand-kept order vanishes.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
+            "    ...shape.areas.filter((a) => !INDEX_AREA_ORDER.includes(a.key)),", ''),
+    },
+    {
+        id: 'a-record-missing-its-category-or-its-availability-block-is-reported-not-guessed',
+        why: 'every fixture record supplied both cleanly, so the fallbacks were unreached - and a schema that has moved on, or a record written to the wrong shape, is exactly when they run and exactly when a guess would be read as a fact',
+        run: async (binDir) => {
+            const sh = await docsShapeLib(binDir)
+            const F = 'docs/features'
+            const rec = (body) => `# Copyright (C) 2026 Antony Stubbs and contributors\n\nschema_version: 1\nkind: feature\n${body}`
+            // No `category:` at all, and no `availability:` at all: both report emptiness, which the
+            // shape renders as `uncategorised` and as no tail. Never a thrown error, and never a
+            // borrowed value - the rule classifyNote follows for a marker it does not recognise.
+            const bare = sh.classifyFeature(rec('title: x\n'), `${F}/x.yaml`, F)
+            if (bare.category !== '' || bare.status !== '' || bare.staged !== false) return false
+            // `availability:` present but a SCALAR, so there is no block to read a status out of.
+            const scalar = sh.classifyFeature(rec('category: processing\navailability: published\n'), `${F}/x.yaml`, F)
+            if (scalar.category !== 'processing' || scalar.status !== '') return false
+            // A nested `category:` must not answer for the record - the key is column-0 anchored.
+            const nested = sh.classifyFeature(rec('references:\n  - category: a link\n'), `${F}/x.yaml`, F)
+            if (nested.category !== '') return false
+            // Nor a `status:` outside the availability block, which is a word any block may use.
+            const stray = sh.classifyFeature(rec('milestones:\n  status: done\n'), `${F}/x.yaml`, F)
+            if (stray.status !== '') return false
+            // CRLF is a record like any other: the block regex has to tolerate the line ending.
+            const crlf = sh.classifyFeature(rec('category: processing\r\navailability:\r\n  status: planned\r\n'), `${F}/x.yaml`, F)
+            return crlf.category === 'processing' && crlf.status === 'planned'
+        },
+        // The fallbacks removed: a missing value becomes `undefined` rather than the empty string the
+        // shape is specified against, and `uncategorised` silently becomes the word "undefined".
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-shape.mjs'),
+            "    const status = /^[ \\t]+status:[ \\t]*(.*)$/m.exec(block)?.[1]?.trim() ?? ''",
+            "    const status = /^[ \\t]*status:[ \\t]*(.*)$/m.exec(text)?.[1]?.trim() ?? ''"),
+    },
+    {
+        id: 'a-staged-record-is-not-tailed-with-the-status-it-declares',
+        why: 'the group said staged and the tail on the same line said published, in the one listing a session reads to find out what the product already does - a reader who takes the tail proposes work against a capability the tree does not have',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const index = invoke(binDir, ['docs', 'index'], { cwd: dir })
+            if (index.code !== 0) return false
+            const line = index.out.split('\n').find((l) => l.includes('A capability not settled yet'))
+            // The fixture record DECLARES published, so a tail echoing the record contradicts its
+            // own heading. Both halves asserted: the contradiction gone, and the fact still stated.
+            if (!line || line.includes('_published_') || !line.includes('_staged_')) return false
+            // A published record still says what it is - the fix is the directory winning, not the
+            // tail going quiet.
+            const published = index.out.split('\n').find((l) => l.includes('Batch processing'))
+            if (!published || !published.includes('_published_')) return false
+            // And the two readers of that fact take it from the SAME place: the record carries it.
+            const sh = await import(pathToFileURL(join(binDir, 'lib', 'docs-shape.mjs')).href)
+            const staged = sh.classifyFeature('availability:\n  status: published\n',
+                'docs/features/staging/x.yaml', 'docs/features')
+            const plain = sh.classifyFeature('availability:\n  status: published\n', 'docs/features/x.yaml', 'docs/features')
+            return staged.staged === true && plain.staged === false && staged.status === 'published'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
+            "    if (d.feature?.staged) return '  _staged_'", '    if (false) return \'  _staged_\''),
+    },
+    {
+        id: 'prior-art-searches-feature-records-under-their-own-heading',
+        why: 'the records were reachable only as "Everything else under docs/", a heading that says nothing about what was found - and the whole point of a section is that a reader knows what kind of prior art it is',
+        run: async (binDir) => {
+            const p = await lib(binDir)
+            return inDir(docsFixture(), () => {
+                const r = p.priorArt(['only this branch records'], { github: false })
+                if (!r.ok) return false
+                const PATH = 'docs/features/branch-only-capability.yaml'
+                const own = r.sections.find((s) => s.heading === 'Shipped and planned capability - docs/features/')
+                const hit = own?.hits.find((h) => h.path === PATH)
+                if (!hit || hit.onBaseline !== false || !hit.refs.includes('only-here')) return false
+                // ...and exactly once: the everything-else sweep excludes every area, this one included.
+                return r.sections.filter((s) => s.hits.some((h) => h.path === PATH)).length === 1
+            })
+        },
+        // The sections stop one area short - the shape the hard-coded list had before it was derived.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
+            '        ...areas.map((a, i) => ({', '        ...areas.slice(0, 3).map((a, i) => ({'),
+    },
+    {
+        id: 'headings-mode-reaches-a-record-area-by-what-the-record-declares',
+        why: 'a markdown-heading pattern cannot match a YAML record, so the records area answered "nothing, across every ref" in the mode AGENTS.md tells agents to reach for FIRST - which is also the sentence it tells them to read as a completed check',
+        run: async (binDir) => {
+            const p = await lib(binDir)
+            return inDir(docsFixture(), () => {
+                const own = (r) => r.sections.find((x) => x.heading === 'Shipped and planned capability - docs/features/')
+                // PARITY IS THE CLAIM, and `published` is what settles it: every fixture record
+                // declares it as `  status: published`, INDENTED under `availability:`. A rule
+                // keyed on top-level keys alone matches none of them, so the mode would keep
+                // reporting a confident emptiness over records that carry the term.
+                const heads = p.priorArt(['published'], { github: false, headings: true })
+                const plain = p.priorArt(['published'], { github: false })
+                if (!heads.ok || !plain.ok) return false
+                const found = (r) => own(r).hits.map((h) => h.path).sort().join(' ')
+                if (own(plain).hits.length === 0 || found(heads) !== found(plain)) return false
+                // The matched TEXT is the record's own declaration, and the copyright comment -
+                // the line every earlier reader mistook for the heading - is never it.
+                const titled = p.priorArt(['only this branch records'], { github: false, headings: true })
+                const hit = own(titled).hits.find((h) => h.path === 'docs/features/branch-only-capability.yaml')
+                if (!hit || !hit.headings.some((t) => t.startsWith('title:'))) return false
+                if (own(titled).hits.some((h) => h.headings.some((t) => /Copyright/.test(t)))) return false
+                // And a term that appears ONLY in that comment finds nothing here, which is what
+                // makes the rule a rule rather than "every line".
+                const comment = p.priorArt(['Antony Stubbs and contributors'], { github: false, headings: true })
+                return own(comment).hits.length === 0
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'repo.mjs'),
+            'documents: RECORD_FILE_RE, headings: RECORD_CLAIM_ERE },', 'documents: RECORD_FILE_RE },'),
+    },
+    {
+        id: 'an-area-this-mode-cannot-search-is-reported-not-reported-empty',
+        why: 'printing "nothing, across N refs" over a corpus the mode never looked at is the false negative wearing a completed check\'s clothes - the failure this whole file exists to remove, reintroduced by the flag',
+        run: async (binDir) => {
+            const p = await lib(binDir)
+            return inDir(docsFixture(), () => {
+                // `headings: null` is an area DECLARING it draws no such distinction. Injected
+                // rather than added to the real table, so the branch is exercised without asking
+                // a shipped area to be unsearchable.
+                const areas = [
+                    { dir: 'docs/inflight', name: 'In-flight state' },
+                    { dir: 'docs/features', name: 'Shipped and planned capability', headings: null },
+                ]
+                const r = p.priorArt(['note'], { github: false, headings: true, areas })
+                if (!r.ok) return false
+                const own = r.sections.find((x) => x.heading === 'Shipped and planned capability - docs/features/')
+                if (!own || own.unsearchable === undefined || own.hits.length !== 0) return false
+                const text = p.formatSection(own, r)
+                // The words a reader takes the answer from, and the word they must NOT find.
+                if (!text.includes('NOT SEARCHED') || text.includes('nothing, across')) return false
+                // The area that CAN be searched still is, so this is a per-area decision and not a bail-out.
+                const notes = r.sections.find((x) => x.heading === 'In-flight state - docs/inflight/')
+                if (notes.unsearchable !== undefined || notes.hits.length === 0) return false
+                // And the tail is numbered off the sections this run built - two areas plus the
+                // sweep - rather than off the default table, which `areas` has just replaced.
+                return r.sections.length === 3 && p.formatTail(r).includes('=== 4. Commits')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
+            '        if (opts.headings && headings === null) {', '        if (false) {'),
+    },
+    {
+        id: 'the-prose-heading-rule-means-the-same-in-both-of-its-spellings',
+        why: 'one rule written as a JavaScript regex and as a POSIX ERE has no compiler keeping the two together, and the failure is silent in the worst direction: a pattern that matches nothing renders here as a finding',
+        run: async (binDir) => {
+            const k = await import(pathToFileURL(join(binDir, 'lib', 'doc-kind.mjs')).href)
+            // The edge cases the two spellings could disagree on: every level, one past the last
+            // level, no separator, an indented hash, a tab separator, a bare hash, and prose.
+            const CASES = ['# one', '## two', '###### six', '####### seven', '#no-space', ' # indented',
+                '#\ttab', '#', 'plain prose']
+            const { dir, commit } = windowRepo()
+            writeFileSync(join(dir, 'cases.md'), `${CASES.join('\n')}\n`)
+            commit('every line a heading rule has to decide about')
+            const grep = spawnSync('git', ['grep', '-h', '-E', k.PROSE_HEADING_ERE, 'master', '--', 'cases.md'],
+                { cwd: dir, encoding: 'utf8' })
+            if (grep.status > 1) return false
+            const byEre = new Set(grep.stdout.split('\n').filter(Boolean))
+            const byJs = new Set(CASES.filter((l) => k.PROSE_HEADING_RE.test(l)))
+            // A pin that selects nothing pins nothing - and selecting everything is the other way to fake it.
+            if (byJs.size === 0 || byJs.size === CASES.length) return false
+            return byJs.size === byEre.size && [...byJs].every((l) => byEre.has(l))
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'doc-kind.mjs'),
+            "export const PROSE_HEADING_ERE = '^#{1,6}[[:space:]]'", "export const PROSE_HEADING_ERE = '^#[[:space:]]'"),
+    },
+    {
+        id: 'docs-header-answers-for-a-feature-record-and-the-refusal-names-every-area',
+        why: 'refusing `docs header docs/features/<x>.yaml` as an uncovered path was the exact moment a session should have been handed the record; and a refusal that lists the areas from memory goes stale the moment one is added',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const hdr = invoke(binDir, ['docs', 'header', 'docs/features/branch-only-capability.yaml'], { cwd: dir })
+            if (hdr.code !== 0 || hdr.out.includes('outside the areas this command covers')) return false
+            if (!hdr.out.includes('docs/features/branch-only-capability.yaml from only-here')) return false
+            // A path under no area still refuses - and names all four, from the table rather than prose.
+            const outside = invoke(binDir, ['docs', 'header', 'docs/data/schema.yaml'], { cwd: dir })
+            return outside.code === 0 && outside.out.includes('outside the areas this command covers')
+                && ['docs/plans/', 'docs/solutions/', 'docs/inflight/', 'docs/features/'].every((a) => outside.out.includes(a))
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
+            'const inCorpus = (path) => DOC_AREAS.some((a) => path.startsWith(`${a.dir}/`))',
+            'const inCorpus = (path) => DOC_AREAS.slice(0, 3).some((a) => path.startsWith(`${a.dir}/`))'),
+    },
+    {
+        id: 'the-session-index-lists-capability-records-on-the-baseline-and-on-branches',
+        why: 'the index is what every session gets without asking, and a capability that exists only on a branch is precisely what an agent proposing to build it never learns any other way',
+        run: async (binDir) => {
+            const r = invoke(binDir, ['docs', 'index'], { cwd: docsFixture() })
+            if (r.code !== 0 || !r.out.includes('# What the product does - capability records')) return false
+            if (!r.out.includes('- Pause and resume  _published_  `docs/features/pause.yaml`')) return false
+            return r.out.includes('# Capabilities recorded only on branches')
+                && r.out.includes('A capability only this branch records')
+        },
+        // NOT by dropping `features` from INDEX_AREA_ORDER any more: that list is a preference
+        // rather than a gate now, so removing a name reorders the index and loses nothing - which is
+        // the whole of `every-area-of-the-corpus-reaches-the-session-index`. The sabotage that still
+        // proves THIS check is the area's own rendering going quiet.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
+            "            out.push('', `## ${g.label}`, ...mine.map(INDEX_LINE.features))", "            out.push('')"),
+    },
+    {
+        id: 'an-area-whose-records-are-not-markdown-declares-which-files-are-its-documents',
+        why: 'the corpus-wide markdown filter dropped every YAML record while the area still printed a heading and a count, which is an empty area that reads as an area with nothing in it',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const s = await docsShapeLib(binDir)
+            return inDir(docsFixture(), () => {
+                const index = n.corpusIndex()
+                const shape = s.docsShape({ index, stranded: n.stranded(index) })
+                if (!shape.ok) return false
+                const area = shape.areas.find((a) => a.key === 'features')
+                const docs = area.groups.flatMap((g) => g.docs)
+                if (docs.length !== 5 || !docs.every((d) => d.path.endsWith('.yaml'))) return false
+                // The area's own README is not one of its documents, whatever the extension rule says.
+                return !docs.some((d) => /README/.test(d.path))
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-shape.mjs'),
+            'export const documentsRe = (area) => area.documents ?? DOCUMENT_RE',
+            'export const documentsRe = () => DOCUMENT_RE'),
+    },
+    {
+        id: 'a-blob-title-read-with-its-path-reads-a-record-as-a-record',
+        why: 'the drift views and the prompt-keyword query title a blob through their own reader, and without the path it answered the copyright comment for every version of every feature record',
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const n = await notes(binDir)
+            return inDir(docsFixture(), () => {
+                const e = g.treeEntries('master', 'docs').entries.find((x) => x.path.endsWith('features/pause.yaml'))
+                if (!e) return false
+                const title = n.blobTitle(e.blob, e.path)
+                return title === 'Pause and resume' && !/Copyright/.test(title)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '    if (isRecord(path)) {', '    if (false) {'),
+    },
+    {
         id: 'help-lists-docs-list-with-its-when-line',
         why: 'the bare call points at docs list; a command help cannot find is one the agent will not trust',
         run: async (binDir) => {
@@ -2545,13 +3095,14 @@ const CHECKS = [
         run: async (binDir) => {
             const dir = docsIndexFixture()
             // Four in-flight branch sets exist off the baseline (workstream, only-here, second, third).
-            // Twelve lines is four per area: the workstream group (heading, three notes, blank) fits
-            // with the solutions area's spare line and nothing after it does.
-            const capped = invoke(binDir, ['docs', 'index', '--max-lines', '12'], { cwd: dir })
+            // Sixteen lines is four per area - the cap is divided across every area the shape holds,
+            // features included - so the workstream group (heading, three notes, blank) fits with the
+            // solutions area's spare line and nothing after it does.
+            const capped = invoke(binDir, ['docs', 'index', '--max-lines', '16'], { cwd: dir })
             if (capped.code !== 0) return false
             const inflight = capped.out.split('# In flight only on branches')[1]?.split('\n# ')[0] ?? ''
             const shown = inflight.split('\n').filter((l) => l.startsWith('## only on ')).length
-            if (shown !== 1 || !inflight.includes('... 3 more branch sets holding 3 documents, past the 12-line cap')) return false
+            if (shown !== 1 || !inflight.includes('... 3 more branch sets holding 3 documents, past the 16-line cap')) return false
             if (!inflight.includes('bin/inflight.mjs docs list inflight')) return false
             // Uncapped, every set is shown and no count line appears anywhere.
             const full = invoke(binDir, ['docs', 'index', '--max-lines', '1000'], { cwd: dir })
@@ -2706,7 +3257,8 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
-            "if (/^#{1,6}\\s/.test(text)) return 'heading'", "if (/^#{1,6}\\s/.test(text)) return 'body'"),
+            "if (!isRecord(path) && /^#{1,6}\\s/.test(text)) return 'heading'",
+            "if (!isRecord(path) && /^#{1,6}\\s/.test(text)) return 'body'"),
     },
     {
         id: 'match-docs-body-hits-are-capped-per-term-and-the-rest-counted',

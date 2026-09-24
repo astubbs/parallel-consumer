@@ -115,6 +115,7 @@ a file in it is touched, rather than waiting to be opened.
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths, class names or current config values | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for one piece of work | Durable reference - a plan goes stale once its work lands |
+| **`docs/features/`** | One record per user-visible capability, the data the public docs are promoted from - a PR that adds a capability writes its record in that PR, and `docs/features/README.md` owns the schema and the availability rules | A changelog fragment, or one record per option configuring a capability - the capability gets the record |
 | **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status; plus a cache of *frozen* upstream **issue** facts | Editorial opinion, and the live state of an upstream issue - that belongs to its fork mirror |
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when it and the manifest disagree, the manifest wins |
 | **`CHANGELOG.md`** | Release notes, regenerated at release time | Per-PR entries of any kind - see [Changelog](#changelog) |
@@ -198,7 +199,7 @@ and the traps that voided earlier experiments.
 
 | Check | Command |
 |---|---|
-| Plans, solutions and in-flight notes, **on every branch** | `node bin/inflight.mjs prior-art <mechanism> [<mechanism>...]` |
+| Every docs area, **on every branch** - the run names each area it searched, so this row does not have to | `node bin/inflight.mjs prior-art <mechanism> [<mechanism>...]` |
 | **The shape of the docs corpus, and one document's other versions** | `node bin/inflight.mjs docs` - every area, its groups and their counts across every ref, with the commands that drill in; `node bin/inflight.mjs docs header <path>` before acting on a document - the pull form of what the read-time hook shows, for a host without hooks |
 | Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` |
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
