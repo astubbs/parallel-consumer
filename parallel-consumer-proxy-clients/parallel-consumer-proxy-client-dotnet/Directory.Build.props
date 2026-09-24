@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<Project>
+    <!--
+        BOTH OUTPUT ROOTS MOVE UNDER target/, and that is what lets this module need no clean
+        fileset. MSBuild's defaults are obj/ and bin/ in the module directory, neither of which
+        Maven's default clean can see - so a build would leave output standing after `mvn clean`
+        and the module would look clean while it was not. (astubbs#242)
+    -->
+    <PropertyGroup>
+        <BaseIntermediateOutputPath>target/obj/</BaseIntermediateOutputPath>
+        <BaseOutputPath>target/bin/</BaseOutputPath>
+        <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+        <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    </PropertyGroup>
+</Project>

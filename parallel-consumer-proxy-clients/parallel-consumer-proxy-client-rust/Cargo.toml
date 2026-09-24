@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# Build scaffolding for the Rust proxy client (astubbs#242). No dependencies, so `cargo build`
+# needs no network and toolchain presence is the only thing deciding whether this module runs.
+
+[package]
+name = "hello"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "hello"
+path = "src/main.rs"

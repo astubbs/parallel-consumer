@@ -68,6 +68,18 @@ arm "an undepthed git fetch is fine"  clean 'git fetch --no-tags origin master'
 arm "hazard-ok allows a scratch fetch" clean '# hazard-ok: fetches into a throwaway git dir
 git --git-dir="$scratch" fetch --depth=1 "$url" "$ref"'
 
+# BUILTIN OPTION LOOKALIKE - nothing about the machine varies; an argument is read as a flag.
+# The positive arms are the two spellings of the line that shipped: a skip banner whose format
+# string starts with a hyphen, which bash's builtin printf rejects with exit 2. Only a CI runner
+# reached it, so every local run was green while every CI skip failed the row it was skipping.
+arm "printf single-quoted dash format"   fire  'printf '\''- %s\n'\'' "$v"'
+arm "printf double-quoted dash format"   fire  'printf "-x %s" "$v"'
+# NOT THE HAZARD, and each is a spelling somebody will reach for while fixing the above.
+arm "printf -- disarms it"               clean 'printf -- '\''- %s\n'\'' "$v"'
+arm "printf -v is a real option"         clean 'printf -v out "%s" "$v"'
+arm "a dash inside the format is fine"   clean 'printf "%s - %s" "$a" "$b"'
+arm "a dash-led string that is not a format" clean 'echo "$m" | grep -F -- "- %s"'
+
 # NOT A USE - this repo is full of prose about exactly these flags.
 arm "a comment about sed -i is fine"  clean '# Not sed -i: GNU takes the suffix attached, BSD as the next arg'
 arm "an indented comment is fine"     clean '    # stat -c is GNU and BSD rejects it'
