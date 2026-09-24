@@ -1,0 +1,34 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# The pinned-emit case (KTD5), and the corpus's one ORACLE-ONLY case: `emit: on-window-close` is
+# outside the wrapper's builder grammar, so no binding can exercise it and the coverage gate credits
+# nothing for it - it is executed, counted and its translation still checked, but the operations it
+# names are covered by other cases.
+#
+# The record at 7200000 is the trailing record the loader requires: under close-driven suppression
+# Kafka emits a window only when a later record advances stream time past its end plus grace, and
+# TopologyTestDriver never advances stream time on close(). Without it the sink would be empty and
+# the case would pass every proof on its store alone while observing nothing about emit. With it the
+# sink holds ONLY the window that closed - the first hour - and never the trailing record's own
+# window, which is still open when the run ends.
+#
+# The twin lengthens a value. count-bytes totals the bytes of the values in a window, so a longer
+# value changes the total in the closed window: it reaches the suppressed sink as well as the store.
+name: windowed-aggregate-emitted-on-window-close
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: in, source: {topic: in}}
+  - {id: g, group-by-key: {of: in}}
+  - {id: w, windowed-by: {of: g, size-ms: 3600000, advance-ms: 3600000, grace-ms: 0, retention-ms: 10800000}}
+  - {id: agg, aggregate: {of: w, fn: count-bytes, store: byte-counts}}
+  - {id: s, to-stream: {of: agg}}
+  - {sink: {of: s, topic: out}}
+inputs:
+  - {key: a, value: "xy", at-ms: 0}
+  - {key: a, value: "z", at-ms: 60000}
+  - {key: t, value: "-", at-ms: 7200000}    # trailing: closes the first window, opens one that stays open
+perturbation:                               # a longer value, which count-bytes totals differently
+  - {key: a, value: "xyz", at-ms: 0}
+  - {key: a, value: "z", at-ms: 60000}
+  - {key: t, value: "-", at-ms: 7200000}
+emit: on-window-close

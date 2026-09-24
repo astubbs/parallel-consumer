@@ -1,0 +1,31 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# R12's windowed aggregate compared at final state, and the aggregate operation's floor. The window
+# is tumbling (advance equal to size) against the hopping case's overlapping windows, so the two
+# windowed cases differ in shape rather than only in their aggregation.
+#
+# `to-stream` is what witnesses windowed-by in the built topology - it mints the key-selecting node
+# that drops the window - so a windowed case without one would be reported as named-but-not-built.
+# The window survives in the store observable, where every entry carries its bounds.
+#
+# The twin changes a value. `concat` accumulates every value in arrival order, so no value is
+# overwritten and nothing about the window can absorb the change: it lands in both observables, the
+# window store and the windowed-fed sink's full emission list.
+name: tumbling-aggregate-concat-at-final-state
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: in, source: {topic: in}}
+  - {id: g, group-by-key: {of: in}}
+  - {id: w, windowed-by: {of: g, size-ms: 3600000, advance-ms: 3600000, grace-ms: 0, retention-ms: 10800000}}
+  - {id: agg, aggregate: {of: w, fn: concat, store: aggregates}}
+  - {id: s, to-stream: {of: agg}}
+  - {sink: {of: s, topic: out}}         # windowed-fed: compared as the full record list (R3)
+inputs:
+  - {key: a, value: "p", at-ms: 0}
+  - {key: a, value: "q", at-ms: 60000}
+  - {key: b, value: "r", at-ms: 120000}
+perturbation:                           # a value change, which concat carries into the accumulator
+  - {key: a, value: "p", at-ms: 0}
+  - {key: a, value: "z", at-ms: 60000}
+  - {key: b, value: "r", at-ms: 120000}
+agreement: final-state

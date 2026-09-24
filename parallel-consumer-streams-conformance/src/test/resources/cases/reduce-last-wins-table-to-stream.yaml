@@ -1,0 +1,27 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# R12's handle-kind chain in one case: stream -> grouped stream -> table (group-by-key + reduce),
+# then table -> stream (to-stream) and out to a sink. Divergence in a wire-crossing binding lives at
+# these joins between operations, which is why the transitions get a case rather than only the
+# operations.
+#
+# The twin changes the LAST value under key a, never an earlier one: last-wins keeps only the newest
+# value, so a change to the first record is absorbed by both observables - the store keeps the last
+# value and the non-windowed sink folds to the last record per key.
+name: reduce-last-wins-table-to-stream
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: in, source: {topic: in}}
+  - {id: g, group-by-key: {of: in}}
+  - {id: t, reduce: {of: g, fn: last-wins, store: latest-per-key}}
+  - {id: s, to-stream: {of: t}}
+  - {sink: {of: s, topic: out}}
+inputs:
+  - {key: a, value: "v1", at-ms: 0}
+  - {key: a, value: "v2", at-ms: 1000}
+  - {key: b, value: "w1", at-ms: 2000}
+perturbation:                           # a's LAST value, the only one last-wins cannot absorb
+  - {key: a, value: "v1", at-ms: 0}
+  - {key: a, value: "v9", at-ms: 1000}
+  - {key: b, value: "w1", at-ms: 2000}
+agreement: final-state

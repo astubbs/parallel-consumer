@@ -1,0 +1,22 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# The pinned-emit rule's positive side: the record at 7200000 sits past the close of the last
+# window any earlier record could open, so the suppressed aggregate reaches the sink.
+name: pinned-emit-with-trailing-record
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: in, source: {topic: in}}
+  - {id: g, group-by-key: {of: in}}
+  - {id: w, windowed-by: {of: g, size-ms: 3600000, advance-ms: 3600000, grace-ms: 0, retention-ms: 3600000}}
+  - {id: c, count: {of: w, store: counts}}
+  - {id: s, to-stream: {of: c}}
+  - {sink: {of: s, topic: out}}
+inputs:
+  - {key: a, value: "1", at-ms: 0}
+  - {key: a, value: "2", at-ms: 60000}
+  - {key: z, value: "-", at-ms: 7200000}
+perturbation:
+  - {key: b, value: "1", at-ms: 0}
+  - {key: a, value: "2", at-ms: 60000}
+  - {key: z, value: "-", at-ms: 7200000}
+emit: on-window-close

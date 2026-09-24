@@ -1,0 +1,15 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# AE5 / R3: the update-stream observable, its capture and its differ path are the driver rung's,
+# so this rung refuses the level rather than loading it and silently comparing at final state.
+name: agreement-updates
+base-instant: 2025-01-01T02:00:00Z
+topology:
+  - {id: in, source: {topic: in}}
+  - {id: g, group-by-key: {of: in}}
+  - {id: c, count: {of: g, store: counts}}
+inputs:
+  - {key: a, value: "1", at-ms: 0}
+perturbation:
+  - {key: b, value: "1", at-ms: 0}
+agreement: final-state+updates

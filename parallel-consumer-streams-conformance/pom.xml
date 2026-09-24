@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<!--
+    The first test-only module on master: it has src/test and NO src/main, deliberately. Its whole
+    content is the Kafka Streams conformance net (astubbs#242) - a corpus of language-neutral cases,
+    an oracle that computes each case's final state with plain Kafka Streams, and the proofs over
+    them. There is nothing here for a caller to depend on, so there is nothing to compile into a
+    main source tree and nothing to publish; see README.md, and docs/plans/2026-09-05-001-test-streams-conformance-net-plan.md
+    for the reasoning (KTD1).
+
+    The parent and dependency shape is cut from parallel-consumer-vertx/pom.xml with everything
+    main-source-related removed. It stays on the parent's default release.target; the mutiny
+    module's override to 17 exists for a runtime floor this module does not have.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>parallel-consumer-streams-conformance</artifactId>
+    <name>Parallel Consumer - Streams Conformance</name>
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- A test-only module still inherits the parent's publication, and this one has nothing to
+         publish, so it carries the same skips parallel-consumer-examples/pom.xml carries and for
+         the same reason - a package smoke cannot catch a release-profile upload of an empty jar.
+         That pom's comment owns the detail: central-publishing-maven-plugin 0.8.0 let a
+         skipPublishing=true module last in the reactor order skip the ENTIRE aggregated bundle
+         upload; 0.9.0+ evaluates skipPublishing per-module and per-artifact, which is what this
+         relies on (the parent pins the version in pluginManagement). -->
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+        <gpg.skip>true</gpg.skip>
+
+        <!-- The Jackson this module reads its YAML cases with, module-local for the reason
+             jackson.examples.version in parallel-consumer-examples/pom.xml states at length:
+             jackson-databind is transitive to WireMock in parallel-consumer-vertx, and managing its
+             version at the root forces WireMock onto an incompatible Jackson and breaks VertxTest
+             with HTTP 500. A property states a version without imposing one on anything.
+
+             Kept on the same number as jackson.examples.version, and for the same reasons - see
+             that property for why 2.18.9 is the floor and why 2.18.10 is the pick. The two are
+             deliberately NOT single-sourced: that property lives in the examples parent, which this
+             module does not inherit from, and moving it to the root pom is the thing the vertx
+             breakage above forbids. Bump them together.
+
+             RETIRE WHEN: kafka-streams ships Jackson 2.18.10 or newer. -->
+        <jackson.conformance.version>2.18.10</jackson.conformance.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- The BOM rather than a bare jackson-dataformat-yaml pin, for the reason
+                 parallel-consumer-examples/parallel-consumer-example-streams/pom.xml gives: the
+                 dataformat module needs jackson-core and jackson-annotations on the same line, and
+                 kafka-streams pins an older jackson-core here, which the root enforcer's
+                 requireUpperBoundDeps rule rejects against a bare version. Importing the BOM lines
+                 the whole family up at once. -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.conformance.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Core's test-jar, for the shared TestConventionRules that TestConventionsArchTest
+             imports, as vertx, reactor and mutiny do (KTD11). This module asserts on its own case,
+             outcome and report types, not on the engine's, so the generated ManagedTruth subjects
+             buy nothing - but the test-jar cannot run without core's main jar beside it: it
+             registers a JUnit TestExecutionListener through ServiceLoader that reaches into core's
+             internal utilities, and without them every test class logs a NoClassDefFoundError from
+             the listener and the per-test reporting is silently dead. So core's main jar is here
+             too, at test scope, and nothing in this module may import from it. -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Testing -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-streams</artifactId>
+            <version>${kafka.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-streams-test-utils</artifactId>
+            <version>${kafka.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <configuration>
+                    <skipPublishing>true</skipPublishing>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!--
+                        The gate's cells are dynamic tests named <case>/<proof> (CorpusGateTest), and surefire's
+                        default XML writes a dynamic test's LEGACY reporting name - everyExecutableCase...()[2] -
+                        which identifies the cell by an index that moves whenever the corpus changes. The whole
+                        point of the naming is that a red is legible in the report without opening a log, so this
+                        module asks the JUnit 5 reporter for the display name instead. Module-scoped: it changes
+                        nothing for a plain @Test, whose display name is already its method name.
+                    -->
+                    <statelessTestsetReporter
+                            implementation="org.apache.maven.plugin.surefire.extensions.junit5.JUnit5Xml30StatelessReporter">
+                        <usePhrasedTestCaseMethodName>true</usePhrasedTestCaseMethodName>
+                    </statelessTestsetReporter>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
