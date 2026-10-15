@@ -70,7 +70,7 @@
         <dependency>
             <groupId>com.github.luben</groupId>
             <artifactId>zstd-jni</artifactId>
-            <version>1.5.7-17</version>
+            <version>1.5.7-23</version>
             <scope>compile</scope>
         </dependency>
         <!-- snappy-java: 1.1.10.8 is the newest release on Central and carries CVE-2026-90559, which
