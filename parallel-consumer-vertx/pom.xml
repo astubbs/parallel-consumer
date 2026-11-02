@@ -18,7 +18,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <properties>
-        <vertx.version>4.5.31</vertx.version>
+        <vertx.version>4.5.35</vertx.version>
     </properties>
 
     <dependencies>
