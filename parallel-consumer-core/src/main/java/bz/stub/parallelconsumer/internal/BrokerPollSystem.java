@@ -218,7 +218,10 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             }
             log.debug("Broker poller thread finished normally, returning OK (true) to future...");
             return true;
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
+            // Error as well (astubbs#539): a NoClassDefFoundError escaped an Exception-only catch, skipping the
+            // notify below, so a control thread already waiting on a commit response sat out its full timeout and
+            // then reported the timeout rather than this.
             // reachable with a USER-supplied throwable: a user rebalance listener that throws is wrapped in
             // ExceptionInUserFunctionException and propagates out through consumer.poll() to here, so rendering it
             // runs the user's getCause/getMessage inside the logging binding - and the notify below must happen

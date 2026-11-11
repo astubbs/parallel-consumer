@@ -219,13 +219,31 @@ class CommitResponseTimeoutSymptomTest {
      */
     @Test
     void aDeadPollThreadReportsItsOwnCauseNotTheCommitResponseTimeout() {
-        final Duration commitTimeout = Duration.ofMinutes(1);
         final String pollThreadFailure = "Not authorized to commit (mocking)";
+        assertADeadPollThreadReportsItsOwnCause(new AuthorizationException(pollThreadFailure), pollThreadFailure);
+    }
+
+    /**
+     * The same, for an {@link Error} rather than an {@code Exception}. astubbs#539: the poll thread's handler caught
+     * {@code Exception} only, so an Error - there, a {@link NoClassDefFoundError} from a Kafka release that had moved
+     * a class PC used - skipped {@link ConsumerOffsetCommitter#notifyPollerDied}, and a control thread blocked in
+     * {@code commitAndWait()} sat out the full {@code offsetCommitTimeout} before reporting the timeout instead.
+     * <p>
+     * Discriminating: narrow that catch back to {@code Exception} and the await below times out.
+     */
+    @Test
+    void aPollThreadKilledByAnErrorReportsItsOwnCauseNotTheCommitResponseTimeout() {
+        final String pollThreadFailure = "org/apache/kafka/common/utils/CloseableIterator";
+        assertADeadPollThreadReportsItsOwnCause(new NoClassDefFoundError(pollThreadFailure), pollThreadFailure);
+    }
+
+    private void assertADeadPollThreadReportsItsOwnCause(Throwable killsThePollThread, String pollThreadFailure) {
+        final Duration commitTimeout = Duration.ofMinutes(1);
 
         var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
             @Override
             public synchronized void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
-                throw new AuthorizationException(pollThreadFailure);
+                throw sneakyThrowable(killsThePollThread);
             }
         };
 
@@ -260,7 +278,7 @@ class CommitResponseTimeoutSymptomTest {
                 .collect(java.util.stream.Collectors.toList());
 
         // the real reason must be reachable, not replaced by the symptom
-        assertThat(chain.stream().anyMatch(t -> t instanceof AuthorizationException)).isTrue();
+        assertThat(chain.stream().anyMatch(t -> t == killsThePollThread)).isTrue();
         assertThat(chain.stream().anyMatch(t -> String.valueOf(t.getMessage()).contains(pollThreadFailure))).isTrue();
 
         // the waiter was told, so it says so
@@ -416,5 +434,16 @@ class CommitResponseTimeoutSymptomTest {
             chain.add(t);
         }
         return chain;
+    }
+
+    /**
+     * Rethrows either kind from {@code commitSync}, which declares neither: an Error is unchecked, and the
+     * {@code RuntimeException} cases are too, so the cast is only to satisfy the compiler.
+     */
+    private static RuntimeException sneakyThrowable(Throwable t) {
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        throw (RuntimeException) t;
     }
 }
