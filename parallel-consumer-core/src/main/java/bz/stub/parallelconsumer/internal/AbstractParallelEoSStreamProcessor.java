@@ -1613,7 +1613,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     log.debug("Control loop interrupted, closing");
                     Thread.interrupted(); //clear interrupted flag as during close need to acquire commit locks and interrupted flag will cause it to throw another interrupted exception.
                     doClose(shutdownTimeout);
-                } catch (Exception e) {
+                } catch (Exception | Error e) {
+                    // Error as well as Exception (astubbs#539): a NoClassDefFoundError from a Kafka version PC was not
+                    // built against used to escape this handler entirely - no log, no failureReason, no close - so
+                    // the processor silently stopped consuming and the cause surfaced only when close() rethrew it.
+                    // Every fatal throwable gets the same treatment: record, log, attempt a controlled shutdown.
                     if (Thread.interrupted()) { //clear interrupted flag
                         log.debug("Thread interrupted flag cleared in control loop error handling");
                     }

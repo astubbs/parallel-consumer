@@ -87,6 +87,27 @@ class ArchitectureTest {
                     .as("Only ProducerWrapper and ParallelConsumerOptions may hold a Producer<K,V> field. " +
                             "All other producer access must go through ProducerWrapper/ProducerManager.");
 
+    /**
+     * Main code must not reach into Kafka's {@code common.utils} package, which is not Kafka public API - with one
+     * exemption, {@link org.apache.kafka.common.utils.Time}, which PC's clock plumbing takes from Kafka.
+     * <p>
+     * astubbs#539: Kafka 4.4.0 moved {@code CloseableIterator} and {@code ByteBufferInputStream} from there into
+     * {@code common.utils.internals}, and a PC jar built against 3.9 died with {@link NoClassDefFoundError} on its
+     * first control-loop pass. Nothing compiles against 4.4 here (the {@code compat: kafka 4.x} lane is disabled),
+     * so this rule is what fails when a new internal dependency arrives. Adding to the exemption is a decision to
+     * take on that risk, not a way to pass.
+     */
+    @ArchTest
+    static final ArchRule noDependencyOnKafkaInternalUtils =
+            noClasses()
+                    .should().dependOnClassesThat(
+                            DescribedPredicate.describe("are in Kafka's non-public org.apache.kafka.common.utils package "
+                                            + "(other than Time)",
+                                    javaClass -> javaClass.getPackageName().startsWith("org.apache.kafka.common.utils")
+                                            && !javaClass.getName().equals("org.apache.kafka.common.utils.Time")))
+                    .as("Main code must not depend on Kafka's org.apache.kafka.common.utils classes (other than Time) " +
+                            "- they are not public API and move between Kafka releases. See astubbs#539.");
+
     // Future: add rule that ConsumerManager is only constructed by PCModule.
     // Requires DescribedPredicate API which is verbose — defer for now.
 

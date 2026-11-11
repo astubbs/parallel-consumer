@@ -23,4 +23,11 @@ bump `kafka.version` 3.9.1 → 4.2.x plus the TestContainers CP image; migrate r
 (`sendOffsetsToTransaction(Map,String)`, `MockConsumer(OffsetResetStrategy)`,
 `new ConsumerGroupMetadata(String)`); downstream module audit; flip `test-kafka-compat` to a blocking
 3.9.1 regression check; docs. Deferred further: `parallel-consumer-share` (KIP-932).
+
+**Users already run the 3.9-built jar on kafka-clients 4.x at runtime**, ahead of this work - astubbs#539
+was a report from one, on 4.4.0. That broke only because main code reached into Kafka's non-public
+`org.apache.kafka.common.utils` package, which 4.4.0 reorganised; the fix replaced both classes, and
+`ArchitectureTest.noDependencyOnKafkaInternalUtils` now fails on any new dependency there (`Time` is
+exempt). It is a guard on one package, not a compatibility claim - nothing compiles or runs the suite
+against 4.x until `test-kafka-compat` is back on.
 <!-- file-refs: N/A - the sentence says the plan is on the branch, not on master -->

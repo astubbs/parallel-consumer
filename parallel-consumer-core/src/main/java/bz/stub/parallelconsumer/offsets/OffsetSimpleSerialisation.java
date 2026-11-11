@@ -8,8 +8,8 @@ import com.github.luben.zstd.ZstdInputStream;
 import com.github.luben.zstd.ZstdOutputStream;
 import lombok.SneakyThrows;
 import lombok.experimental.UtilityClass;
+import bz.stub.parallelconsumer.internal.utils.ByteBufferInputStream;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.common.utils.ByteBufferInputStream;
 import org.xerial.snappy.SnappyInputStream;
 import org.xerial.snappy.SnappyOutputStream;
 

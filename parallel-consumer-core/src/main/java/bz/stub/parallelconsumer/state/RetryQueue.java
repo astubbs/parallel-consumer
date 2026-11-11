@@ -9,7 +9,6 @@ import bz.stub.parallelconsumer.ParallelConsumer;
 import com.facebook.infer.annotation.ThreadConfined;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
-import org.apache.kafka.common.utils.CloseableIterator;
 
 import java.time.Instant;
 import java.util.*;
@@ -334,9 +333,14 @@ public class RetryQueue {
      * {@code RetryQueueIteratorConfinementTest} is what fails when the two disagree. The rule:
      * {@code parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md}, "Declare thread
      * confinement".
+     * <p>
+     * <b>{@link AutoCloseable}, not Kafka's {@code CloseableIterator}.</b> That interface is not Kafka public API,
+     * and Kafka 4.4.0 moved it into {@code common.utils.internals}; implementing it made this class fail to load
+     * there, killing the control thread on its first retry-queue scan (astubbs#539). {@code close()} is
+     * redeclared without {@code throws}, so try-with-resources callers are unchanged.
      */
     @ThreadConfined(ThreadConfined.ANY)
-    public static class RetryQueueIterator implements CloseableIterator<WorkContainer<?, ?>> {
+    public static class RetryQueueIterator implements Iterator<WorkContainer<?, ?>>, AutoCloseable {
         private final ReentrantReadWriteLock lock;
         private final Iterator<WorkContainer<?, ?>> wrapped;
 
