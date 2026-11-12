@@ -200,7 +200,7 @@
              The whole 1.13 line is affected by three advisories and no fix will ever ship for it -
              see excludeVulnerabilityIds below, which owns that reasoning and names 1.17.x as the
              version the migration should target. -->
-        <micrometer-core.version>1.13.15</micrometer-core.version>
+        <micrometer-core.version>1.15.12</micrometer-core.version>
     </properties>
 
     <profiles>
