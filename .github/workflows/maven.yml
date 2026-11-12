@@ -681,7 +681,7 @@ jobs:
 
       # Dependency vulnerability scanning - GitHub's own dependency review
       - name: "deps: vulnerabilities"
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         if: ${{ !cancelled() }}
         with:
           fail-on-severity: high
