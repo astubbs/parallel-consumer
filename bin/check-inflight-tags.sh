@@ -31,7 +31,16 @@ set -uo pipefail
 # shellcheck source=lib/inflight-tags.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/inflight-tags.sh" || exit 1
 
-cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+# Outside a work tree this gate CANNOT RUN, which is exit 2 (bin/AGENTS.md: a skip is never a pass).
+# It used to be `cd "$(git rev-parse ...)" || exit 0`, which is two silent passes in one line: exit 0
+# for "checked nothing", and `cd ""` - a no-op success on bash 3.2, an error from bash 5.3 on. The
+# self-test's doc-and-lib cases ran in a non-git fixture, so on the ubuntu-26.04 runner (bash 5.3)
+# the gate passed without reading a file and both cases reported the gate as broken.
+top=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$top" ] || {
+    echo "check-inflight-tags: not inside a git work tree ($PWD) - nothing was checked" >&2
+    exit 2
+}
+cd "$top" || exit 2
 [ -d docs/inflight ] || exit 0
 
 TYPES="$INFLIGHT_TYPES"

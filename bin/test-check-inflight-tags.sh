@@ -93,7 +93,12 @@ dry_assert() { # <name> <caught|missed>
 # THE DOC AND THE LIB MUST AGREE, checked in both directions. Run against fixture copies so the case
 # tests the CHECK rather than the repo's current state - and so it keeps working when the vocabulary
 # legitimately grows.
-dry_dir=$(mktemp -d); mkdir -p "$dry_dir/bin/lib" "$dry_dir/docs/inflight"
+#
+# The fixture is a git work tree, as assert()'s is, because the gate checks the tree it is run in and
+# cannot run outside one. On bash 3.2 a non-git fixture happened to work - `cd ""` is a no-op there -
+# and on bash 5.3 (the ubuntu-26.04 runner) the gate exited before reading a file, so both directions
+# below reported the gate as broken when it was the fixture.
+dry_dir=$(mktemp -d); git -C "$dry_dir" init -q; mkdir -p "$dry_dir/bin/lib" "$dry_dir/docs/inflight"
 cp bin/check-inflight-tags.sh "$dry_dir/bin/"
 # The shell library is a wrapper over the Node file, which imports repo.mjs: all three travel, or the
 # copy's gate fails on a missing module and both directions below read that as "caught".
@@ -126,6 +131,20 @@ out=$( cd "$dry_dir" && bash bin/check-inflight-tags.sh 2>&1 )
 case "$out" in *bogus-impact*) dry_got=caught ;; *) dry_got=missed ;; esac
 dry_assert "a doc value the lib rejects is caught" "$dry_got"
 rm -rf "$dry_dir"
+
+# OUTSIDE A WORK TREE THE GATE CANNOT RUN, and must say so with exit 2 rather than pass having read
+# nothing (bin/AGENTS.md: a skip is never a pass). The old `cd "$(git rev-parse ...)" || exit 0`
+# exited 0 here on every bash - and on bash 3.2 did not even reach that exit, checking the cwd instead.
+no_git=$(mktemp -d); mkdir -p "$no_git/docs/inflight"
+printf '# T\n\n<!-- inflight-type: chore -->\n' > "$no_git/docs/inflight/bug-case.md"
+out=$( cd "$no_git" && GIT_CEILING_DIRECTORIES="$(dirname "$no_git")" bash "$CHECK" 2>&1 ); rc=$?
+if [ "$rc" -eq 2 ] && [[ "$out" == *"not inside a git work tree"* ]]; then
+    echo "ok:   outside a git work tree the gate exits 2 and says nothing was checked"
+else
+    echo "FAIL: outside a git work tree the gate exits 2 and says nothing was checked (rc=$rc: $out)" >&2
+    failures=$((failures + 1))
+fi
+rm -rf "$no_git"
 assert "a state with no reason is rejected"   fail '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: coordination -->\n<!-- inflight-state: closed -->\n'
 
 # The shapes where this gate and the session index used to DISAGREE. Each one passed here and then
