@@ -10,6 +10,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.RecordContext;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
+import com.google.common.truth.Truth8;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 
@@ -17,6 +18,7 @@ import java.time.Duration;
 import java.util.function.Function;
 
 import static bz.stub.parallelconsumer.ManagedTruth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.mockito.Mockito.mock;
 
 class WorkContainerTest {
@@ -25,6 +27,27 @@ class WorkContainerTest {
     void basics() {
         var workContainer = new ModelUtils(new PCModuleTestEnv()).createWorkFor(0);
         assertThat(workContainer).getDelayUntilRetryDue().isNegative();
+    }
+
+    /**
+     * astubbs#533: before the first failure the reason is an empty Optional, never null - through the public
+     * {@link RecordContext} accessor a user function calls on first delivery, and the container it reads from. Then,
+     * after a failure, it holds that failure.
+     */
+    @Test
+    void lastFailureReasonIsEmptyNotNullBeforeTheFirstFailure() {
+        WorkContainer<String, String> wc = new WorkContainer<>(0, mock(ConsumerRecord.class), new PCModuleTestEnv());
+
+        var firstDelivery = new RecordContext<>(wc);
+        assertWithMessage("RecordContext promises an Optional, so it must never be null")
+                .that(firstDelivery.getLastFailureReason()).isNotNull();
+        Truth8.assertThat(firstDelivery.getLastFailureReason()).isEmpty();
+        Truth8.assertThat(wc.getLastFailureReason()).isEmpty();
+
+        var failure = new FakeRuntimeException("first attempt failed");
+        wc.onUserFunctionFailure(failure);
+
+        Truth8.assertThat(new RecordContext<>(wc).getLastFailureReason()).hasValue(failure);
     }
 
     @Test
