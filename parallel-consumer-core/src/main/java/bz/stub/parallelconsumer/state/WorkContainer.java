@@ -307,8 +307,13 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     @Getter
     private Optional<Instant> succeededAt = Optional.empty();
 
+    /**
+     * Initialised like its two siblings above: {@code Optional.empty()} until the first failure. It used to be left
+     * {@code null}, so {@link bz.stub.parallelconsumer.RecordContext#getLastFailureReason()} returned null on a
+     * record's first delivery and a caller chaining on the promised Optional threw NPE (astubbs#533).
+     */
     @Getter
-    private Optional<Throwable> lastFailureReason;
+    private Optional<Throwable> lastFailureReason = Optional.empty();
 
     /**
      * Where this record is in its execution lifecycle: whether it is out at a worker, and what verdict it carries.
