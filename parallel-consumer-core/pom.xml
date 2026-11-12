@@ -73,15 +73,14 @@
             <version>1.5.7-17</version>
             <scope>compile</scope>
         </dependency>
-        <!-- snappy-java: 1.1.10.8 is the newest release on Central and carries CVE-2026-90559, which
-             is excluded in the root pom with the reachability argument (the vulnerable overload is
-             Snappy.uncompress(ByteBuffer, ByteBuffer); everything here goes through the stream
-             classes, which never call it). Bump and delete that exclusion when a fixed release
-             ships - xerial/snappy-java#728 is the issue, xerial/snappy-java#734 the candidate fix. -->
+        <!-- snappy-java: 1.1.10.9 fixed CVE-2026-90559 (xerial/snappy-java#739), the advisory the root
+             pom used to exclude on a reachability argument, along with CVE-2026-93451, CVE-2026-108106
+             and CVE-2026-116590 against the same releases. Kept at the newest release rather than the
+             first fixed one; Java 8 bytecode, no new compile-scope dependency. -->
         <dependency>
             <groupId>org.xerial.snappy</groupId>
             <artifactId>snappy-java</artifactId>
-            <version>1.1.10.8</version>
+            <version>1.1.10.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
