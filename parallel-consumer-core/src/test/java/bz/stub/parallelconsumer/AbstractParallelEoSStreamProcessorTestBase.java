@@ -254,7 +254,7 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
 
     protected void instantiateConsumerProducer() {
         LongPollingMockConsumer<String, String> consumer = new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST);
-        MockProducer<String, String> producer = new MockProducer<>(true,
+        MockProducer<String, String> producer = new MockProducer<String, String>(true, null,
                 Serdes.String().serializer(), Serdes.String().serializer());
 
         this.producerSpy = spy(producer);

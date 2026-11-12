@@ -6,9 +6,6 @@
 
 
 <!-- post-merge: checked-begin -->
-- **`Kafka Compat (experimental 4.x)` is disabled** (`if: false` in `maven.yml`) - it cannot compile
-  under kafka-clients 4.x until the 0.7.x migration. Re-enable with
-  `if: github.event_name == 'pull_request'` when that work starts (see `pr-53-java-baseline-kafka4.md`).
 - ~~**The `local` self-hosted PR jobs are disabled**~~ **Resolved 2026-08-06:** `pr-local-fast-feedback.yml`
   was deleted, along with `self-hosted-tests.yml`. Neither had a working runner - `local` had none
   registered at all and `performance` pointed at an offline mac laptop - so both queued until GitHub

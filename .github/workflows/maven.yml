@@ -564,12 +564,21 @@ jobs:
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Experimental Kafka 4.x compatibility check. Non-blocking.
-  # DISABLED pending the Kafka 4.x migration work: the experimental 4.x build currently fails and just adds
-  # a red X of noise to every PR (it is continue-on-error, so it never gated merges). Re-enable by restoring
-  # the `if: github.event_name == 'pull_request'` condition below when the Kafka 4 work starts. See docs/inflight/ci-disabled-jobs-and-runner-load.md.
+  # Kafka 4.x compatibility check: the whole build and suite, compiled and run against kafka-clients 4.x.
+  # Non-blocking (continue-on-error) while it settles; promote it to a required check once it has a record.
+  #
+  # ON since astubbs#539. It was off (`if: false`) because the 4.x build did not compile, and that is exactly
+  # how astubbs#539 shipped: users already run the 3.9-built jar on kafka-clients 4.x, and 0.6.0.0 died on 4.4.0
+  # with NoClassDefFoundError because main code used two Kafka-internal classes 4.4 had moved. The test code
+  # had the same problem (MockProducer's 3-arg constructor, AppInfoParser, CompressionType), now migrated
+  # to forms that compile against 3.9 and 4.x alike.
+  #
+  # A PINNED version, not a range: a range resolves to whatever Kafka released last and changes this lane's
+  # answer under an unchanged tree. Bump it per Kafka release. The Jackson override exists because the
+  # examples pin Jackson for kafka-streams 3.9 (see jackson.examples.version in the examples parent), and
+  # kafka-streams 4.4 depends on 2.21.7, which the upper-bound enforcer rule rightly refuses to downgrade.
   test-kafka-compat:
-    if: false # was: github.event_name == 'pull_request' — re-enable when Kafka 4.x work begins
+    if: github.event_name == 'pull_request'
     needs: prepare-deps
     name: "compat: kafka 4.x (experimental)"
     runs-on: ubuntu-latest
@@ -589,11 +598,8 @@ jobs:
           restore-keys: |
             setup-java-Linux-x64-maven-
       - name: Build and Test (Kafka 4.x)
-        run: bin/ci-build.sh '[3.9.1,5)'
+        run: bin/ci-build.sh 4.4.0 -Djackson.examples.version=2.21.7
       # Same inert-`**` fix as the `test` matrix upload, whose step comment carries the reasoning.
-      # This job is `if: false` today, so nothing here is exercised - which is precisely why it is
-      # fixed now: re-enabling it for the Kafka 4.x work would otherwise reintroduce the defect
-      # under a flag nobody is watching.
       - name: Collect jacoco report files for Codecov
         if: always()
         id: coverage

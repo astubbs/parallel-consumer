@@ -4,9 +4,11 @@
 #
 
 # CI build script - run the full build and test suite
-# Usage: bin/ci-build.sh [kafka-version]
+# Usage: bin/ci-build.sh [kafka-version [extra-maven-args...]]
 # Example: bin/ci-build.sh 3.9.1
-# If no version is specified, uses the default from pom.xml
+# If no version is specified, uses the default from pom.xml. Anything after the version is forwarded
+# to Maven, as bin/ci-unit-test.sh does - the Kafka 4.x compat lane uses it to move the examples'
+# Jackson pin, which kafka-streams 4.x needs newer than the 3.9 line allows.
 
 set -euo pipefail
 
@@ -14,6 +16,7 @@ KAFKA_VERSION_ARG=""
 if [ $# -ge 1 ]; then
   KAFKA_VERSION_ARG="-Dkafka.version=$1"
   echo "Building with Kafka version: $1"
+  shift
 else
   echo "Building with default Kafka version from pom.xml"
 fi
@@ -27,4 +30,5 @@ fi
   -Pci \
   clean verify \
   ${KAFKA_VERSION_ARG:+"$KAFKA_VERSION_ARG"} \
-  -Dexcluded.groups=performance,chaos,quarantined,lincheck,soak,capacity
+  -Dexcluded.groups=performance,chaos,quarantined,lincheck,soak,capacity \
+  "$@"
