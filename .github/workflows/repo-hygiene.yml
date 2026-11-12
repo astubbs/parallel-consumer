@@ -115,7 +115,7 @@ jobs:
       # instead of its default warn-and-skip exit 0, which the sweep would count as a pass.
       COPYRIGHT_CHECK_REQUIRE_FORK_POINT: "1"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Gates that read history must not see a truncated graft. A shallow clone does not error
           # on `git log` or `git merge-base` - it answers, wrongly, which is the exact class
@@ -619,7 +619,7 @@ jobs:
       # the hook failed open to silence, and seven cases went red on this lane only - reproduced in
       # a depth-1 clone locally, and cleared by fetching origin/master into it. The fixture-building
       # suites never needed history; the one that reads the real clone does.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
