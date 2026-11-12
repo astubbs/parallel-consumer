@@ -8,9 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.record.CompressionType;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -42,15 +41,20 @@ class CompressionCodecsIT extends BrokerIntegrationTest<String, String> {
 
     private static final int RECORDS = 200;
 
+    /**
+     * The codecs as {@code compression.type} strings rather than Kafka's {@code CompressionType} enum: that enum is
+     * not public API and moved to {@code common.record.internal} in Kafka 4.4, so naming it kept this suite from
+     * compiling against 4.x (astubbs#539). The config strings are the public contract and are the same in both.
+     */
     @ParameterizedTest
-    @EnumSource(value = CompressionType.class, names = {"GZIP", "SNAPPY", "LZ4", "ZSTD"})
-    void batchesProducedWithCodecAreConsumedIntact(CompressionType codec) {
+    @ValueSource(strings = {"gzip", "snappy", "lz4", "zstd"})
+    void batchesProducedWithCodecAreConsumedIntact(String codec) {
         ParallelEoSStreamProcessor<String, String> pc = startPcOnNewTopic(options -> options);
 
         // release 8 target: no String.repeat
         String payload = String.join("", Collections.nCopies(2_000, "x")) + UUID.randomUUID();
         Properties compression = new Properties();
-        compression.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, codec.name);
+        compression.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, codec);
         try (KafkaProducer<String, String> producer = getKcu().createNewProducer(NOT_TRANSACTIONAL, compression)) {
             for (int i = 0; i < RECORDS; i++) {
                 producer.send(new ProducerRecord<>(getTopic(), "key-" + i, i + ":" + payload));

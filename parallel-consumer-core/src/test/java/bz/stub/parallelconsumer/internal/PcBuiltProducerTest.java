@@ -115,7 +115,7 @@ class PcBuiltProducerTest {
         var received = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
         var module = moduleBuildingWith(optionsWith(callers, CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER), config -> {
             received.set(config);
-            return new MockProducer<>(true, new StringSerializer(), new StringSerializer());
+            return new MockProducer<String, String>(true, null, new StringSerializer(), new StringSerializer());
         });
 
         var wrapper = module.producerWrap();
@@ -153,7 +153,7 @@ class PcBuiltProducerTest {
      */
     @Test
     void aProducerBuiltForAManagerThatFailsToConstructIsClosed() {
-        var producer = spy(new MockProducer<>(true, new StringSerializer(), new StringSerializer()));
+        var producer = spy(new MockProducer<String, String>(true, null, new StringSerializer(), new StringSerializer()));
         doThrow(new KafkaException("coordinator not available")).when(producer).initTransactions();
         var module = moduleBuildingWith(optionsWith(realProducerConfig("pc-test"), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER), config -> producer);
 
@@ -210,7 +210,7 @@ class PcBuiltProducerTest {
      */
     @Test
     void theCallersInstanceIsNotClosedWhenTheManagerFailsToConstruct() {
-        var instance = spy(new MockProducer<>(true, new StringSerializer(), new StringSerializer()));
+        var instance = spy(new MockProducer<String, String>(true, null, new StringSerializer(), new StringSerializer()));
         doThrow(new KafkaException("coordinator not available")).when(instance).initTransactions();
         var options = ParallelConsumerOptions.<String, String>builder()
                 .consumer(consumerInGroup())

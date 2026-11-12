@@ -49,8 +49,8 @@ that ever broke.** A real SASL client on a modern JDK remains untested here.
 
 ## What is left, and the decision that is not mine
 
-Nothing in CI runs above `java-version: '17'`, and the Kafka-version axis is switched off in
-`.github/workflows/maven.yml` (grep `test-kafka-compat`). That gap is astubbs#128
+Nothing in CI runs above `java-version: '17'`, and the Kafka-version axis is a single non-blocking
+4.x lane in `.github/workflows/maven.yml` (grep `test-kafka-compat`), not a matrix. That gap is astubbs#128
 (mirroring confluentinc#103), and until a lane exists "runs on Java 24" is a local observation, not
 a claim the project can publish.
 

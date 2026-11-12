@@ -29,5 +29,6 @@ bump `kafka.version` 3.9.1 → 4.2.x plus the TestContainers CP image; migrate r
 was a report from one, on 4.4.0. That broke only because main code reached into Kafka's non-public
 `org.apache.kafka.common.utils` package, which 4.4.0 reorganised; the fix replaced both classes, and
 `ArchitectureTest.noDependencyOnKafkaInternalUtils` now fails on any new dependency there (`Time` is
-exempt). It is a guard on one package, not a compatibility claim - nothing compiles or runs the suite
-against 4.x until `test-kafka-compat` is back on.
+exempt). It is a guard on one package, not a compatibility claim. The same PR switched `test-kafka-compat`
+back on, pinned to 4.4.0 and non-blocking, after migrating the test code to forms that compile against
+3.9 and 4.x alike - so the suite now runs against 4.x on every PR, ahead of the 0.7.x move itself.
