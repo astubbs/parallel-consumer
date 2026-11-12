@@ -80,7 +80,7 @@ jobs:
           java-version: '17'
           # No `cache: maven` - see caching strategy note at top of file
       - name: Restore Maven cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.m2/repository
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
@@ -90,7 +90,7 @@ jobs:
         run: ./mvnw --batch-mode -Pci dependency:go-offline -DincludeScope=test -U
       - name: Save Maven cache (rotating key)
         if: success()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ~/.m2/repository
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}-${{ github.run_id }}
@@ -290,7 +290,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - name: Restore Maven cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.m2/repository
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
@@ -582,7 +582,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - name: Restore Maven cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.m2/repository
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
@@ -886,7 +886,7 @@ jobs:
       # compete with the key the build lanes own, and it resolves a different (smaller) set.
       - name: Restore Maven cache
         if: ${{ !cancelled() && env.CVE_SCAN_CREDENTIALS_PRESENT == 'true' }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.m2/repository
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
@@ -1037,7 +1037,7 @@ jobs:
       # Restore-only, off prepare-deps' rotating key. This step must not SAVE a cache: it would
       # compete with the key the build lanes own, and it resolves a different (smaller) set.
       - name: Restore Maven cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.m2/repository
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
@@ -1119,7 +1119,7 @@ jobs:
           java-version: '17'
       # ONE restore for both analysers - the two jobs each carried an identical copy of this step.
       - name: Restore Maven cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.m2/repository
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
@@ -1154,7 +1154,7 @@ jobs:
       - name: Restore the Infer toolchain
         if: ${{ !cancelled() }}
         id: infer-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/infer-dist/infer.tar.xz
           key: infer-linux-x86_64-v1.3.0
@@ -1323,7 +1323,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - name: Restore Maven cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.m2/repository
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
