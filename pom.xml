@@ -644,10 +644,23 @@
                 <version>${truth-generator-maven-plugin.version}</version>
                 <scope>test</scope>
             </dependency>
+            <!-- guava: compile scope in the reactor, vertx and mutiny modules, so this reaches users.
+                 33.7.2, not 33.7.1: every release up to and including 33.7.1 carries CVE-2026-102554
+                 (GHSA-xxph-c9ww-hj94, high - deserialising CompactHashMap / CompactHashSet /
+                 MapMakerInternalMap allocates without bound). Java 8 bytecode, like 33.6.0. -->
             <dependency>
                 <groupId>com.google.guava</groupId>
                 <artifactId>guava</artifactId>
-                <version>33.6.0-jre</version>
+                <version>33.7.2-jre</version>
+            </dependency>
+            <!-- jspecify is pinned only to converge it. guava 33.7.x depends on 1.0.1 and reactor-core
+                 3.8.7 on 1.0.0, and RequireUpperBoundDeps fails parallel-consumer-reactor on the
+                 split - which is why Dependabot's guava PR went red on every build job. Annotations
+                 only (no runtime behaviour); retire this pin when reactor-core moves to 1.0.1. -->
+            <dependency>
+                <groupId>org.jspecify</groupId>
+                <artifactId>jspecify</artifactId>
+                <version>1.0.1</version>
             </dependency>
             <dependency>
                 <groupId>me.tongfei</groupId>
@@ -891,29 +904,6 @@
                         <excludeVulnerabilityId>CVE-2026-40984</excludeVulnerabilityId>
                         <excludeVulnerabilityId>CVE-2026-59295</excludeVulnerabilityId>
                         <excludeVulnerabilityId>CVE-2026-59296</excludeVulnerabilityId>
-
-                        <!-- org.xerial.snappy:snappy-java (declared in parallel-consumer-core, beside
-                             zstd-jni, and also Kafka's own snappy codec). CVE-2026-90559 (CVSS 8.7,
-                             CWE-787, xerial/snappy-java#728): Snappy.uncompress(ByteBuffer, ByteBuffer)
-                             never checks that the destination has room for the declared decompressed
-                             size, so a well-formed blob declaring more than the buffer's capacity
-                             writes past the off-heap allocation and kills the JVM. Real, and
-                             UNREACHABLE HERE for a structural reason: that overload is called by
-                             nothing in this tree. kafka-clients' SnappyCompression and this
-                             project's OffsetSimpleSerialisation both go through SnappyInputStream /
-                             SnappyOutputStream, which (read from the 1.1.10.8 bytecode) invoke only
-                             the byte[] overloads and size the output from Snappy.uncompressedLength
-                             first; inside snappy-java the ByteBuffer overload is reached only from
-                             SnappyFramedInputStream, and nothing here uses the framed format. The
-                             issue itself says the sibling paths already carry the check.
-                             1.1.10.8 is the newest release on Central (July 2025); the candidate fix
-                             xerial/snappy-java#734 is open and unmerged, so this is standing, not
-                             temporary - there is no written-and-merged fix to wait on yet.
-                             Re-argue this entry if anything here starts calling Snappy.uncompress or
-                             Snappy.rawUncompress directly, or reading the framed format.
-                             RETIRE WHEN: snappy-java ships a release carrying the capacity check -
-                             then bump the version in parallel-consumer-core/pom.xml and delete this. -->
-                        <excludeVulnerabilityId>CVE-2026-90559</excludeVulnerabilityId>
 
                         <!-- com.fasterxml.jackson.core:jackson-databind (example-streams only). False
                              positive: GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and
