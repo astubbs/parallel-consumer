@@ -491,7 +491,7 @@ jobs:
         # - an empty value is exactly what re-opens the tree-wide fallback described above.
         # Dispatched measurement runs stay out of the coverage ledger: they are not PR or master state.
         if: always() && steps.coverage.outputs.files != '' && github.event_name != 'workflow_dispatch'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: ${{ steps.coverage.outputs.files }}
           # The second lock: even if `files` is somehow unusable, never let the CLI go looking for
@@ -554,7 +554,7 @@ jobs:
         # Skipped when the collector found nothing, rather than letting the CLI fall back to its
         # tree-wide search - an empty `files:` is exactly what produced the junk sweep above.
         if: ${{ !cancelled() && steps.testreports.outputs.files != '' && github.event_name != 'workflow_dispatch' }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           report_type: test_results
           files: ${{ steps.testreports.outputs.files }}
@@ -615,7 +615,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: always() && steps.coverage.outputs.files != ''
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: ${{ steps.coverage.outputs.files }}
           disable_search: true
@@ -1399,7 +1399,7 @@ jobs:
       - name: Upload unit coverage to Codecov
         # Skipped rather than handed an empty `files:`, which is what re-opens the tree-wide search.
         if: always() && steps.coverage.outputs.unit != ''
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: ${{ steps.coverage.outputs.unit }}
           # The second lock on the split: never let the CLI re-widen this flag to the whole tree.
@@ -1408,7 +1408,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload integration coverage to Codecov
         if: always() && steps.coverage.outputs.integration != ''
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: ${{ steps.coverage.outputs.integration }}
           disable_search: true
