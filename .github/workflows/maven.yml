@@ -568,7 +568,7 @@ jobs:
   # Non-blocking (continue-on-error) while it settles; promote it to a required check once it has a record.
   #
   # ON since astubbs#539. It was off (`if: false`) because the 4.x build did not compile, and that is exactly
-  # how #539 shipped: users already run the 3.9-built jar on kafka-clients 4.x, and 0.6.0.0 died on 4.4.0
+  # how astubbs#539 shipped: users already run the 3.9-built jar on kafka-clients 4.x, and 0.6.0.0 died on 4.4.0
   # with NoClassDefFoundError because main code used two Kafka-internal classes 4.4 had moved. The test code
   # had the same problem (MockProducer's 3-arg constructor, AppInfoParser, CompressionType), now migrated
   # to forms that compile against 3.9 and 4.x alike.

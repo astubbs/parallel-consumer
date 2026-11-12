@@ -89,15 +89,18 @@ public abstract class BrokerIntegrationTest<K, V> {
      */
     private static final String FALLBACK_CP_IMAGE = "confluentinc/cp-kafka:7.9.0";
 
+    private static final String KAFKA_VERSION_RESOURCE = "kafka/kafka-version.properties";
+    // file-refs: N/A - a classpath resource inside the kafka-clients jar, not a path in this repository
+
     /**
-     * The kafka-clients version on the classpath, read from the {@code kafka/kafka-version.properties} resource the
-     * jar ships. This is what Kafka's {@code AppInfoParser} reads, but that class is not public API and moved to
+     * The kafka-clients version on the classpath, read from the {@link #KAFKA_VERSION_RESOURCE} resource the jar
+     * ships. This is what Kafka's {@code AppInfoParser} reads, but that class is not public API and moved to
      * {@code common.utils.internals} in Kafka 4.4, so calling it kept this suite from compiling against 4.x
      * (astubbs#539). The resource sits at the same path in 3.x and 4.x.
      */
     static String kafkaClientsVersion() {
         try (InputStream in = org.apache.kafka.clients.consumer.KafkaConsumer.class.getClassLoader()
-                .getResourceAsStream("kafka/kafka-version.properties")) {
+                .getResourceAsStream(KAFKA_VERSION_RESOURCE)) {
             if (in == null) {
                 return "unknown";
             }
