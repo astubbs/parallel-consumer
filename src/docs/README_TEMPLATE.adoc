@@ -508,6 +508,10 @@ In the transactional commit mode, set `transactional.id` in that configuration a
 <2> Choose your ordering type, `KEY` in this case.
 This ensures maximum concurrency, while ensuring messages are processed and committed in `KEY` order, making sure no offset is committed unless all offsets before it in it's partition, are completed also.
 <3> The maximum number of concurrent processing operations to be performing at any given time.
+In the core module this is the size of the worker pool: a fixed `ThreadPoolExecutor` whose core and maximum size are both `maxConcurrency`, its platform threads created on demand as work arrives and kept once created.
+A value far above the core count is right for IO-bound functions, because a thread parked on an HTTP call or a database write costs stack memory and little else; for a CPU-bound function it is context-switch cost, so set it near the core count instead.
+It also sizes the buffer: the in-flight target is `maxConcurrency * batchSize * loadFactor`, so it decides how many records are held in memory as well as how many are processed at once (`messageBufferSize` fixes that number independently, see <<ordered-by-partition>>).
+In the Vert.x, Reactor and Mutiny modules it is a ceiling on outstanding asynchronous work, not a thread count.
 Also, because the library coordinates offsets, `enable.auto.commit` must be disabled in your consumer.
 <5> Subscribe to your topics
 
@@ -570,6 +574,13 @@ The library also supports sending a batch or records as input to the users proce
 Using this, you can process several records in your function at once.
 
 To use it, set a `batch size` in the options class.
+
+IMPORTANT: `batchSize` is a maximum, not a target. A batch is whatever work is eligible at the moment it is
+assembled, sliced into chunks of at most `batchSize`; the library never waits for a batch to fill. A consumer that
+keeps up with its input therefore sees small batches, often of one record, and only sees full batches once lag
+builds. With key or partition ordering the slice is drawn from what the shards can offer at that instant, so it is
+bounded by eligible work, not by the topic's backlog. Waiting until N records or T elapses (micro-batching) is a
+deferred capability, not a setting - see <<roadmap>>.
 
 There are then various access methods for the batch of records - see the `PollContext` object for more information.
 
@@ -638,6 +649,19 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-str
 <2> For the slow consumer part of your Topology, drop down into the parallel consumer, and use massive concurrency
 
 See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/bz/stub/parallelconsumer/examples/streams/StreamsApp.java[Kafka Streams example] project, and it's test.
+
+[[several-instances]]
+=== Several instances in one application: isolation versus sharing
+
+An instance is the isolation boundary. Each `ParallelStreamProcessor` owns its `KafkaConsumer` and `group.id`, its worker pool sized by `maxConcurrency`, its buffer and its commit cadence, and pauses its own poller when its own buffer fills. Nothing is shared between two instances in one JVM unless you share it.
+
+So for a service with more than one workload -- a fast command topic and a slow, heavy event topic, say, or the stages of a fan-out pipeline -- run one instance per workload, each with its own consumer group. Each stage's lag is then its own signal, back-pressure is per stage, and a slow workload cannot starve a fast one, because they do not share a pool. The `pcinstance` metrics tag (see <<metrics>>) keeps their meters apart in one registry.
+
+The reasons to share one instance across topics are fewer: one group to operate, one set of threads. The costs are what sharing always costs here -- interference between workloads, lag and back-pressure that look global, and no in-library scheduler to make one instance fair across its topics. Prefer separate instances unless the workloads are alike.
+
+Two things not to share: a `KafkaConsumer` between instances, ever; and a `Producer` between instances in the transactional commit mode, where each instance needs its own `transactional.id`. Two instances in the *same* `group.id` on one JVM only split the partitions between them and isolate nothing.
+
+Thread cost is the sum of `maxConcurrency` across instances, in the core module a fixed pool of platform threads per instance, so size each stage for what its downstream can take rather than for speed. Limiting one stage by another's capacity is not built in: today it is that stage's `maxConcurrency`, or `pauseIfRunning()` and `resumeIfPaused()` driven by a monitor of the downstream group's lag. Group-wide rate limiting and self-tuning concurrency are on the <<roadmap>>.
 
 [[upgrading]]
 == Upgrading
@@ -733,6 +757,7 @@ This is the fastest option.
 .Unordered concurrent processing of message
 image::https://lucid.app/publicSegments/view/aab5d743-de05-46d0-8c1e-0646d7d2946f/image.png[align="center"]
 
+[[ordered-by-partition]]
 === Ordered by Partition
 
 At most only one message from any given input partition will be in flight at any given time.

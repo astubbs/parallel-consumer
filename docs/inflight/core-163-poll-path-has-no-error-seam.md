@@ -8,10 +8,10 @@
 PC has an exception handler, and then asks the question that was never answered: *"is there a plan to
 add error handler processing, or do we need to customize it?"*
 
-Below is a draft reply, written to be postable as-is. Under it are the two things the reply depends on
+Below is the reply as drafted; it was posted on 2026-09-18, recast around the fluent API (astubbs#502) as the answer being built (https://github.com/confluentinc/parallel-consumer/issues/550#issuecomment-5723213296), and the mirror body was corrected the same day. Under it are the two things the reply depends on
 that no command can tell you, one of which is currently wrong in live requirements work.
 
-## Draft answer (not yet posted)
+## Draft answer (posted 2026-09-18, in the recast form above)
 
 > No, there is no handler for a deserialization failure thrown out of `consumer.poll()`, and that
 > is still true today. The poll path does catch two specific exceptions - a bounded

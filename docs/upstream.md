@@ -191,9 +191,11 @@ existed.
 That also keeps `upstream-mirror` meaning one precise thing - "an upstream *issue* we carry" -
 which is what makes the mirror set verifiable against upstream.
 
-`scripts/upstream-sweep.sh --audit` lists the zero-reply discussions. The unread backlog and the
-threads worth acting on are tracked in
-[`docs/inflight/upstream-discussions-unanswered.md`](inflight/upstream-discussions-unanswered.md).
+`scripts/upstream-sweep.sh --audit` lists the zero-reply discussions; it is the instrument, so run it
+rather than trusting any list. The backlog it and the live listing showed on 2026-09-18 - every
+unanswered question and every answered-but-superseded thread - was answered from the fork that day,
+one comment per thread, recorded in
+[`docs/inflight/upstream-v6-release-responses.md`](inflight/upstream-v6-release-responses.md).
 
 ## Backlinking upstream
 

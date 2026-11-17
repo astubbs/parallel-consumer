@@ -1,4 +1,4 @@
-# confluentinc#777: revocation duplicates are the contract, and the answer saying so is unposted
+# confluentinc#777: revocation duplicates are the contract - answered and closed 2026-09-18
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
@@ -28,7 +28,7 @@ completion, which is the opposite shape - here the committed offset is already c
 record is correctly encoded as incomplete, and the redelivery follows from that correctness.
 <!-- post-merge: checked-end -->
 
-## Draft answer - postable as-is once a maintainer agrees with the closing rationale
+## Draft answer - the maintainer agreed on 2026-09-18 (no grace period; cooperative assignor first, drain on close second); posted as bullets at https://github.com/confluentinc/parallel-consumer/issues/777#issuecomment-5723060410, mirror closed as by-design
 
 > Your read of the mechanism is exactly right, including step 3, and the behaviour is deliberate
 > rather than an oversight - but the reason is worth stating, because it is not simply

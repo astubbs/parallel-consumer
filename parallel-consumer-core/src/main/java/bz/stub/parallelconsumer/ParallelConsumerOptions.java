@@ -499,6 +499,11 @@ public class ParallelConsumerOptions<K, V> {
      * If we have enough, then we actively manage pausing our subscription so that we can continue calling {@code poll}
      * without pulling in even more messages.
      * <p>
+     * <b>This is a maximum, not a target.</b> A batch is whatever work is eligible when it is assembled, sliced into
+     * chunks of at most this size; nothing waits for a batch to fill, so a consumer that keeps up with its input sees
+     * small batches and only sees full ones once lag builds. Waiting for N records or T elapsed is micro-batching,
+     * a deferred capability rather than a setting here.
+     * <p>
      * <b>Must be at least 1</b>, which is the default and is also the non-batching configuration. Zero, a negative
      * and (the field being boxed) null are all reachable through this builder, and {@link #validate()} rejects all
      * three with an {@link IllegalArgumentException} at construction. Unbounded, the same wrong value used to be

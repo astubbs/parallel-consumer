@@ -145,8 +145,8 @@ count means no new record is being taken as work at all: the instance has stoppe
   thrown - is never entered.
 
 A green run therefore cannot distinguish "no timeout occurred" from "no commit was attempted". This
-is exactly the `dirty` asymmetry `upstream-tell-809-833-the-hang-is-fixed.md` names for this same
-workload; these runs are the measurement of it rather than evidence about the report.
+is exactly the `dirty` asymmetry the astubbs#177 write-up
+(`docs/solutions/logic-errors/the-only-producer-of-commit-responses-died-so-every-waiter-reported-a-timeout-2026-09-18.md`) names for this same workload; these runs are the measurement of it rather than evidence about the report.
 
 **Lowering the poisoned fraction does not fix it, and that is a run rather than a guess:** 0.03 bought
 about 1.5 extra bursts and stalled identically, which rules out "too many poisoned keys" and makes the
@@ -190,7 +190,7 @@ which exist to make this scenario able to falsify its own assertion, are unchang
 3. **`gtassone`'s configuration from confluentinc#809** - 128 partitions, concurrency 64, user
    function 100ms to minutes, `PERIODIC_CONSUMER_SYNC`. This is astubbs#175's own shape, and the
    scenario does not have it: the workload transcribes the now-closed astubbs#177 report instead,
-   whose defect `upstream-tell-809-833-the-hang-is-fixed.md` says is already fixed.
+   whose defect is fixed (`docs/solutions/logic-errors/the-only-producer-of-commit-responses-died-so-every-waiter-reported-a-timeout-2026-09-18.md`).
    `upstream-175-sporadic-commit-timeouts.md` no longer nominates it as a *wedge* candidate - see
    the section below - but it remains the closest recorded configuration to the live report, which is
    what this arm buys.
@@ -244,7 +244,7 @@ state, not a busy one. Whoever picks this up should consider whether the reporte
 The candidate list at the top of this note already reflects both of these. They are repeated here
 because they are what the remaining soak arms are aimed at, and each is owned by the note named:
 
-- **`upstream-tell-809-833-the-hang-is-fixed.md`** - four `astubbs#177` commits landed 2026-08-19 and
+- **`docs/solutions/logic-errors/the-only-producer-of-commit-responses-died-so-every-waiter-reported-a-timeout-2026-09-18.md`** - four `astubbs#177` commits landed 2026-08-19 and
   close candidate 1's class outright: the poller now publishes its own death
   (`notifyPollerDied`), waiters are released with its exception, and the message reports the budget it
   actually waited on. astubbs#177's mirror is closed; confluentinc#833 is still open upstream and

@@ -34,8 +34,8 @@ the wrong conclusion a reader draws has changed shape rather than gone: the trac
 three-defect report closed with nothing on it saying which fix answered which half. The remaining
 scope is recorded here and in
 [`core-commit-failure-seam.md`](core-commit-failure-seam.md); it is not recorded where a reader of the
-issue will meet it. Telling the *upstream* reporters is a different task and is owned by
-[`upstream-tell-809-833-the-hang-is-fixed.md`](upstream-tell-809-833-the-hang-is-fixed.md).
+issue will meet it. Telling the *upstream* reporters was done on 2026-09-18; the diagnosis and the links are in
+[`docs/solutions/logic-errors/the-only-producer-of-commit-responses-died-so-every-waiter-reported-a-timeout-2026-09-18.md`](../solutions/logic-errors/the-only-producer-of-commit-responses-died-so-every-waiter-reported-a-timeout-2026-09-18.md).
 
 ## Delete when
 

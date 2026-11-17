@@ -58,7 +58,7 @@ settles the open question in `branch-audit-orphans.md`**, which lists that branc
 belongs to `sweep-2023-tx-failure-taxonomy`; verify before attaching": it does. Its exception types
 are unrecorded input to `core-exception-hierarchy-cleanup.md`.
 
-## What to put on the issue
+## What to put on the issue - applied 2026-09-18 (https://github.com/astubbs/parallel-consumer/issues/241: Fork status replaced, relabelled `feature`)
 
 Keep it open - the taxonomy question survives even though its stated premise does not - but the body
 is what a future reader trusts, so replace `## Fork status` with something like:
