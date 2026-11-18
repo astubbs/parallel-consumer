@@ -15,6 +15,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
@@ -121,6 +122,66 @@ public class ProcessingShard<K, V> {
      */
     private final AtomicLong workAwaitingSelectionCount = new AtomicLong(0);
 
+    /**
+     * Containers that have LEFT this shard while still out at a worker - departures whose flight the shard's
+     * ordering promise still has to wait for, even though {@link #workMap} no longer knows about them.
+     * <p>
+     * <b>Why the map alone cannot keep the promise across a rebalance (astubbs#178, confluentinc#843).</b> In
+     * the ordered modes a taken container stays resident, and {@link #getWorkIfAvailable} stops at it: an
+     * in-flight head is what serialises the shard. The revoke and epoch-change sweeps evict on staleness alone
+     * and never ask whether the container is in flight, so a revoke-and-reassign under work empties the slot
+     * while the worker is still inside the user function; the uncommitted offset is then re-delivered, the fresh
+     * container is takeable, and one key is running on two threads. PC's own bookkeeping never notices, because
+     * {@link WorkManager#handleFutureResult} drops the old result as stale - only the user's ordering does.
+     * The {@code Replacing stale entry} branch of {@link #addWorkContainer} is the same state by a second door.
+     * <p>
+     * <b>So a departure that is still in flight is remembered here, and an ordered scan waits for it</b> - the
+     * re-delivered record waits for the flight exactly as it would have waited with no rebalance at all. The
+     * alternative, draining in-flight work inside the revoke callback, is the confluentinc#857 recipe: it spends
+     * the poll-interval budget inside {@code poll()}, and the sweeps were made shard-only precisely so a callback
+     * never waits on anything ({@link ShardManager#removeStaleContainers}).
+     * <p>
+     * <b>Written on both threads, guarded by no lock, and the ORDERING is what makes that safe.</b> Entries
+     * arrive from {@link #recordDepartureIfInFlight} - the broker-poll thread's sweeps through {@link #retire},
+     * and {@link #addWorkContainer}'s displacement branch - and are cleared by the scan once
+     * {@link WorkContainer#isInFlight()} is false. Two rules, one per side, and together they close every
+     * interleaving without a lock:
+     * <ul>
+     * <li><b>A writer RECORDS the departure BEFORE it publishes.</b> The displacement branch records the resident
+     *     it is about to displace before the {@code put} that makes the replacement resident (and therefore
+     *     selectable). The sweeps remove without publishing anything, and the re-delivery that follows them is
+     *     registered from the mailbox after the callback has returned, so it is ordered behind their record by
+     *     the mailbox's own happens-before edge.</li>
+     * <li><b>A scan asks AFTER it reads.</b> {@link #getWorkIfAvailable} reads a candidate off {@link #workMap}
+     *     and only then asks {@link #hasInFlightDeparture()}. Reading the replacement is the
+     *     {@code java.util.concurrent} happens-before edge to the {@code put} that published it, and the record
+     *     precedes that put in program order - so a scan that can see the replacement can see the departure.
+     *     Asked before the loop it could not: no departure, then the replacement, then a double delivery, which
+     *     is the window the
+     *     astubbs/parallel-consumer#517 review found in the first version and
+     *     {@code ShardDisplacementRecordsTheDepartureBeforePublishingTest} forces.</li>
+     * </ul>
+     * There is no {@code @GuardedBy} to write: the set is a concurrent collection and the question it answers is
+     * read off the container's own atomic state, so the invariant recorded here stands in for a lock name, as
+     * this tree's {@code AGENTS.md} asks. A flight that ends between the read and the return costs one extra
+     * scan of waiting; a flight that is evicted between a scan's read and its return is still resident at the
+     * scan's head, where the ordered {@code break} already stops on it. Departure is monotonic - a container
+     * instance is never re-inserted into a shard - so nothing here can go stale in the dangerous direction.
+     * <p>
+     * On the shipped engine the displacement branch and the scan are BOTH the controller thread - the poll
+     * thread's {@code registerWork} only posts to the mailbox - so that gap cannot open today. That is a
+     * confinement claim nothing checks, and the direct-pull engine (astubbs#361) scans from worker threads, so
+     * the ordering above is what the correctness rests on, not the confinement.
+     * <p>
+     * Only the ordered modes record anything: {@link ProcessingOrder#UNORDERED} makes no promise and records
+     * nothing. {@link #isEmpty()} consults it, so a shard with an in-flight departure survives
+     * {@link ShardManager#removeShardIfEmpty} with an empty map - otherwise KEY ordering's collection of the
+     * emptied shard would take the memory with it. Equality is identity ({@link WorkContainer} overrides neither
+     * {@code equals} nor {@code hashCode}), so the set means "these containers", never "these coordinates".
+     * Pinned by {@code KeyOrderAcrossRebalanceTest}.
+     */
+    private final Set<WorkContainer<K, V>> inFlightDepartures = ConcurrentHashMap.newKeySet();
+
     void addWorkContainer(WorkContainer<K, V> incomingWorkContainer) {
         long offset = incomingWorkContainer.offset();
         WorkContainer<K, V> residentBeforePut = workMap.get(offset);
@@ -131,6 +192,14 @@ public class ProcessingShard<K, V> {
         if (residentBeforePut != null) {
             log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
                     residentBeforePut.getEpoch(), offset, incomingWorkContainer.getEpoch());
+            // RECORD THE DEPARTURE BEFORE PUBLISHING. The put below makes the arrival resident, and resident is
+            // selectable; the displaced container's departure has to be recorded before that, or a scan landing
+            // between the put and retire(displaced) sees no departure and a takeable replacement, and hands it
+            // out while the displaced one is still executing (astubbs/parallel-consumer#517 review). Recording it
+            // here is what makes the gap harmless: the scan reads the candidate off the map first and asks about
+            // departures second, so the map's own happens-before edge carries this write to it - see
+            // inFlightDepartures. The retire below then records the same container again, which the set absorbs.
+            recordDepartureIfInFlight(residentBeforePut);
         }
 
         // ADMIT FIRST, then let the map itself say what happened - never the read above.
@@ -198,12 +267,16 @@ public class ProcessingShard<K, V> {
             // surprise, which is why both records are kept.
             // Proof, control arms and ablation matrix: ShardDisplacementOrphanReachabilityTest and
             // docs/solutions/logic-errors/the-shard-displacement-orphan-is-unreachable-and-the-guard-is-outside-the-class-2026-09-08.md.
-            population.onRetired();
+            //
             // The displaced container gives back its claim IF it still holds one. It does not when it was
             // already taken as work, and does when it was only ever queued - the compare-and-set tells those
             // apart from the container's own record instead of guessing, which is what used to leave this
-            // branch a claim short every time a taken entry was replaced.
-            excludeFromSelection(displaced);
+            // branch a claim short every time a taken entry was replaced. And if it WAS taken and is still out
+            // at a worker, that flight is an in-flight departure - retire() records it, so the arrival that just
+            // took its slot cannot be handed out on top of it (astubbs#178's second door).
+            // retire() hands back the container it was given, which is `displaced` itself - the same bare call
+            // onSuccess makes, and nothing to act on.
+            retire(displaced);
         }
     }
 
@@ -258,8 +331,23 @@ public class ProcessingShard<K, V> {
     }
 
 
+    /**
+     * Holding no work AND no in-flight departure. The second half is what lets a shard emptied by a revoke sweep
+     * survive {@link ShardManager#removeShardIfEmpty} while a container that left it is still out at a worker - see
+     * {@link #inFlightDepartures}. A pure query: it reads each departed container's own state rather than the
+     * housekeeping {@link #getWorkIfAvailable} does, so the answer is true the moment the last flight ends,
+     * whichever thread asks and whether or not a scan has run since.
+     */
     public boolean isEmpty() {
-        return workMap.isEmpty();
+        return workMap.isEmpty() && !hasInFlightDeparture();
+    }
+
+    /**
+     * @return true while any container that left this shard is still out at a worker - the condition an ordered
+     *         scan waits on, and the one that keeps an otherwise-empty shard from being collected
+     */
+    boolean hasInFlightDeparture() {
+        return inFlightDepartures.stream().anyMatch(WorkContainer::isInFlight);
     }
 
     public long getCountOfWorkAwaitingSelection() {
@@ -331,7 +419,32 @@ public class ProcessingShard<K, V> {
         }
         population.onRetired();
         excludeFromSelection(removed);
+        // A departure still out at a worker is an in-flight departure - see inFlightDepartures. Recorded here
+        // because this is the ONE exit path, so every route by which an in-flight container can leave (the two
+        // sweeps and the displacement branch) is covered without any of them having to remember. The success
+        // and failure paths end the flight BEFORE they remove (WorkManager#onSuccessResult / onFailureResult),
+        // so a completed record never lands here; and a flight that ends between this read and the add is
+        // cleared by the next scan, which is the safe direction. The displacement branch records its container
+        // EARLIER as well, before it publishes the replacement - this call is then the no-op that keeps the
+        // exit path uniform.
+        recordDepartureIfInFlight(removed);
         return removed;
+    }
+
+    /**
+     * Record {@code departing} as an in-flight departure if it is still out at a worker, so an ordered scan waits
+     * for it. Idempotent: the set is identity-keyed, and the displacement branch calls this twice for one
+     * container on purpose (before the put, and again from {@link #retire}).
+     */
+    private void recordDepartureIfInFlight(WorkContainer<K, V> departing) {
+        if (isOrderRestricted() && departing.isInFlight()) {
+            // The add's answer is LOGGED rather than dropped or parked in a dead local (the same trade
+            // ShardManager.onFailure settled). FALSE is expected on the displacement branch's second call and
+            // nowhere else - departure is monotonic, so a container cannot otherwise be recorded twice.
+            boolean newlyRecorded = inFlightDepartures.add(departing);
+            log.debug("{} is leaving shard {} while still in flight - the shard waits for that flight before " +
+                    "handing out more work (astubbs#178). Newly recorded: {}", departing, getKey(), newlyRecorded);
+        }
     }
 
     /**
@@ -476,10 +589,30 @@ public class ProcessingShard<K, V> {
         var slowWork = new HashSet<WorkContainer<?, ?>>();
         var workTaken = new ArrayList<WorkContainer<K, V>>();
 
+        if (isOrderRestricted()) {
+            // Housekeeping only: clear the departures whose workers have since returned. The scan is the
+            // controller, the one thread allowed to wait, and it visits here anyway. The DECISION is not made
+            // here - it is made per candidate below, after the candidate has been read off the map, because
+            // that read is what orders a concurrent record-before-publish in front of it (see inFlightDepartures).
+            inFlightDepartures.removeIf(WorkContainer::isNotInFlight);
+        }
+
         var iterator = workMap.entrySet().iterator();
         while (workTaken.size() < workToGetDelta && iterator.hasNext()) {
             var workContainer = iterator.next().getValue();
             scanMeter.onEntryExamined();
+
+            if (isOrderRestricted() && hasInFlightDeparture()) {
+                // In the ordered modes a container that left this shard while still in flight still holds the
+                // shard's serialisation, exactly as it would at the head of the map had it not been swept or
+                // displaced (astubbs#178) - so nothing is taken until it ends. Asked AFTER the candidate was read,
+                // never before the loop: a displacement records the departure and THEN publishes the replacement,
+                // and reading the replacement off the map is what makes the record visible here. Asked before
+                // the loop it could see no departure, then find the replacement, and take it.
+                log.trace("Shard {} has a departure that is still in flight; taking nothing until it ends: {}",
+                        getKey(), inFlightDepartures);
+                break;
+            }
 
             if (pm.couldBeTakenAsWork(workContainer)) {
                 // ONE call, deliberately. This used to read `isAvailableToTakeAsWork()` and then call

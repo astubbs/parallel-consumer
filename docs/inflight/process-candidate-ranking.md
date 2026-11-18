@@ -42,11 +42,6 @@ named on each line owns it.
    offer a revocation grace period at all? Upstream declined it. **If the answer is no, confluentinc#777
    is a documentation obligation rather than a defect** and the close is unblocked - at the cost of a
    README section and one chaos cell that must be run rather than predicted.
-7. **astubbs#178** (confluentinc#843), `core-178-key-order-across-a-rebalance.md` - is an undrained
-   old-epoch delivery a violation of the README's "strong ordering by key", or legitimate
-   at-least-once? Last because it is the only one that needs a *bound* argued for rather than a
-   yes/no, and `KeyOrderLedger`'s javadoc already says picking that number is the whole job.
-
 **What is NOT on this list, from the same triage, and why:** astubbs#139 is a 1.0 blocker with a
 four-step definition of done in `core-139-public-api-thread-safety-contract.md` - real work, not a
 call. astubbs#175 has no decision left in it; its one live strand is the AB-BA wedge that

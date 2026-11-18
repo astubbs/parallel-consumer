@@ -1161,8 +1161,8 @@ entries:
 
   - id: key-order-across-rebalance
     group: rebalance-stability
-    summary: Same key on two worker threads across a rebalance - contract question plus a missing detector
-    fork: {branches: [], prs: [], fork_issue: 178, status: none}
+    summary: Same key on two worker threads across a rebalance - the rebalance-gated route, ruled a violation and fixed; the detector widened
+    fork: {branches: [], prs: [517], fork_issue: 178, status: merged}
     upstream: {repo: confluentinc/parallel-consumer, issues: [843], prs: [], related: [777, 909, 893, 623], status: open, last_checked: 2026-08-20}
     adoc_anchor: part3-cat2-correctness
     notes: >
@@ -1176,10 +1176,13 @@ entries:
       ProcessingShard.removeStaleWorkContainersFromShard tests staleness without
       checking isInFlight, and PC does not drain on revoke, so a redelivered record can
       execute concurrently with the still-running old-epoch one. Present in 0.5.3.0 via
-      confluentinc#623, not fork-introduced. The chaos suite's KeyOrderLedger would catch
-      it except its window key includes the epoch, so a cross-epoch overlap passes.
-      Blocked on a maintainer ruling on the KEY-ordering contract across a rebalance.
-      Detail in docs/inflight/core-178-key-order-across-a-rebalance.md.
+      confluentinc#623, not fork-introduced. RULED a violation 2026-09-17 and fixed:
+      ProcessingShard remembers containers that left it while still in flight
+      (inFlightDepartures) and an ordered scan waits for them, so the re-delivery waits for
+      the flight as it would with no rebalance; KeyOrderLedger's overlap check now
+      spans epochs and would catch the shape under churn. The reporter's own
+      no-rebalance case is unaffected and stays with the no-disturbance scenario.
+      Detail in docs/solutions/logic-errors/a-revoke-sweep-freed-a-key-whose-worker-was-still-running-2026-09-18.md.
 
   - id: bug-809-commit-timeout-close-path-zombie
     group: rebalance-stability

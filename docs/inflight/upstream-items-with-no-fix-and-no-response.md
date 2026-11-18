@@ -22,8 +22,12 @@ these get answered.
 
 **Bugs with no fix PR:**
 
-- confluentinc#843 (astubbs#178) - same key on two threads across a rebalance. A contract question,
-  wait-for-info; [`core-178-key-order-across-a-rebalance.md`](core-178-key-order-across-a-rebalance.md).
+- confluentinc#843 (astubbs#178) - same key on two threads across a rebalance. The contract question
+  was ruled a violation and the rebalance-gated route fixed
+  ([`a-revoke-sweep-freed-a-key-whose-worker-was-still-running-2026-09-18.md`](../solutions/logic-errors/a-revoke-sweep-freed-a-key-whose-worker-was-still-running-2026-09-18.md));
+  the reporter's no-rebalance case stays with
+  [`test-no-disturbance-duplicate-scenario.md`](test-no-disturbance-duplicate-scenario.md), and the
+  response is drafted in `issue-response-178.md`.
 - confluentinc#546 (astubbs#162) - truncating state; the replay branch is refuted (astubbs#484, merged),
   the false-truncation WARN is decided (INFO, no truncation branch) and being built on its own PR.
 - confluentinc#551 (astubbs#164) - batching not as expected; the fork verified the over-request as
