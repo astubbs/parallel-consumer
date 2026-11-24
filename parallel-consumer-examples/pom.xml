@@ -54,7 +54,7 @@
 
              RETIRE WHEN: kafka-streams ships Jackson 2.18.10 or newer. 3.9.2 is the last 3.9.x, and
              4.x is behind the Java 11 baseline move. -->
-        <jackson.examples.version>2.18.10</jackson.examples.version>
+        <jackson.examples.version>2.18.12</jackson.examples.version>
     </properties>
 
     <build>
