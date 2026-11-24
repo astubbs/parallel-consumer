@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <version>0.6.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>parallel-consumer-observability</artifactId>
+    <name>Kafka Parallel Consumer Observability</name>
+    <description>
+        Experimental, opt-in: reads a running Parallel Consumer instance's state into an immutable value,
+        safely and cheaply, and makes each new reading visible to whoever is watching - in process, on the
+        JVM's own threads. Nothing here opens a socket or writes anywhere. It is what an observation
+        surface reads: the web dashboard, the MCP tools, or an application's own monitoring.
+    </description>
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <dependencies>
+        <!--
+            The only dependency this module declares. Micrometer arrives transitively from core, which already
+            declares it at compile scope, so this module puts nothing on a consumer's classpath that core did
+            not already put there. That is the property which lets the dashboard and the MCP server both build
+            on this without either inheriting the other's dependencies, and it is worth keeping: a dependency
+            added here is a dependency added to every surface above it.
+
+            The test libraries - JUnit, AssertJ, Mockito, Logback - are declared in the parent's own
+            dependencies block and inherited by every module, so they are deliberately absent here.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!--
+            Core's test-jar, for the shared ArchUnit rules only. Every module with test sources has to point
+            ArchUnit at its own packages or the rules silently do not run there, which is what
+            EveryModuleWiresUpArchUnitTest enforces - and the rules themselves live once, in core's tests.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
