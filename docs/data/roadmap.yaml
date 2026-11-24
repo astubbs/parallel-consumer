@@ -154,6 +154,33 @@ entries:
     pull_request: astubbs#268
     caveat: 0.6.0.0 ships a preview and an announcement, not the finished surface.
 
+  - id: mcp-interface
+    title: An MCP server inside the runtime, so an agent can explain what an instance is doing
+    serves: [observability, usability]
+    horizon: next-0x
+    blocks_1_0: false
+    stage: planned
+    stage_delivery: draft
+    stage_detail: >-
+      An implementation-ready plan on astubbs#508 for a read-only hello world on one instance: its
+      own module above the observability substrate (astubbs#514), with the tool set, the
+      value-metadata contract, the response bounds and the acceptance harness all specified. Nothing
+      built. It no longer depends on the dashboard (astubbs#268), which is now a sibling surface
+      projecting the same reading rather than the base this sits on.
+    why_now: >-
+      Parallel Consumer holds state no broker tool can see - the completion frontier, the offset
+      map's fill, the ordering domains, the admission reasons - and the people who meet it now have an
+      agent open. The machine-readable feed comes before the human query interface.
+    done_when: >-
+      An agent connected only to the MCP server explains, from the tools alone, why one partition on
+      a staged instance has stopped committing while later records on it have already finished, and
+      the run is graded against a control arm given the dashboard's state document instead of the
+      tools. The fleet view and the write path are later milestones.
+    pull_request: astubbs#508
+    caveat: >-
+      The owner targets 0.6.1.0; the horizon ladder has no rung for a minor release, so next-0x is the
+      nearest honest value and docs/inflight/release-v6.1-scope.md carries the 6.1 targeting.
+
   - id: delivered-value-metrics
     title: Emit the measures the library exists to improve
     serves: [observability, performance]
